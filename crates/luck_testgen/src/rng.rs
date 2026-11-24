@@ -64,7 +64,8 @@ mod tests {
         }
     }
 
-    // Every generated program, and so minsize.snap, rests on this sequence.
+    // Every seeded program the property tests generate rests on this
+    // sequence.
     #[test]
     fn draws_for_a_seed_never_change() {
         let mut rng = Rng::new(42);

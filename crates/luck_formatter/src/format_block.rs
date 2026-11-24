@@ -240,7 +240,8 @@ impl<'ast> Formatter<'ast> {
                 if absorbed.is_none() {
                     has_leading_paren = source[span.start as usize] == b'(';
                 }
-                run.start = run.start.min(own_line_start(source, span.start).unwrap_or(span.start));
+                let line_start = own_line_start(source, span.start, self.version());
+                run.start = run.start.min(line_start.unwrap_or(span.start));
                 run.end = run.end.max(span.end);
                 absorbed = Some(absorbed.map_or(span.start, |range| range.start)..span.end);
             }
@@ -355,7 +356,7 @@ impl<'ast> Formatter<'ast> {
             let line_start = self
                 .comments()
                 .source_text()
-                .and_then(|source| own_line_start(source, start))
+                .and_then(|source| own_line_start(source, start, self.version()))
                 .unwrap_or(start);
             self.write_exact(Span::new(line_start, end));
         }
@@ -380,7 +381,7 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return false;
         };
-        let base_indent = own_line_start(source, start)
+        let base_indent = own_line_start(source, start, self.version())
             .map_or(&b""[..], |line_start| Span::new(line_start, start).text(source));
         let line_breaks = self.comments().line_breaks_between_tokens(start, end);
         let mut line_start = start;
@@ -453,7 +454,8 @@ pub(crate) fn format_selection<'ast>(
     let last_end = items.clone().last()?.span(groupings).end;
 
     let source = parse.source;
-    let line_start = own_line_start(source, first_start).unwrap_or(first_start);
+    let line_start =
+        own_line_start(source, first_start, parse.chunk.version).unwrap_or(first_start);
     let base_indent = Span::new(line_start, first_start).text(source);
     let mut comments = Comments::from_parse(parse);
     comments.restrict_to(Span::new(line_start, last_end));

@@ -4,17 +4,12 @@ use luck_token::{CommentKind, Span, TokenKind};
 
 use crate::document::DocumentState;
 
-/// `name`'s text, or `None` for a name the parser found missing.
-pub(crate) const fn identifier<'ast>(name: &Name<'ast>) -> Option<&'ast str> {
-    if name.text.as_str().is_empty() { None } else { Some(name.text.as_str()) }
-}
-
 /// The name at `offset`, either end included, and its node, or `None` where
 /// the innermost node there is something else or a name recovery made up.
 pub(crate) fn name_at(document: &DocumentState, offset: u32) -> Option<(NodeId, &Name<'_>)> {
     let nodes = document.nodes();
     let id = nodes.node_at(offset)?;
-    let name = nodes.kind(id).as_name().filter(|name| identifier(name).is_some())?;
+    let name = nodes.kind(id).as_name().filter(|name| name.written().is_some())?;
     Some((id, name))
 }
 

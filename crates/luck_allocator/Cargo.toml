@@ -19,6 +19,7 @@ workspace = true
 track_allocations = []
 
 [dependencies]
+parking_lot  = { workspace = true }
 thread_local = { workspace = true }
 
 [dev-dependencies]

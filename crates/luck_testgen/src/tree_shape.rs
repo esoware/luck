@@ -376,36 +376,52 @@ impl Printer {
     }
 
     /// A run's operators share one precedence, so its associativity groups
-    /// it: `a - b - c` prints as `(a - b) - c`, and `a .. b .. c` as
-    /// `a .. (b .. c)`.
+    /// it: `a - b - c` is `(a - b) - c`, and `a .. b .. c` is `a .. (b .. c)`.
+    /// An operand that's a run at the same level, where it groups as the run
+    /// would without it, joins the run, so `(a - b) - c` prints as
+    /// `a - b - c`. Each operator holds the operand after it, so a run nests
+    /// no deeper however long it grows.
     fn binary(&mut self, binary: &BinaryOp<'_>) {
-        let (_, associativity) = binary.links.first().op.precedence();
-        match associativity {
-            Associativity::Left => self.left_grouped(&binary.first, &binary.links),
-            Associativity::Right => self.right_grouped(&binary.first, &binary.links),
+        self.open("BinaryOp");
+        match binary.precedence().1 {
+            Associativity::Left => self.left_run(binary),
+            Associativity::Right => {
+                self.expr(&binary.first);
+                self.right_links(binary);
+            }
+        }
+        self.close();
+    }
+
+    /// The operands and operators of `run`, a left-associative one.
+    fn left_run(&mut self, run: &BinaryOp<'_>) {
+        match joining_run(&run.first, run) {
+            Some(first) => self.left_run(first),
+            None => self.expr(&run.first),
+        }
+        self.links(&run.links);
+    }
+
+    /// The operators of `run`, a right-associative one, and the operands
+    /// after them.
+    fn right_links(&mut self, run: &BinaryOp<'_>) {
+        let last = run.links.last();
+        self.links(&run.links[..run.links.len() - 1]);
+        let joining = joining_run(&last.operand, run);
+        self.open(&format!("{:?}", last.op));
+        self.expr(joining.map_or(&last.operand, |last_run| &last_run.first));
+        self.close();
+        if let Some(last_run) = joining {
+            self.right_links(last_run);
         }
     }
 
-    fn left_grouped(&mut self, first: &Expression<'_>, links: &[BinaryLink<'_>]) {
-        let Some((last, rest)) = links.split_last() else {
-            self.expr(first);
-            return;
-        };
-        self.open(&format!("{:?}", last.op));
-        self.left_grouped(first, rest);
-        self.expr(&last.operand);
-        self.close();
-    }
-
-    fn right_grouped(&mut self, first: &Expression<'_>, links: &[BinaryLink<'_>]) {
-        let Some((head, rest)) = links.split_first() else {
-            self.expr(first);
-            return;
-        };
-        self.open(&format!("{:?}", head.op));
-        self.expr(first);
-        self.right_grouped(&head.operand, rest);
-        self.close();
+    fn links(&mut self, links: &[BinaryLink<'_>]) {
+        for link in links {
+            self.open(&format!("{:?}", link.op));
+            self.expr(&link.operand);
+            self.close();
+        }
     }
 
     fn table(&mut self, table: &TableConstructor<'_>) {
@@ -646,6 +662,21 @@ impl Printer {
     }
 }
 
+/// `operand`, of `run`, when it's a run at `run`'s level, which parentheses
+/// around it don't change.
+fn joining_run<'tree, 'ast>(
+    operand: &'tree Expression<'ast>,
+    run: &BinaryOp<'_>,
+) -> Option<&'tree BinaryOp<'ast>> {
+    if let Expression::BinaryOp(inner) = operand.unwrap_parentheses()
+        && inner.precedence().0 == run.precedence().0
+    {
+        Some(inner)
+    } else {
+        None
+    }
+}
+
 fn without_parentheses<'tree, 'ast>(ty: &'tree Type<'ast>) -> &'tree Type<'ast> {
     let mut current = ty;
     while let Type::Parenthesized(parenthesized) = current {
@@ -682,6 +713,20 @@ mod tests {
             ),
             shape("x = -3 + (a - b - c) local y = f(), g() type U = A | B | C", version)
         );
+        assert_eq!(
+            shape("x = ((a - b) + c) - d y = a .. (b .. (c .. d)) z = 2 ^ (3 ^ 4)", version),
+            shape("x = a - b + c - d y = a .. b .. c .. d z = 2 ^ 3 ^ 4", version)
+        );
+    }
+
+    #[test]
+    fn a_long_run_nests_no_deeper_than_a_short_one() {
+        let links = 2_000;
+        for op in ["+", ".."] {
+            let source = format!("return x{}", format!(" {op} x").repeat(links));
+            let longest_line = shape(&source, LuaVersion::Lua54).lines().map(str::len).max();
+            assert!(longest_line.is_some_and(|width| width < 20), "{op}: {longest_line:?}");
+        }
     }
 
     #[test]
@@ -692,6 +737,12 @@ mod tests {
         assert_ne!(shape("f(g())", version), shape("f((g()))", version));
         assert_ne!(shape("return {f()}", version), shape("return {(f())}", version));
         assert_ne!(shape("x = a .. b .. c", version), shape("x = (a .. b) .. c", version));
+        assert_ne!(shape("x = a - b - c - d", version), shape("x = a - (b - c) - d", version));
+        assert_ne!(
+            shape("x = a .. b .. c .. d", version),
+            shape("x = a .. (b .. c) .. d", version)
+        );
+        assert_ne!(shape("x = a - b + c", version), shape("x = a + b - c", version));
         assert_ne!(shape(r#"x = "\xFE""#, version), shape(r#"x = "\xFF""#, version));
         assert_ne!(shape("x = -(1i)", LuaVersion::Luau), shape("x = -1i", LuaVersion::Luau));
     }

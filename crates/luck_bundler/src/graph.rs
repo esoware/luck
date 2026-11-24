@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::mem;
+use std::ops::{Index, IndexMut};
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
@@ -73,6 +74,20 @@ impl<'ast> DependencyGraph<'ast> {
             FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
         let found = discover_reachable(arenas, reader, &entry);
         number_modules(arenas, reader, entry, found)
+    }
+}
+
+impl<'ast> Index<ModuleId> for DependencyGraph<'ast> {
+    type Output = ModuleInfo<'ast>;
+
+    fn index(&self, id: ModuleId) -> &ModuleInfo<'ast> {
+        &self.modules[id.0]
+    }
+}
+
+impl<'ast> IndexMut<ModuleId> for DependencyGraph<'ast> {
+    fn index_mut(&mut self, id: ModuleId) -> &mut ModuleInfo<'ast> {
+        &mut self.modules[id.0]
     }
 }
 

@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use luck_benchmark_files::{test_files, test_projects};
 use luck_codegen::LiteralSpelling;
 
@@ -27,15 +27,14 @@ fn bench_codegen(criterion: &mut Criterion) {
         let allocator = Allocator::new();
         let parse_results = project.parse_files(&allocator);
         group.bench_function(id, |bencher| {
-            bencher.iter(|| {
-                for parse_result in &parse_results {
-                    let output = Vec::with_capacity(parse_result.source.len());
-                    black_box(luck_codegen::compact_into(
-                        black_box(&parse_result.chunk),
-                        spelling,
-                        output,
-                    ));
-                }
+            bencher.iter_with_large_drop(|| {
+                parse_results
+                    .iter()
+                    .map(|parse_result| {
+                        let output = Vec::with_capacity(parse_result.source.len());
+                        luck_codegen::compact_into(&parse_result.chunk, spelling, output)
+                    })
+                    .collect::<Vec<_>>()
             });
         });
     }

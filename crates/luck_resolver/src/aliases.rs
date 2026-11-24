@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use crate::file_system::FileSystem;
 use crate::luaurc::parse_aliases;
 use crate::path::lexically_normalized;
-use crate::shared_cache::SharedCache;
+use crate::shared_cache::{Generation, SharedCache};
 
 #[derive(Debug)]
 pub(crate) enum AliasTarget {
@@ -36,7 +36,7 @@ pub(crate) struct AliasesInEffect {
 }
 
 /// The `.luaurc` alias tables read so far, shared by every thread.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct AliasCache {
     declared_tables: SharedCache<OsString, Arc<Declared>>,
     /// The aliases in effect in each directory a require came from.
@@ -53,6 +53,13 @@ enum Declared {
 }
 
 impl AliasCache {
+    pub(crate) fn new(generation: &Arc<Generation>) -> Self {
+        Self {
+            declared_tables: SharedCache::new(generation),
+            merged_tables: SharedCache::new(generation),
+        }
+    }
+
     pub(crate) fn clear(&self) {
         self.declared_tables.clear();
         self.merged_tables.clear();
@@ -125,9 +132,9 @@ mod tests {
 
     use super::*;
     use crate::ResolveError;
-    use crate::cache::Cache;
     use crate::file_system::FileSystemOs;
     use crate::fixtures::{canonical, luau_project, write_files};
+    use crate::fs_cache::FsCache;
     use crate::luau::Luau;
 
     #[test]
@@ -144,14 +151,15 @@ mod tests {
         )
         .expect("write aliases");
         let current = source_directory.join("main.luau");
-        let luau = Luau::default();
-        let cache = Cache::new(FileSystemOs);
+        let generation = Arc::default();
+        let luau = Luau::new(&generation);
+        let fs_cache = FsCache::new(FileSystemOs, &generation);
         let merged = Arc::as_ptr(&luau.aliases().in_effect(&FileSystemOs, &source_directory));
         assert_eq!(luau.aliases().merged_tables.len(), 1);
         assert_eq!(luau.aliases().declared_tables.len(), source_directory.ancestors().count());
         assert_eq!(luau.aliases().in_effect(&FileSystemOs, &source_directory).targets.len(), 64);
         for module in ["@alias0/utils", "@ALIAS63/utils", "@alias0/utils"] {
-            let resolved = luau.resolve(&cache, &current, module).expect("resolve cached alias");
+            let resolved = luau.resolve(&fs_cache, &current, module).expect("resolve cached alias");
             assert_eq!(resolved.path, source_directory.join("utils.luau"));
             assert!(!resolved.is_self_alias_shadowed);
             let reused = luau.aliases().in_effect(&FileSystemOs, &source_directory);
@@ -175,16 +183,17 @@ mod tests {
         );
         let current = source_directory.join("main.luau");
         let sibling_file = sibling.join("main.luau");
-        let luau = Luau::default();
-        let cache = Cache::new(FileSystemOs);
+        let generation = Arc::default();
+        let luau = Luau::new(&generation);
+        let fs_cache = FsCache::new(FileSystemOs, &generation);
         for _ in 0..2 {
             for module in ["@SHARED/utils", "@inherited/utils"] {
                 let resolved =
-                    luau.resolve(&cache, &current, module).expect("resolve inherited alias");
+                    luau.resolve(&fs_cache, &current, module).expect("resolve inherited alias");
                 assert_eq!(resolved.path, source_directory.join("utils.luau"));
             }
             let error = luau
-                .resolve(&cache, &sibling_file, "@SHARED/utils")
+                .resolve(&fs_cache, &sibling_file, "@SHARED/utils")
                 .expect_err("sibling must not inherit child aliases");
             assert!(matches!(error, ResolveError::NotFound(_)), "{error:?}");
         }
@@ -197,11 +206,12 @@ mod tests {
         let source_directory = canonical(&project, "src");
         write_files(project.path(), &[(".luaurc", r#"{"aliases":{"SeLf":"missing"}}"#)]);
         let current = source_directory.join("init.luau");
-        let luau = Luau::default();
-        let cache = Cache::new(FileSystemOs);
+        let generation = Arc::default();
+        let luau = Luau::new(&generation);
+        let fs_cache = FsCache::new(FileSystemOs, &generation);
         for _ in 0..2 {
             let resolved =
-                luau.resolve(&cache, &current, "@SELF/utils").expect("resolve built-in self");
+                luau.resolve(&fs_cache, &current, "@SELF/utils").expect("resolve built-in self");
             assert_eq!(resolved.path, source_directory.join("utils.luau"));
             assert!(resolved.is_self_alias_shadowed);
         }

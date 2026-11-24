@@ -13,6 +13,7 @@ use luck_ast::{Expression, Name};
 use luck_diagnostics::Diagnostic;
 use luck_token::{BinOp, LuaVersion, MAX_ACTIVE_LOCALS, Span, UnOp};
 
+use super::Constness;
 use crate::checker::{too_many_locals, too_many_upvalues};
 use crate::id::SymbolId;
 use crate::scoping::Scoping;
@@ -130,7 +131,7 @@ impl Limits {
         &mut self,
         symbol: SymbolId,
         span: Span,
-        is_constant: bool,
+        constness: Constness,
         errors: &mut Vec<Diagnostic>,
     ) {
         let depth = self.frames.len() - 1;
@@ -138,9 +139,11 @@ impl Limits {
         if self.symbols.len() <= index {
             self.symbols.resize(index + 1, None);
         }
-        self.symbols[index] =
-            Some(if is_constant { Tracked::Constant } else { Tracked::Variable(depth) });
-        if !is_constant || !self.version.has_register_local_limit() {
+        self.symbols[index] = Some(match constness {
+            Constness::Constant => Tracked::Constant,
+            Constness::Variable => Tracked::Variable(depth),
+        });
+        if constness == Constness::Variable || !self.version.has_register_local_limit() {
             self.hidden(1, span, errors);
         }
     }

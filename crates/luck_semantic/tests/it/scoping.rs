@@ -604,6 +604,23 @@ type function g(t) return t end",
 }
 
 #[test]
+fn type_function_body_sees_no_type_of_a_closed_block() {
+    let allocator = Allocator::new();
+    let scoping = scoping_in(
+        &allocator,
+        "\
+do type Closed = number end
+do
+type Open = number
+type function f() return Closed, Open end
+end",
+        LuaVersion::Luau,
+    );
+    assert_eq!(references(&scoping, "Closed").len(), 1);
+    assert_eq!(references(&scoping, "Open").len(), 0);
+}
+
+#[test]
 fn type_runtime_names_are_only_known_in_type_functions() {
     let allocator = Allocator::new();
     let scoping = scoping_in(

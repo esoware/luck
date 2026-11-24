@@ -12,7 +12,6 @@ use luck_ast::{
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span};
-use rustc_hash::FxHashSet;
 
 use self::gotos::{BlockStart, FunctionStart, Gotos, Sink};
 use self::limits::{Limits, Upvalue};
@@ -135,7 +134,7 @@ impl SemanticBuilder {
             type_function_scope: None,
             type_depth: 0,
             local_functions: Vec::new(),
-            type_names: FxHashSet::default(),
+            type_names: Vec::new(),
             scratch_nodes: Vec::new(),
             deferred_writes: Vec::new(),
         };
@@ -165,11 +164,20 @@ impl Binding {
     }
 }
 
+/// Lua 5.4+: whether a local is a compile-time constant, whose uses read
+/// its value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Constness {
+    Constant,
+    Variable,
+}
+
 /// What a scope's exit restores.
 struct OuterScope {
     scope: ScopeId,
     function: ScopeId,
     shadowed_len: usize,
+    type_names_len: usize,
     global_star: Option<bool>,
     named_globals: u32,
     /// Also the count where a label that ends the inner block resolves.
@@ -261,8 +269,8 @@ struct Builder<'ast> {
     type_depth: u32,
     /// The `local function`s whose bodies the walk is in, innermost last.
     local_functions: Vec<SymbolId>,
-    /// Luau: every type declared by a block entered so far.
-    type_names: FxHashSet<&'ast str>,
+    /// Luau: every type the open blocks declare, outermost block's first.
+    type_names: Vec<&'ast str>,
     /// The nodes of names a statement binds once its values are read,
     /// innermost statement's last.
     scratch_nodes: Vec<NodeId>,
@@ -352,6 +360,7 @@ impl<'ast> Builder<'ast> {
             scope: mem::replace(&mut self.current_scope, id),
             function: mem::replace(&mut self.current_function, function),
             shadowed_len: self.shadowed.len(),
+            type_names_len: self.type_names.len(),
             global_star: self.global_star,
             named_globals: self.named_globals,
             active_vars: self.active_vars,
@@ -380,6 +389,7 @@ impl<'ast> Builder<'ast> {
         for (name, previous) in self.shadowed.drain(outer.shadowed_len..).rev() {
             self.bindings[name.index()] = previous;
         }
+        self.type_names.truncate(outer.type_names_len);
     }
 
     /// The active variables where the innermost open block began, which is
@@ -388,15 +398,13 @@ impl<'ast> Builder<'ast> {
         self.outer_scopes.last().map_or(0, |outer| outer.active_vars)
     }
 
-    /// Declares a local, which is a Lua 5.4+ compile-time constant when
-    /// `is_constant`.
     fn declare(
         &mut self,
         text: &str,
         span: Span,
         kind: SymbolKind,
         declaration: NodeId,
-        is_constant: bool,
+        constness: Constness,
     ) -> SymbolId {
         let name = self.intern(text);
         let shadows = self.binding(name).local();
@@ -408,7 +416,7 @@ impl<'ast> Builder<'ast> {
             self.env_name = Some(name);
         }
         if let Some(limits) = &mut self.limits {
-            limits.local(id, span, is_constant, &mut self.errors);
+            limits.local(id, span, constness, &mut self.errors);
         }
         id
     }
@@ -419,12 +427,12 @@ impl<'ast> Builder<'ast> {
         name: &Name<'_>,
         kind: SymbolKind,
         declaration: NodeId,
-        is_constant: bool,
+        constness: Constness,
     ) -> Option<&mut Symbol> {
         if name.text.is_empty() {
             return None;
         }
-        let id = self.declare(name.text.as_str(), name.span, kind, declaration, is_constant);
+        let id = self.declare(name.text.as_str(), name.span, kind, declaration, constness);
         self.scoping.set_role(name.index, NameRole::Symbol(id));
         Some(self.scoping.symbol_mut(id))
     }
@@ -437,9 +445,10 @@ impl<'ast> Builder<'ast> {
         }
     }
 
-    /// Lua 5.5: a `global` declaration of `name`, which a value assigns when
-    /// `is_assigned`.
-    fn declare_global(&mut self, name: &Name<'_>, is_assigned: bool, is_read_only: bool) {
+    /// Lua 5.5: a `global` declaration of `name`, which binds it to
+    /// `binding`, a `Global` or a `ReadOnlyGlobal`, and which a value
+    /// assigns when `is_assigned`.
+    fn declare_global(&mut self, name: &Name<'_>, binding: Binding, is_assigned: bool) {
         if name.text.is_empty() {
             return;
         }
@@ -448,7 +457,7 @@ impl<'ast> Builder<'ast> {
         if is_assigned {
             self.scoping.mark_assigned_global(id);
         }
-        self.bind(id, if is_read_only { Binding::ReadOnlyGlobal } else { Binding::Global });
+        self.bind(id, binding);
         self.named_globals += 1;
         self.active_vars += 1;
     }
@@ -476,7 +485,7 @@ impl<'ast> Builder<'ast> {
         // inside a type function they're no references of this chunk.
         if resolved.is_none()
             && self.type_function_scope.is_some()
-            && (text == "types" || self.type_names.contains(text))
+            && (text == "types" || self.type_names.contains(&text))
         {
             return None;
         }
@@ -596,7 +605,7 @@ impl<'ast> Builder<'ast> {
     fn record_type_names(&mut self, block: &'ast Block<'ast>) {
         for stmt in &block.stmts {
             if let Statement::TypeDeclaration(declaration) = stmt {
-                self.type_names.insert(declaration.name.text.as_str());
+                self.type_names.push(declaration.name.text.as_str());
             }
         }
     }
@@ -726,11 +735,13 @@ impl<'ast> Builder<'ast> {
             self.visit_type(annotation);
         }
         let own_symbol = if let FunctionBinding::OwnName { name, declaration, kind } = binding {
-            self.declare_name(name, SymbolKind::FunctionName, declaration, false).map(|symbol| {
-                symbol.is_exported = kind.is_exported(); // Luau
-                symbol.is_read_only = kind.is_const(); // Luau
-                symbol.id
-            })
+            self.declare_name(name, SymbolKind::FunctionName, declaration, Constness::Variable).map(
+                |symbol| {
+                    symbol.is_exported = kind.is_exported(); // Luau
+                    symbol.is_read_only = kind.is_const(); // Luau
+                    symbol.id
+                },
+            )
         } else {
             None
         };
@@ -748,18 +759,19 @@ impl<'ast> Builder<'ast> {
         self.push_scope(ScopeKind::Function, body_node);
         if matches!(binding, FunctionBinding::ImplicitSelf) {
             let span = Span::new(body.span.start, body.span.start);
-            self.declare("self", span, SymbolKind::ImplicitSelf, body_node, false);
+            self.declare("self", span, SymbolKind::ImplicitSelf, body_node, Constness::Variable);
         }
         for (i, param) in body.params.iter().enumerate() {
             let node = self.scratch_nodes[first_param + i];
-            self.declare_name(&param.name, SymbolKind::Parameter, node, false);
+            self.declare_name(&param.name, SymbolKind::Parameter, node, Constness::Variable);
         }
         self.scratch_nodes.truncate(first_param);
         if let (Some(vararg), Some(node)) = (body.vararg.as_deref(), vararg_node) {
             // Lua 5.5: `...name` binds the vararg table to a read-only local,
             // and a plain `...` to a hidden one.
             if let Some(name) = &vararg.name
-                && let Some(symbol) = self.declare_name(name, SymbolKind::Parameter, node, false)
+                && let Some(symbol) =
+                    self.declare_name(name, SymbolKind::Parameter, node, Constness::Variable)
             {
                 symbol.is_read_only = true;
             }
@@ -770,7 +782,7 @@ impl<'ast> Builder<'ast> {
             // `arg`, after its parameters, as `parlist` declares it.
             if self.version.has_implicit_vararg_table() {
                 let span = Span::new(vararg.span.start, vararg.span.start);
-                self.declare("arg", span, SymbolKind::ImplicitArg, node, false);
+                self.declare("arg", span, SymbolKind::ImplicitArg, node, Constness::Variable);
             }
         }
         self.block(&body.block);
@@ -954,9 +966,13 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             });
         for (i, attributed) in local_assignment.names.iter().enumerate() {
             let node = self.scratch_nodes[first_name + i];
-            let is_constant = is_last_constant && i == last;
+            let constness = if is_last_constant && i == last {
+                Constness::Constant
+            } else {
+                Constness::Variable
+            };
             let Some(symbol) =
-                self.declare_name(&attributed.name, SymbolKind::Local, node, is_constant)
+                self.declare_name(&attributed.name, SymbolKind::Local, node, constness)
             else {
                 continue;
             };
@@ -1091,9 +1107,12 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         self.push_scope(ScopeKind::Loop, node);
         self.hidden_locals(self.version.numeric_for_state_locals(), numeric_for.name.span);
         let is_read_only = self.version.has_const_for_variables();
-        if let Some(symbol) =
-            self.declare_name(&numeric_for.name, SymbolKind::NumericForVariable, node, false)
-        {
+        if let Some(symbol) = self.declare_name(
+            &numeric_for.name,
+            SymbolKind::NumericForVariable,
+            node,
+            Constness::Variable,
+        ) {
             symbol.is_read_only = is_read_only; // Lua 5.5
         }
         self.loops.push(LoopFrame::WhileOrFor);
@@ -1126,9 +1145,12 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         let has_const_control = self.version.has_const_for_variables();
         for (i, binding) in generic_for.names.iter().enumerate() {
             let declaration = self.scratch_nodes[first_name + i];
-            if let Some(symbol) =
-                self.declare_name(&binding.name, SymbolKind::IteratorVariable, declaration, false)
-            {
+            if let Some(symbol) = self.declare_name(
+                &binding.name,
+                SymbolKind::IteratorVariable,
+                declaration,
+                Constness::Variable,
+            ) {
                 // Lua 5.5: only the first variable is the control variable.
                 symbol.is_read_only = i == 0 && has_const_control;
             }
@@ -1168,8 +1190,12 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         }
         let is_assigned = !global_declaration.exprs.is_empty();
         for attributed in &global_declaration.names {
-            let is_read_only = attributed.attribute_or(leading).is_some_and(is_read_only_attribute);
-            self.declare_global(&attributed.name, is_assigned, is_read_only);
+            let binding = if attributed.attribute_or(leading).is_some_and(is_read_only_attribute) {
+                Binding::ReadOnlyGlobal
+            } else {
+                Binding::Global
+            };
+            self.declare_global(&attributed.name, binding, is_assigned);
         }
         self.leave();
     }
@@ -1178,7 +1204,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     fn visit_global_function(&mut self, global_function: &'ast GlobalFunction<'ast>) {
         self.enter(AstKind::GlobalFunction(global_function));
         self.name_node(&global_function.name);
-        self.declare_global(&global_function.name, true, false);
+        self.declare_global(&global_function.name, Binding::Global, true);
         self.function(&global_function.body, FunctionBinding::Nothing, global_function.span.start);
         self.leave();
     }

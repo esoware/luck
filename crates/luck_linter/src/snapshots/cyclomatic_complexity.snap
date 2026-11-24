@@ -56,6 +56,74 @@ warning: function `return_and` has cyclomatic complexity 2 (threshold: 0)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: split this function into smaller helpers
 
+warning: function `after_return` has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:1:1
+1 | function after_return() do return end return a and b end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `if_and` has cyclomatic complexity 3 (threshold: 0)
+ --> Lua54:1:1
+1 | function if_and() if a and b then end end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `elseif_chain` has cyclomatic complexity 4 (threshold: 0)
+ --> Lua54:1:1
+1 | function elseif_chain() if a then elseif b then elseif c then end end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `while_loop` has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:1:1
+1 | function while_loop() while a do end end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `repeat_loop` has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:1:1
+1 | function repeat_loop() repeat until a end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `numeric_for` has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:1:1
+1 | function numeric_for() for i = 1, 2 do end end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `generic_for` has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:1:1
+1 | function generic_for() for _ in f do end end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: split this function into smaller helpers
+
+warning: function `outer` has cyclomatic complexity 1 (threshold: 0)
+ --> Lua54:1:1
+1 | function outer()
+  | ^^^^^^^^^^^^^^^^
+2 |   local f = function() if a then end end
+3 |   local function g() if b then end end
+4 | end
+  | ^^^
+help: split this function into smaller helpers
+
+warning: function (anonymous) has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:2:13
+1 | function outer()
+2 |   local f = function() if a then end end
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 |   local function g() if b then end end
+help: split this function into smaller helpers
+
+warning: function `g` has cyclomatic complexity 2 (threshold: 0)
+ --> Lua54:3:3
+2 |   local f = function() if a then end end
+3 |   local function g() if b then end end
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 | end
+help: split this function into smaller helpers
+
 warning: function `comp_value` has cyclomatic complexity 2 (threshold: 0)
  --> Luau:1:1
 1 | function comp_value() t[1] += a or b end

@@ -98,11 +98,20 @@ fn run_in_child(root: &Path, file: &SuiteFile, program: &[u8]) -> io::Result<End
         }
     }
     let mut child = command.spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(program)?;
-    }
-    let Some(status) = wait(&mut child)? else {
-        return Ok(Ending::TimedOut);
+    let ended = child
+        .stdin
+        .take()
+        .map_or(Ok(()), |mut stdin| stdin.write_all(program))
+        .and_then(|()| wait(&mut child));
+    let status = match ended {
+        Ok(Some(status)) => status,
+        Ok(None) => return Ok(Ending::TimedOut),
+        Err(error) => {
+            // The run failed already, so only its own error is worth reporting.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
     };
     Ok(Verdict::read(&verdict_path).map_or_else(|| Ending::Crashed(status.code()), Ending::Verdict))
 }

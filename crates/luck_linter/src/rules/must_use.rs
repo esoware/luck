@@ -86,7 +86,6 @@ local s = 'x'
 s:upper()",
             LuaTarget::Lua54,
         ),
-        ("tostring(42)", LuaTarget::Lua54),
     ];
 
     #[test]

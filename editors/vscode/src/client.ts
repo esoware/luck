@@ -20,6 +20,7 @@ export class LuckClient {
 	private client: LanguageClient | undefined;
 	private operation: Promise<void> = Promise.resolve();
 	private restartTimer: NodeJS.Timeout | undefined;
+	private shouldRun = false;
 	private readonly context: vscode.ExtensionContext;
 	private readonly statusBar: StatusBar;
 	private readonly settingsListener = vscode.workspace.onDidChangeConfiguration((event) => {
@@ -27,7 +28,7 @@ export class LuckClient {
 			void (setting("enable") ? this.start() : this.stop());
 			return;
 		}
-		if (RESTART_SETTINGS.some((key) => affectsSetting(event, key))) {
+		if (this.shouldRun && RESTART_SETTINGS.some((key) => affectsSetting(event, key))) {
 			clearTimeout(this.restartTimer);
 			this.restartTimer = setTimeout(() => void this.restart(), RESTART_DEBOUNCE_MS);
 		}
@@ -47,14 +48,18 @@ export class LuckClient {
 	}
 
 	public start(): Promise<void> {
+		this.shouldRun = true;
 		return this.enqueue(() => this.doStart());
 	}
 
 	public stop(): Promise<void> {
+		this.shouldRun = false;
+		clearTimeout(this.restartTimer);
 		return this.enqueue(() => this.doStop());
 	}
 
 	public restart(): Promise<void> {
+		this.shouldRun = true;
 		return this.enqueue(async () => {
 			await this.doStop();
 			await this.doStart();
@@ -62,7 +67,6 @@ export class LuckClient {
 	}
 
 	public shutdown(): Promise<void> {
-		clearTimeout(this.restartTimer);
 		this.settingsListener.dispose();
 		return this.stop();
 	}
@@ -139,6 +143,16 @@ export class LuckClient {
 			return;
 		}
 		this.client = undefined;
+		if (client.state === State.Starting) {
+			await new Promise<void>((resolve) => {
+				const listener = client.onDidChangeState(({ newState }) => {
+					if (newState !== State.Starting) {
+						listener.dispose();
+						resolve();
+					}
+				});
+			});
+		}
 		try {
 			await client.stop();
 		} catch (error) {

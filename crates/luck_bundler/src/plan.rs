@@ -219,7 +219,7 @@ impl<'ast> Plan<'ast> {
             }
         }
 
-        let entry = &graph.modules[graph.entry_id.0];
+        let entry = &graph[graph.entry_id];
         self.push_module(graph.entry_id, entry, version, None, Binding::Entry);
         if let Some(slot) = entry_slot {
             let exporting_slot = entry.exports.has_values.then_some(slot);
@@ -236,7 +236,7 @@ impl<'ast> Plan<'ast> {
         let mut seen_strings: FxHashSet<&str> = FxHashSet::default();
         let mut strings_by_module: Vec<Vec<&'ast str>> = vec![Vec::new(); graph.modules.len()];
         let ordered_dependencies =
-            graph.topological_order.iter().flat_map(|id| &graph.modules[id.0].dependencies);
+            graph.topological_order.iter().flat_map(|id| &graph[*id].dependencies);
         for dependency in ordered_dependencies {
             if seen_strings.insert(dependency.require_string) {
                 strings_by_module[dependency.target.0].push(dependency.require_string);
@@ -256,7 +256,7 @@ impl<'ast> Plan<'ast> {
             self.push_path_registrations(id, &strings_by_module[id.0], version);
         }
 
-        let entry = &graph.modules[graph.entry_id.0];
+        let entry = &graph[graph.entry_id];
         self.push_module(graph.entry_id, entry, version, None, Binding::Entry);
         let entry_strings = &strings_by_module[graph.entry_id.0];
         for &string in entry_strings {
@@ -286,11 +286,7 @@ impl<'ast> Plan<'ast> {
 fn non_entry_modules<'graph, 'ast>(
     graph: &'graph DependencyGraph<'ast>,
 ) -> impl Iterator<Item = (ModuleId, &'graph ModuleInfo<'ast>)> {
-    graph
-        .topological_order
-        .iter()
-        .filter(|id| **id != graph.entry_id)
-        .map(|id| (*id, &graph.modules[id.0]))
+    graph.topological_order.iter().filter(|id| **id != graph.entry_id).map(|id| (*id, &graph[*id]))
 }
 
 /// The first of `__luck_`, `__luck1_`, `__luck2_`, and so on that no module's

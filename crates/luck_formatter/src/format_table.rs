@@ -9,6 +9,15 @@ use luck_token::{Span, TokenKind, has_line_break};
 
 use crate::ir::{Formatter, LineMode};
 
+/// Where a table stands, which decides the group it breaks in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TablePlacement {
+    /// A call's argument hugged by its parentheses, which breaks in the
+    /// argument list's place.
+    Hugged,
+    Standalone,
+}
+
 fn is_fillable(table: &TableConstructor<'_>) -> bool {
     table.fields.iter().all(|field| match field {
         Field::Positional(value) => matches!(
@@ -55,8 +64,11 @@ impl<'ast> Formatter<'ast> {
         has_shared_line && is_multi_line
     }
 
-    /// A hugged table breaks in its call's argument list's place.
-    pub(crate) fn write_table(&mut self, table: &TableConstructor<'ast>, is_hugged: bool) {
+    pub(crate) fn write_table(
+        &mut self,
+        table: &TableConstructor<'ast>,
+        placement: TablePlacement,
+    ) {
         if table.fields.is_empty() {
             self.write_dangling_list(("{", "}"), table.span.end, LineMode::SoftOrSpace);
             return;
@@ -122,10 +134,9 @@ impl<'ast> Formatter<'ast> {
             grouped.soft_line_or_space();
             grouped.token("}");
         };
-        if is_hugged {
-            self.hugged_group_with_id(group_id, content);
-        } else {
-            self.group_with_id(group_id, content);
+        match placement {
+            TablePlacement::Hugged => self.hugged_group_with_id(group_id, content),
+            TablePlacement::Standalone => self.group_with_id(group_id, content),
         }
     }
 

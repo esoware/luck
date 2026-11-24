@@ -45,11 +45,11 @@
 //! ```
 
 mod aliases;
-mod cache;
 mod error;
 mod file_system;
 #[cfg(test)]
 mod fixtures;
+mod fs_cache;
 mod lua;
 mod luau;
 mod luaurc;

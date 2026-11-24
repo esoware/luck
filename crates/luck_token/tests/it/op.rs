@@ -84,6 +84,23 @@ fn un_op_and_compound_op_spell_their_tokens() {
 }
 
 #[test]
+fn compound_op_applies_the_binary_operator_it_spells() {
+    for op in [
+        CompoundOp::Add,
+        CompoundOp::Sub,
+        CompoundOp::Mul,
+        CompoundOp::Div,
+        CompoundOp::FloorDiv,
+        CompoundOp::Mod,
+        CompoundOp::Pow,
+        CompoundOp::Concat,
+    ] {
+        let spelled = op.static_text().strip_suffix('=').expect("a compound operator ends in `=`");
+        assert_eq!(op.binary_op().static_text(), spelled, "{op:?}");
+    }
+}
+
+#[test]
 fn bin_op_is_comparison_holds_only_for_comparisons() {
     assert!(BinOp::Eq.is_comparison());
     assert!(BinOp::Lt.is_comparison());

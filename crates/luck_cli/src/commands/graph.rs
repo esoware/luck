@@ -70,7 +70,7 @@ impl GraphArgs {
 }
 
 fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
-    let module_path = |id: ModuleId| to_slash_lossy(&dependency_graph.modules[id.0].path);
+    let module_path = |id: ModuleId| to_slash_lossy(&dependency_graph[id].path);
 
     let mut modules_map = Map::new();
     for module in &dependency_graph.modules {
@@ -106,7 +106,7 @@ fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
     println!("digraph dependencies {{");
     for module in &dependency_graph.modules {
         for dependency in &module.dependencies {
-            let target = &dependency_graph.modules[dependency.target.0];
+            let target = &dependency_graph[dependency.target];
             println!("  \"{}\" -> \"{}\";", quoted(&module.path), quoted(&target.path));
         }
     }

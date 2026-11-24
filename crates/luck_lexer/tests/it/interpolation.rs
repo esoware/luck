@@ -1,6 +1,6 @@
 use luck_diagnostics::Diagnostic;
 use luck_lexer::{Lexer, lex};
-use luck_token::{Comment, LuaVersion, TokenKind};
+use luck_token::{LuaVersion, Token, TokenKind};
 
 use crate::common::{token_texts, tokens_in};
 
@@ -275,12 +275,8 @@ fn interpolated_segments_preserve_raw_escapes_and_spans() {
         }
         let mut lexer =
             Lexer::new(source.as_bytes(), LuaVersion::Luau).expect("source fits u32 spans");
-        for token in &result.tokens {
-            assert_eq!(&lexer.next_token(), token);
-        }
-        let finished = lexer.finish();
-        assert_eq!(finished.comments, Vec::<Comment>::new());
-        assert!(finished.errors.is_empty(), "{:?}", finished.errors);
+        let streamed: Vec<Token> = result.tokens.iter().map(|_| lexer.next_token()).collect();
+        assert_eq!(lexer.finish(streamed), result);
     }
 }
 

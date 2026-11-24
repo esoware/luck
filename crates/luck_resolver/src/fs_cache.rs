@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use rustc_hash::FxHashMap;
 
 use crate::file_system::{FileMetadata, FileSystem};
-use crate::shared_cache::SharedCache;
+use crate::shared_cache::{Generation, SharedCache};
 
 /// What a resolver has read through `file_system`, which every thread
 /// resolving through it shares.
@@ -18,7 +18,7 @@ use crate::shared_cache::SharedCache;
 /// the listing can't settle goes to `file_system`, such as a symlink or a name
 /// that matches an entry only ignoring case.
 #[derive(Debug)]
-pub(crate) struct Cache<Fs> {
+pub(crate) struct FsCache<Fs> {
     file_system: Fs,
     directories: SharedCache<OsString, Arc<Directory>>,
     /// The canonical paths only `file_system` could give.
@@ -60,12 +60,12 @@ enum Listed {
     Missing,
 }
 
-impl<Fs: FileSystem> Cache<Fs> {
-    pub(crate) fn new(file_system: Fs) -> Self {
+impl<Fs: FileSystem> FsCache<Fs> {
+    pub(crate) fn new(file_system: Fs, generation: &Arc<Generation>) -> Self {
         Self {
             file_system,
-            directories: SharedCache::default(),
-            canonical_files: SharedCache::default(),
+            directories: SharedCache::new(generation),
+            canonical_files: SharedCache::new(generation),
         }
     }
 
@@ -179,15 +179,19 @@ mod tests {
     use crate::file_system::FileSystemOs;
     use crate::fixtures::project_with;
 
-    fn assert_answers_as_the_os(cache: &Cache<FileSystemOs>, directory: &Path, names: &[&str]) {
+    fn assert_answers_as_the_os(
+        fs_cache: &FsCache<FileSystemOs>,
+        directory: &Path,
+        names: &[&str],
+    ) {
         for name in names {
             let path = directory.join(name);
-            assert_eq!(cache.is_file(&path), path.is_file(), "is_file({name:?})");
-            assert_eq!(cache.is_dir(&path), path.is_dir(), "is_dir({name:?})");
+            assert_eq!(fs_cache.is_file(&path), path.is_file(), "is_file({name:?})");
+            assert_eq!(fs_cache.is_dir(&path), path.is_dir(), "is_dir({name:?})");
             if path.is_file() {
                 let canonical = FileSystemOs.canonicalize(&path).unwrap();
                 assert_eq!(
-                    cache.canonical_file(&path).as_os_str(),
+                    fs_cache.canonical_file(&path).as_os_str(),
                     canonical.as_os_str(),
                     "{name:?}"
                 );
@@ -207,7 +211,7 @@ mod tests {
             ("src/utils.lua:stream", ""),
         ]);
         assert_answers_as_the_os(
-            &Cache::new(FileSystemOs),
+            &FsCache::new(FileSystemOs, &Arc::default()),
             &project.path().join("src"),
             &[
                 "utils.lua",
@@ -239,7 +243,7 @@ mod tests {
     fn a_name_beside_one_that_is_not_ascii_goes_to_the_os() {
         let project = project_with(&[("src/\u{e9}.lua", ""), ("src/plain.lua", "")]);
         assert_answers_as_the_os(
-            &Cache::new(FileSystemOs),
+            &FsCache::new(FileSystemOs, &Arc::default()),
             &project.path().join("src"),
             &["\u{e9}.lua", "\u{c9}.lua", "e\u{301}.lua", "e.lua", "plain.lua", "missing.lua"],
         );
@@ -254,9 +258,13 @@ mod tests {
         if symlink_file(&target, &link).is_err() {
             return;
         }
-        let cache = Cache::new(FileSystemOs);
-        assert_answers_as_the_os(&cache, &project.path().join("src"), &["link.lua", "plain.lua"]);
-        assert_eq!(cache.canonical_file(&link), FileSystemOs.canonicalize(&target).unwrap());
+        let fs_cache = FsCache::new(FileSystemOs, &Arc::default());
+        assert_answers_as_the_os(
+            &fs_cache,
+            &project.path().join("src"),
+            &["link.lua", "plain.lua"],
+        );
+        assert_eq!(fs_cache.canonical_file(&link), FileSystemOs.canonicalize(&target).unwrap());
     }
 
     #[test]
@@ -264,16 +272,17 @@ mod tests {
         let project = project_with(&[("src/utils.lua", "")]);
         let utils = project.path().join("src/utils.lua");
         let added = project.path().join("src/added.lua");
-        let cache = Cache::new(FileSystemOs);
-        let canonical = cache.canonical_file(&utils);
+        let generation = Arc::default();
+        let fs_cache = FsCache::new(FileSystemOs, &generation);
+        let canonical = fs_cache.canonical_file(&utils);
         fs::remove_file(&utils).expect("remove utils");
         fs::write(&added, "").expect("write added");
-        assert!(cache.is_file(&utils));
-        assert_eq!(cache.canonical_file(&utils), canonical);
-        assert!(!cache.is_file(&added));
+        assert!(fs_cache.is_file(&utils));
+        assert_eq!(fs_cache.canonical_file(&utils), canonical);
+        assert!(!fs_cache.is_file(&added));
 
-        cache.clear();
-        assert!(!cache.is_file(&utils));
-        assert!(cache.is_file(&added));
+        generation.clear(|| fs_cache.clear());
+        assert!(!fs_cache.is_file(&utils));
+        assert!(fs_cache.is_file(&added));
     }
 }

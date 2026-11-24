@@ -37,7 +37,7 @@ pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
             break;
         }
     }
-    LexResult { tokens, ..lexer.finish() }
+    lexer.finish(tokens)
 }
 
 #[derive(Debug)]
@@ -214,11 +214,11 @@ impl<'source> Lexer<'source> {
         self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS)
     }
 
-    /// What the lexer gathered beside its tokens, which went to whoever
-    /// called [`Lexer::next_token`], so the result holds none.
-    pub fn finish(self) -> LexResult {
+    /// What the lexer gathered, with `tokens`, the ones its caller took from
+    /// [`Lexer::next_token`].
+    pub fn finish(self, tokens: Vec<Token>) -> LexResult {
         LexResult {
-            tokens: Vec::new(),
+            tokens,
             comments: self.comments,
             errors: self.errors,
             lenient_escapes: self.lenient_escapes,

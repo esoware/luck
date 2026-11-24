@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use luck_allocator::Allocator;
+use luck_diagnostics::Diagnostic;
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_semantic::SemanticBuilder;
 
@@ -64,16 +65,18 @@ impl CheckArgs {
 
 fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     let file_path = file.path.as_path();
+    let label = file_path.to_string_lossy();
+    let version = file.project.target_for(Some(file_path)).version();
     let source = match FileSystemOs.read(file_path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            return Some(
-                format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
-            );
+            let mut rendered = Vec::new();
+            let source_file = SourceFile { label: &label, text: None, version };
+            DefaultReporter.render(source_file, &[Diagnostic::e010(&label, &error)], &mut rendered);
+            return Some(rendered);
         }
     };
 
-    let version = file.project.target_for(Some(file_path)).version();
     let result = luck_parser::parse(allocator, &source, version);
     let errors = if result.errors.is_empty() {
         // The compile-time errors real Lua reports beyond the grammar, such as
@@ -91,7 +94,6 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     }
 
     let mut rendered = Vec::new();
-    let label = file_path.to_string_lossy();
     let source_file = SourceFile { label: &label, text: Some(&source), version };
     DefaultReporter.render(source_file, &errors, &mut rendered);
     Some(rendered)
@@ -100,12 +102,16 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use clap::Parser as _;
+    use luck_allocator::Allocator;
+    use luck_config::Project;
 
-    use super::CheckArgs;
+    use super::{CheckArgs, check_file};
     use crate::cli::Cli;
     use crate::commands::Command;
+    use crate::project::ProjectFile;
 
     #[test]
     fn check_is_top_level_command_with_paths_and_config() {
@@ -119,5 +125,19 @@ mod tests {
         assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
         assert_eq!(config, Some(PathBuf::from("luck.json")));
         assert!(!no_error_on_unmatched_pattern);
+    }
+
+    #[test]
+    fn an_unreadable_file_reports_e010() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+
+        let rendered = check_file(&Allocator::new(), &file).expect("an unread file fails");
+
+        let text = String::from_utf8(rendered).expect("the report is UTF-8");
+        let label = file.path.to_string_lossy();
+        assert!(text.starts_with(&format!("[E010] error: cannot read file `{label}`: ")), "{text}");
+        assert!(text.ends_with("help: check that the file exists and is readable\n"), "{text}");
     }
 }

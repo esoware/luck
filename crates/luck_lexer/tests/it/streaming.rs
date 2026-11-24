@@ -51,14 +51,9 @@ y = 0x --[[ open",
                     break;
                 }
             }
-            assert_eq!(streamed, materialized.tokens, "{version:?} {source:?}");
-            let eof = streamed.last().expect("an EOF token");
-            assert_eq!(&lexer.next_token(), eof, "EOF repeats: {source:?}");
-            let finished = lexer.finish();
-            assert!(finished.tokens.is_empty(), "{version:?} {source:?}");
-            assert_eq!(finished.comments, materialized.comments, "{version:?} {source:?}");
-            assert_eq!(finished.errors, materialized.errors, "{version:?} {source:?}");
-            assert_eq!(finished.lenient_escapes, materialized.lenient_escapes, "{version:?}");
+            let eof = *streamed.last().expect("an EOF token");
+            assert_eq!(lexer.next_token(), eof, "EOF repeats: {source:?}");
+            assert_eq!(lexer.finish(streamed), materialized, "{version:?} {source:?}");
         }
     }
 }

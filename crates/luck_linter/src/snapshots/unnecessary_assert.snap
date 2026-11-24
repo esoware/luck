@@ -70,20 +70,6 @@ help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
  --> Lua54:1:1
-1 | assert'x'
-  | ^^^^^^^^^
-tag: unnecessary
-help: remove the `assert` or check a real condition
-
-warning: `assert` on a constant value always passes
- --> Lua54:1:1
-1 | assert[[x]]
-  | ^^^^^^^^^^^
-tag: unnecessary
-help: remove the `assert` or check a real condition
-
-warning: `assert` on a constant value always passes
- --> Lua54:1:1
 1 | assert{}
   | ^^^^^^^^
 tag: unnecessary

@@ -35,7 +35,7 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
 }
 
 fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
-    let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
+    let Some(args) = global_new_call(call, "UDim2", context.scoping()) else {
         return;
     };
     let [x_scale_arg, x_offset_arg, y_scale_arg, y_offset_arg] = args else {
@@ -93,6 +93,7 @@ mod tests {
         ("local x = 0.5 local u = UDim2.new(x, 0, 1, 0)", LuaTarget::LuauRoblox),
         ("local u = UDim2.new(0.5, 0)", LuaTarget::LuauRoblox),
         ("local UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
+        ("UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
         ("local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::Luau),
     ];
 

@@ -243,6 +243,30 @@ fn a_folder_added_to_the_workspace_is_walked() {
     assert!(places(&found).contains(&("main.lua", Position::new(1, 5))), "{found:?}");
 }
 
+/// The walk loads each config on a thread of its own, which a nesting past
+/// the parser's limit doesn't overflow, so the server reports the config as
+/// every other path that loads it does.
+#[test]
+fn the_walk_reports_a_config_nested_past_the_limit() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let config_path = directory.path().join("luck.json");
+    let nesting = 100_000;
+    let config = format!(
+        r#"{{ "lint": {{ "rules": {{ "cyclomatic_complexity": ["warn", {{ "max": 1 }}, {}{}] }} }} }}"#,
+        "[".repeat(nesting),
+        "]".repeat(nesting)
+    );
+    fs::write(&config_path, config).expect("write luck.json");
+    fs::write(directory.path().join("main.lua"), "print(1)\n").expect("write main.lua");
+
+    let mut client = Client::start_in(directory.path());
+    let config_uri = Uri::from_file_path(&config_path).expect("file path URI");
+    let diags = client.diagnostics(&config_uri, None);
+    let [diag] = diags.as_slice() else { panic!("one config error: {diags:?}") };
+    assert_eq!(diag.message, "invalid config: arrays and objects nest more than 128 levels deep");
+    client.shut_down().expect("the server is still up");
+}
+
 #[test]
 fn a_require_that_does_not_resolve_is_reported_until_its_module_exists() {
     let text = "\

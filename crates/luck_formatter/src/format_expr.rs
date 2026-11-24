@@ -17,9 +17,19 @@ use luck_token::{
     Span, TokenKind, UnOp, spell_integer, spell_number, spell_string, write_interpolated_text,
 };
 
+use crate::format_table::TablePlacement;
 use crate::ir::Formatter;
 use crate::numbers::normalize_number;
 use crate::quotes::requote;
+
+/// Where a broken operator chain puts the lines after its first.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ChainIndent {
+    /// Level with its first operand, for a chain that already sits on an
+    /// indented line of its own.
+    Level,
+    Indented,
+}
 
 /// A unary, binary, if, or cast expression, whose own parentheses show how
 /// a user groups it.
@@ -191,7 +201,9 @@ impl<'ast> Formatter<'ast> {
             Expression::StringLiteral(literal) => self.write_string(literal),
             Expression::Name(name) => self.ascii(name.text.as_bytes()),
             Expression::Suffixed(chain) => self.write_suffixed(chain),
-            Expression::BinaryOp(binary_op) => self.write_binary_chain(binary_op, true, slot),
+            Expression::BinaryOp(binary_op) => {
+                self.write_binary_chain(binary_op, ChainIndent::Indented, slot);
+            }
             Expression::UnaryOp(unary_op) => self.write_unary(unary_op, slot),
             Expression::Parenthesized(parenthesized) => {
                 self.token("(");
@@ -199,7 +211,9 @@ impl<'ast> Formatter<'ast> {
                 self.write_closing_comments(parenthesized.span.end);
                 self.token(")");
             }
-            Expression::TableConstructor(table) => self.write_table(table, false),
+            Expression::TableConstructor(table) => {
+                self.write_table(table, TablePlacement::Standalone);
+            }
             Expression::FunctionDef(function_def) => {
                 self.without_sorting_requires(|unsorted| {
                     unsorted.write_function_definition(function_def);
@@ -425,16 +439,12 @@ impl<'ast> Formatter<'ast> {
     /// every operator. An operand that binds tighter keeps a group of its
     /// own, so `a == b or c == d` breaks at `or` alone.
     ///
-    /// Unless `is_indented`, a broken chain keeps its operators level with
-    /// its first operand, for a condition that already sits on an indented
-    /// line of its own.
-    ///
     /// A comment that ends its line before an operand goes above the operator,
     /// which starts the operand's line when the chain breaks.
     pub(crate) fn write_binary_chain(
         &mut self,
         binary_op: &BinaryOp<'ast>,
-        is_indented: bool,
+        indent: ChainIndent,
         slot: Slot,
     ) {
         let operators = |f: &mut Self| {
@@ -448,10 +458,9 @@ impl<'ast> Formatter<'ast> {
         };
         self.group(|f| {
             f.write_expr_in(&binary_op.first, slot.operand(binary_op, 0));
-            if is_indented {
-                f.indent(operators);
-            } else {
-                operators(f);
+            match indent {
+                ChainIndent::Level => operators(f),
+                ChainIndent::Indented => f.indent(operators),
             }
         });
     }

@@ -4,6 +4,7 @@
 
 mod common;
 
+mod clear_cache;
 mod file_system;
 mod lua;
 mod luau;

@@ -11,7 +11,6 @@ use luck_linter::{
 };
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_stdlib::StdlibLibrary;
-use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};
 use crate::output::{read_stdin_source, write_output};
@@ -337,7 +336,9 @@ impl LintArgs {
         let total_errors = finding_errors + usize::from(fix_error.is_some());
         let version = stdlib.target.version();
 
-        let rendered = self.rendered(stdin_path, current_source, messages, version, verbosity);
+        let source_file = SourceFile { label: stdin_path, text: Some(current_source), version };
+        let diags = messages.into_iter().map(|message| message.diagnostic);
+        let rendered = self.rendered(source_file, diags, verbosity);
         let _ = if self.format.is_for_tools() && fixes.is_empty() {
             io::stdout().write_all(&rendered)
         } else {
@@ -389,17 +390,21 @@ impl LintArgs {
         verbosity: Verbosity,
     ) -> LintOutcome {
         let file_path = file.path.as_path();
+        let label = file_path.to_string_lossy();
         let source = match FileSystemOs.read(file_path) {
             Ok(bytes) => bytes,
             Err(error) => {
+                let version = file.project.target_for(Some(file_path)).version();
+                let source_file = SourceFile { label: &label, text: None, version };
+                let diag = Diagnostic::e010(&label, &error);
                 // A skipped file fails the run, so CI can't pass with files
                 // left unlinted.
                 return LintOutcome {
                     error_count: 1,
                     warning_count: 0,
                     is_fixed: false,
-                    note: Some(format!("error: cannot read `{}`: {error}", file_path.display())),
-                    rendered: Vec::new(),
+                    note: None,
+                    rendered: self.rendered(source_file, [diag], verbosity),
                 };
             }
         };
@@ -423,36 +428,33 @@ impl LintArgs {
 
         let (finding_errors, warning_count) = severity_counts(&messages);
         let version = stdlib.target.version();
-        let label = file_path.to_string_lossy();
-        let rendered = self.rendered(&label, current_source, messages, version, verbosity);
+        let source_file = SourceFile { label: &label, text: Some(current_source), version };
+        let diags = messages.into_iter().map(|message| message.diagnostic);
+        let rendered = self.rendered(source_file, diags, verbosity);
         // Fixes that couldn't be made or written fail the run, as an unread
         // file does.
         let error_count = finding_errors + usize::from(note.is_some());
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 
-    /// What the run prints for `messages`, in its format. `--quiet` drops
-    /// the warnings from the output only: they still count toward the exit
-    /// code.
+    /// What the run prints for `diags`, all in `file`, in its format.
+    /// `--quiet` drops the warnings from the output only: they still count
+    /// toward the exit code.
     fn rendered(
         &self,
-        label: &str,
-        source: &[u8],
-        messages: Vec<Message>,
-        version: LuaVersion,
+        file: SourceFile<'_>,
+        diags: impl IntoIterator<Item = Diagnostic>,
         verbosity: Verbosity,
     ) -> Vec<u8> {
         let mut rendered = Vec::new();
         if self.silent {
             return rendered;
         }
-        let diags: Vec<Diagnostic> = messages
+        let shown: Vec<Diagnostic> = diags
             .into_iter()
-            .map(|message| message.diagnostic)
             .filter(|diag| verbosity != Verbosity::Quiet || diag.is_error())
             .collect();
-        let file = SourceFile { label, text: Some(source), version };
-        self.format.reporter().render(file, &diags, &mut rendered);
+        self.format.reporter().render(file, &shown, &mut rendered);
         rendered
     }
 
@@ -557,10 +559,12 @@ fn print_lint_config(lint_config: &LintConfig) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use clap::Parser as _;
     use clap::error::ErrorKind;
     use luck_stdlib::library_for;
-    use luck_token::LuaTarget;
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::cli::Cli;
@@ -759,14 +763,14 @@ local unused = 1
 print(undefined_var)";
         let diags = lint_source(source, LuaTarget::Lua54, &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
+        let file = SourceFile {
+            label: "a.lua",
+            text: Some(source.as_bytes()),
+            version: LuaVersion::Lua54,
+        };
         let lines_when = |verbosity: Verbosity| {
-            let rendered = args.rendered(
-                "a.lua",
-                source.as_bytes(),
-                diags.clone(),
-                LuaVersion::Lua54,
-                verbosity,
-            );
+            let shown = diags.iter().map(|message| message.diagnostic.clone());
+            let rendered = args.rendered(file, shown, verbosity);
             String::from_utf8(rendered).expect("JSON is UTF-8")
         };
 
@@ -782,14 +786,31 @@ print(undefined_var)";
         let linter = Linter::new(LintConfig::default());
         let diags = lint_source("print(undefined_var)", LuaTarget::Lua54, &linter);
         assert!(!diags.is_empty(), "{diags:?}");
-        let rendered = lint_args(&["--silent"]).rendered(
-            "a.lua",
-            b"print(undefined_var)",
-            diags,
-            LuaVersion::Lua54,
-            Verbosity::Normal,
-        );
+        let file = SourceFile {
+            label: "a.lua",
+            text: Some(b"print(undefined_var)"),
+            version: LuaVersion::Lua54,
+        };
+        let shown = diags.into_iter().map(|message| message.diagnostic);
+        let rendered = lint_args(&["--silent"]).rendered(file, shown, Verbosity::Normal);
         assert!(rendered.is_empty(), "{}", String::from_utf8_lossy(&rendered));
+    }
+
+    /// The format's own output carries the failure, so tools reading the json
+    /// or github format see it too.
+    #[test]
+    fn an_unreadable_file_reports_e010_in_the_run_format() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+
+        let outcome =
+            lint_args(&["-f", "json"]).lint_file(&Allocator::new(), &file, None, Verbosity::Normal);
+
+        assert_eq!((outcome.error_count, outcome.note), (1, None));
+        let rendered = String::from_utf8(outcome.rendered).expect("JSON is UTF-8");
+        assert_eq!(rendered.lines().count(), 1, "{rendered}");
+        assert!(rendered.contains(r#""code":"E010""#), "{rendered}");
     }
 
     #[test]

@@ -33,7 +33,7 @@ impl Rule for RobloxSuspiciousUdim2New {
 }
 
 fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
-    let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
+    let Some(args) = global_new_call(call, "UDim2", context.scoping()) else {
         return;
     };
     if args.is_empty() || args.len() >= 4 {
@@ -68,6 +68,7 @@ mod tests {
         ("local u = UDim2.new()", LuaTarget::LuauRoblox),
         ("local x = 1 local u = UDim2.new(x, 0)", LuaTarget::LuauRoblox),
         ("local UDim2 = {} local u = UDim2.new(1, 2)", LuaTarget::LuauRoblox),
+        ("UDim2 = {} local u = UDim2.new(1, 2)", LuaTarget::LuauRoblox),
         ("local u = UDim2.new(1, 2)", LuaTarget::Luau),
     ];
 

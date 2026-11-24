@@ -1,13 +1,15 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span};
 
-use crate::cache::Cache;
 use crate::error::ResolveError;
 use crate::file_system::{FileSystem, FileSystemOs};
+use crate::fs_cache::FsCache;
 use crate::lua::Lua;
 use crate::luau::Luau;
+use crate::shared_cache::Generation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolveOptions {
@@ -51,8 +53,9 @@ pub type Resolver = ResolverGeneric<FileSystemOs>;
 /// kept too.
 #[derive(Debug)]
 pub struct ResolverGeneric<Fs> {
-    cache: Cache<Fs>,
+    fs_cache: FsCache<Fs>,
     scheme: Scheme,
+    generation: Arc<Generation>,
 }
 
 #[derive(Debug)]
@@ -70,23 +73,26 @@ impl Resolver {
 impl<Fs: FileSystem> ResolverGeneric<Fs> {
     pub fn new_with_file_system(file_system: Fs, options: ResolveOptions) -> Self {
         let ResolveOptions { version, search_paths, root } = options;
+        let generation = Arc::default();
         let scheme = if version.is_luau() {
-            Scheme::Luau(Luau::default())
+            Scheme::Luau(Luau::new(&generation))
         } else {
-            Scheme::Lua(Lua::new(search_paths, root))
+            Scheme::Lua(Lua::new(search_paths, root, &generation))
         };
-        Self { cache: Cache::new(file_system), scheme }
+        Self { fs_cache: FsCache::new(file_system, &generation), scheme, generation }
     }
 
     /// Forgets everything read so far, so the next resolution sees the file
     /// system as it is then. A resolution already running may still answer
-    /// from what it read before.
+    /// from what it read before, but keeps none of it.
     pub fn clear_cache(&self) {
-        self.cache.clear();
-        match &self.scheme {
-            Scheme::Lua(lua) => lua.clear(),
-            Scheme::Luau(luau) => luau.clear(),
-        }
+        self.generation.clear(|| {
+            self.fs_cache.clear();
+            match &self.scheme {
+                Scheme::Lua(lua) => lua.clear(),
+                Scheme::Luau(luau) => luau.clear(),
+            }
+        });
     }
 
     /// The module `module`, a require's string such as `"foo.bar"`,
@@ -99,10 +105,10 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
     pub fn resolve(&self, from_file: &Path, module: &str) -> Result<Resolution, ResolveError> {
         match &self.scheme {
             Scheme::Lua(lua) => {
-                let path = lua.resolve(&self.cache, module)?;
+                let path = lua.resolve(&self.fs_cache, module)?;
                 Ok(Resolution { path, is_self_alias_shadowed: false })
             }
-            Scheme::Luau(luau) => luau.resolve(&self.cache, from_file, module),
+            Scheme::Luau(luau) => luau.resolve(&self.fs_cache, from_file, module),
         }
     }
 }

@@ -17,16 +17,31 @@ fn module_declarations(line: &str) -> Vec<&str> {
     name_list.split(',').map(|name| name.split_whitespace().next().unwrap_or_default()).collect()
 }
 
+fn indentation(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
 #[test]
 fn lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
     let program = generate_full_grammar(42, LuaVersion::Lua55, 30);
-    if !program.lines().any(|line| line == "global <const> *") {
-        return;
-    }
-    let mut declared: Vec<&str> = Vec::new();
-    for line in program.lines() {
-        declared.extend(module_declarations(line));
-        let target = line.split_once(" = ").map(|(target, _)| target);
+    let lines: Vec<&str> = program.lines().collect();
+    let wildcard = lines.iter().position(|line| line.trim_start() == "global <const> *");
+    let Some(wildcard) = wildcard else {
+        panic!("the full-grammar profile promises Lua 5.5's `global <const> *`\n{program}");
+    };
+    let depth = indentation(lines[wildcard]);
+    let mut declared: Vec<&str> =
+        lines[..wildcard].iter().copied().flat_map(module_declarations).collect();
+    // The wildcard holds to the end of its block, which the first line
+    // indented less than it closes.
+    let scope = lines[wildcard + 1..]
+        .iter()
+        .take_while(|line| line.is_empty() || indentation(line) >= depth)
+        .filter(|line| indentation(line) == depth);
+    for line in scope {
+        let statement = &line[depth..];
+        declared.extend(module_declarations(statement));
+        let target = statement.split_once(" = ").map(|(target, _)| target);
         let Some(name) =
             target.filter(|text| text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
         else {
@@ -34,9 +49,9 @@ fn lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
         };
         assert!(
             declared.contains(&name),
-            "`{line}` assigns `{name}`, which no module-scope declaration binds, so it is a \
-             global made read-only by `global <const> *` and Lua 5.5 rejects the chunk with \
-             `attempt to assign to const variable`\n{program}"
+            "`{statement}` assigns `{name}`, which nothing in scope declares, so it is a global \
+             made read-only by `global <const> *` and Lua 5.5 rejects the chunk with `attempt \
+             to assign to const variable`\n{program}"
         );
     }
 }

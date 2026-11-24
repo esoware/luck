@@ -6,8 +6,8 @@ use luck_ast::{
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
-use super::Parser;
 use super::recovery::Closer;
+use super::{Parser, name_token};
 
 /// A compound statement, as its missing-keyword errors name it.
 #[derive(Clone, Copy)]
@@ -30,29 +30,22 @@ impl fmt::Display for Construct {
 /// Whether `kind` can open a statement in some dialect.
 pub(super) const fn is_stmt_start(kind: TokenKind) -> bool {
     match kind {
-        TokenKind::If
-        | TokenKind::While
-        | TokenKind::Do
-        | TokenKind::For
-        | TokenKind::Repeat
-        | TokenKind::Function
-        | TokenKind::Local
-        | TokenKind::Goto
-        | TokenKind::DoubleColon
-        | TokenKind::Semicolon
-        | TokenKind::Return
-        | TokenKind::Break
-        | TokenKind::Identifier
-        | TokenKind::Continue
-        | TokenKind::Export
-        | TokenKind::Const
-        | TokenKind::Type
-        | TokenKind::Typeof
-        | TokenKind::Read
-        | TokenKind::Write
-        | TokenKind::Global
-        | TokenKind::LeftParen
-        | TokenKind::At => true,
+        name_token!(
+            TokenKind::If
+                | TokenKind::While
+                | TokenKind::Do
+                | TokenKind::For
+                | TokenKind::Repeat
+                | TokenKind::Function
+                | TokenKind::Local
+                | TokenKind::Goto
+                | TokenKind::DoubleColon
+                | TokenKind::Semicolon
+                | TokenKind::Return
+                | TokenKind::Break
+                | TokenKind::LeftParen
+                | TokenKind::At
+        ) => true,
         TokenKind::Number
         | TokenKind::Integer
         | TokenKind::StringLiteral
@@ -333,16 +326,7 @@ impl<'ast> Parser<'ast> {
             {
                 self.parse_global_stmt()
             }
-            TokenKind::Identifier
-            | TokenKind::LeftParen
-            | TokenKind::Continue
-            | TokenKind::Export
-            | TokenKind::Const
-            | TokenKind::Type
-            | TokenKind::Typeof
-            | TokenKind::Read
-            | TokenKind::Write
-            | TokenKind::Global => self.parse_assignment_or_call(),
+            name_token!(TokenKind::LeftParen) => self.parse_assignment_or_call(),
             _ => self.report_unexpected_in_block(),
         }
     }

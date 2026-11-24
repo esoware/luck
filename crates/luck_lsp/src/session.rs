@@ -1,6 +1,6 @@
 use std::fs;
 use std::num::NonZero;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,7 +15,7 @@ use crate::analyzed::SpareArena;
 use crate::line_index::PositionEncoding;
 use crate::providers::diagnostics;
 use crate::server::Task;
-use crate::settings::{ConfigError, DocumentSettings, LoadedProject, SettingsCache};
+use crate::settings::{ConfigError, DocumentSettings, LoadedProject, SettingsCache, settings_path};
 use crate::workspace::Workspace;
 
 /// What the main loop shares with every job.
@@ -68,9 +68,9 @@ impl Session {
         &self.allocators
     }
 
-    /// The project of the file at `path`, a canonical path, or of an
-    /// untitled document, which reports why its `luck.json` doesn't load if
-    /// this is the first lookup to find it, under the directories of
+    /// The project of the file at `path`, whose directory is canonical, or
+    /// of an untitled document, which reports why its `luck.json` doesn't
+    /// load if this is the first lookup to find it, under the directories of
     /// `spelled`, the path as the client spells it.
     pub(crate) fn project_for(
         &self,
@@ -84,15 +84,13 @@ impl Session {
         project
     }
 
-    /// The settings of the document at `path`, a canonical path, or of an
-    /// untitled document, under the project [`Self::project_for`] finds.
-    pub(crate) fn document_settings(
-        &self,
-        path: Option<PathBuf>,
-        spelled: Option<&Path>,
-    ) -> DocumentSettings {
-        let project = self.project_for(path.as_deref(), spelled);
-        self.settings.document_settings(project, path)
+    /// The settings of the document at `spelled`, its path as the client
+    /// spells it, or of an untitled document, under the project
+    /// [`Self::project_for`] finds.
+    pub(crate) fn document_settings(&self, spelled: Option<&Path>) -> DocumentSettings {
+        let file = spelled.map(settings_path);
+        let project = self.project_for(file.as_deref(), spelled);
+        self.settings.document_settings(project, file.as_deref())
     }
 
     /// Hands `task` to the main loop.

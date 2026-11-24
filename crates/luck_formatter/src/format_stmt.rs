@@ -15,6 +15,7 @@ use luck_ast::{
 
 use crate::CollapseSimpleStatement;
 use crate::format_block::first_item_start;
+use crate::format_expr::ChainIndent;
 use crate::ir::Formatter;
 
 /// What follows `=`.
@@ -82,7 +83,7 @@ impl<'ast> Formatter<'ast> {
                 self.hard_line();
                 self.token("until");
                 self.space();
-                self.write_condition(&repeat_loop.condition, true);
+                self.write_condition(&repeat_loop.condition, ChainIndent::Indented);
             }
             Statement::IfStatement(if_stmt) => self.write_if(if_stmt),
             Statement::NumericFor(numeric_for) => self.write_numeric_for(numeric_for),
@@ -172,7 +173,7 @@ impl<'ast> Formatter<'ast> {
             grouped.token(open);
             grouped.indent(|f| {
                 f.soft_line_or_space();
-                f.write_condition(condition, false);
+                f.write_condition(condition, ChainIndent::Level);
             });
             grouped.soft_line_or_space();
             grouped.token(close);
@@ -183,18 +184,13 @@ impl<'ast> Formatter<'ast> {
     /// whole one come off, even the ones the tree keeps: `(f())` truncating
     /// values to one changes nothing observable. They stay around a comment,
     /// which needs the line breaks they hold.
-    ///
-    /// An operator chain breaks level with its first operand unless
-    /// `is_indented`, for a condition that sits on an indented line of its own.
-    fn write_condition(&mut self, condition: &Expression<'ast>, is_indented: bool) {
+    fn write_condition(&mut self, condition: &Expression<'ast>, indent: ChainIndent) {
         let unwrapped = condition.unwrap_parentheses();
         let outer = self.grouping_around(condition.span()).unwrap_or_else(|| condition.span());
         if self.comments().has_comment_outside(outer, iter::once(unwrapped.span())) {
             self.write_expr(condition);
-        } else if let Expression::BinaryOp(chain) = unwrapped
-            && !is_indented
-        {
-            self.node(|| outer, |f| f.write_binary_chain(chain, false, Slot::FREE));
+        } else if let Expression::BinaryOp(chain) = unwrapped {
+            self.node(|| outer, |f| f.write_binary_chain(chain, indent, Slot::FREE));
         } else {
             self.node(|| outer, |f| f.write_bare_expr(unwrapped, Slot::FREE));
         }

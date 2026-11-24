@@ -5,12 +5,9 @@
 use std::cell::OnceCell;
 use std::mem;
 
-use luck_ast::{
-    BinaryOp, Block, FunctionBody, GenericFor, GetSpan as _, IfExpression, IfStatement, Name,
-    NumericFor, RepeatLoop, Statement, Type, Visit, WhileLoop,
-};
+use luck_ast::{Block, GetSpan as _, IfStatement, Name, RepeatLoop, Statement, WhileLoop};
 use luck_semantic::LabelId;
-use luck_token::{BinOp, Span};
+use luck_token::Span;
 use luck_value::ToBoolean as _;
 use rustc_hash::FxHashMap;
 
@@ -346,7 +343,7 @@ impl<'ast> GraphBuilder<'_, 'ast> {
                 let node = self.simple(chain.span);
                 if chain
                     .last_call()
-                    .is_some_and(|call| is_global_call(call, "error", self.host.semantic))
+                    .is_some_and(|call| is_global_call(call, "error", self.host.scoping()))
                 {
                     self.connect(node, Exit::Error.node());
                     self.cursor = None;
@@ -490,91 +487,15 @@ impl<'ast> GraphBuilder<'_, 'ast> {
     }
 }
 
-pub(crate) fn decision_points(block: &Block<'_>) -> u32 {
-    let mut points = DecisionPoints::default();
-    points.visit_block(block);
-    points.count
-}
-
-/// One per `if`, `elseif`, and loop, one per `and` or `or`, and one per `if`
-/// or `elseif` of a Luau if-expression.
-#[derive(Default)]
-struct DecisionPoints {
-    count: u32,
-}
-
-impl DecisionPoints {
-    fn count_clauses(&mut self, clause_count: usize) {
-        self.count +=
-            u32::try_from(clause_count + 1).expect("a source has fewer than `u32::MAX` bytes");
-    }
-}
-
-impl<'ast> Visit<'ast> for DecisionPoints {
-    fn visit_if_stmt(&mut self, if_stmt: &'ast IfStatement<'ast>) {
-        self.count_clauses(if_stmt.elseif_clauses.len());
-        self.walk_if_stmt(if_stmt);
-    }
-
-    fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
-        self.count += 1;
-        self.walk_while_loop(while_loop);
-    }
-
-    fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
-        self.count += 1;
-        self.walk_repeat_loop(repeat_loop);
-    }
-
-    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
-        self.count += 1;
-        self.walk_numeric_for(numeric_for);
-    }
-
-    fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
-        self.count += 1;
-        self.walk_generic_for(generic_for);
-    }
-
-    fn visit_binary_op(&mut self, binary_op: &'ast BinaryOp<'ast>) {
-        if matches!(binary_op.links.first().op, BinOp::And | BinOp::Or) {
-            self.count += u32::try_from(binary_op.links.len())
-                .expect("a source has fewer than `u32::MAX` bytes");
-        }
-        self.walk_binary_op(binary_op);
-    }
-
-    // Luau
-    fn visit_if_expr(&mut self, if_expr: &'ast IfExpression<'ast>) {
-        self.count_clauses(if_expr.elseif_clauses.len());
-        self.walk_if_expr(if_expr);
-    }
-
-    fn visit_function_body(&mut self, _function_body: &'ast FunctionBody<'ast>) {}
-
-    fn visit_type(&mut self, _ty: &'ast Type<'ast>) {}
-}
-
 #[cfg(test)]
 mod tests {
     use std::fmt::Write as _;
 
-    use luck_allocator::Allocator;
-    use luck_ast::Chunk;
+    use luck_ast::{FunctionBody, GenericFor, NumericFor, Visit};
     use luck_token::LuaVersion;
 
     use super::*;
     use crate::fixtures::with_host;
-
-    fn parse_chunk<'ast>(
-        allocator: &'ast Allocator,
-        source: &'ast str,
-        version: LuaVersion,
-    ) -> &'ast Chunk<'ast> {
-        let parse = luck_parser::parse(allocator, source.as_bytes(), version);
-        assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
-        allocator.alloc(parse.chunk)
-    }
 
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
         with_host(source, version.into(), |host| FlowGraph::of_block(&host.chunk.block, host))
@@ -582,10 +503,6 @@ mod tests {
 
     fn flow(source: &str) -> FlowGraph {
         flow_of(source, LuaVersion::Lua54)
-    }
-
-    fn points(source: &str) -> u32 {
-        decision_points(&parse_chunk(&Allocator::new(), source, LuaVersion::Lua54).block)
     }
 
     #[test]
@@ -951,101 +868,5 @@ print(2)";
         let offset_of = |text: &str| u32::try_from(source.find(text).expect("in source")).unwrap();
         assert!(!graph.can_run(offset_of("print(1)")));
         assert!(graph.can_run(offset_of("print(2)")));
-    }
-
-    #[test]
-    fn decision_points_empty_block() {
-        // The rule adds McCabe's baseline of 1; the count here is 0.
-        assert_eq!(points(""), 0);
-    }
-
-    #[test]
-    fn decision_points_single_if() {
-        assert_eq!(
-            points(
-                "\
-local c = 1
-if c then end"
-            ),
-            1
-        );
-    }
-
-    #[test]
-    fn decision_points_if_with_and() {
-        // +1 for the if, +1 for the `and`.
-        assert_eq!(
-            points(
-                "\
-local a = 1
-local b = 1
-if a and b then end"
-            ),
-            2
-        );
-    }
-
-    #[test]
-    fn decision_points_if_elseif() {
-        // +1 for the if, +1 for the elseif.
-        assert_eq!(
-            points(
-                "\
-local a = 1
-local b = 1
-if a then elseif b then end"
-            ),
-            2
-        );
-    }
-
-    #[test]
-    fn decision_points_each_loop_kind() {
-        assert_eq!(points("while a do end"), 1);
-        assert_eq!(points("repeat until a"), 1);
-        assert_eq!(points("for i = 1, 2 do end"), 1);
-        assert_eq!(points("for _ in f do end"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_table_call_argument() {
-        assert_eq!(points("f{a and b}"), 1);
-        assert_eq!(points("f({a and b})"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_assignment_target() {
-        assert_eq!(points("t[a or b] = 1"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_return() {
-        assert_eq!(points("return a and b"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_return_after_a_terminating_stmt() {
-        assert_eq!(points("do return end return a and b"), 1);
-    }
-
-    #[test]
-    fn decision_points_skip_nested_functions() {
-        assert_eq!(points("local f = function() if a then end end"), 0);
-        assert_eq!(points("local function f() if a then end end"), 0);
-    }
-
-    #[test]
-    fn decision_points_nested_elseif_chain() {
-        // +1 for the if, +1 per elseif (two of them) = 3.
-        assert_eq!(
-            points(
-                "\
-local a = 1
-local b = 1
-local c = 1
-if a then elseif b then elseif c then end"
-            ),
-            3
-        );
     }
 }

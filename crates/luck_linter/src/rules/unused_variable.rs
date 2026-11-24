@@ -1,11 +1,8 @@
-use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
 use crate::context::LintContext;
-use crate::diagnostic::Finding;
-use crate::fix::FixKind;
 use crate::rule::{Rule, declare_lint_rule};
-use crate::underscore_fix::prefix_underscore;
+use crate::underscore_fix::unused_binding;
 
 /// The `_` prefix is a suggestion, because it silences the warning rather
 /// than answering it, and an unused variable is often a misspelled use.
@@ -22,8 +19,7 @@ declare_lint_rule!(
 
 impl Rule for UnusedVariable {
     fn run_once(&self, context: &LintContext<'_, '_>) {
-        let semantic = context.semantic;
-        let tree = semantic.scoping();
+        let tree = context.scoping();
 
         for symbol in tree.symbols() {
             let name = tree.name(symbol.name);
@@ -59,14 +55,11 @@ impl Rule for UnusedVariable {
                 continue;
             }
 
-            context.diagnostic(
-                Finding::new(format!("unused {kind_name} `{name}`"), symbol.definition_span)
-                    .with_tag(Tag::Unnecessary)
-                    .with_help("prefix with `_` to suppress this warning")
-                    .with_fix(context, FixKind::Suggestion, |fixer| {
-                        prefix_underscore(fixer, semantic, symbol)
-                    }),
-            );
+            context.diagnostic(unused_binding(
+                context,
+                format!("unused {kind_name} `{name}`"),
+                symbol,
+            ));
         }
     }
 }

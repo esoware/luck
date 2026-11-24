@@ -446,8 +446,73 @@ do
   local t = setmetatable({}, { __index = function() return 1 end })
 ",
         "if a then b() end do",
+        "\
+local function outer()
+  repeat
+    x()
+  until
+--[[ wait until ready ]] ready
+",
     ] {
         assert_eq!(labels_of(source).len(), 1, "{source:?}");
+    }
+}
+
+/// The guess points at the construct's keyword, and reads its closer, not
+/// the same word in a name or a comment near either.
+#[test]
+fn a_missing_end_points_at_the_keyword_of_the_construct_that_took_it() {
+    for (source, keyword) in [
+        (
+            "\
+do
+  local function my_function()
+    return 1
+end
+",
+            "function",
+        ),
+        (
+            "\
+do
+  local function functional()
+    return 1
+end
+",
+            "function",
+        ),
+        (
+            "\
+do
+  local function f --[[ the function ]] ()
+    return 1
+end
+",
+            "function",
+        ),
+        (
+            "\
+do
+  repeat
+    x()
+until --[[
+  until ]] done
+",
+            "repeat",
+        ),
+    ] {
+        let allocator = Allocator::new();
+        let result = parse(&allocator, source);
+        let [error] = result.errors.as_slice() else {
+            panic!("{source:?}: {:?}", result.errors);
+        };
+        let start = source.find(keyword).expect("the source holds the keyword");
+        let expected = (
+            Span::from_indices(start, start + keyword.len()),
+            format!("did you forget to close this `{keyword}`?"),
+        );
+        let suspect = error.labels.get(1).map(|label| (label.span, label.message.to_string()));
+        assert_eq!(suspect, Some(expected), "{source:?}");
     }
 }
 

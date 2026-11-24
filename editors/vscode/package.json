@@ -33,7 +33,7 @@
     },
     "virtualWorkspaces": {
       "supported": "limited",
-      "description": "Most features work, but require resolution and bundle commands need a real filesystem."
+      "description": "Syntax highlighting, snippets, and the luck.json and .luaurc schemas work. Diagnostics, formatting, and the other language features run only on files on disk and untitled documents."
     }
   },
   "main": "./out/extension.js",
@@ -461,15 +461,20 @@
           "autoDetect",
           "${workspaceFolder}"
         ],
-        "pattern": {
-          "regexp": "^(.*?):(\\d+):(\\d+):\\s+(error|warning|info):\\s+(.*?)\\s+\\[(.+?)\\]$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5,
-          "code": 6
-        }
+        "pattern": [
+          {
+            "regexp": "^\\[([^\\]]+)\\] (Error|Warning): (.*)$",
+            "code": 1,
+            "severity": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*\\S*\\[ (.+):(\\d+):(\\d+) \\]$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
       }
     ],
     "walkthroughs": [

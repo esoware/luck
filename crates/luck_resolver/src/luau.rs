@@ -1,10 +1,11 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use crate::aliases::{AliasCache, AliasTarget};
-use crate::cache::Cache;
 use crate::file_system::FileSystem;
-use crate::shared_cache::SharedCache;
+use crate::fs_cache::FsCache;
+use crate::shared_cache::{Generation, SharedCache};
 use crate::{Resolution, ResolveError};
 
 /// Luau's require by string, which resolves a relative or `@alias` require
@@ -12,7 +13,7 @@ use crate::{Resolution, ResolveError};
 ///
 /// Many requires pass through the same directories and reach the same
 /// modules, so it keeps what each module path holds.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Luau {
     aliases: AliasCache,
     modules: SharedCache<OsString, ModuleFiles>,
@@ -32,18 +33,19 @@ struct ModuleFiles {
 }
 
 impl ModuleFiles {
-    fn read(cache: &Cache<impl FileSystem>, module_path: &Path) -> Self {
+    fn read(fs_cache: &FsCache<impl FileSystem>, module_path: &Path) -> Self {
         // `init` itself can't be named as a file, only reached through its
         // directory.
         let can_be_a_file = module_path.file_name() != Some(OsStr::new("init"));
         Self {
             module: ExtensionFiles {
-                has_luau: can_be_a_file && cache.is_file(&append_extension(module_path, ".luau")),
-                has_lua: can_be_a_file && cache.is_file(&append_extension(module_path, ".lua")),
+                has_luau: can_be_a_file
+                    && fs_cache.is_file(&append_extension(module_path, ".luau")),
+                has_lua: can_be_a_file && fs_cache.is_file(&append_extension(module_path, ".lua")),
             },
-            init: cache.is_dir(module_path).then(|| ExtensionFiles {
-                has_luau: cache.is_file(&module_path.join("init.luau")),
-                has_lua: cache.is_file(&module_path.join("init.lua")),
+            init: fs_cache.is_dir(module_path).then(|| ExtensionFiles {
+                has_luau: fs_cache.is_file(&module_path.join("init.luau")),
+                has_lua: fs_cache.is_file(&module_path.join("init.lua")),
             }),
         }
     }
@@ -58,6 +60,10 @@ enum Probed {
 }
 
 impl Luau {
+    pub(crate) fn new(generation: &Arc<Generation>) -> Self {
+        Self { aliases: AliasCache::new(generation), modules: SharedCache::new(generation) }
+    }
+
     pub(crate) fn clear(&self) {
         self.aliases.clear();
         self.modules.clear();
@@ -70,7 +76,7 @@ impl Luau {
 
     pub(crate) fn resolve(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         from_file: &Path,
         module: &str,
     ) -> Result<Resolution, ResolveError> {
@@ -85,12 +91,12 @@ impl Luau {
         let requiring_module = requiring_module_path(from_file);
         // Luau resets to the requiring module before it navigates, so an
         // ambiguous one fails every require it makes with a valid prefix.
-        self.probe(cache, &requiring_module)?;
+        self.probe(fs_cache, &requiring_module)?;
         let parent = requiring_module.parent().unwrap_or_else(|| Path::new("."));
         if let Some(alias) = alias_path {
-            return self.resolve_alias(cache, alias, parent, &requiring_module);
+            return self.resolve_alias(fs_cache, alias, parent, &requiring_module);
         }
-        let path = self.navigate(cache, parent, &require_path)?;
+        let path = self.navigate(fs_cache, parent, &require_path)?;
         Ok(Resolution { path, is_self_alias_shadowed: false })
     }
 
@@ -99,7 +105,7 @@ impl Luau {
     /// for `.luaurc` files starts.
     fn resolve_alias(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         alias: &str,
         lookup_directory: &Path,
         requiring_module: &Path,
@@ -108,15 +114,15 @@ impl Luau {
             alias.split_once('/').map_or((alias, None), |(name, rest)| (name, Some(rest)));
 
         if alias_name.eq_ignore_ascii_case("self") {
-            return self.resolve_self(cache, sub_path, lookup_directory, requiring_module);
+            return self.resolve_self(fs_cache, sub_path, lookup_directory, requiring_module);
         }
 
         let (directory, full_sub_path) =
-            self.follow_alias(cache, lookup_directory, alias_name, sub_path.unwrap_or(""))?;
-        if matches!(self.probe(cache, &directory)?, Probed::Missing) {
+            self.follow_alias(fs_cache, lookup_directory, alias_name, sub_path.unwrap_or(""))?;
+        if matches!(self.probe(fs_cache, &directory)?, Probed::Missing) {
             return Err(not_found(&directory, &full_sub_path));
         }
-        let path = self.navigate(cache, &directory, &full_sub_path)?;
+        let path = self.navigate(fs_cache, &directory, &full_sub_path)?;
         Ok(Resolution { path, is_self_alias_shadowed: false })
     }
 
@@ -124,7 +130,7 @@ impl Luau {
     /// the chain ends at, with `sub_path` preceded by what the chain added.
     fn follow_alias(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         lookup_directory: &Path,
         alias_name: &str,
         sub_path: &str,
@@ -139,7 +145,7 @@ impl Luau {
                 followed.push(lowercase_name);
                 return Err(ResolveError::AliasCycle(followed));
             }
-            let aliases = self.aliases.in_effect(cache.file_system(), &directory);
+            let aliases = self.aliases.in_effect(fs_cache.file_system(), &directory);
             match aliases.targets.get(&lowercase_name) {
                 Some(AliasTarget::Directory(target_directory)) => {
                     return Ok((target_directory.clone(), full_sub_path));
@@ -172,7 +178,7 @@ impl Luau {
     /// sibling. A `.luaurc` alias named `self` can't override it.
     fn resolve_self(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         sub_path: Option<&str>,
         lookup_directory: &Path,
         requiring_module: &Path,
@@ -180,10 +186,10 @@ impl Luau {
         let relative_path = sub_path.ok_or(ResolveError::BareSelfAlias)?;
         let is_self_alias_shadowed = self
             .aliases
-            .in_effect(cache.file_system(), lookup_directory)
+            .in_effect(fs_cache.file_system(), lookup_directory)
             .targets
             .contains_key("self");
-        let path = self.navigate(cache, requiring_module, relative_path)?;
+        let path = self.navigate(fs_cache, requiring_module, relative_path)?;
         Ok(Resolution { path, is_self_alias_shadowed })
     }
 
@@ -192,7 +198,7 @@ impl Luau {
     /// skipped, and `..` leaves the current directory unchecked, as in Luau.
     fn navigate(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         start: &Path,
         sub_path: &str,
     ) -> Result<PathBuf, ResolveError> {
@@ -220,7 +226,7 @@ impl Luau {
                 }
                 child => {
                     position.push(child);
-                    let child_probe = self.probe(cache, &position)?;
+                    let child_probe = self.probe(fs_cache, &position)?;
                     if matches!(child_probe, Probed::Missing) {
                         return Err(not_found(start, sub_path));
                     }
@@ -230,10 +236,10 @@ impl Luau {
         }
         let probed = match probed_position {
             Some(probed) => probed,
-            None => self.probe(cache, &position)?,
+            None => self.probe(fs_cache, &position)?,
         };
         match probed {
-            Probed::Module(found) => Ok(cache.canonical_file(&found)),
+            Probed::Module(found) => Ok(fs_cache.canonical_file(&found)),
             Probed::Directory | Probed::Missing => Err(not_found(start, sub_path)),
         }
     }
@@ -242,12 +248,12 @@ impl Luau {
     /// `.lua` file, a directory with or without an `init` file, or nothing.
     fn probe(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         module_path: &Path,
     ) -> Result<Probed, ResolveError> {
-        let files = self
-            .modules
-            .get_or_insert_with(module_path.as_os_str(), || ModuleFiles::read(cache, module_path));
+        let files = self.modules.get_or_insert_with(module_path.as_os_str(), || {
+            ModuleFiles::read(fs_cache, module_path)
+        });
         // Append the extension to the full name: `with_extension` replaces
         // everything after the last dot, so `./config.v2` would probe
         // `config.luau` instead of `config.v2.luau`.

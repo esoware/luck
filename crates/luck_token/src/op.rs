@@ -240,4 +240,17 @@ impl CompoundOp {
             Self::Concat => "..=",
         }
     }
+
+    pub const fn binary_op(self) -> BinOp {
+        match self {
+            Self::Add => BinOp::Add,
+            Self::Sub => BinOp::Sub,
+            Self::Mul => BinOp::Mul,
+            Self::Div => BinOp::Div,
+            Self::FloorDiv => BinOp::FloorDiv,
+            Self::Mod => BinOp::Mod,
+            Self::Pow => BinOp::Pow,
+            Self::Concat => BinOp::Concat,
+        }
+    }
 }

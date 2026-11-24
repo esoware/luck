@@ -1,6 +1,10 @@
+use luck_ast::{
+    BinaryOp, FunctionBody, GenericFor, IfExpression, IfStatement, NumericFor, RepeatLoop, Type,
+    Visit, WhileLoop,
+};
 use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::BinOp;
 
-use crate::cfg::decision_points;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
@@ -55,8 +59,10 @@ impl Rule for CyclomaticComplexity {
         else {
             return;
         };
+        let mut points = DecisionPoints::default();
+        points.visit_block(&function.body.block);
         // McCabe: one straight-line path plus one per decision point.
-        let complexity = decision_points(&function.body.block) + 1;
+        let complexity = points.count + 1;
         if complexity <= threshold {
             return;
         }
@@ -75,6 +81,65 @@ impl Rule for CyclomaticComplexity {
             .with_help("split this function into smaller helpers"),
         );
     }
+}
+
+/// One per `if`, `elseif`, and loop, one per `and` or `or`, and one per `if`
+/// or `elseif` of a Luau if-expression.
+#[derive(Default)]
+struct DecisionPoints {
+    count: u32,
+}
+
+impl DecisionPoints {
+    fn count_clauses(&mut self, clause_count: usize) {
+        self.count +=
+            u32::try_from(clause_count + 1).expect("a source has fewer than `u32::MAX` bytes");
+    }
+}
+
+impl<'ast> Visit<'ast> for DecisionPoints {
+    fn visit_if_stmt(&mut self, if_stmt: &'ast IfStatement<'ast>) {
+        self.count_clauses(if_stmt.elseif_clauses.len());
+        self.walk_if_stmt(if_stmt);
+    }
+
+    fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
+        self.count += 1;
+        self.walk_while_loop(while_loop);
+    }
+
+    fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
+        self.count += 1;
+        self.walk_repeat_loop(repeat_loop);
+    }
+
+    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
+        self.count += 1;
+        self.walk_numeric_for(numeric_for);
+    }
+
+    fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
+        self.count += 1;
+        self.walk_generic_for(generic_for);
+    }
+
+    fn visit_binary_op(&mut self, binary_op: &'ast BinaryOp<'ast>) {
+        if matches!(binary_op.links.first().op, BinOp::And | BinOp::Or) {
+            self.count += u32::try_from(binary_op.links.len())
+                .expect("a source has fewer than `u32::MAX` bytes");
+        }
+        self.walk_binary_op(binary_op);
+    }
+
+    // Luau
+    fn visit_if_expr(&mut self, if_expr: &'ast IfExpression<'ast>) {
+        self.count_clauses(if_expr.elseif_clauses.len());
+        self.walk_if_expr(if_expr);
+    }
+
+    fn visit_function_body(&mut self, _function_body: &'ast FunctionBody<'ast>) {}
+
+    fn visit_type(&mut self, _ty: &'ast Type<'ast>) {}
 }
 
 #[cfg(test)]
@@ -126,6 +191,32 @@ function m.sub:run() if a then end end",
         ("function value_and() x = a and b end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
         ("function target_or() t[a or b] = 1 end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
         ("function return_and() return a and b end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        (
+            "function after_return() do return end return a and b end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 0}"#),
+        ),
+        ("function if_and() if a and b then end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        (
+            "function elseif_chain() if a then elseif b then elseif c then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 0}"#),
+        ),
+        ("function while_loop() while a do end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function repeat_loop() repeat until a end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function numeric_for() for i = 1, 2 do end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function generic_for() for _ in f do end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        // `outer` counts neither nested function's `if`, which each counts as
+        // its own.
+        (
+            "\
+function outer()
+  local f = function() if a then end end
+  local function g() if b then end end
+end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 0}"#),
+        ),
         ("function comp_value() t[1] += a or b end", LuaTarget::Luau, Some(r#"{"max": 0}"#)),
         ("function comp_target() t[a or b] += 1 end", LuaTarget::Luau, Some(r#"{"max": 0}"#)),
         ("type function t1(a) if a then return a end end", LuaTarget::Luau, Some(r#"{"max": 1}"#)),

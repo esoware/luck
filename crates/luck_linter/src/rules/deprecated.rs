@@ -267,7 +267,7 @@ fn check_field_accesses(
     let (Expression::Name(root), Suffix::Field(_)) = (&chain.prefix, chain.suffixes.first()) else {
         return;
     };
-    if semantic.scoping().resolves_to_local(root) {
+    if !semantic.scoping().reaches_host_global(root) {
         return;
     }
     let stdlib = semantic.stdlib();
@@ -316,6 +316,12 @@ mod tests {
         (
             "\
 local Enum = {}
+local a = Enum.AlignType.Parallel",
+            LuaTarget::LuauRoblox,
+        ),
+        (
+            "\
+Enum = {}
 local a = Enum.AlignType.Parallel",
             LuaTarget::LuauRoblox,
         ),

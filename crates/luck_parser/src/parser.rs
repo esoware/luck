@@ -27,6 +27,25 @@ use self::forgotten::{UnclosedBlock, label_forgotten_ends};
 use self::recovery::OpenConstructs;
 use crate::{Groupings, ParseResult};
 
+/// The kinds [`TokenKind::is_name`] accepts, and any `other` kinds, as a
+/// pattern, so a `match` that lists them keeps its jump table. It takes the
+/// others itself because clippy rejects an or-pattern written around it.
+macro_rules! name_token {
+    ($($other:path)|*) => {
+        TokenKind::Identifier
+            | TokenKind::Continue
+            | TokenKind::Export
+            | TokenKind::Const
+            | TokenKind::Type
+            | TokenKind::Typeof
+            | TokenKind::Read
+            | TokenKind::Write
+            | TokenKind::Global
+            $(| $other)*
+    };
+}
+use name_token;
+
 /// The tree and every list in it go in `allocator`, and its names and
 /// literals borrow `source`, but for a string's value that decoding rewrote,
 /// which goes in `allocator` too.
@@ -217,11 +236,6 @@ impl<'ast> Parser<'ast> {
         if !self.unclosed_blocks.is_empty() {
             label_forgotten_ends(&chunk, self.source, &self.unclosed_blocks, &mut self.errors);
         }
-        let lexed = self.lexer.finish();
-        let mut errors = lexed.errors;
-        errors.append(&mut self.errors);
-        errors.sort_by_key(|e| e.span.map(|span| span.start));
-        self.groupings.finish();
         let mut tokens = self.tokens.unwrap_or_default();
         // The lexer repeats its `Eof` to a parser that reads on.
         while let [.., Token { kind: TokenKind::Eof, .. }, Token { kind: TokenKind::Eof, .. }] =
@@ -229,11 +243,16 @@ impl<'ast> Parser<'ast> {
         {
             tokens.pop();
         }
+        let lexed = self.lexer.finish(tokens);
+        let mut errors = lexed.errors;
+        errors.append(&mut self.errors);
+        errors.sort_by_key(|e| e.span.map(|span| span.start));
+        self.groupings.finish();
         ParseResult {
             source: self.source,
             chunk,
             comments: lexed.comments,
-            tokens,
+            tokens: lexed.tokens,
             groupings: self.groupings,
             errors,
             lenient_escapes: lexed.lenient_escapes,

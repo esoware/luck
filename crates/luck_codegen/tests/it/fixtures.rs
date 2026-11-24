@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_codegen::LiteralSpelling;
-use luck_testgen::lua_fixtures;
+use luck_testgen::{lua_fixtures, tree_shape};
 
 #[test]
 fn every_fixture_compacts_to_output_that_compacts_to_itself() {
@@ -18,6 +18,7 @@ fn every_fixture_compacts_to_output_that_compacts_to_itself() {
         if !parsed.errors.is_empty() {
             continue;
         }
+        let shape = tree_shape(&parsed.chunk);
         for (label, spelling) in
             [("as written", LiteralSpelling::AsWritten), ("shortest", LiteralSpelling::Shortest)]
         {
@@ -27,6 +28,8 @@ fn every_fixture_compacts_to_output_that_compacts_to_itself() {
             let name = fixture.relative_path.display();
             if let Some(error) = reparsed.errors.first() {
                 writeln!(report, "{name} {label}: {text}\n  {}", error.message).unwrap();
+            } else if tree_shape(&reparsed.chunk) != shape {
+                writeln!(report, "{name} {label}: {text} parses to a different tree").unwrap();
             } else if luck_codegen::compact(&reparsed.chunk, spelling) == output {
                 round_trip_count += 1;
             } else {

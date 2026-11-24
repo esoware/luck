@@ -4,7 +4,7 @@ Loads a `luck.json` into one validated project, which every luck command and the
 
 ## Overview
 
-`luck.json` is JSON5. Discovery walks up from a directory to the nearest `luck.json`, and only that file applies: a config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. `Project::load` reads the file and what it extends, merges them, and checks everything at once: the syntax, every key, the dialects, the globs, the lint rule names and options, and the build keys that can't go together. A problem comes back as one E014 `Diagnostic` placed where it is in the file at fault, or E010 when the file can't be read.
+`luck.json` is JSON5, with arrays and objects nested at most 128 levels deep. Discovery walks up from a directory to the nearest `luck.json`, and only that file applies: a config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. `Project::load` reads the file and what it extends, merges them, and checks everything at once: the syntax, every key, the dialects, the globs, the lint rule names and options, and the build keys that can't go together. A problem comes back as one E014 `Diagnostic` placed where it is in the file at fault, or E010 when the file can't be read.
 
 Each tool defines the type of its own section, so `transforms`, `dynamic_require`, `format`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, `FormatConfig`, and `LintConfig`, through the `serde` features this crate turns on, and the dialect keys into `LuaTarget`. The linter checks its rule names as its section deserializes.
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::{fs, io};
 
 use luck_allocator::ThreadAllocators;
-use luck_bundler::{Bundle, BundleOptions, DependencyGraph, DynamicRequire};
+use luck_bundler::{Bundle, BundleOptions, DependencyGraph, DynamicRequire, ModuleId};
 use luck_diagnostics::FileDiagnostics;
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::LuaVersion;
@@ -1004,14 +1004,14 @@ require(\"b\")
     let relative_paths: Vec<&str> =
         graph.modules.iter().map(|module| module.relative_path.as_str()).collect();
     assert_eq!(relative_paths, ["main.lua", "a.lua", "b.lua"]);
-    let targets = |i: usize| -> Vec<&str> {
-        graph.modules[i]
+    let targets = |id: ModuleId| -> Vec<&str> {
+        graph[id]
             .dependencies
             .iter()
-            .map(|dependency| graph.modules[dependency.target.0].relative_path.as_str())
+            .map(|dependency| graph[dependency.target].relative_path.as_str())
             .collect()
     };
-    assert_eq!(targets(0), ["a.lua"]);
-    assert_eq!(targets(1), ["b.lua", "b.lua"]);
-    assert_eq!(targets(2), Vec::<&str>::new());
+    assert_eq!(targets(ModuleId(0)), ["a.lua"]);
+    assert_eq!(targets(ModuleId(1)), ["b.lua", "b.lua"]);
+    assert_eq!(targets(ModuleId(2)), Vec::<&str>::new());
 }

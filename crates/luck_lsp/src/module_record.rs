@@ -22,8 +22,6 @@ use luck_semantic::{Scoping, Semantic, SymbolId};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
-use crate::providers::cursor::identifier;
-
 /// What one file shows the others: the modules it requires by path, and
 /// each place it names a member of a module's table.
 #[derive(Debug)]
@@ -180,7 +178,7 @@ fn member_name<'ast>(suffix: &'ast Suffix<'ast>) -> Option<&'ast Name<'ast>> {
         Suffix::MethodCall(call) => &call.name,
         Suffix::Index { .. } | Suffix::Call(_) | Suffix::TypeInstantiation { .. } => return None,
     };
-    identifier(name).map(|_| name)
+    name.written().map(|_| name)
 }
 
 struct Found<'ast> {
@@ -252,7 +250,7 @@ impl<'ast> Collector<'ast> {
             (None, Some(method)) => (method, true),
             (None, None) => return,
         };
-        if identifier(name).is_some() {
+        if name.written().is_some() {
             self.push(table, name, is_definition);
         }
     }
@@ -261,7 +259,7 @@ impl<'ast> Collector<'ast> {
     fn keys(&mut self, table: &'ast TableConstructor<'ast>) {
         for field in &table.fields {
             if let Field::Named { name, .. } = field
-                && identifier(name).is_some()
+                && name.written().is_some()
             {
                 self.push(Table::Returned, name, true);
             }

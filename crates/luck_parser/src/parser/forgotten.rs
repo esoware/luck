@@ -6,7 +6,7 @@
 
 use luck_ast::{Chunk, FunctionBody, GetSpan as _, Statement, Visit};
 use luck_diagnostics::{Diagnostic, Label};
-use luck_token::{LuaVersion, Span, has_line_break};
+use luck_token::{LuaVersion, Span, Token, TokenKind, has_line_break};
 
 /// An error that a block is missing its `end` or `until`.
 #[derive(Clone, Copy)]
@@ -25,7 +25,12 @@ pub(super) fn label_forgotten_ends(
     unclosed: &[UnclosedBlock],
     errors: &mut [Diagnostic],
 ) {
-    let mut finder = Misindented { source, version: chunk.version, found: Vec::new() };
+    // The tree keeps no span for a `function` or `until` keyword, so they
+    // come from lexing the source again, which only a parse that left a
+    // block unclosed pays for.
+    let tokens = luck_lexer::lex(source, chunk.version).tokens;
+    let mut finder =
+        Misindented { source, version: chunk.version, tokens: &tokens, found: Vec::new() };
     finder.visit_block(&chunk.block);
     for &UnclosedBlock { error_index, opener } in unclosed {
         let error = &mut errors[error_index];
@@ -54,6 +59,7 @@ struct Suspect {
 struct Misindented<'source> {
     source: &'source [u8],
     version: LuaVersion,
+    tokens: &'source [Token],
     found: Vec<Suspect>,
 }
 
@@ -76,12 +82,16 @@ impl Misindented<'_> {
         between.is_some_and(|text| has_line_break(text, self.version))
     }
 
-    /// The last `word` before `offset`, which a construct's keyword is when
-    /// only a name, attributes, or whitespace come between.
-    fn last_before(&self, word: &str, offset: u32) -> Option<Span> {
-        let before = &self.source[..offset as usize];
-        let start = before.windows(word.len()).rposition(|window| window == word.as_bytes())?;
-        Some(Span::from_indices(start, start + word.len()))
+    /// The last `keyword` token that starts at `from` or later and before
+    /// `to`.
+    fn last_keyword(&self, keyword: TokenKind, from: u32, to: u32) -> Option<Span> {
+        let end = self.tokens.partition_point(|token| token.span.start < to);
+        self.tokens[..end]
+            .iter()
+            .rev()
+            .take_while(|token| token.span.start >= from)
+            .find(|token| token.kind == keyword)
+            .map(|token| token.span)
     }
 
     /// The `end` that `span`, a construct's, ends with, if it ends with one.
@@ -101,7 +111,12 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
             Statement::NumericFor(_) | Statement::GenericFor(_) => Some("for"),
             Statement::RepeatLoop(repeat) => {
                 let opener = Span::new(span.start, span.start + 6);
-                let until = self.last_before("until", repeat.condition.span().start);
+                // Past the block, so a nested loop's `until` isn't taken for
+                // a missing one.
+                let after_block =
+                    repeat.block.stmts.last().map_or(opener.end, |last| last.span().end);
+                let condition = repeat.condition.span().start;
+                let until = self.last_keyword(TokenKind::Until, after_block, condition);
                 self.check("repeat", opener, until);
                 None
             }
@@ -133,7 +148,8 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
     }
 
     fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
-        if let Some(opener) = self.last_before("function", function_body.span.start) {
+        // Only the function's name comes between its keyword and its body.
+        if let Some(opener) = self.last_keyword(TokenKind::Function, 0, function_body.span.start) {
             self.check("function", opener, self.end_of(function_body.span));
         }
         self.walk_function_body(function_body);

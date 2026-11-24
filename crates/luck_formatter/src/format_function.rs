@@ -6,6 +6,7 @@ use luck_ast::{
 };
 use luck_token::{Span, TokenKind};
 
+use crate::format_table::TablePlacement;
 use crate::ir::{Formatter, LineMode};
 use crate::{CallParentheses, SpaceAfterFunction};
 
@@ -207,8 +208,12 @@ impl<'ast> Formatter<'ast> {
                     | CallParentheses::None
                     | CallParentheses::Input => true,
                 };
-                let write_table =
-                    |f: &mut Self| f.node(|| table.span, |inner| inner.write_table(table, false));
+                let write_table = |f: &mut Self| {
+                    f.node(
+                        || table.span,
+                        |inner| inner.write_table(table, TablePlacement::Standalone),
+                    );
+                };
                 if should_keep_bare {
                     self.space();
                     write_table(self);
@@ -324,7 +329,7 @@ impl<'ast> Formatter<'ast> {
                         && !f.is_wrapped(arg, Slot::FREE)
                     {
                         let extent = f.extent(arg);
-                        f.node(|| extent, |inner| inner.write_table(table, true));
+                        f.node(|| extent, |inner| inner.write_table(table, TablePlacement::Hugged));
                     } else if is_hugged {
                         let function_group = f.group_id();
                         f.hugged_group_with_id(function_group, |hugged| hugged.write_expr(arg));

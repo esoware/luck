@@ -1,6 +1,6 @@
 use luck_ast::{AstKind, AstType};
 use luck_semantic::{AstNode, AstTypesBitset};
-use luck_token::{BinOp, CompoundOp, Span};
+use luck_token::{BinOp, Span};
 
 use crate::binary::operator_pairs;
 use crate::context::LintContext;
@@ -24,7 +24,7 @@ impl Rule for DivideByZero {
         let kind = node.kind();
         // Luau
         if let AstKind::CompoundAssignment(compound) = kind {
-            if let Some(op_name) = compound_divisive_op_name(compound.op)
+            if let Some(op_name) = divisive_op_name(compound.op.binary_op())
                 && has_number_value(&compound.expr, context, 0.0)
             {
                 context.diagnostic(zero_divisor_finding(op_name, compound.span));
@@ -77,19 +77,6 @@ const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
         | BinOp::BitXor
         | BinOp::Shl
         | BinOp::Shr => None,
-    }
-}
-
-const fn compound_divisive_op_name(op: CompoundOp) -> Option<&'static str> {
-    match op {
-        CompoundOp::Div => Some("division"),
-        CompoundOp::Mod => Some("modulo"),
-        CompoundOp::FloorDiv => Some("floor division"),
-        CompoundOp::Add
-        | CompoundOp::Sub
-        | CompoundOp::Mul
-        | CompoundOp::Pow
-        | CompoundOp::Concat => None,
     }
 }
 

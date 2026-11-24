@@ -22,10 +22,11 @@ pub(crate) fn emit<'ast>(
     graph: &mut DependencyGraph<'ast>,
     version: LuaVersion,
 ) -> Result<(Chunk<'ast>, Vec<u8>), Vec<FileDiagnostics>> {
-    let entry = &graph.modules[graph.entry_id.0];
+    let entry_id = graph.entry_id;
+    let entry = &graph[entry_id];
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
-        let block = graph.modules[graph.entry_id.0].block.take();
+        let block = graph[entry_id].block.take();
         return Ok((Chunk::new(version, block), header));
     }
 
@@ -34,7 +35,7 @@ pub(crate) fn emit<'ast>(
     let mut bodies = Vec::with_capacity(graph.modules.len());
     let mut errors = Vec::new();
     for wrapped in plan.wrapped_modules() {
-        let module = &mut graph.modules[wrapped.id.0];
+        let module = &mut graph[wrapped.id];
         let mut block = module.block.take();
         rewrite_module(allocator, &mut block, module, &plan, &names, version);
         if wrapped.wrapper.may_overflow(module) {

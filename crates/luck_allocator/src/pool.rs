@@ -1,4 +1,6 @@
-use std::{iter, mem, ops::Deref, sync::PoisonError};
+use std::{iter, mem, ops::Deref};
+
+use parking_lot::Mutex;
 
 use crate::Allocator;
 
@@ -6,11 +8,7 @@ use crate::Allocator;
 /// back, so a run keeps about one allocator per thread however much work it does.
 #[derive(Debug)]
 pub struct AllocatorPool {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "parking_lot isn't a dependency here, and nothing that can panic holds the lock"
-    )]
-    allocators: std::sync::Mutex<Vec<Allocator>>,
+    allocators: Mutex<Vec<Allocator>>,
 }
 
 impl AllocatorPool {
@@ -23,7 +21,7 @@ impl AllocatorPool {
 
     /// An allocator from the pool, or a new one when the pool has none to spare.
     pub fn get(&self) -> AllocatorGuard<'_> {
-        let spare = self.allocators.lock().unwrap_or_else(PoisonError::into_inner).pop();
+        let spare = self.allocators.lock().pop();
         let allocator = spare.unwrap_or_default();
         AllocatorGuard { allocator, pool: self }
     }
@@ -50,6 +48,6 @@ impl Drop for AllocatorGuard<'_> {
         // A new allocator owns no memory, so the one left in its place has nothing to free.
         let mut allocator = mem::take(&mut self.allocator);
         allocator.reset();
-        self.pool.allocators.lock().unwrap_or_else(PoisonError::into_inner).push(allocator);
+        self.pool.allocators.lock().push(allocator);
     }
 }

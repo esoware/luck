@@ -22,6 +22,13 @@ pub struct Name<'ast> {
     pub span: Span,
 }
 
+impl<'ast> Name<'ast> {
+    /// The text, or `None` for a name the parser found missing.
+    pub const fn written(&self) -> Option<&'ast str> {
+        if self.text.as_str().is_empty() { None } else { Some(self.text.as_str()) }
+    }
+}
+
 impl PartialEq for Name<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text && self.span == other.span
@@ -141,5 +148,11 @@ mod tests {
             format!("{numbered:?}"),
             r#"Name { text: "x", span: Span { start: 0, end: 1 } }"#
         );
+    }
+
+    #[test]
+    fn a_missing_name_is_not_written() {
+        assert_eq!(Name::new("x".into(), None, Span::new(0, 1)).written(), Some("x"));
+        assert_eq!(Name::new("".into(), None, Span::new(1, 1)).written(), None);
     }
 }

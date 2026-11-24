@@ -1,4 +1,8 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink as symlink_file;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_file;
 use std::path::Path;
 
 use ls_types::notification::{Cancel, DidCloseTextDocument};
@@ -23,6 +27,7 @@ use ls_types::{
     TextDocumentContentChangeEvent, TextEdit, Uri, WorkDoneProgressParams,
     WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
+use lsp_server::ErrorCode;
 use luck_token::index_to_offset;
 use serde_json::json;
 
@@ -256,6 +261,29 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     fs::write(&config_path, "{}").expect("fix luck.json");
     client.file_changed(&config_path, FileChangeType::CHANGED);
     assert!(client.diagnostics(&config_uri, None).is_empty(), "the fix clears the error");
+}
+
+/// A symlink reads by its own name, as `luck lint` reads the path it's
+/// given, and not by its target's.
+#[test]
+fn a_symlink_takes_the_dialect_of_its_own_name() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let text = "local x: number = 1\n";
+    let target = directory.path().join("b.luau");
+    fs::write(&target, text).expect("write b.luau");
+    let link = directory.path().join("a.lua");
+    // Windows lets only an administrator or developer mode make one.
+    if symlink_file(&target, &link).is_err() {
+        return;
+    }
+    let uri = Uri::from_file_path(&link).expect("file path URI");
+
+    let mut client = Client::start();
+    client.open(&uri, text);
+    let diags = client.diagnostics(&uri, Some(1));
+    let codes: Vec<_> = diags.iter().filter_map(|diag| diag.code.as_ref()).collect();
+    assert_eq!(codes, [&NumberOrString::String("E008".to_owned())], "read as Lua: {diags:?}");
 }
 
 #[test]
@@ -850,8 +878,15 @@ fn syntax_tree_request_dumps_ast() {
         dump.contains("LocalAssignment"),
         "the AST dump should contain the parsed statement node: {dump}"
     );
-    let refused = client.request_result::<SyntaxTree>(json!({}));
-    assert!(refused.is_err(), "a request naming no document is refused: {refused:?}");
+    let unopened = workspace_uri("unopened.lua");
+    let unopened_dump =
+        client.request::<SyntaxTree>(json!({ "textDocument": { "uri": unopened.as_str() } }));
+    assert_eq!(unopened_dump, "", "a document that isn't open has no tree");
+    for params in [json!({}), json!({ "textDocument": { "uri": "not a uri" } })] {
+        let refused = client.request_result::<SyntaxTree>(params);
+        let refusal = refused.expect_err("a request naming no document is refused");
+        assert_eq!(refusal.code, ErrorCode::InvalidParams as i32, "{refusal:?}");
+    }
 }
 
 #[test]

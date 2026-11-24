@@ -40,9 +40,7 @@ luck_stdlib          = { workspace = true }
 luck_testgen         = { workspace = true }
 luck_token           = { workspace = true }
 
-flate2   = { workspace = true }
 mlua     = { workspace = true }
 rayon    = { workspace = true }
 similar  = { workspace = true }
-tar      = { workspace = true }
 tempfile = { workspace = true }

@@ -36,7 +36,7 @@ fn bench_minifier(criterion: &mut Criterion) {
             bencher.iter_with_setup_wrapper(|runner| {
                 allocator.reset();
                 let mut parse_results = project.parse_files(&allocator);
-                runner.run(|| {
+                let _minified = runner.run(|| {
                     parse_results
                         .iter_mut()
                         .map(|parse_result| {

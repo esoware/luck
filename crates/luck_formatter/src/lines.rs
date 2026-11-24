@@ -1,16 +1,18 @@
 //! Where a source's lines start and end, and where it holds a blank line, as
 //! the chunk's dialect breaks lines.
 
-use luck_token::{LuaVersion, Span, index_to_offset, is_lua_whitespace, strip_line_break};
+use luck_token::{
+    LuaVersion, Span, ends_with_line_break, index_to_offset, is_lua_whitespace, strip_line_break,
+};
 
-/// `offset`'s line's start, when only spaces and tabs come before `offset` on
-/// it.
-pub(crate) fn own_line_start(source: &[u8], offset: u32) -> Option<u32> {
+/// `offset`'s line's start, as `version` breaks lines, when only spaces and
+/// tabs come before `offset` on it.
+pub(crate) fn own_line_start(source: &[u8], offset: u32, version: LuaVersion) -> Option<u32> {
     let i = offset as usize;
     let before = &source[..i];
     let indent_length = before.iter().rev().take_while(|b| matches!(b, b' ' | b'\t')).count();
     let line_start = i - indent_length;
-    let is_line_start = line_start == 0 || matches!(before[line_start - 1], b'\n' | b'\r');
+    let is_line_start = line_start == 0 || ends_with_line_break(&before[..line_start], version);
     is_line_start.then(|| index_to_offset(line_start))
 }
 
@@ -92,6 +94,25 @@ mod tests {
         ] {
             assert_eq!(
                 starts_line(source.as_bytes(), offset, version),
+                expected,
+                "{source:?} in {version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_starts_after_a_line_break_and_before_its_indentation() {
+        for (source, offset, version, expected) in [
+            ("--", 0, LuaVersion::Lua54, Some(0)),
+            ("x\n \t--", 4, LuaVersion::Lua54, Some(2)),
+            ("x --", 2, LuaVersion::Lua54, None),
+            ("x\r --", 3, LuaVersion::Lua54, Some(2)),
+            // Luau reads a lone CR as a space.
+            ("x\r --", 3, LuaVersion::Luau, None),
+            ("x\r\n --", 4, LuaVersion::Luau, Some(3)),
+        ] {
+            assert_eq!(
+                own_line_start(source.as_bytes(), offset, version),
                 expected,
                 "{source:?} in {version:?}"
             );

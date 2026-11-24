@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use flate2::read::GzDecoder;
-use luck_benchmark_files::fetch_bytes;
+use luck_benchmark_files::{extract_once, fetch_bytes};
 use luck_token::LuaTarget;
-use tar::Archive;
 
 /// One dialect's official test suite, pinned to the release of the
 /// interpreter mlua vendors for it.
@@ -156,25 +154,7 @@ impl Suite {
     /// The suite's directory in the cache, downloaded into it on first use.
     pub(crate) fn fetch(&self) -> io::Result<PathBuf> {
         let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join("cache");
-        let root = cache.join(self.directory);
-        if root.is_dir() {
-            return Ok(root);
-        }
-        let bytes = fetch_bytes(self.url)?;
-        // Unpacking aside and renaming keeps `root` absent until it's whole.
-        // An interrupted run's leftovers go first.
-        let partial = cache.join(format!("{}.partial", self.directory));
-        let _ = fs::remove_dir_all(&partial);
-        fs::create_dir_all(&partial)?;
-        for read in Archive::new(GzDecoder::new(bytes.as_slice())).entries()? {
-            let mut entry = read?;
-            if entry.path()?.starts_with(self.tarball_directory) {
-                entry.unpack_in(&partial)?;
-            }
-        }
-        fs::rename(partial.join(self.tarball_directory), &root)?;
-        fs::remove_dir_all(&partial)?;
-        Ok(root)
+        extract_once(&cache, self.directory, self.url, self.tarball_directory, fetch_bytes)
     }
 
     /// The suite's test files in `root`, or only those whose path contains

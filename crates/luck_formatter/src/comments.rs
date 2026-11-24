@@ -132,7 +132,7 @@ impl<'ast> Comments<'ast> {
         );
         let version = parse.chunk.version;
         let region_start = |off: &Comment| {
-            own_line_start(source, off.span.start)
+            own_line_start(source, off.span.start, version)
                 .unwrap_or_else(|| after_line_break(source, off.span.end, version))
         };
         // An `off` inside an open region changes nothing.

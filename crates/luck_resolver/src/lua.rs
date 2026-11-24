@@ -1,9 +1,10 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::ResolveError;
-use crate::cache::Cache;
 use crate::file_system::FileSystem;
-use crate::shared_cache::SharedCache;
+use crate::fs_cache::FsCache;
+use crate::shared_cache::{Generation, SharedCache};
 
 const DEFAULT_SEARCH_PATHS: [&str; 2] = ["?.lua", "?/init.lua"];
 
@@ -18,7 +19,11 @@ pub(crate) struct Lua {
 }
 
 impl Lua {
-    pub(crate) fn new(search_paths: Vec<String>, root: PathBuf) -> Self {
+    pub(crate) fn new(
+        search_paths: Vec<String>,
+        root: PathBuf,
+        generation: &Arc<Generation>,
+    ) -> Self {
         Self {
             search_paths: if search_paths.is_empty() {
                 DEFAULT_SEARCH_PATHS.map(str::to_owned).to_vec()
@@ -26,7 +31,7 @@ impl Lua {
                 search_paths
             },
             root,
-            resolved: SharedCache::default(),
+            resolved: SharedCache::new(generation),
         }
     }
 
@@ -36,27 +41,26 @@ impl Lua {
 
     pub(crate) fn resolve(
         &self,
-        cache: &Cache<impl FileSystem>,
+        fs_cache: &FsCache<impl FileSystem>,
         module: &str,
     ) -> Result<PathBuf, ResolveError> {
-        if let Some(path) = self.resolved.get(module) {
-            return Ok(path);
-        }
-        let slashed_module = module.replace('.', "/");
-        // A leading dot must not turn a relative template into a rooted path.
-        let module_path = slashed_module.trim_start_matches('/');
-        let found = self.search_paths.iter().find_map(|template| {
-            let candidate = self.root.join(template.replace('?', module_path));
-            cache.is_file(&candidate).then(|| cache.canonical_file(&candidate))
-        });
-        let Some(path) = found else {
-            return Err(ResolveError::NotFound(
-                self.search_paths
-                    .iter()
-                    .map(|template| PathBuf::from(template.replace('?', module_path)))
-                    .collect(),
-            ));
-        };
-        Ok(self.resolved.insert(module.to_owned(), path))
+        self.resolved.get_or_try_insert_with(module, || {
+            let slashed_module = module.replace('.', "/");
+            // A leading dot must not turn a relative template into a rooted
+            // path.
+            let module_path = slashed_module.trim_start_matches('/');
+            let found = self.search_paths.iter().find_map(|template| {
+                let candidate = self.root.join(template.replace('?', module_path));
+                fs_cache.is_file(&candidate).then(|| fs_cache.canonical_file(&candidate))
+            });
+            found.ok_or_else(|| {
+                ResolveError::NotFound(
+                    self.search_paths
+                        .iter()
+                        .map(|template| PathBuf::from(template.replace('?', module_path)))
+                        .collect(),
+                )
+            })
+        })
     }
 }

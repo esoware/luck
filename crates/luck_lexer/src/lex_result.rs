@@ -1,7 +1,7 @@
 use luck_diagnostics::Diagnostic;
 use luck_token::{Comment, Span, Token};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct LexResult {
     /// Every token, ending in `Eof` for any source [`Lexer::new`](crate::Lexer::new) accepts.
     pub tokens: Vec<Token>,

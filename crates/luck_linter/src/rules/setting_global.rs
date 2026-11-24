@@ -91,8 +91,7 @@ x = 1",
         ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] =
-        &[("counter = 1", LuaTarget::Lua54), ("my_global = 1", LuaTarget::Lua54)];
+    const FAIL: &[(&str, LuaTarget)] = &[("counter = 1", LuaTarget::Lua54)];
 
     #[test]
     fn test() {

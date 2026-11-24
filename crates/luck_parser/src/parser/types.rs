@@ -11,8 +11,8 @@ use luck_ast::{
 };
 use luck_token::{Span, Token, TokenKind};
 
-use super::Parser;
 use super::recovery::Closer;
+use super::{Parser, name_token};
 
 /// Luau's flat type-suffix chain rejects `A | B & C`, `A? & B`, and the like.
 const MIXED_TYPE_MESSAGE: &str =
@@ -285,15 +285,7 @@ impl<'ast> Parser<'ast> {
         match self.peek() {
             // `typeof.Name` is a module-qualified type.
             TokenKind::Typeof if self.peek_next() != TokenKind::Dot => self.parse_typeof_type(),
-            TokenKind::Identifier
-            | TokenKind::Continue
-            | TokenKind::Export
-            | TokenKind::Const
-            | TokenKind::Type
-            | TokenKind::Typeof
-            | TokenKind::Read
-            | TokenKind::Write
-            | TokenKind::Global => {
+            name_token!() => {
                 let name = self.advance_name();
                 self.parse_named_type(name)
             }

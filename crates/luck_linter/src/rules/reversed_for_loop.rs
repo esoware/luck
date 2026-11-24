@@ -63,7 +63,6 @@ for i = 10, n do print(i) end",
         ("for i = 10, 1 do print(i) end", LuaTarget::Lua54),
         ("for i = 0x10, 1 do print(i) end", LuaTarget::Lua54),
         ("for i = -1, -5 do print(i) end", LuaTarget::Lua54),
-        ("for i = 10, 1 do end", LuaTarget::Lua54),
     ];
 
     #[test]

@@ -40,7 +40,7 @@ impl Rule for RobloxUnknownEnumMember {
         let Some(mut entry) = stdlib.globals.get("Enum") else {
             return;
         };
-        if context.scoping().resolves_to_local(root) {
+        if !context.scoping().reaches_host_global(root) {
             return;
         }
         for (read_index, suffix) in (0..).zip(context.read_suffixes(node)) {
@@ -88,6 +88,12 @@ mod tests {
         (
             "\
 local Enum = { Materialz = 1 }
+local m = Enum.Materialz",
+            LuaTarget::LuauRoblox,
+        ),
+        (
+            "\
+Enum = { Materialz = 1 }
 local m = Enum.Materialz",
             LuaTarget::LuauRoblox,
         ),

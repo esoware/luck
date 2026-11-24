@@ -11,7 +11,6 @@ use luck_ast::{
 use luck_token::Span;
 
 use crate::document::{DocumentState, span_text};
-use crate::providers::cursor::identifier;
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
     outline(document, &document.parse().chunk.block)
@@ -62,7 +61,7 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
             }
             Statement::LocalAssignment(local) => {
                 for (index, attributed) in local.names.iter().enumerate() {
-                    let Some(name) = identifier(&attributed.name) else {
+                    let Some(name) = attributed.name.written() else {
                         continue;
                     };
                     if let Some(Expression::FunctionDef(function)) = local.exprs.get(index) {
@@ -119,13 +118,13 @@ impl SymbolEmitter<'_> {
                 continue;
             };
             let (label, selection_span) = match var {
-                Var::Name(name) => (identifier(name), name.span),
+                Var::Name(name) => (name.written(), name.span),
                 Var::Suffixed(chain) => {
                     let Suffix::Field(name) = chain.suffixes.last() else {
                         continue;
                     };
                     let label = span_text(self.document.text(), chain.span);
-                    (identifier(name).map(|_| label), chain.span)
+                    (name.written().map(|_| label), chain.span)
                 }
             };
             if let Some(name) = label {
@@ -141,7 +140,7 @@ impl SymbolEmitter<'_> {
     }
 
     fn push_named_function(&mut self, name: &Name<'_>, body: &FunctionBody<'_>, span: Span) {
-        if let Some(label) = identifier(name) {
+        if let Some(label) = name.written() {
             self.push_function(label, SymbolKind::FUNCTION, body, span, name.span);
         }
     }
@@ -173,13 +172,13 @@ impl SymbolEmitter<'_> {
 /// The label for `name`, empty when recovery left no real name in it.
 fn function_name_label(name: &FunctionName<'_>) -> (String, SymbolKind) {
     let mut label = String::new();
-    for segment in name.names.iter().filter_map(identifier) {
+    for segment in name.names.iter().filter_map(Name::written) {
         if !label.is_empty() {
             label.push('.');
         }
         label.push_str(segment);
     }
-    if let Some(method) = name.method.as_ref().and_then(identifier) {
+    if let Some(method) = name.method.as_ref().and_then(Name::written) {
         label.push(':');
         label.push_str(method);
     }
@@ -193,7 +192,7 @@ fn function_name_label(name: &FunctionName<'_>) -> (String, SymbolKind) {
 
 fn format_params(body: &FunctionBody<'_>) -> String {
     let mut parts: Vec<&str> =
-        body.params.iter().filter_map(|param| identifier(&param.name)).collect();
+        body.params.iter().filter_map(|param| param.name.written()).collect();
     if body.vararg.is_some() {
         parts.push("...");
     }

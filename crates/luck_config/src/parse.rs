@@ -1,20 +1,65 @@
-use json5::char::{is_json5_identifier, is_json5_line_terminator};
+use std::iter;
+
+use json5::char::{is_json5_identifier, is_json5_line_terminator, is_json5_whitespace};
 use luck_diagnostics::Diagnostic;
 use luck_token::Span;
 
 use crate::config::LuckConfig;
 
+/// How deep arrays and objects may nest. json5 reads each level with a
+/// recursive call and no limit of its own, so a deeper file would overflow
+/// the stack of whichever thread loads it.
+const MAX_NESTING_DEPTH: usize = 128;
+
 pub(crate) fn parse(text: &str) -> Result<LuckConfig, Diagnostic> {
+    let mut depth = 0_usize;
+    for (start, token) in tokens(text) {
+        match token {
+            "[" | "{" => depth += 1,
+            "]" | "}" => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth > MAX_NESTING_DEPTH {
+            let problem =
+                format!("arrays and objects nest more than {MAX_NESTING_DEPTH} levels deep");
+            return Err(Diagnostic::e014(Some(Span::from_indices(start, start + 1)), &problem));
+        }
+    }
     json5::from_str(text).map_err(|e| {
         let message = e.to_string();
         let (problem, span) = match e.position() {
             Some(position) => {
                 let problem = message.strip_suffix(&format!(" at {position}")).unwrap_or(&message);
-                (problem, Some(token_at(text, offset_of(text, position))))
+                let start = offset_of(text, position);
+                (problem, Some(Span::from_indices(start, start + token_length(&text[start..]))))
             }
             None => (message.as_str(), None),
         };
         Diagnostic::e014(span, problem)
+    })
+}
+
+/// Each token of `text`, a JSON5 document, with its offset, past the
+/// whitespace and comments between them.
+fn tokens(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut offset = 0;
+    iter::from_fn(move || {
+        loop {
+            let rest = &text[offset..];
+            if let Some(comment) = rest.strip_prefix("//") {
+                offset += 2 + comment.find(is_json5_line_terminator).unwrap_or(comment.len());
+            } else if let Some(comment) = rest.strip_prefix("/*") {
+                offset += 2 + comment.find("*/").map_or(comment.len(), |end| end + 2);
+            } else {
+                let c = rest.chars().next()?;
+                if !is_json5_whitespace(c) {
+                    let start = offset;
+                    offset += token_length(rest);
+                    return Some((start, &text[start..offset]));
+                }
+                offset += c.len_utf8();
+            }
+        }
     })
 }
 
@@ -37,13 +82,12 @@ fn offset_of(text: &str, position: json5::Position) -> usize {
     chars.nth(position.column).map_or(text.len(), |(offset, _)| offset)
 }
 
-/// The token that starts at `start`: a quoted string, or a run of the
-/// characters a key, a number, or a literal is made of, so an error
-/// underlines the word at fault.
-fn token_at(text: &str, start: usize) -> Span {
-    let rest = &text[start..];
+/// The length of the token `rest` starts with: a quoted string, or a run of
+/// the characters a key, a number, or a literal is made of, so an error
+/// underlines the word at fault, or else one character.
+fn token_length(rest: &str) -> usize {
     let mut chars = rest.char_indices();
-    let length = match chars.next() {
+    match chars.next() {
         None => 0,
         Some((_, quote @ ('"' | '\''))) => {
             let mut is_escaped = false;
@@ -59,25 +103,53 @@ fn token_at(text: &str, start: usize) -> Span {
             chars.find(|&(_, c)| !is_word_char(c)).map_or(rest.len(), |(index, _)| index)
         }
         Some((_, first)) => first.len_utf8(),
-    };
-    Span::from_indices(start, start + length)
+    }
 }
 
 fn is_word_char(c: char) -> bool {
     is_json5_identifier(c) || matches!(c, '+' | '-' | '.')
 }
 
-/// Where `name` is written in `text` as a string, or the start when it's
-/// written another way, such as through an escape.
-pub(crate) fn string_span(text: &str, name: &str) -> Span {
-    ['"', '\'']
-        .iter()
-        .find_map(|quote| text.find(&format!("{quote}{name}{quote}")))
-        .map_or_else(Span::default, |start| Span::from_indices(start, start + name.len() + 2))
+/// Where `name` is written as an entry of the array under the top-level
+/// `key` of `text`, a config, or the start when it's written another way,
+/// such as through an escape.
+pub(crate) fn entry_span(text: &str, key: &str, name: &str) -> Span {
+    let mut depth = 0_usize;
+    let mut is_in_entries = false;
+    let (mut before_previous, mut previous) = ("", "");
+    for (start, token) in tokens(text) {
+        match token {
+            "[" | "{" => {
+                if depth == 1 {
+                    is_in_entries = token == "["
+                        && previous == ":"
+                        && string_content(before_previous).unwrap_or(before_previous) == key;
+                }
+                depth += 1;
+            }
+            "]" | "}" if is_in_entries && depth == 2 => break,
+            "]" | "}" => depth = depth.saturating_sub(1),
+            _ if is_in_entries && depth == 2 && string_content(token) == Some(name) => {
+                return Span::from_indices(start, start + token.len());
+            }
+            _ => {}
+        }
+        (before_previous, previous) = (previous, token);
+    }
+    Span::default()
+}
+
+/// What `token` holds between its quotes, or `None` when it isn't a whole
+/// string.
+fn string_content(token: &str) -> Option<&str> {
+    let quote = token.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    token.strip_prefix(quote)?.strip_suffix(quote)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
 
     #[test]
@@ -134,6 +206,64 @@ mod tests {
         )
         .expect("JSON5 features should parse");
         assert_eq!(config.minify, Some(true));
+    }
+
+    /// A config whose arrays and objects nest `depth` levels deep, in a rule
+    /// setting's third element, which takes any value.
+    fn nested(depth: usize) -> String {
+        let inner = depth - 4;
+        format!(
+            r#"{{ "lint": {{ "rules": {{ "cyclomatic_complexity": ["warn", {{ "max": 1 }}, {}{}] }} }} }}"#,
+            "[".repeat(inner),
+            "]".repeat(inner)
+        )
+    }
+
+    #[test]
+    fn rejects_nesting_past_the_limit_on_the_bracket_that_passes_it() {
+        let text = nested(100_000);
+        let deep = text.clone();
+        let diag = thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || parse(&deep).unwrap_err())
+            .expect("the thread starts")
+            .join()
+            .expect("the parse returns");
+        assert_eq!(
+            diag.message,
+            "invalid config: arrays and objects nest more than 128 levels deep"
+        );
+        // Four levels lead to the run of brackets, so its 125th passes 128.
+        let start = text.find("[[").expect("the run of brackets") + 124;
+        assert_eq!(diag.span, Some(Span::from_indices(start, start + 1)));
+    }
+
+    #[test]
+    fn leaves_nesting_at_the_limit_to_json5() {
+        let diag = parse(&nested(128)).unwrap_err();
+        assert!(diag.message.starts_with("invalid config: invalid length 3"), "{diag:?}");
+    }
+
+    #[test]
+    fn counts_no_bracket_in_a_string_or_a_comment() {
+        let brackets = "[".repeat(200);
+        let text = format!("{{ // {brackets}\n /* {brackets} */ lua: '{brackets}' }}");
+        let diag = parse(&text).unwrap_err();
+        assert!(diag.message.contains("unknown variant"), "{diag:?}");
+    }
+
+    #[test]
+    fn entry_span_finds_an_entry_of_the_top_level_key_alone() {
+        let text = r#"{
+  overrides: [{ extends: ['a.json'] }],
+  "note": "extends", // 'a.json'
+  extends: ['b.json', 'a.json'],
+  "std": ["a.json"],
+}"#;
+        let span = entry_span(text, "extends", "a.json");
+        let start = text.find("'a.json'],").expect("the entry");
+        assert_eq!(span, Span::from_indices(start, start + 8));
+        assert_eq!(entry_span(text, "extends", "c.json"), Span::default());
     }
 
     #[test]

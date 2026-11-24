@@ -29,12 +29,13 @@ use ls_types::{
     Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentSymbolResponse, FileChangeType, InitializeParams, NumberOrString,
-    PublishDiagnosticsParams, Uri, WorkspaceEdit, WorkspaceFoldersChangeEvent,
-    WorkspaceSymbolResponse,
+    PublishDiagnosticsParams, TextDocumentIdentifier, Uri, WorkspaceEdit,
+    WorkspaceFoldersChangeEvent, WorkspaceSymbolResponse,
 };
 use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::capabilities;
 use crate::document::{Document, DocumentState};
@@ -71,8 +72,14 @@ pub(crate) enum Task {
 /// `luck/syntaxTree`: the open document's tree, dumped.
 enum SyntaxTree {}
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyntaxTreeParams {
+    text_document: TextDocumentIdentifier,
+}
+
 impl LspRequest for SyntaxTree {
-    type Params = serde_json::Value;
+    type Params = SyntaxTreeParams;
     type Result = String;
     const METHOD: &'static str = "luck/syntaxTree";
 }
@@ -762,18 +769,10 @@ impl Server {
                 });
             }
             SyntaxTree::METHOD => {
-                let Request { id, params, .. } = request;
-                let Some(uri) = params
-                    .get("textDocument")
-                    .and_then(|text_document| text_document.get("uri"))
-                    .and_then(|uri| uri.as_str())
-                    .and_then(|uri| uri.parse::<Uri>().ok())
-                else {
-                    let refusal = "missing `textDocument.uri`".to_owned();
-                    self.send(Response::new_err(id, ErrorCode::InvalidParams as i32, refusal));
+                let Some((id, params)) = self.params::<SyntaxTree>(request) else {
                     return;
                 };
-                let document = self.document(&uri);
+                let document = self.document(&params.text_document.uri);
                 self.spawn::<SyntaxTree, _>(id, move |session, _| {
                     Ok(document.map_or_else(String::new, |open| {
                         syntax_tree::syntax_tree(open.state(session))

@@ -34,6 +34,7 @@ memchr            = { workspace = true }
 parking_lot       = { workspace = true }
 rustc-hash        = { workspace = true }
 self_cell         = { workspace = true }
+serde             = { workspace = true }
 serde_json        = { workspace = true }
 
 [dev-dependencies]

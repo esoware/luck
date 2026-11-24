@@ -51,9 +51,10 @@ enum TypeFunction {
 impl TypeFunction {
     /// The one `call` calls with one argument: `type`, or on Luau `typeof`.
     fn of_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Self> {
-        let function = if is_global_call(call, "type", semantic) {
+        let scoping = semantic.scoping();
+        let function = if is_global_call(call, "type", scoping) {
             Self::Type
-        } else if semantic.version().is_luau() && is_global_call(call, "typeof", semantic) {
+        } else if semantic.version().is_luau() && is_global_call(call, "typeof", scoping) {
             Self::Typeof
         } else {
             return None;

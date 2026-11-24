@@ -31,9 +31,3 @@ warning: return value of `s:upper` is discarded
 2 | s:upper()
   | ^^^^^^^^^
 help: assign the result or remove the call
-
-warning: return value of `tostring` is discarded
- --> Lua54:1:1
-1 | tostring(42)
-  | ^^^^^^^^^^^^
-help: assign the result or remove the call

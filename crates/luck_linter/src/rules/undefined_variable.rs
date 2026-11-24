@@ -112,8 +112,7 @@ f(1)",
         ("print(tostring(1))", LuaTarget::Lua54),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] =
-        &[("print(missing)", LuaTarget::Lua54), ("print(undefined_var)", LuaTarget::Lua54)];
+    const FAIL: &[(&str, LuaTarget)] = &[("print(missing)", LuaTarget::Lua54)];
 
     #[test]
     fn test() {

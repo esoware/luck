@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent};
 use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolution, ResolveError};
+use luck_resolver::{Resolution, ResolveError};
 use luck_semantic::{AstNodes, Scoping};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, Token};
@@ -36,11 +36,7 @@ impl LazySettings {
     }
 
     fn resolve(&self, session: &Session) -> &Arc<DocumentSettings> {
-        self.resolved.get_or_init(|| {
-            let spelled = self.path.as_deref();
-            let canonical = spelled.map(|path| FileSystemOs.canonicalize_existing(path));
-            Arc::new(session.document_settings(canonical, spelled))
-        })
+        self.resolved.get_or_init(|| Arc::new(session.document_settings(self.path.as_deref())))
     }
 }
 

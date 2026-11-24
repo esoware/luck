@@ -102,14 +102,7 @@ impl Workspace {
 
     /// The file at `path`, a canonical path.
     pub(crate) fn file(&self, path: &Path) -> Arc<DiskFile> {
-        let mut changed = self.changed.lock();
-        if !changed.is_empty() {
-            let mut files = self.files.write();
-            for reported in mem::take(&mut *changed) {
-                files.remove(&FileSystemOs.canonicalize_existing(&reported));
-            }
-        }
-        drop(changed);
+        self.forget_changed();
         if let Some(file) = self.files.read().get(path) {
             return Arc::clone(file);
         }
@@ -117,9 +110,22 @@ impl Workspace {
         Arc::clone(self.files.write().entry(path.to_path_buf()).or_insert(read))
     }
 
-    /// Whether the file at `path` was read since it last changed.
+    /// Whether the file at `path`, a canonical path, was read since it last
+    /// changed.
     pub(crate) fn is_read(&self, path: &Path) -> bool {
+        self.forget_changed();
         self.files.read().get(path).is_some_and(|file| file.record.get().is_some())
+    }
+
+    /// Drops the record of each file the watcher reported changed.
+    fn forget_changed(&self) {
+        let mut changed = self.changed.lock();
+        if !changed.is_empty() {
+            let mut files = self.files.write();
+            for reported in mem::take(&mut *changed) {
+                files.remove(&FileSystemOs.canonicalize_existing(&reported));
+            }
+        }
     }
 }
 
@@ -331,7 +337,7 @@ impl<'job> WorkspaceView<'job> {
         }
         let bytes = FileSystemOs.read(path).ok()?;
         let text: Arc<str> = String::from_utf8_lossy(&bytes).into();
-        let settings = self.session.document_settings(Some(path.to_path_buf()), None);
+        let settings = self.session.document_settings(Some(path));
         let line_index = LineIndex::new(&text, self.session.encoding());
         let document = DocumentState::new(
             text,
@@ -392,5 +398,30 @@ impl<'job> WorkspaceView<'job> {
     pub(crate) fn is_workspace_file(&self, path: &Path) -> bool {
         let walk = self.session.workspace().walk();
         walk.files(self.session).binary_search_by(|file| file.as_path().cmp(path)).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use crate::fixtures::session;
+
+    #[test]
+    fn a_file_the_watcher_reported_changed_is_not_read() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+        let spelled = directory.path().join("a.lua");
+        fs::write(&spelled, "return {}\n").expect("write a.lua");
+        let path = FileSystemOs.canonicalize(&spelled).expect("canonicalize");
+        let session = session();
+        let workspace = session.workspace();
+        assert!(!workspace.is_read(&path));
+        assert!(workspace.file(&path).source(&session).is_some());
+        assert!(workspace.is_read(&path));
+
+        workspace.forget(spelled);
+        assert!(!workspace.is_read(&path), "its record is stale");
     }
 }

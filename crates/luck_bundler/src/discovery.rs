@@ -10,6 +10,7 @@ use luck_diagnostics::Diagnostic;
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
 use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
 use memchr::memmem;
+use rayon::Yield;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{Analysis, StaticRequire, analyze};
@@ -205,7 +206,6 @@ pub(crate) fn discover_reachable<'ast>(
     // than a graph may hold.
     let mut seen = FxHashSet::from_iter([entry.as_os_str().to_owned()]);
     let (sender, receiver) = mpsc::channel::<(PathBuf, thread::Result<Discovered<'ast>>)>();
-    let is_worker_thread = rayon::current_thread_index().is_some();
     rayon::in_place_scope(|scope| {
         let start = |path: PathBuf| {
             let task_sender = sender.clone();
@@ -219,14 +219,14 @@ pub(crate) fn discover_reachable<'ast>(
         };
         start(entry.to_path_buf());
         while found.len() < seen.len() {
-            let report =
-                if is_worker_thread { receiver.try_recv().ok() } else { receiver.recv().ok() };
-            // A thread of the pool runs queued tasks while it waits, so a pool
-            // of one runs them all here.
-            let Some((path, outcome)) = report else {
-                rayon::yield_now();
-                continue;
-            };
+            let (path, outcome) = next_report(
+                || receiver.try_recv().ok(),
+                || {
+                    receiver
+                        .recv()
+                        .expect("`sender` outlives the loop, so a task still out reports")
+                },
+            );
             let discovered = outcome.unwrap_or_else(|payload| panic::resume_unwind(payload));
             for target in discovered
                 .module
@@ -243,4 +243,71 @@ pub(crate) fn discover_reachable<'ast>(
         }
     });
     found
+}
+
+/// The first report `poll` gives, with this thread running the pool's queued
+/// tasks while there's none, so a pool of one runs them all here.
+///
+/// Only this thread starts tasks, so once none is queued, each one still to
+/// report is running on another thread, and this blocks in `wait` rather
+/// than spin until one does. Off the pool, nothing runs here, so it blocks
+/// after the first poll.
+fn next_report<Report>(
+    mut poll: impl FnMut() -> Option<Report>,
+    wait: impl FnOnce() -> Report,
+) -> Report {
+    loop {
+        if let Some(report) = poll() {
+            return report;
+        }
+        if !matches!(rayon::yield_now(), Some(Yield::Executed)) {
+            return wait();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use rayon::ThreadPoolBuilder;
+
+    use super::*;
+
+    fn on_one_thread<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+        ThreadPoolBuilder::new().num_threads(1).build().expect("the pool starts").install(work)
+    }
+
+    /// Polling again would spin until a task on another thread reported, and
+    /// with nothing queued, there's nothing to run in the meantime.
+    #[test]
+    fn next_report_waits_once_no_task_is_queued() {
+        let (report, polls) = on_one_thread(|| {
+            let polls = Cell::new(0);
+            let poll = || {
+                polls.set(polls.get() + 1);
+                (polls.get() > 1).then_some("polled again")
+            };
+            (next_report(poll, || "waited"), polls.get())
+        });
+        assert_eq!((report, polls), ("waited", 1));
+    }
+
+    /// On a pool of one, a queued task can only run here, so waiting first
+    /// would wait for it forever.
+    #[test]
+    fn next_report_runs_a_queued_task_before_it_waits() {
+        let report = on_one_thread(|| {
+            let has_run = AtomicBool::new(false);
+            rayon::in_place_scope(|scope| {
+                scope.spawn(|_| has_run.store(true, Ordering::Relaxed));
+                next_report(
+                    || has_run.load(Ordering::Relaxed).then_some("ran the task"),
+                    || "waited",
+                )
+            })
+        });
+        assert_eq!(report, "ran the task");
+    }
 }

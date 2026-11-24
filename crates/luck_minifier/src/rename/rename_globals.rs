@@ -15,11 +15,13 @@ use luck_semantic::{NameId, Scoping};
 pub(super) fn renamable_globals(block: &Block<'_>, scoping: &Scoping) -> Vec<NameId> {
     let mut top_level = Vec::new();
     flatten(block, &mut top_level);
-    let function_globals = function_globals(&top_level, scoping);
+    let mut renamable = function_globals(&top_level, scoping);
+    let mut is_renamable = BitSet::new(scoping.names().len());
+    for name in &renamable {
+        is_renamable.insert(name.index());
+    }
 
     let mut reads = Reads::new(scoping);
-    let mut is_assign_first = BitSet::new(scoping.names().len());
-    let mut assign_first = Vec::new();
     for &stmt in &top_level {
         let Statement::Assignment(assignment) = stmt else {
             reads.visit_stmt(stmt);
@@ -28,18 +30,15 @@ pub(super) fn renamable_globals(block: &Block<'_>, scoping: &Scoping) -> Vec<Nam
         reads.read_assignment(assignment);
         for target in &assignment.targets {
             if let Some(name) = target_global(target, scoping)
-                && !function_globals.contains(&name)
+                && !is_renamable.contains(name.index())
                 && !reads.has(name)
                 && !is_excluded(name, scoping)
-                && !is_assign_first.contains(name.index())
             {
-                is_assign_first.insert(name.index());
-                assign_first.push(name);
+                is_renamable.insert(name.index());
+                renamable.push(name);
             }
         }
     }
-    let mut renamable = function_globals;
-    renamable.extend(assign_first);
     renamable
 }
 
@@ -210,8 +209,14 @@ impl<'tree> Visit<'tree> for Reads<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+    use std::time::{Duration, Instant};
+
+    use luck_allocator::Allocator;
     use luck_token::LuaVersion;
 
+    use super::renamable_globals;
+    use crate::binding::analyze;
     use crate::fixtures::{RENAMING, assert_lua55_renames, assert_luau_renames, minify_with};
     use crate::transform_config::TransformConfig;
 
@@ -851,6 +856,28 @@ function g() end
                 "do local e=1 end function e()end",
             ),
         ]);
+    }
+
+    #[test]
+    fn many_function_globals_and_assignments_are_found_without_rescanning_them() {
+        let count = 300_000;
+        let mut source = String::new();
+        for i in 0..count {
+            writeln!(source, "function f{i}() end").unwrap();
+        }
+        for i in 0..count {
+            writeln!(source, "g{i} = f{i}").unwrap();
+        }
+        let allocator = Allocator::new();
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let scoping = analyze(&parsed.chunk, parsed.counts);
+        let started = Instant::now();
+        let renamable = renamable_globals(&parsed.chunk.block, &scoping);
+        let elapsed = started.elapsed();
+        assert_eq!(renamable.len(), 2 * count);
+        // Looking each assigned global up among the function globals one by
+        // one takes several seconds at this size.
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
     }
 
     #[test]

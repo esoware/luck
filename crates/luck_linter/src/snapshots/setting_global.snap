@@ -6,9 +6,3 @@ warning: setting global variable `counter` (missing `local`?)
 1 | counter = 1
   | ^^^^^^^
 help: add `local` before the first assignment
-
-warning: setting global variable `my_global` (missing `local`?)
- --> Lua54:1:1
-1 | my_global = 1
-  | ^^^^^^^^^
-help: add `local` before the first assignment

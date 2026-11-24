@@ -1,14 +1,15 @@
-use std::env;
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
+use std::{env, fs};
 
 use clap::Args;
 use luck_allocator::ThreadAllocators;
 use luck_bundler::{bundle, bundle_minified};
-use luck_config::{BuildConfig, CONFIG_FILE_NAME, Project, check_output_paths, find_config};
+use luck_config::{BuildConfig, Project, check_output_paths, find_config};
 use luck_diagnostics::FileDiagnostics;
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
@@ -54,6 +55,21 @@ enum BuildFailure {
     /// watch mode.
     Fatal(Exit),
 }
+
+/// What one pass of watch mode's builds read and wrote.
+#[derive(Default)]
+struct WatchedFiles {
+    /// Every file the builds read, config files included, so an edit to any
+    /// of them triggers a rebuild. A config that doesn't load counts as read,
+    /// with the file at fault, since fixing either fixes the build.
+    read: Vec<PathBuf>,
+    /// Each build's output.
+    written: Vec<PathBuf>,
+}
+
+/// A file's length and last write time, which a save changes, or `None` for
+/// a file that can't be read.
+type FileState = Option<(u64, SystemTime)>;
 
 impl BuildArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
@@ -110,10 +126,11 @@ impl BuildArgs {
 
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
         let mut arenas = ThreadAllocators::new();
-        let mut read_files = self.build_for_watch(&mut arenas, verbosity)?;
+        let mut files = self.build_for_watch(&mut arenas, verbosity)?;
+        let mut states_before_rebuild = Vec::new();
 
         loop {
-            let directories = watched_directories(&read_files);
+            let directories = watched_directories(&files.read);
 
             let (sender, receiver) = mpsc::channel();
             let mut debouncer = new_debouncer(Duration::from_millis(200), sender)
@@ -128,53 +145,62 @@ impl BuildArgs {
                 }
             }
 
-            eprintln!("\n[watching for changes...]");
+            // A watcher ends with the rebuild it ran through, along with what
+            // it saw, since notify-debouncer-mini's events have no kind, and
+            // the rebuild's own writes, and on Linux its reads, would each
+            // start another. A file saved during the rebuild then shows only
+            // in its state, checked once this watcher is up, so no save falls
+            // between the two.
+            if !has_changed(&states_before_rebuild) {
+                eprintln!("\n[watching for changes...]");
 
-            if !wait_for_change(&receiver) {
-                return Ok(());
+                if !wait_for_change(&receiver) {
+                    return Ok(());
+                }
             }
 
             eprintln!();
 
-            read_files = self.build_for_watch(&mut arenas, verbosity)?;
+            states_before_rebuild = read_states(&files);
+            files = self.build_for_watch(&mut arenas, verbosity)?;
         }
     }
 
-    /// Every file the builds read, config files included, so an edit to any
-    /// of them triggers a rebuild. A config that doesn't load counts as read,
-    /// with the file at fault, since fixing either fixes the build.
     fn build_for_watch(
         &self,
         arenas: &mut ThreadAllocators,
         verbosity: Verbosity,
-    ) -> Result<Vec<PathBuf>, Exit> {
+    ) -> Result<WatchedFiles, Exit> {
         let Ok(config_path) = self.config_path() else {
-            return Ok(Vec::new());
+            return Ok(WatchedFiles::default());
         };
         let project = match Project::load(&config_path) {
             Ok(project) => project,
             Err(error) => {
                 config_error(&error);
-                return Ok(vec![config_path, error.path]);
+                return Ok(WatchedFiles {
+                    read: vec![config_path, error.path],
+                    written: Vec::new(),
+                });
             }
         };
-        let mut read_files = project.files().to_vec();
+        let mut read = project.files().to_vec();
         let builds = match project.builds(self.resolved_profile()) {
             Ok(builds) => builds,
             Err(message) => {
                 usage_error(message);
-                return Ok(read_files);
+                return Ok(WatchedFiles { read, written: Vec::new() });
             }
         };
         for build in &builds {
             match self.build_one(arenas, &project, build, verbosity) {
                 Ok(source_files) | Err(BuildFailure::Failed { source_files }) => {
-                    read_files.extend(source_files);
+                    read.extend(source_files);
                 }
                 Err(BuildFailure::Fatal(exit)) => return Err(exit),
             }
         }
-        Ok(read_files)
+        Ok(WatchedFiles { read, written: builds.into_iter().map(|build| build.output).collect() })
     }
 
     fn build_one(
@@ -309,12 +335,35 @@ fn wait_for_change(receiver: &Receiver<DebounceEventResult>) -> bool {
     true
 }
 
+fn file_state(path: &Path) -> FileState {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// The state of each file in `files` that the builds read and didn't write,
+/// since an output another build reads changes on every build.
+fn read_states(files: &WatchedFiles) -> Vec<(PathBuf, FileState)> {
+    let written: Vec<PathBuf> =
+        files.written.iter().map(|output| FileSystemOs.canonicalize_existing(output)).collect();
+    files
+        .read
+        .iter()
+        .filter(|file| !written.contains(&FileSystemOs.canonicalize_existing(file)))
+        .map(|file| (file.clone(), file_state(file)))
+        .collect()
+}
+
+/// Whether a file has changed from its state in `states`.
+fn has_changed(states: &[(PathBuf, FileState)]) -> bool {
+    states.iter().any(|(file, state)| file_state(file) != *state)
+}
+
 /// Only `.lua`, `.luau`, `.json`, and `.luaurc` changes trigger a rebuild, so
 /// editor temp files and `.git` churn don't.
 fn is_relevant_change(path: &Path) -> bool {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("lua" | "luau" | "json") => true,
-        _ => path.file_name().is_some_and(|name| name == ".luaurc" || name == CONFIG_FILE_NAME),
+        _ => path.file_name().is_some_and(|name| name == ".luaurc"),
     }
 }
 
@@ -327,13 +376,13 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-fn relative_display(path: &Path) -> String {
+fn relative_display(path: &Path) -> Cow<'_, str> {
     if let Ok(working_directory) = env::current_dir()
         && let Ok(relative) = path.strip_prefix(&working_directory)
     {
-        return relative.display().to_string().replace('\\', "/");
+        return to_slash_lossy(relative);
     }
-    path.display().to_string().replace('\\', "/")
+    to_slash_lossy(path)
 }
 
 fn print_build_header(config: &BuildConfig) {
@@ -383,10 +432,6 @@ fn print_build_footer(total_duration: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use luck_resolver::{FileSystem as _, FileSystemOs};
-
     use super::*;
 
     fn watching(config: PathBuf) -> BuildArgs {
@@ -402,10 +447,10 @@ mod tests {
 
     /// The directories watched for what `args` builds, canonical.
     fn watched_for(args: &BuildArgs) -> Vec<PathBuf> {
-        let read_files = args
+        let files = args
             .build_for_watch(&mut ThreadAllocators::new(), Verbosity::Quiet)
             .expect("watch goes on");
-        watched_directories(&read_files)
+        watched_directories(&files.read)
             .iter()
             .map(|directory| FileSystemOs.canonicalize_existing(directory))
             .collect()
@@ -414,6 +459,81 @@ mod tests {
     #[test]
     fn watches_the_current_directory_for_a_bare_config_path() {
         assert_eq!(watched_directories(&[PathBuf::from("luck.json")]), [PathBuf::from(".")]);
+    }
+
+    /// Builds `config` the way watch mode does, and gives what it read and
+    /// didn't write as it was before.
+    fn states_before(config: &Path) -> Vec<(PathBuf, FileState)> {
+        let files = watching(config.to_path_buf())
+            .build_for_watch(&mut ThreadAllocators::new(), Verbosity::Quiet)
+            .expect("watch goes on");
+        read_states(&files)
+    }
+
+    /// The rebuild's own reads and writes leave its sources as they were, and
+    /// only a save, here one of a new length so even a coarse clock shows it,
+    /// changes one.
+    #[test]
+    fn a_save_during_a_rebuild_starts_another() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = directory.path();
+        fs::write(project.join("main.lua"), "return require('small')\n").expect("write main.lua");
+        fs::write(project.join("small.lua"), "return 'v1'\n").expect("write small.lua");
+        let config = project.join("luck.json");
+        fs::write(&config, r#"{"entry":"main.lua","output":"out.lua"}"#).expect("write luck.json");
+        let states = states_before(&config);
+        assert!(states.iter().any(|(file, _)| file.ends_with("small.lua")), "{states:?}");
+
+        let mut arenas = ThreadAllocators::new();
+        let rebuilt = watching(config).build_for_watch(&mut arenas, Verbosity::Quiet);
+        assert!(rebuilt.is_ok_and(|files| files.written.len() == 1));
+        assert!(!has_changed(&states), "the rebuild itself must not start another");
+
+        fs::write(project.join("small.lua"), "return 'v2, saved during the rebuild'\n")
+            .expect("save small.lua");
+        assert!(has_changed(&states), "the save during the rebuild was lost");
+    }
+
+    /// One build's output that another reads changes on every build, which
+    /// would otherwise rebuild forever.
+    #[test]
+    fn an_output_another_build_reads_starts_no_rebuild() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = directory.path();
+        fs::write(project.join("a.lua"), "return 1\n").expect("write a.lua");
+        fs::write(project.join("b.lua"), "return require('dist.a')\n").expect("write b.lua");
+        let config = project.join("luck.json");
+        let entries = r#"{"entries":[
+            {"entry":"a.lua","output":"dist/a.lua"},
+            {"entry":"b.lua","output":"dist/b.lua"}
+        ]}"#;
+        fs::write(&config, entries).expect("write luck.json");
+        let states = states_before(&config);
+        assert!(project.join("dist/b.lua").is_file(), "both builds must succeed");
+
+        let mut arenas = ThreadAllocators::new();
+        watching(config).build_for_watch(&mut arenas, Verbosity::Quiet).expect("watch goes on");
+        assert!(!has_changed(&states), "{states:?}");
+    }
+
+    #[test]
+    fn config_and_source_changes_are_relevant() {
+        for relevant in ["luck.json", "base.json", "main.lua", "main.luau", ".luaurc"] {
+            assert!(is_relevant_change(Path::new(relevant)), "{relevant}");
+        }
+        for irrelevant in ["main.lua~", ".main.lua.swp", "luck.toml"] {
+            assert!(!is_relevant_change(Path::new(irrelevant)), "{irrelevant}");
+        }
+    }
+
+    /// A backslash separates components only on Windows, and elsewhere is part
+    /// of a file name.
+    #[test]
+    fn build_paths_print_with_forward_slashes() {
+        let expected = if cfg!(windows) { "src/out.lua" } else { r"src\out.lua" };
+        assert_eq!(relative_display(Path::new(r"src\out.lua")), expected);
+        let working_directory = env::current_dir().expect("working directory");
+        assert_eq!(relative_display(&working_directory.join("src").join("out.lua")), "src/out.lua");
     }
 
     #[test]

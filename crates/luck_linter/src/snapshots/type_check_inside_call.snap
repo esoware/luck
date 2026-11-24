@@ -8,7 +8,7 @@ error: comparison is inside the `type()` call, did you mean `type(x) == "string"
 help: move the comparison outside: `type(x) == "string"`
 
 error: comparison is inside the `type()` call, did you mean `type(x) == "string"`?
- --> Lua54:1:12
+ --> Luau:1:12
 1 | local ok = typeof(x ~= "Instance")
   |            ^^^^^^^^^^^^^^^^^^^^^^^
 help: move the comparison outside: `type(x) == "string"`

@@ -1367,6 +1367,29 @@ fn windows_line_endings_keep_an_lf_that_verbatim_text_follows_with_a_cr() {
     );
 }
 
+#[test]
+fn a_format_off_after_a_lone_cr_trails_the_statement_before_it_in_luau() {
+    // Luau reads a lone CR as a space, so the region starts on the next line,
+    // as it does after a trailing directive.
+    let expected = "\
+local x = 1 -- luck: format off
+local   y   =   2
+-- luck: format on
+local z = 3
+";
+    for line_space in ["\r", " "] {
+        let input = format!(
+            "\
+local x = 1{line_space}-- luck: format off
+local   y   =   2
+-- luck: format on
+local   z   =   3
+"
+        );
+        assert_format_with(&input, expected, LuaVersion::Luau, &FormatOptions::default());
+    }
+}
+
 fn conditional_collapse_options() -> FormatOptions {
     FormatOptions {
         collapse_simple_statement: CollapseSimpleStatement::ConditionalOnly,

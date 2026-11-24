@@ -21,7 +21,6 @@ use luck_token::Span;
 use rustc_hash::FxHashMap;
 
 use crate::document::DocumentState;
-use crate::providers::cursor::identifier;
 
 /// In the order of [`TokenType`], whose discriminant is the index here.
 const TOKEN_TYPES: &[SemanticTokenType] = &[
@@ -197,7 +196,7 @@ impl<'document> Classifier<'document> {
     }
 
     fn plain(&mut self, name: &Name<'_>, token_type: TokenType) {
-        if identifier(name).is_some() {
+        if name.written().is_some() {
             self.push(name.span, Classification::plain(token_type));
         }
     }
@@ -211,7 +210,7 @@ impl<'document> Classifier<'document> {
         let Some(symbol_id) = tree.symbol_of(name) else {
             return;
         };
-        if identifier(name).is_none_or(|text| text == "self") {
+        if name.written().is_none_or(|text| text == "self") {
             return;
         }
         let symbol = tree.symbol(symbol_id);
@@ -240,7 +239,7 @@ impl<'document> Classifier<'document> {
         let Some(reference) = tree.reference_of(name).map(|id| tree.reference(id)) else {
             return;
         };
-        if identifier(name).is_none_or(|text| text == "self") {
+        if name.written().is_none_or(|text| text == "self") {
             return;
         }
         let mut classification = match reference.resolved {
@@ -277,7 +276,7 @@ impl<'document> Classifier<'document> {
         entry: Option<&StdlibEntry<'_>>,
         shape: Option<ValueShape>,
     ) {
-        let Some(text) = identifier(name) else {
+        let Some(text) = name.written() else {
             return;
         };
         let mut classification = match entry {
@@ -447,7 +446,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
     fn visit_global_declaration(&mut self, global_declaration: &'ast GlobalDeclaration<'ast>) {
         let leading = global_declaration.attribute.as_deref();
         for attributed in &global_declaration.names {
-            if let Some(text) = identifier(&attributed.name) {
+            if let Some(text) = attributed.name.written() {
                 let mut classification = Classification::value(TokenType::Variable, text);
                 if attributed
                     .attribute_or(leading)

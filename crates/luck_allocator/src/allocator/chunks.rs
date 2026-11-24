@@ -89,7 +89,8 @@ impl Allocator {
     ///
     /// A new chunk is twice the size of the current one, or of the default size when there's
     /// none, and big enough for `layout` either way. When the global allocator refuses it, the
-    /// size halves until it would be too small for `layout` or below the default.
+    /// size halves, down to the least that's big enough for `layout` and no smaller than the
+    /// default, which is the last size tried.
     #[inline(never)]
     #[cold]
     pub(super) fn alloc_layout_slow(&self, layout: Layout) -> NonNull<u8> {
@@ -104,10 +105,10 @@ impl Allocator {
             None => min_size,
         };
         while self.push_chunk(size, layout).is_none() {
-            size /= 2;
-            if size < min_size {
+            if size == min_size {
                 oom();
             }
+            size = max(size / 2, min_size);
         }
         self.try_alloc_layout_fast(layout).unwrap_or_else(|| oom())
     }
@@ -331,10 +332,41 @@ unsafe fn round_up_to_unchecked(n: usize, divisor: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::{alloc::Layout, iter, ptr};
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+        iter, ptr,
+    };
 
     use super::{DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER, OVERHEAD, TYPICAL_PAGE_SIZE};
     use crate::Allocator;
+
+    thread_local! {
+        static LARGEST_ALLOWED: Cell<usize> = const { Cell::new(usize::MAX) };
+    }
+
+    /// The system allocator, refusing an allocation over this thread's `LARGEST_ALLOWED` bytes.
+    struct Refusing;
+
+    // SAFETY: Every call goes on to `System`, but for an allocation it refuses with a null
+    // pointer, as `alloc` may.
+    unsafe impl GlobalAlloc for Refusing {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.size() > LARGEST_ALLOWED.get() {
+                return ptr::null_mut();
+            }
+            // SAFETY: The caller keeps `alloc`'s contract, which is `System`'s.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: Every allocation came from `System`, and the caller passes its layout.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Refusing = Refusing;
 
     fn chunk_count(allocator: &Allocator) -> usize {
         iter::successors(allocator.footer.get(), |footer| {
@@ -400,6 +432,24 @@ mod tests {
         assert_eq!(allocator.capacity(), THIRD_CHUNK);
         assert_eq!(allocator.used_bytes(), 0);
         assert_eq!(chunk_count(&allocator), 1);
+    }
+
+    #[test]
+    fn a_refused_chunk_is_tried_at_the_least_size_that_fits_before_giving_up() {
+        // Too big for what's left of the first chunk, and smaller than the second would be.
+        let layout =
+            Layout::from_size_align(DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER + TYPICAL_PAGE_SIZE, 1)
+                .unwrap();
+        let fitting_chunk =
+            (layout.size() + OVERHEAD).next_multiple_of(TYPICAL_PAGE_SIZE) - OVERHEAD;
+        let allocator = Allocator::new();
+        allocator.alloc(0_u8);
+        // The doubled chunk is refused, and half of it is too small for `layout`.
+        LARGEST_ALLOWED.set(2 * DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER);
+        allocator.alloc_layout(layout);
+        LARGEST_ALLOWED.set(usize::MAX);
+        assert_eq!(allocator.capacity(), DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER + fitting_chunk);
+        assert_eq!(chunk_count(&allocator), 2);
     }
 
     #[test]

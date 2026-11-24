@@ -3,17 +3,18 @@ use std::slice;
 use luck_ast::{
     Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, TableConstructor,
 };
-use luck_stdlib::SemanticAnalysis;
+use luck_semantic::Scoping;
 use luck_token::Span;
 use luck_value::{ToBoolean as _, ValueContext};
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
 /// method call, or a `name` the chunk shadows or rebinds, is user code.
-pub(crate) fn is_global_call(call: Call<'_>, name: &str, semantic: &SemanticAnalysis<'_>) -> bool {
+pub(crate) fn is_global_call(call: Call<'_>, name: &str, scoping: &Scoping) -> bool {
     call.method.is_none()
-        && call.callee.as_name().is_some_and(|callee| {
-            callee.text == name && semantic.scoping().reaches_host_global(callee)
-        })
+        && call
+            .callee
+            .as_name()
+            .is_some_and(|callee| callee.text == name && scoping.reaches_host_global(callee))
 }
 
 /// The root and the field of a `root.field(...)` call. `None` for a method
@@ -30,18 +31,16 @@ pub(crate) fn dotted_callee(call: Call<'_>) -> Option<(&Name<'_>, &str)> {
     (!field.text.is_empty()).then_some((root, field.text.as_str()))
 }
 
-/// The arguments when `call` is a parenthesized `<global>.new(...)` call,
-/// and `<global>` isn't shadowed by a local.
+/// The arguments when `call` is a parenthesized `<global>.new(...)` call to
+/// the host's `<global>`. A `<global>` the chunk shadows or rebinds is user
+/// code.
 pub(crate) fn global_new_call<'ast>(
     call: Call<'ast>,
     global: &str,
-    semantic: &SemanticAnalysis<'_>,
+    scoping: &Scoping,
 ) -> Option<&'ast [Expression<'ast>]> {
     let (root, field) = dotted_callee(call)?;
-    if field != "new" || root.text != global {
-        return None;
-    }
-    if semantic.scoping().resolves_to_local(root) {
+    if field != "new" || root.text != global || !scoping.reaches_host_global(root) {
         return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = call.args else {

@@ -820,6 +820,7 @@ dependencies = [
 name = "luck_allocator"
 version = "0.6.0"
 dependencies = [
+ "parking_lot",
  "quickcheck",
  "thread_local",
 ]
@@ -999,7 +1000,6 @@ dependencies = [
 name = "luck_conformance"
 version = "0.6.0"
 dependencies = [
- "flate2",
  "luck_allocator",
  "luck_ast",
  "luck_benchmark_files",
@@ -1016,7 +1016,6 @@ dependencies = [
  "mlua",
  "rayon",
  "similar",
- "tar",
  "tempfile",
 ]
 
@@ -1106,6 +1105,7 @@ dependencies = [
  "parking_lot",
  "rustc-hash",
  "self_cell",
+ "serde",
  "serde_json",
  "tempfile",
 ]

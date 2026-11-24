@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use luck_allocator::Allocator;
 use luck_config::{Editorconfigs, Project};
+use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaVersion;
@@ -215,12 +216,16 @@ impl FmtArgs {
         file: &ProjectFile,
     ) -> FileOutcome {
         let file_path = file.path.as_path();
+        let version = file.project.target_for(Some(file_path)).version();
         let source = match FileSystemOs.read(file_path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                return FileOutcome::Failed(
-                    format!("error: cannot read `{}`: {error}\n", file_path.display()).into_bytes(),
-                );
+                let mut rendered = Vec::new();
+                let label = file_path.to_string_lossy();
+                let source_file = SourceFile { label: &label, text: None, version };
+                let diag = Diagnostic::e010(&label, &error);
+                DefaultReporter.render(source_file, &[diag], &mut rendered);
+                return FileOutcome::Failed(rendered);
             }
         };
 
@@ -230,7 +235,6 @@ impl FmtArgs {
         };
 
         let options = self.format_options(editorconfigs, &file.project, file_path);
-        let version = file.project.target_for(Some(file_path)).version();
         let formatted =
             match format_document(allocator, &source, file_path, version, &options, range) {
                 FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
@@ -306,6 +310,8 @@ fn format_document(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use clap::Parser as _;
 
     use super::*;
@@ -499,5 +505,23 @@ end
         assert!(matches!(format(&text), FormatOutcome::Unchanged));
 
         assert!(matches!(format("local x ="), FormatOutcome::Failed(_)));
+    }
+
+    #[test]
+    fn an_unreadable_file_reports_e010() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+
+        let outcome =
+            fmt_args(&[]).format_file(&Allocator::new(), &Editorconfigs::default(), &file);
+
+        let FileOutcome::Failed(rendered) = outcome else {
+            panic!("an unread file must fail");
+        };
+        let text = String::from_utf8(rendered).expect("the report is UTF-8");
+        let label = file.path.to_string_lossy();
+        assert!(text.starts_with(&format!("[E010] error: cannot read file `{label}`: ")), "{text}");
+        assert!(text.ends_with("help: check that the file exists and is readable\n"), "{text}");
     }
 }

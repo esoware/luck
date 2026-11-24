@@ -6,8 +6,8 @@ use luck_ast::{
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
-use super::Parser;
 use super::recovery::Closer;
+use super::{Parser, name_token};
 
 impl<'ast> Parser<'ast> {
     /// Each precedence level's operators run in a loop into one node, so a
@@ -138,15 +138,7 @@ impl<'ast> Parser<'ast> {
     #[inline]
     fn parse_primary_expr(&mut self) -> Expression<'ast> {
         match self.peek() {
-            TokenKind::Identifier
-            | TokenKind::Continue
-            | TokenKind::Export
-            | TokenKind::Const
-            | TokenKind::Type
-            | TokenKind::Typeof
-            | TokenKind::Read
-            | TokenKind::Write
-            | TokenKind::Global => {
+            name_token!() => {
                 let name = self.advance_name();
                 self.counts.name_uses += 1;
                 let start = name.span.start;

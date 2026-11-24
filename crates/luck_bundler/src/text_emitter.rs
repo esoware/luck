@@ -62,7 +62,7 @@ fn push_string_literal(output: &mut String, bytes: &[u8]) {
 }
 
 impl Registration<'_> {
-    fn write(&self, prefix: &str, modules: &[ModuleInfo<'_>], output: &mut String) {
+    fn write(&self, prefix: &str, graph: &DependencyGraph<'_>, output: &mut String) {
         match *self {
             Self::Exporting { slot } => {
                 output.extend([prefix, "modules["]);
@@ -96,7 +96,7 @@ impl Registration<'_> {
                 output.extend([prefix, "paths["]);
                 name.write(output);
                 output.push_str("]=");
-                push_string_literal(output, modules[module.0].relative_path.as_bytes());
+                push_string_literal(output, graph[module].relative_path.as_bytes());
                 output.push('\n');
             }
         }
@@ -170,7 +170,7 @@ pub(crate) fn emit<'ast>(
     graph: &mut DependencyGraph<'ast>,
     version: LuaVersion,
 ) -> Result<(Vec<u8>, Vec<LineMapEntry>), Vec<FileDiagnostics>> {
-    let entry = &graph.modules[graph.entry_id.0];
+    let entry = &graph[graph.entry_id];
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
         let line_map = vec![LineMapEntry {
             bundle_start_line: 1,
@@ -187,7 +187,7 @@ pub(crate) fn emit<'ast>(
     let mut edits: Vec<Vec<(Span, Edit<'ast>)>> = Vec::with_capacity(graph.modules.len());
     let mut errors = Vec::new();
     for wrapped in plan.wrapped_modules() {
-        let module = &mut graph.modules[wrapped.id.0];
+        let module = &mut graph[wrapped.id];
         // Taken before measuring the module rewrites its tree.
         edits.push(module_edits(module, &plan, version));
         if wrapped.wrapper.may_overflow(module) {
@@ -247,7 +247,7 @@ fn write<'plan, 'ast>(
     };
     let prefix = plan.prefix.as_str();
 
-    let entry = &graph.modules[graph.entry_id.0];
+    let entry = &graph[graph.entry_id];
     writer.push(&chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied()));
 
     writer.generate(|output| write_prelude(prefix, plan.loader, output));
@@ -262,10 +262,10 @@ fn write<'plan, 'ast>(
                 let module_edits = spliced
                     .as_mut()
                     .map(|edits| edits.next().expect("each wrapped module has its edits"));
-                writer.push_wrapped(wrapped, &graph.modules[wrapped.id.0], module_edits);
+                writer.push_wrapped(wrapped, &graph[wrapped.id], module_edits);
             }
             Item::Registration(registration) => {
-                writer.generate(|output| registration.write(prefix, &graph.modules, output));
+                writer.generate(|output| registration.write(prefix, graph, output));
             }
         }
     }

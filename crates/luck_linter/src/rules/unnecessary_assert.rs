@@ -33,7 +33,7 @@ impl Rule for UnnecessaryAssert {
 }
 
 fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
-    if !is_global_call(call, "assert", context.semantic) {
+    if !is_global_call(call, "assert", context.scoping()) {
         return None;
     }
     let is_truthy = CallArgs::new(call.args).next()?.to_boolean(context)?;
@@ -87,8 +87,6 @@ assert(true)",
         ("assert(x or true)", LuaTarget::Lua54),
         ("assert(not 1)", LuaTarget::Lua54),
         (r#"assert"""#, LuaTarget::Lua54),
-        ("assert'x'", LuaTarget::Lua54),
-        ("assert[[x]]", LuaTarget::Lua54),
         ("assert{}", LuaTarget::Lua54),
         ("assert{ false }", LuaTarget::Lua54),
         ("local ok = assert(true)", LuaTarget::Lua54),

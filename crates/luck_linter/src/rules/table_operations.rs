@@ -108,7 +108,7 @@ fn table_stdlib_function<'call>(
     context: &LintContext<'_, '_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
-    if root.text != "table" || context.scoping().resolves_to_local(root) {
+    if root.text != "table" || !context.scoping().reaches_host_global(root) {
         return None;
     }
     context.semantic.stdlib().lookup(&["table", field])?;
@@ -171,6 +171,18 @@ mod tests {
         (
             "\
 local table = {}
+table.insert(t, 0, v)",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+table = {}
+table.insert(t, 0, v)",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local _ENV = { table = {} }
 table.insert(t, 0, v)",
             LuaTarget::Lua54,
         ),

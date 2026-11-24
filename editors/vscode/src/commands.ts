@@ -1,6 +1,4 @@
 import * as vscode from "vscode";
-import path from "node:path";
-import * as fs from "node:fs";
 import { RequestType } from "vscode-languageclient/node";
 import type { TextDocumentIdentifier, WorkspaceEdit } from "vscode-languageclient/node";
 import { version as extensionVersion } from "../package.json";
@@ -96,8 +94,12 @@ async function createConfig(): Promise<void> {
 		void vscode.window.showErrorMessage("Luck: open a folder before creating a config.");
 		return;
 	}
-	const configPath = path.join(folder.uri.fsPath, "luck.json");
-	if (fs.existsSync(configPath)) {
+	const configUri = vscode.Uri.joinPath(folder.uri, "luck.json");
+	const isExisting = await vscode.workspace.fs.stat(configUri).then(
+		() => true,
+		() => false,
+	);
+	if (isExisting) {
 		void vscode.window.showWarningMessage("Luck: luck.json already exists.");
 	} else {
 		const skeleton = {
@@ -107,9 +109,15 @@ async function createConfig(): Promise<void> {
 				extra_globals: [],
 			},
 		};
-		await fs.promises.writeFile(configPath, `${JSON.stringify(skeleton, null, 2)}\n`, "utf8");
+		const text = `${JSON.stringify(skeleton, null, 2)}\n`;
+		try {
+			await vscode.workspace.fs.writeFile(configUri, new TextEncoder().encode(text));
+		} catch (error) {
+			void vscode.window.showErrorMessage(`Luck: ${error}`);
+			return;
+		}
 	}
-	await vscode.window.showTextDocument(vscode.Uri.file(configPath));
+	await vscode.window.showTextDocument(configUri);
 }
 
 async function viewSyntaxTree(client: LuckClient): Promise<void> {

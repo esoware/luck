@@ -169,31 +169,31 @@ impl Lookups {
 }
 
 impl SettingsCache {
-    /// The settings of the document at `path`, a canonical path, or of an
-    /// untitled document, under `project`, the one [`Self::project_for`]
-    /// gives it.
+    /// The settings of the document at `file`, a path [`settings_path`]
+    /// gives, or of an untitled document, under `project`, the one
+    /// [`Self::project_for`] gives it.
     pub(crate) fn document_settings(
         &self,
         project: Arc<LoadedProject>,
-        path: Option<PathBuf>,
+        file: Option<&Path>,
     ) -> DocumentSettings {
         let editorconfigs = Arc::clone(&self.lookups.read().editorconfigs);
         let loaded = project.project();
-        let file = path.as_deref();
         let stdlib = loaded.stdlib_for(file).clone();
         let linter = loaded.linter_for(file);
         let format = loaded.format_options(file, Some(&editorconfigs));
+        let path = file.map(|located| FileSystemOs.canonicalize_existing(located));
         let is_included =
-            file.is_none_or(|canonical| loaded.filter().includes_canonical(canonical));
+            path.as_deref().is_none_or(|canonical| loaded.filter().includes_canonical(canonical));
         DocumentSettings { path, project, stdlib, linter, format, is_included }
     }
 
     /// The project of the nearest `luck.json` above the file at
-    /// `document_path`, a canonical path, so each directory and config has
-    /// one spelling, or the defaults rooted at its directory when there's
-    /// none, and why that `luck.json` doesn't load, if this is the first
-    /// lookup to find it. A `luck.json` that doesn't load gives the defaults
-    /// rooted at its directory.
+    /// `document_path`, whose directory is canonical, so each directory and
+    /// config has one spelling, or the defaults rooted at its directory when
+    /// there's none, and why that `luck.json` doesn't load, if this is the
+    /// first lookup to find it. A `luck.json` that doesn't load gives the
+    /// defaults rooted at its directory.
     ///
     /// `spelled` is the document's path as the client spells it. A load error
     /// names its file under the same directories, since a client knows a file
@@ -280,6 +280,19 @@ impl SettingsCache {
         for project in &self.lookups.read().projects {
             project.clear_resolvers();
         }
+    }
+}
+
+/// `spelled`, a document's path as the client spells it, under its
+/// directory's canonical path.
+///
+/// A document's project and settings follow this, as `luck lint`'s follow
+/// the path it's given, so a symlink takes the dialect of its own name and
+/// not its target's.
+pub(crate) fn settings_path(spelled: &Path) -> PathBuf {
+    match (spelled.parent(), spelled.file_name()) {
+        (Some(directory), Some(name)) => FileSystemOs.canonicalize_existing(directory).join(name),
+        _ => FileSystemOs.canonicalize_existing(spelled),
     }
 }
 

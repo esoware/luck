@@ -11,9 +11,9 @@ gen_full_lua54.lua:
 
 gen_full_luau.luau:
   file size: 441060 # 441.06 kB
-  sys allocs: 45309
-  sys reallocs: 6154
-  sys deallocs: 45309
+  sys allocs: 45303
+  sys reallocs: 6156
+  sys deallocs: 45303
   sys alloc bytes: 13720065 # 13.72 MB
   sys peak growth: 10526227 # 10.53 MB
   arena allocs: 0

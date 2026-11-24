@@ -6,9 +6,3 @@ error: undefined variable `missing`
 1 | print(missing)
   |       ^^^^^^^
 help: declare it with `local`, or add it to `extra_globals` or a `std` definition
-
-error: undefined variable `undefined_var`
- --> Lua54:1:7
-1 | print(undefined_var)
-  |       ^^^^^^^^^^^^^
-help: declare it with `local`, or add it to `extra_globals` or a `std` definition

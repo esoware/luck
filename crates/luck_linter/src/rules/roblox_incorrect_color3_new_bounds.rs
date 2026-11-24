@@ -33,7 +33,7 @@ impl Rule for RobloxIncorrectColor3NewBounds {
 }
 
 fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
-    let Some(args) = global_new_call(call, "Color3", context.semantic) else {
+    let Some(args) = global_new_call(call, "Color3", context.scoping()) else {
         return;
     };
     let has_out_of_bounds =
@@ -57,6 +57,7 @@ mod tests {
         ("local c = Color3.new(0, 0.5, 1)", LuaTarget::LuauRoblox),
         ("local r = 255 local c = Color3.new(r, 0, 0)", LuaTarget::LuauRoblox),
         ("local Color3 = {} local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
+        ("Color3 = {} local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
         ("local c = Color3.new(255, 0, 0)", LuaTarget::Luau),
         ("local c = Color3.fromRGB(255, 0, 0)", LuaTarget::LuauRoblox),
     ];

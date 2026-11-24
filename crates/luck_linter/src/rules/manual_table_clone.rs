@@ -146,7 +146,7 @@ fn is_generic_copy(
     let (Some(key), Some(value)) = (tree.symbol_of(&key.name), tree.symbol_of(&value.name)) else {
         return false;
     };
-    is_pairs_call(iterator, context.semantic)
+    is_pairs_call(iterator, tree)
         && copied_value(&generic_for.block, destination, key, tree)
             .is_some_and(|copied| is_name_of(copied, value, tree))
 }
@@ -206,12 +206,12 @@ fn index_read<'ast>(
 }
 
 /// A shadowed one is a user iterator, not a table walk.
-fn is_pairs_call(expr: &Expression<'_>, semantic: &SemanticAnalysis<'_>) -> bool {
+fn is_pairs_call(expr: &Expression<'_>, tree: &Scoping) -> bool {
     let Expression::Suffixed(chain) = expr else {
         return false;
     };
     chain.last_call().is_some_and(|call| {
-        is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
+        is_global_call(call, "pairs", tree) || is_global_call(call, "ipairs", tree)
     })
 }
 
