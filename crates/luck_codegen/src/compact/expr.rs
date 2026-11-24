@@ -12,7 +12,7 @@ impl Printer {
     /// saves every callee-saved register.
     #[expect(clippy::inline_always, reason = "an outlined copy would be the call it saves")]
     #[inline(always)]
-    pub(super) fn print_expr(&mut self, expr: &Expression<'_>, slot: Slot) {
+    fn print_expr(&mut self, expr: &Expression<'_>, slot: Slot) {
         match expr {
             Expression::Name(name) => self.name(name.text.as_str()),
             Expression::Number(literal) if !expr.needs_parens(slot) => self.print_number(literal),

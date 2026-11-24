@@ -7,7 +7,7 @@ use crate::common::assert_reprints;
 /// The full-grammar generator reaches what fixtures rarely hold: goto, every
 /// Luau type form, varargs, interpolation, and every operator side by side.
 #[test]
-fn generated_programs_compact_to_output_that_compacts_to_itself() {
+fn generated_programs_compact_to_output_that_reads_back_as_the_same_tree() {
     for version in LuaVersion::ALL {
         for seed in 0..200 {
             for source in

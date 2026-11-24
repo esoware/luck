@@ -1,8 +1,9 @@
 use luck_ast::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, Expression,
     FunctionAttribute, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction,
-    GlobalStar, IfStatement, LocalAssignment, LocalFunction, LocalFunctionKind, NumericFor,
-    Parameter, RepeatLoop, Slot, Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    GlobalStar, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
+    LocalFunctionKind, NumericFor, Parameter, RepeatLoop, Slot, Statement, TypeDeclaration,
+    TypeDeclarationValue, WhileLoop,
 };
 
 use super::Printer;
@@ -153,7 +154,9 @@ impl Printer {
         self.print_function_attributes(&local_function.attributes);
         match local_function.kind {
             LocalFunctionKind::Local => self.piece("local function"),
+            // Luau
             LocalFunctionKind::Const => self.piece("const function"),
+            // Luau
             LocalFunctionKind::Export => self.piece("export function"),
         }
         self.name(local_function.name.text.as_str());
@@ -161,13 +164,14 @@ impl Printer {
     }
 
     fn print_local_assignment(&mut self, local: &LocalAssignment<'_>) {
-        if local.kind.is_exported() {
-            self.piece("export");
-        }
-        if local.kind.is_const() {
-            self.piece("const");
-        } else {
-            self.piece("local");
+        match local.kind {
+            LocalAssignmentKind::Local => self.piece("local"),
+            // Luau
+            LocalAssignmentKind::Const => self.piece("const"),
+            // Luau
+            LocalAssignmentKind::ExportLocal => self.piece("export local"),
+            // Luau
+            LocalAssignmentKind::ExportConst => self.piece("export const"),
         }
         if let Some(attribute) = &local.attribute {
             self.print_attribute(attribute);
