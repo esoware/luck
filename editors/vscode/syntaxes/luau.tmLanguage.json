@@ -855,7 +855,7 @@
               "include": "#types"
             },
             {
-              "match": "[,;]",
+              "match": ";",
               "name": "punctuation.separator.comma.luau"
             }
           ]

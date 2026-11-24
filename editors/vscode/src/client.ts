@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
-import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient/node";
+import type { Executable, LanguageClientOptions, ServerInfo } from "vscode-languageclient/node";
 import { LanguageClient, RevealOutputChannelOn, State } from "vscode-languageclient/node";
 import { discoverServer } from "./discover";
 import { logExtension, outputChannel } from "./output";
-import { affectsSetting, setting } from "./settings";
+import { affectsSetting, setting, settingId } from "./settings";
 import type { SettingKey } from "./settings";
 import type { StatusBar } from "./status-bar";
 
@@ -40,6 +40,10 @@ export class LuckClient {
 
 	public get languageClient(): LanguageClient | undefined {
 		return this.client;
+	}
+
+	public get serverInfo(): ServerInfo | undefined {
+		return this.client?.initializeResult?.serverInfo;
 	}
 
 	public start(): Promise<void> {
@@ -86,8 +90,8 @@ export class LuckClient {
 
 		const args = ["lsp", ...(setting("server.args") ?? [])];
 		const env = { ...process.env, ...setting("server.extraEnv") };
-		const serverOptions: ServerOptions = { command, args, options: { env } };
-		const clientOptions: LanguageClientOptions = {
+		const serverOptions = { command, args, options: { env } } satisfies Executable;
+		const clientOptions = {
 			documentSelector: [
 				{ scheme: "file", language: "lua" },
 				{ scheme: "file", language: "luau" },
@@ -97,13 +101,13 @@ export class LuckClient {
 			outputChannel: outputChannel("server"),
 			traceOutputChannel: outputChannel("trace"),
 			revealOutputChannelOn: RevealOutputChannelOn.Never,
-		};
+		} satisfies LanguageClientOptions;
 
 		const client = new LanguageClient("luck", "Luck Language Server", serverOptions, clientOptions);
 		await client.start();
-		const version = client.initializeResult?.serverInfo?.version;
 		this.client = client;
 		client.onDidChangeState(({ newState }) => this.showClientState(client, newState));
+		const version = this.serverInfo?.version;
 		this.statusBar.update({ state: "ready", version });
 		logExtension(`start: ready (server ${version ?? "unknown"})`);
 	}
@@ -118,8 +122,7 @@ export class LuckClient {
 				break;
 			}
 			case State.Running: {
-				const version = client.initializeResult?.serverInfo?.version;
-				this.statusBar.update({ state: "ready", version });
+				this.statusBar.update({ state: "ready", version: this.serverInfo?.version });
 				break;
 			}
 			case State.Stopped:
@@ -170,6 +173,6 @@ async function promptMissingBinary(): Promise<void> {
 	if (selection === "Download Server") {
 		await vscode.commands.executeCommand("luck.downloadServer");
 	} else if (selection === "Open Settings") {
-		await vscode.commands.executeCommand("workbench.action.openSettings", "luck.server.path");
+		await vscode.commands.executeCommand("workbench.action.openSettings", settingId("server.path"));
 	}
 }
