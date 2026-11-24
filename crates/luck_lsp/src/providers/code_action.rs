@@ -221,7 +221,7 @@ where
 mod tests {
     use ls_types::{PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams};
     use luck_diagnostics::{Diagnostic as LuckDiagnostic, Severity};
-    use luck_linter::{Category, LintConfig, RuleLevel, TextEdit as LinterTextEdit};
+    use luck_linter::{Category, LintConfig, RuleId, RuleLevel, TextEdit as LinterTextEdit};
     use luck_token::LuaTarget;
 
     use super::*;
@@ -232,7 +232,7 @@ mod tests {
         "file:///main.lua".parse().expect("valid URI")
     }
 
-    fn config_enabling(rule: &str) -> LintConfig {
+    fn config_enabling(rule: RuleId) -> LintConfig {
         let mut config = LintConfig::default();
         config.categories.set_level(Category::Correctness, RuleLevel::Off);
         config.rules.set_level(rule, RuleLevel::Warn);
@@ -287,7 +287,8 @@ mod tests {
 
     #[test]
     fn fix_all_action_has_the_kind_the_client_requests() {
-        let (document, lints) = linted("local x = nil\n", &config_enabling("redundant_nil_init"));
+        let (document, lints) =
+            linted("local x = nil\n", &config_enabling(RuleId::RedundantNilInit));
         let kind = CodeActionKind::new("source.fixAll.luck");
         let actions = code_action(
             &document,
@@ -304,8 +305,10 @@ mod tests {
 
     #[test]
     fn fix_all_edits_do_not_overlap() {
-        let (document, lints) =
-            linted("return not (a == (not (b == c)))\n", &config_enabling("unnecessary_negation"));
+        let (document, lints) = linted(
+            "return not (a == (not (b == c)))\n",
+            &config_enabling(RuleId::UnnecessaryNegation),
+        );
         let edits = all_fix_edits(&document, &lints);
         let mut ranges: Vec<Range> = edits.iter().map(|edit| edit.range).collect();
         ranges.sort_by_key(|range| range.start);
@@ -322,7 +325,7 @@ mod tests {
     #[test]
     fn two_diagnostics_of_one_rule_yield_one_fix_each() {
         let (document, lints) =
-            linted("local x = nil local y = nil\n", &config_enabling("redundant_nil_init"));
+            linted("local x = nil local y = nil\n", &config_enabling(RuleId::RedundantNilInit));
         let diags = diagnostics::to_lsp(&uri(), &document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(0, 27));
         let actions = code_action(&document, &params(range, diags, None), &lints);
@@ -337,7 +340,7 @@ mod tests {
     fn no_disable_action_for_a_parse_error() {
         // Directives apply only after a clean parse, so a comment can't
         // silence a syntax error.
-        let (document, lints) = linted("local x =\n", &config_enabling("redundant_nil_init"));
+        let (document, lints) = linted("local x =\n", &config_enabling(RuleId::RedundantNilInit));
         let diags = diagnostics::to_lsp(&uri(), &document, &lints);
         let range = Range::new(Position::new(0, 0), Position::new(1, 0));
         let actions = code_action(&document, &params(range, diags, None), &lints);
@@ -356,7 +359,7 @@ local f = function()
   local x = nil
 end
 ";
-        let config = config_enabling("redundant_nil_init");
+        let config = config_enabling(RuleId::RedundantNilInit);
         let edited = disabled(text, &config, 0);
         assert!(
             edited.contains("local x = nil -- luck: allow(redundant_nil_init)\n"),
@@ -369,7 +372,7 @@ end
     #[test]
     fn disable_comment_suppresses_a_later_statement_on_the_line() {
         let text = "local a = 1 local x = nil\n";
-        let config = config_enabling("redundant_nil_init");
+        let config = config_enabling(RuleId::RedundantNilInit);
         let edited = disabled(text, &config, 0);
         let (_, remaining) = linted(&edited, &config);
         assert!(
@@ -384,7 +387,7 @@ end
 local s = [[
 x]] local y = nil
 ";
-        let config = config_enabling("redundant_nil_init");
+        let config = config_enabling(RuleId::RedundantNilInit);
         let edited = disabled(text, &config, 0);
         assert!(
             edited.contains(
@@ -404,7 +407,7 @@ local t = {
 }
 local u = second_missing
 ";
-        let config = config_enabling("undefined_variable");
+        let config = config_enabling(RuleId::UndefinedVariable);
         let edited = disabled(text, &config, 0);
         let (_, remaining) = linted(&edited, &config);
         assert!(
@@ -416,7 +419,7 @@ local u = second_missing
     #[test]
     fn disable_comment_before_a_later_statement_silences_only_its_own() {
         let text = "local x = nil local y = nil\n";
-        let config = config_enabling("redundant_nil_init");
+        let config = config_enabling(RuleId::RedundantNilInit);
         let edited = disabled(text, &config, 0);
         assert!(edited.contains("--[[ luck: allow(redundant_nil_init) ]]"), "{edited:?}");
         let (reparsed, remaining) = linted(&edited, &config);
@@ -444,7 +447,7 @@ local u = second_missing
     /// `nil`, whose deletion is a fix.
     fn suggestion_and_fix() -> (DocumentState, Vec<Message>) {
         let mut config = LintConfig::default();
-        config.rules.set_level("redundant_nil_init", RuleLevel::Warn);
+        config.rules.set_level(RuleId::RedundantNilInit, RuleLevel::Warn);
         linted("local unused = nil\n", &config)
     }
 

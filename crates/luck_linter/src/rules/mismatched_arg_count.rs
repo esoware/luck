@@ -6,23 +6,20 @@ use luck_semantic::{AstNode, AstTypesBitset, Symbol};
 use crate::call::{CallArg, CallArgs, calls_in};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MismatchedArgCount;
 
-impl_rule!(
+declare_lint_rule!(
     MismatchedArgCount,
-    "mismatched_arg_count",
     Correctness,
     Warning,
     "call passes more arguments than the called function accepts"
 );
 
-impl RuleRunner for MismatchedArgCount {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for MismatchedArgCount {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -103,12 +100,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::MismatchedArgCount;
     use crate::diagnostic::Message;
     use crate::fixtures::{labeled, run_rule};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&MismatchedArgCount, source, LuaVersion::Lua54)
+        run_rule(RuleId::MismatchedArgCount, source, LuaVersion::Lua54)
     }
 
     #[test]

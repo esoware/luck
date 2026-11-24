@@ -6,10 +6,12 @@ use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::FormatOptions;
-use luck_linter::LintConfig;
+use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
 use luck_stdlib::Stdlib;
 use luck_token::{LuaTarget, LuaVersion};
+use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 use crate::build::{BuildConfig, BuildKeys};
 use crate::config::{Entries, LuckConfig, OverrideConfig};
@@ -32,8 +34,13 @@ pub struct Project {
     luau: Stdlib,
     filter: ProjectFilter,
     format: FormatConfig,
-    lint: Arc<LintConfig>,
     overrides: Vec<Override>,
+    /// The `lint` section compiled, for every file no override with `lint`
+    /// settings matches.
+    linter: Arc<Linter>,
+    /// The linter of each set of overrides with `lint` settings, by their
+    /// indices, compiled for the first file they all match.
+    layered_linters: Mutex<FxHashMap<Vec<usize>, Arc<Linter>>>,
     search_paths: Vec<String>,
     dynamic_require: DynamicRequire,
     transforms: TransformConfig,
@@ -135,8 +142,9 @@ impl Project {
             luau: stdlibs.1,
             filter,
             format: format.unwrap_or_default(),
-            lint: Arc::new(lint.unwrap_or_default()),
             overrides: compiled_overrides,
+            linter: Arc::new(Linter::new(lint.unwrap_or_default())),
+            layered_linters: Mutex::default(),
             search_paths: search_paths.unwrap_or_default(),
             dynamic_require: dynamic_require.unwrap_or_default(),
             transforms: transforms.unwrap_or_default(),
@@ -165,8 +173,9 @@ impl Project {
             luau: Stdlib::new(LuaTarget::Luau),
             filter,
             format: FormatConfig::default(),
-            lint: Arc::default(),
             overrides: Vec::new(),
+            linter: Arc::new(Linter::new(LintConfig::default())),
+            layered_linters: Mutex::default(),
             search_paths: Vec::new(),
             dynamic_require: DynamicRequire::default(),
             transforms: TransformConfig::default(),
@@ -212,18 +221,23 @@ impl Project {
         }
     }
 
-    /// The `lint` section with the overrides `path` matches layered over it.
+    /// The linter of the `lint` section with the overrides `path` matches
+    /// layered over it, which every file those overrides match shares.
     #[must_use]
-    pub fn lint_for(&self, path: Option<&Path>) -> Arc<LintConfig> {
-        let overrides = self.overrides_for(path);
-        let mut layers = overrides.iter().filter_map(|layer| layer.lint.as_ref()).peekable();
-        if layers.peek().is_none() {
-            return Arc::clone(&self.lint);
+    pub fn linter_for(&self, path: Option<&Path>) -> Arc<Linter> {
+        let (indices, layers): (Vec<usize>, Vec<&LintConfig>) = self
+            .overrides_for(path)
+            .into_iter()
+            .filter_map(|(index, layer)| Some((index, layer.lint.as_ref()?)))
+            .unzip();
+        if indices.is_empty() {
+            return Arc::clone(&self.linter);
         }
-        Arc::new(
-            layers
-                .fold(LintConfig::clone(&self.lint), |lint, layer| layer.clone().merge_onto(lint)),
-        )
+        Arc::clone(self.layered_linters.lock().entry(indices).or_insert_with(|| {
+            let base = self.linter.config().clone();
+            let lint = layers.into_iter().fold(base, |lint, layer| layer.clone().merge_onto(lint));
+            Arc::new(Linter::new(lint))
+        }))
     }
 
     /// The defaults, then the `.editorconfig` files above `path` when there
@@ -237,8 +251,8 @@ impl Project {
     ) -> FormatOptions {
         let format = self
             .overrides_for(path)
-            .iter()
-            .filter_map(|layer| layer.format)
+            .into_iter()
+            .filter_map(|(_, layer)| layer.format)
             .fold(self.format, |format, layer| layer.merge_onto(format));
         let editorconfig = path
             .zip(editorconfigs)
@@ -250,13 +264,15 @@ impl Project {
     /// Layers `overlay` over every file's lint settings, as command-line
     /// flags do.
     pub fn overlay_lint(&mut self, overlay: &LintConfig) {
-        self.lint = Arc::new(overlay.clone().merge_onto(LintConfig::clone(&self.lint)));
+        let lint = overlay.clone().merge_onto(self.linter.config().clone());
+        self.linter = Arc::new(Linter::new(lint));
         // Folded into each override too, it stays last however many a file
         // matches: merging is associative, and a layer repeated later
         // supersedes its earlier copy.
         for layer in self.overrides.iter_mut().filter_map(|layer| layer.lint.as_mut()) {
             *layer = overlay.clone().merge_onto(mem::take(layer));
         }
+        self.layered_linters.get_mut().clear();
     }
 
     #[must_use]
@@ -296,7 +312,8 @@ impl Project {
         )
     }
 
-    fn overrides_for(&self, path: Option<&Path>) -> Vec<&Override> {
+    /// Each override `path` matches, in order, with its index.
+    fn overrides_for(&self, path: Option<&Path>) -> Vec<(usize, &Override)> {
         let Some(file) = path.filter(|_| !self.overrides.is_empty()) else {
             return Vec::new();
         };
@@ -304,7 +321,8 @@ impl Project {
         let candidate = Candidate::new(self.filter.relative(&canonical));
         self.overrides
             .iter()
-            .filter(|layer| {
+            .enumerate()
+            .filter(|(_, layer)| {
                 layer.files.is_match_candidate(&candidate)
                     && !layer.exclude_files.is_match_candidate(&candidate)
             })
@@ -318,15 +336,19 @@ mod tests {
     use crate::fixtures::project_with;
 
     #[test]
-    fn a_file_no_override_matches_shares_the_base_lint_config() {
+    fn files_that_match_the_same_overrides_share_one_linter() {
         let directory = project_with(&[(
             "luck.json",
-            r#"{ "overrides": [{ "files": ["spec/**"], "lint": { "extra_globals": ["it"] } }] }"#,
+            r#"{ "overrides": [
+                { "files": ["spec/**"], "lint": { "extra_globals": ["it"] } },
+                { "files": ["**/*.lua"], "format": { "line_width": 80 } }
+            ] }"#,
         )]);
         let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
-        let base = project.lint_for(Some(&directory.path().join("src/a.lua")));
-        assert!(Arc::ptr_eq(&base, &project.lint));
-        let spec = project.lint_for(Some(&directory.path().join("spec/a.lua")));
-        assert!(!Arc::ptr_eq(&spec, &project.lint));
+        let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
+        assert!(Arc::ptr_eq(&linter_at("src/a.lua"), &project.linter));
+        let spec = linter_at("spec/a.lua");
+        assert!(!Arc::ptr_eq(&spec, &project.linter));
+        assert!(Arc::ptr_eq(&spec, &linter_at("spec/b.lua")));
     }
 }

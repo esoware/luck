@@ -773,7 +773,7 @@ mod tests {
             .expect("files resolve");
         let globals: Vec<Vec<String>> = files
             .iter()
-            .map(|file| file.project.lint_for(Some(&file.path)).extra_globals.clone())
+            .map(|file| file.project.linter_for(Some(&file.path)).config().extra_globals.clone())
             .collect();
         assert_eq!(globals, [["a", "vim"], ["b", "vim"]]);
     }

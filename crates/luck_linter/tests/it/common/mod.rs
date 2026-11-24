@@ -1,28 +1,34 @@
 use luck_allocator::Allocator;
-use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
+use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
 use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
 pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
-    luck_linter::lint(
-        &Allocator::new(),
-        source.as_bytes(),
-        library_for(target),
-        config,
-        FixKind::empty(),
-    )
+    lint_bytes(source.as_bytes(), target, config, FixKind::empty())
 }
 
-pub(crate) fn with_level(name: &str, level: RuleLevel) -> LintConfig {
+/// `source`'s messages, with the fixes of the kinds `fixes` holds.
+pub(crate) fn lint_bytes(
+    source: &[u8],
+    target: LuaTarget,
+    config: &LintConfig,
+    fixes: FixKind,
+) -> Vec<Message> {
+    let allocator = Allocator::new();
+    let parse = luck_parser::parse(&allocator, source, target.version());
+    Linter::new(config.clone()).run(&parse, library_for(target), fixes)
+}
+
+pub(crate) fn with_level(rule: RuleId, level: RuleLevel) -> LintConfig {
     let mut config = LintConfig::default();
-    config.rules.set_level(name, level);
+    config.rules.set_level(rule, level);
     config
 }
 
-pub(crate) fn enable(name: &str) -> LintConfig {
-    with_level(name, RuleLevel::Warn)
+pub(crate) fn enable(rule: RuleId) -> LintConfig {
+    with_level(rule, RuleLevel::Warn)
 }
 
-pub(crate) fn disable(name: &str) -> LintConfig {
-    with_level(name, RuleLevel::Off)
+pub(crate) fn disable(rule: RuleId) -> LintConfig {
+    with_level(rule, RuleLevel::Off)
 }

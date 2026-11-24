@@ -1,44 +1,32 @@
 use luck_allocator::Allocator;
-use luck_linter::{FixKind, LintConfig};
+use luck_linter::{FixKind, LintConfig, Linter, RuleId};
 use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
-use crate::common::{enable, lint};
+use crate::common::{enable, lint, lint_bytes};
 
 /// `source` once every fix of the kinds `fixes` holds is applied, asserting
 /// that the fixes converge and that the result parses.
 fn fixed(source: &str, config: &LintConfig, fixes: FixKind) -> String {
     let allocator = Allocator::new();
-    let result = luck_linter::fix(
-        &allocator,
-        source.as_bytes(),
-        library_for(LuaTarget::Lua54),
-        config,
-        fixes,
-    )
-    .expect("the fixes converge");
+    let result = Linter::new(config.clone())
+        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), fixes)
+        .expect("the fixes converge");
     assert!(result.parse.errors.is_empty(), "{:?}", result.parse.errors);
     String::from_utf8(result.parse.source.to_owned()).unwrap()
 }
 
 #[test]
 fn lint_builds_only_the_fixes_of_the_kinds_asked_for() {
-    let allocator = Allocator::new();
     let source = "\
 local unused = nil
 return 1";
-    let config = enable("redundant_nil_init");
+    let config = enable(RuleId::RedundantNilInit);
     let fix_kinds = |fixes: FixKind| -> Vec<(&str, Option<FixKind>)> {
-        luck_linter::lint(
-            &allocator,
-            source.as_bytes(),
-            library_for(LuaTarget::Lua54),
-            &config,
-            fixes,
-        )
-        .iter()
-        .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
-        .collect()
+        lint_bytes(source.as_bytes(), LuaTarget::Lua54, &config, fixes)
+            .iter()
+            .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
+            .collect()
     };
     assert_eq!(
         fix_kinds(FixKind::empty()),
@@ -60,15 +48,10 @@ fn fix_returns_the_last_round_s_diagnostics() {
     let source = "\
 local unused = nil
 return 1";
-    let config = enable("redundant_nil_init");
-    let result = luck_linter::fix(
-        &allocator,
-        source.as_bytes(),
-        library_for(LuaTarget::Lua54),
-        &config,
-        FixKind::Fix,
-    )
-    .expect("the fixes converge");
+    let config = enable(RuleId::RedundantNilInit);
+    let result = Linter::new(config.clone())
+        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix)
+        .expect("the fixes converge");
     assert_eq!(
         result.parse.source,
         b"\
@@ -85,10 +68,9 @@ return 1"
 fn a_fix_copies_bytes_that_are_not_utf8_as_written() {
     let allocator = Allocator::new();
     let source = b"local a = 'caf\xE9'\nlocal b = '\xFF' -- d\xE9j\xE0\nreturn a, b";
-    let config = enable("merge_adjacent_locals");
-    let result =
-        luck_linter::fix(&allocator, source, library_for(LuaTarget::Lua51), &config, FixKind::Fix)
-            .expect("the fixes converge");
+    let result = Linter::new(enable(RuleId::MergeAdjacentLocals))
+        .fix(&allocator, source, library_for(LuaTarget::Lua51), FixKind::Fix)
+        .expect("the fixes converge");
     assert_eq!(result.parse.source, b"local a, b = 'caf\xE9', '\xFF' -- d\xE9j\xE0\nreturn a, b");
 }
 
@@ -119,7 +101,7 @@ fn parenthesized_conditions_fix_removes_parens() {
     let source = "\
 local x = 1
 if (x == 1) then end";
-    let fixed = fixed(source, &enable("parenthesized_conditions"), FixKind::Fix);
+    let fixed = fixed(source, &enable(RuleId::ParenthesizedConditions), FixKind::Fix);
     assert!(fixed.contains("if x == 1 then"), "{fixed}");
 }
 
@@ -147,14 +129,14 @@ fn no_fix_deletes_a_comment() {
     let source = "\
 local x = --[[why]] nil
 return x";
-    assert_eq!(fixed(source, &enable("redundant_nil_init"), FixKind::all()), source);
+    assert_eq!(fixed(source, &enable(RuleId::RedundantNilInit), FixKind::all()), source);
 }
 
 #[test]
 fn fixes_overlapping_ones_in_later_rounds() {
     let source = "return not (a == (not (b == c)))";
     assert_eq!(
-        fixed(source, &enable("unnecessary_negation"), FixKind::Fix),
+        fixed(source, &enable(RuleId::UnnecessaryNegation), FixKind::Fix),
         "return a ~= (b ~= c)"
     );
 }

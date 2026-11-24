@@ -11,11 +11,10 @@ use luck_token::{Comment, LineIndex, LuaVersion, Span};
 use luck_value::ValueContext;
 
 use crate::cfg::FlowGraph;
-use crate::config::LintConfig;
 use crate::diagnostic::Finding;
 use crate::directives::Directives;
-use crate::driver::Analysis;
 use crate::fix::FixKind;
+use crate::linter::Analysis;
 use crate::local_flow::LocalFlow;
 
 /// What every rule reads of one file, shared by all, as oxlint's
@@ -33,7 +32,6 @@ pub(crate) struct ContextHost<'ast> {
     /// Where each escape Lua 5.1 and Luau read as the character it escapes
     /// is, as the lexer found them.
     pub lenient_escapes: &'ast [Span],
-    pub config: &'ast LintConfig,
     /// The kinds of fix the host applies, which are the only ones rules
     /// build.
     pub fixes: FixKind,
@@ -60,7 +58,6 @@ impl<'ast> ContextHost<'ast> {
     pub(crate) fn new(
         parse: &'ast ParseResult<'_>,
         analysis: &'ast Analysis<'ast>,
-        config: &'ast LintConfig,
         fixes: FixKind,
     ) -> Self {
         let semantic = analysis.semantic();
@@ -73,7 +70,6 @@ impl<'ast> ContextHost<'ast> {
             comments: &parse.comments,
             groupings: &parse.groupings,
             lenient_escapes: &parse.lenient_escapes,
-            config,
             fixes,
             graphs: OnceCell::new(),
             local_flow: OnceCell::new(),

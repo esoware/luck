@@ -4,24 +4,21 @@ use luck_stdlib::{ResolvedCallee, StdlibEntry};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MustUse;
 
-impl_rule!(
+declare_lint_rule!(
     MustUse,
-    "must_use",
     Suspicious,
     Warning,
     "return value of a must-use function is discarded"
 );
 
 /// A call statement drops the results of its chain's last call.
-impl RuleRunner for MustUse {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for MustUse {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -57,11 +54,11 @@ fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(&MustUse, source, version)
+        run_rule(RuleId::MustUse, source, version)
             .into_iter()
             .map(|diag| diag.message.to_string())
             .collect()

@@ -3,23 +3,20 @@ use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AlmostSwapped;
 
-impl_rule!(
+declare_lint_rule!(
     AlmostSwapped,
-    "almost_swapped",
     Correctness,
     Error,
     "looks like a failed variable swap; use `a, b = b, a`"
 );
 
-impl RuleRunner for AlmostSwapped {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::Block])
-    }
+impl Rule for AlmostSwapped {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::Block(block) = node.kind() else {
@@ -77,12 +74,12 @@ fn expr_var_name<'ast>(expr: &Expression<'ast>) -> Option<&'ast str> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&AlmostSwapped, source, LuaVersion::Lua54)
+        run_rule(RuleId::AlmostSwapped, source, LuaVersion::Lua54)
     }
 
     #[test]

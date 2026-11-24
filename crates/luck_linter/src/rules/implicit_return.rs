@@ -5,18 +5,17 @@ use crate::cfg::Exit;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// A function that never returns a value is a procedure and isn't flagged,
 /// so a bare `return` used as a guard clause doesn't count.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ImplicitReturn;
 
 // "Return a value or nil" is idiomatic Lua, and neither Selene nor
 // Luacheck flags it, so this stays off by default.
-impl_rule!(
+declare_lint_rule!(
     ImplicitReturn,
-    "implicit_return",
     Suspicious,
     Warning,
     "function returns on some paths but falls through on others"
@@ -24,10 +23,8 @@ impl_rule!(
 
 /// A function body's block runs in the function's scope, whose graph it
 /// asks for.
-impl RuleRunner for ImplicitReturn {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::Block])
-    }
+impl Rule for ImplicitReturn {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         if !matches!(node.kind(), AstKind::Block(_)) {
@@ -61,12 +58,12 @@ impl RuleRunner for ImplicitReturn {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&ImplicitReturn, source, LuaVersion::Lua54)
+        run_rule(RuleId::ImplicitReturn, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -110,7 +107,7 @@ mod tests {
     #[test]
     fn flags_global_function_with_mixed_paths() {
         let diags = run_rule(
-            &ImplicitReturn,
+            RuleId::ImplicitReturn,
             "global function f(x) if x then return 1 end end",
             LuaVersion::Lua55,
         );
@@ -120,13 +117,13 @@ mod tests {
     #[test]
     fn flags_type_function_with_mixed_paths() {
         let source = "type function t1(a) if a then return a end end";
-        let diags = run_rule(&ImplicitReturn, source, LuaVersion::Luau);
+        let diags = run_rule(RuleId::ImplicitReturn, source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn ignores_type_alias() {
-        let diags = run_rule(&ImplicitReturn, "type T = number", LuaVersion::Luau);
+        let diags = run_rule(RuleId::ImplicitReturn, "type T = number", LuaVersion::Luau);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -174,7 +171,7 @@ local function f(x)
  repeat continue until true
  return 2
 end";
-        let diags = run_rule(&ImplicitReturn, source, LuaVersion::Luau);
+        let diags = run_rule(RuleId::ImplicitReturn, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "`continue` ends the repeat, so `return 2` runs: {diags:?}");
     }
 

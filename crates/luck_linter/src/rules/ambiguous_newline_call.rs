@@ -5,23 +5,20 @@ use luck_token::{LuaVersion, Span, has_line_break};
 use crate::call::calls_in;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AmbiguousNewlineCall;
 
-impl_rule!(
+declare_lint_rule!(
     AmbiguousNewlineCall,
-    "ambiguous_newline_call",
     Suspicious,
     Warning,
     "call arguments open on a new line, which reads ambiguously"
 );
 
-impl RuleRunner for AmbiguousNewlineCall {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for AmbiguousNewlineCall {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -66,9 +63,10 @@ mod tests {
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&AmbiguousNewlineCall, source, LuaVersion::Lua54)
+        run_rule(RuleId::AmbiguousNewlineCall, source, LuaVersion::Lua54)
     }
 
     #[test]

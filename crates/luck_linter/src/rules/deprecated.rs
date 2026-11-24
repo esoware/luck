@@ -13,26 +13,23 @@ use crate::call::{CallArgs, calls_in, string_literal_value};
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, FixKind, RuleFixer};
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// A replacement the catalog marks exact is a fix, and any other one a
 /// suggestion.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Deprecated;
 
-impl_rule!(
+declare_lint_rule!(
     Deprecated,
-    "deprecated",
     Correctness,
     Warning,
     "use of a deprecated standard library function, argument, or value",
-    Fix | Suggestion
+    fix = Fix | Suggestion
 );
 
-impl RuleRunner for Deprecated {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for Deprecated {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -320,13 +317,14 @@ mod tests {
 
     use luck_token::LuaVersion;
 
-    use super::{Deprecated, Tag};
+    use super::Tag;
     use crate::diagnostic::Message;
     use crate::fix::FixKind;
     use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run_fix(source: &str, version: LuaVersion) -> Option<(String, String)> {
-        let diags = run_rule(&Deprecated, source, version);
+        let diags = run_rule(RuleId::Deprecated, source, version);
         let diag = diags.into_iter().find(|diag| diag.fix.is_some())?;
         let applied = fix_and_reparse(source, slice::from_ref(&diag), version);
         Some((diag.fix?.message.into_owned(), applied))
@@ -338,16 +336,16 @@ mod tests {
 
     #[test]
     fn flags_and_fixes_an_exact_replacement() {
-        let diags = run_rule(&Deprecated, "unpack(t)", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::Deprecated, "unpack(t)", LuaVersion::Lua54);
         assert_eq!(fix_kind(&diags), Some(FixKind::Fix), "{diags:?}");
         assert_eq!(diags[0].tag, Some(Tag::Deprecated), "an editor strikes it through");
     }
 
     #[test]
     fn flags_and_suggests_a_replacement_that_changes_behavior() {
-        let getn = run_rule(&Deprecated, "local n = table.getn(t)", LuaVersion::Lua54);
+        let getn = run_rule(RuleId::Deprecated, "local n = table.getn(t)", LuaVersion::Lua54);
         assert_eq!(fix_kind(&getn), Some(FixKind::Suggestion), "`#` calls `__len`: {getn:?}");
-        let wait = run_rule_roblox(&Deprecated, "wait(1)");
+        let wait = run_rule_roblox(RuleId::Deprecated, "wait(1)");
         assert_eq!(fix_kind(&wait), Some(FixKind::Suggestion), "{wait:?}");
     }
 
@@ -395,7 +393,7 @@ mod tests {
     #[test]
     fn flags_expr_template_in_stmt_position_without_fix() {
         // `(a ^ b)` can't stand alone as a statement, so there's no fix.
-        let diags = run_rule(&Deprecated, "math.pow(a, b)", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::Deprecated, "math.pow(a, b)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "expected no fix: {diags:?}");
         assert!(run_fix("math.pow(a, b)", LuaVersion::Lua54).is_none());
@@ -412,7 +410,7 @@ mod tests {
     fn ignores_method_call() {
         // The type of `obj` is unknown, so `getn` doesn't resolve to a
         // stdlib entry.
-        let diags = run_rule(&Deprecated, "obj:getn()", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::Deprecated, "obj:getn()", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -420,13 +418,14 @@ mod tests {
     fn flags_deprecated_string_method_on_literal() {
         // A string literal has the `string` shape, so `:gfind` warns like
         // `string.gfind`.
-        let diags = run_rule(&Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
+        let diags = run_rule(RuleId::Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
         assert!(diags.iter().any(|diag| diag.message.contains("gfind")), "{diags:?}");
     }
 
     #[test]
     fn flags_dead_service_name() {
-        let diags = run_rule_roblox(&Deprecated, "local p = game:GetService('PointsService')");
+        let diags =
+            run_rule_roblox(RuleId::Deprecated, "local p = game:GetService('PointsService')");
         assert!(
             diags
                 .iter()
@@ -437,7 +436,7 @@ mod tests {
 
     #[test]
     fn flags_dead_service_name_without_parentheses() {
-        let diags = run_rule_roblox(&Deprecated, "local p = game:GetService'PointsService'");
+        let diags = run_rule_roblox(RuleId::Deprecated, "local p = game:GetService'PointsService'");
         assert!(
             diags
                 .iter()
@@ -448,13 +447,14 @@ mod tests {
 
     #[test]
     fn ignores_live_service_name() {
-        let diags = run_rule_roblox(&Deprecated, "local p = game:GetService('Players')");
+        let diags = run_rule_roblox(RuleId::Deprecated, "local p = game:GetService('Players')");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_deprecated_instance_new_parent_arg() {
-        let diags = run_rule_roblox(&Deprecated, "local p = Instance.new('Part', workspace)");
+        let diags =
+            run_rule_roblox(RuleId::Deprecated, "local p = Instance.new('Part', workspace)");
         assert!(
             diags.iter().any(|diag| diag.message.contains("argument 2 of `Instance.new`")),
             "{diags:?}"
@@ -463,13 +463,13 @@ mod tests {
 
     #[test]
     fn ignores_instance_new_without_parent_arg() {
-        let diags = run_rule_roblox(&Deprecated, "local p = Instance.new('Part')");
+        let diags = run_rule_roblox(RuleId::Deprecated, "local p = Instance.new('Part')");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_deprecated_enum_item() {
-        let diags = run_rule_roblox(&Deprecated, "local a = Enum.AlignType.Parallel");
+        let diags = run_rule_roblox(RuleId::Deprecated, "local a = Enum.AlignType.Parallel");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("`Enum.AlignType.Parallel` is deprecated"), "{diags:?}");
     }
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn ignores_deprecated_enum_item_on_shadowed_root() {
         let diags = run_rule_roblox(
-            &Deprecated,
+            RuleId::Deprecated,
             "\
 local Enum = {}
 local a = Enum.AlignType.Parallel",
@@ -488,7 +488,8 @@ local a = Enum.AlignType.Parallel",
     #[test]
     fn flags_deprecated_collectgarbage_option() {
         // Per-constant deprecation from the 5.4 GC rework.
-        let diags = run_rule(&Deprecated, "collectgarbage('setpause', 100)", LuaVersion::Lua54);
+        let diags =
+            run_rule(RuleId::Deprecated, "collectgarbage('setpause', 100)", LuaVersion::Lua54);
         assert!(
             diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
             "{diags:?}"
@@ -497,7 +498,7 @@ local a = Enum.AlignType.Parallel",
 
     #[test]
     fn flags_deprecated_collectgarbage_option_without_parentheses() {
-        let diags = run_rule(&Deprecated, "collectgarbage'setpause'", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::Deprecated, "collectgarbage'setpause'", LuaVersion::Lua54);
         assert!(
             diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
             "{diags:?}"
@@ -546,7 +547,7 @@ local a = Enum.AlignType.Parallel",
 
     #[test]
     fn flags_without_fix_when_template_arguments_are_missing() {
-        let diags = run_rule(&Deprecated, "local r = math.pow(f())", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::Deprecated, "local r = math.pow(f())", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "`(f() ^ )` doesn't parse, so no fix applies: {diags:?}");
     }
@@ -564,7 +565,7 @@ local a = Enum.AlignType.Parallel",
     #[test]
     fn flags_without_fix_for_length_template_as_statement() {
         let diags = run_rule(
-            &Deprecated,
+            RuleId::Deprecated,
             "\
 local a = 1
 table.getn(t)",
@@ -588,7 +589,8 @@ table.getn(t)",
 
     #[test]
     fn flags_without_fix_when_a_comment_sits_inside_the_call() {
-        let diags = run_rule(&Deprecated, "local r = math.pow(a --[[why]], b)", LuaVersion::Lua54);
+        let diags =
+            run_rule(RuleId::Deprecated, "local r = math.pow(a --[[why]], b)", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "{diags:?}");
     }
@@ -596,7 +598,7 @@ table.getn(t)",
     #[test]
     fn flags_without_fix_when_the_replacement_name_is_shadowed() {
         let diags = run_rule(
-            &Deprecated,
+            RuleId::Deprecated,
             "\
 local table = {}
 local a = unpack(t)",
@@ -608,7 +610,7 @@ local a = unpack(t)",
 
     #[test]
     fn flags_without_fix_for_a_method_call() {
-        let diags = run_rule(&Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
+        let diags = run_rule(RuleId::Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
         assert!(diags.iter().any(|diag| diag.message.contains("gfind")), "{diags:?}");
         assert!(diags.iter().all(|diag| diag.fix.is_none()), "{diags:?}");
     }

@@ -5,26 +5,23 @@ use luck_token::{BinOp, UnOp};
 use crate::binary::{OperatorPair, operator_pairs};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Lua's comparison operators share one precedence and associate left, so
 /// `a < b == c` parses as `(a < b) == c`. Unary `not` binds tighter than
 /// any of them, so `not a == b` parses as `(not a) == b`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ComparisonPrecedence;
 
-impl_rule!(
+declare_lint_rule!(
     ComparisonPrecedence,
-    "comparison_precedence",
     Correctness,
     Error,
     "chained comparison or `not` operand that doesn't parse the way it reads"
 );
 
-impl RuleRunner for ComparisonPrecedence {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::BinaryOp])
-    }
+impl Rule for ComparisonPrecedence {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::BinaryOp(run) = node.kind() else {
@@ -108,12 +105,12 @@ fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>) {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&ComparisonPrecedence, source, LuaVersion::Lua54)
+        run_rule(RuleId::ComparisonPrecedence, source, LuaVersion::Lua54)
     }
 
     #[test]

@@ -11,7 +11,7 @@ use luck_allocator::Allocator;
 use luck_codegen::LiteralSpelling;
 use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
-use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
+use luck_linter::{CategoryLevels, FixKind, LintConfig, Linter, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticBuilder;
@@ -57,8 +57,21 @@ impl FileReport {
     }
 }
 
+/// The linter the `linter` stage runs, with every rule on.
+pub(crate) fn every_rule() -> Linter {
+    Linter::new(LintConfig {
+        categories: CategoryLevels {
+            correctness: Some(RuleLevel::Warn),
+            suspicious: Some(RuleLevel::Warn),
+            style: Some(RuleLevel::Warn),
+            performance: Some(RuleLevel::Warn),
+        },
+        ..LintConfig::default()
+    })
+}
+
 /// `root` is the suite's directory, which the programs run in.
-pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport {
+pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile, linter: &Linter) -> FileReport {
     let source = file.bytes.as_slice();
     let version = suite.target.version();
     let allocator = Allocator::new();
@@ -107,7 +120,7 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
         guard(|| formatter(&allocator, &parse)).unwrap_or_else(|error| (error, None));
     let (minifier, minify_output) =
         guard(|| minifier(&allocator, source, version)).unwrap_or_else(|error| (error, None));
-    let linter = guard(|| lint(suite, &parse, &lines));
+    let linted = guard(|| lint(suite, linter, &parse, &lines));
     let runtime = runtime::is_runnable(suite, file).then(|| {
         runtime::check(suite, root, file, format_output.as_deref(), minify_output.as_deref())
     });
@@ -117,7 +130,7 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile) -> FileReport 
         codegen: Some(codegen),
         formatter: Some(formatter),
         minifier: Some(minifier),
-        linter: Some(linter),
+        linter: Some(linted),
         runtime,
     }
 }
@@ -236,18 +249,15 @@ fn minifier(
     (result, Some(output))
 }
 
-/// Every rule's diagnostics.
-fn lint(suite: &Suite, parse: &ParseResult<'_>, lines: &LineIndex) -> Vec<LintLine> {
-    let every_rule = LintConfig {
-        categories: CategoryLevels {
-            correctness: Some(RuleLevel::Warn),
-            suspicious: Some(RuleLevel::Warn),
-            style: Some(RuleLevel::Warn),
-            performance: Some(RuleLevel::Warn),
-        },
-        ..LintConfig::default()
-    };
-    luck_linter::lint_parsed(parse, library_for(suite.target), &every_rule, FixKind::empty())
+/// `linter`'s diagnostics.
+fn lint(
+    suite: &Suite,
+    linter: &Linter,
+    parse: &ParseResult<'_>,
+    lines: &LineIndex,
+) -> Vec<LintLine> {
+    linter
+        .run(parse, library_for(suite.target), FixKind::empty())
         .iter()
         .map(|message| {
             let (line, column) = lines.line_column(message.span().start);

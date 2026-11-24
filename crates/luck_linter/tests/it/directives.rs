@@ -1,10 +1,10 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
-use luck_linter::{FixKind, LintConfig, Message, RuleLevel};
+use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
 use luck_stdlib::library_for;
 use luck_token::LuaTarget;
 
-use crate::common::{lint, with_level};
+use crate::common::{lint, lint_bytes, with_level};
 
 #[test]
 fn allow_covers_next_stmt() {
@@ -62,7 +62,7 @@ local unused = 1",
 
 #[test]
 fn deny_escalates_severity() {
-    let config = with_level("undefined_variable", RuleLevel::Warn);
+    let config = with_level(RuleId::UndefinedVariable, RuleLevel::Warn);
     let diags = lint(
         "\
 -- luck: deny(undefined_variable)
@@ -79,7 +79,7 @@ print(undef)",
 
 #[test]
 fn warn_downgrades_severity() {
-    let config = with_level("undefined_variable", RuleLevel::Error);
+    let config = with_level(RuleId::UndefinedVariable, RuleLevel::Error);
     let diags = lint(
         "\
 -- luck: warn(undefined_variable)
@@ -106,7 +106,7 @@ local b = 2";
 
 #[test]
 fn deny_region_covers_block() {
-    let config = with_level("unused_variable", RuleLevel::Warn);
+    let config = with_level(RuleId::UnusedVariable, RuleLevel::Warn);
     let source = "\
 -- luck: deny(unused_variable) start
 local a = 1
@@ -187,13 +187,7 @@ local _x = 1";
 #[test]
 fn invalid_lint_filter_shows_a_word_that_is_not_utf8() {
     let source = b"-- luck: allow(x) \xE9t\xE9\nlocal _x = 1";
-    let diags = luck_linter::lint(
-        &Allocator::new(),
-        source,
-        library_for(LuaTarget::Lua51),
-        &LintConfig::default(),
-        FixKind::empty(),
-    );
+    let diags = lint_bytes(source, LuaTarget::Lua51, &LintConfig::default(), FixKind::empty());
     let found: Vec<(&str, &[u8])> = diags
         .iter()
         .filter(|diag| diag.code == "invalid_lint_filter")
@@ -344,14 +338,9 @@ local a = 1
 print(a) -- luck: allow(unused_variable, undefined_variable)
 ";
     let allocator = Allocator::new();
-    let fixed = luck_linter::fix(
-        &allocator,
-        source.as_bytes(),
-        library_for(LuaTarget::Lua54),
-        &LintConfig::default(),
-        FixKind::Fix,
-    )
-    .expect("fixes converge");
+    let fixed = Linter::new(LintConfig::default())
+        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix)
+        .expect("fixes converge");
     assert_eq!(
         fixed.parse.source,
         b"\
@@ -371,7 +360,7 @@ local a = 1
 print(a)";
     assert_eq!(lint(source, LuaTarget::Lua54, &LintConfig::default()), []);
     let mut config = LintConfig::default();
-    config.rules.set_level("unused_lint_filter", RuleLevel::Off);
+    config.rules.set_level(RuleId::UnusedLintFilter, RuleLevel::Off);
     assert_eq!(
         lint(
             "\

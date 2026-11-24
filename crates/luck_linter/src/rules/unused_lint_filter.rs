@@ -8,48 +8,43 @@ use crate::context::ContextHost;
 use crate::diagnostic::Finding;
 use crate::directives::{Directive, Directives, Target};
 use crate::fix::TextEdit;
-use crate::rule::{Rule as _, impl_rule};
-use crate::rules::RULES;
+use crate::rule::{Rule, declare_lint_rule};
+use crate::rules::RuleId;
 
 /// Flags an `allow` that drops no diagnostic of a rule that ran, with a fix
 /// that removes it. One whose rule didn't run may still be needed, so it's
 /// left alone.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedLintFilter;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedLintFilter,
-    "unused_lint_filter",
     Correctness,
     Warning,
     "`allow` directive that silences nothing",
-    Fix
+    fix = Fix
 );
+
+/// The linter runs it apart from the others, through [`UnusedLintFilter::check`].
+impl Rule for UnusedLintFilter {}
 
 impl UnusedLintFilter {
     /// `used` marks each entry whose `allow` dropped a diagnostic, and `runs`
-    /// says whether the rule at a slot ran.
+    /// says whether a rule ran.
     ///
     /// What an `allow` of this rule drops is this rule's own reports, which
     /// `used` doesn't count, so one is never reported.
-    pub(crate) fn check<Runs>(
-        self,
-        context: &ContextHost<'_>,
-        used: &[bool],
-        runs: Runs,
-    ) -> Vec<Finding>
+    pub(crate) fn check<Runs>(context: &ContextHost<'_>, used: &[bool], runs: Runs) -> Vec<Finding>
     where
-        Runs: Fn(usize) -> bool,
+        Runs: Fn(RuleId) -> bool,
     {
         let directives = context.directives;
-        let runs_other = |slot: usize| {
-            runs(slot) && RULES.get(slot).is_some_and(|entry| entry.rule().name() != self.name())
-        };
-        let has_run_other = (0..RULES.len()).any(runs_other);
+        let runs_other = |rule: RuleId| rule != RuleId::UnusedLintFilter && runs(rule);
+        let has_run_other = RuleId::ALL.into_iter().any(runs_other);
         let is_unused = |entry: usize| {
             !used.get(entry).copied().unwrap_or(true)
                 && directives.entries().get(entry).is_some_and(|found| match found.target {
-                    Target::Rule(slot) => runs_other(slot),
+                    Target::Rule(rule) => runs_other(rule),
                     Target::Every => has_run_other,
                     Target::Unknown => false,
                 })
@@ -200,7 +195,7 @@ mod tests {
     use crate::fixtures::{fix_and_reparse, run_rule};
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnusedLintFilter, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnusedLintFilter, source, LuaVersion::Lua54)
     }
 
     fn fixed(source: &str) -> String {

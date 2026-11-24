@@ -1,19 +1,13 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UndefinedVariable;
 
-impl_rule!(
-    UndefinedVariable,
-    "undefined_variable",
-    Correctness,
-    Error,
-    "use of undefined variable"
-);
+declare_lint_rule!(UndefinedVariable, Correctness, Error, "use of undefined variable");
 
-impl RuleRunner for UndefinedVariable {
+impl Rule for UndefinedVariable {
     fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
@@ -42,12 +36,12 @@ impl RuleRunner for UndefinedVariable {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UndefinedVariable, source, LuaVersion::Lua54)
+        run_rule(RuleId::UndefinedVariable, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -73,7 +67,7 @@ print(y)",
 global z <const> = 2
 print(z)",
         ] {
-            let diags = run_rule(&UndefinedVariable, source, LuaVersion::Lua55);
+            let diags = run_rule(RuleId::UndefinedVariable, source, LuaVersion::Lua55);
             assert!(diags.is_empty(), "{source}: {diags:?}");
         }
     }
@@ -98,7 +92,7 @@ print(_)");
 
     #[test]
     fn ignores_compound_assignment_to_undeclared_name() {
-        let diags = run_rule(&UndefinedVariable, "counter += 1", LuaVersion::Luau);
+        let diags = run_rule(RuleId::UndefinedVariable, "counter += 1", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -113,7 +107,7 @@ return y");
     #[test]
     fn ignores_read_after_global_star() {
         let diags = run_rule(
-            &UndefinedVariable,
+            RuleId::UndefinedVariable,
             "\
 global *
 return y",
@@ -128,14 +122,17 @@ return y",
 type function t1(a)
  return types.string
 end";
-        let diags = run_rule(&UndefinedVariable, source, LuaVersion::Luau);
+        let diags = run_rule(RuleId::UndefinedVariable, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "type functions have the `types` library: {diags:?}");
     }
 
     #[test]
     fn ignores_implicit_arg_table_of_a_lua51_vararg_function() {
-        let diags =
-            run_rule(&UndefinedVariable, "local function f(...) return arg end", LuaVersion::Lua51);
+        let diags = run_rule(
+            RuleId::UndefinedVariable,
+            "local function f(...) return arg end",
+            LuaVersion::Lua51,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

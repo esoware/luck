@@ -4,28 +4,25 @@ use luck_token::LuaVersion;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Lua 5.1, 5.2, and Luau store every number as a double, so integers above
 /// 2^53 can round.
 ///
 /// Lua 5.3+ has 64-bit integers: a decimal literal above 2^63-1 becomes a
 /// float, and a hex literal above 2^64-1 wraps around.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct IntegerParsing;
 
-impl_rule!(
+declare_lint_rule!(
     IntegerParsing,
-    "integer_parsing",
     Correctness,
     Warning,
     "integer literal the target Lua version can't represent exactly"
 );
 
-impl RuleRunner for IntegerParsing {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::NumberLiteral])
-    }
+impl Rule for IntegerParsing {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::NumberLiteral]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         if let AstKind::NumberLiteral(literal) = node.kind()
@@ -76,9 +73,10 @@ mod tests {
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(&IntegerParsing, source, version)
+        run_rule(RuleId::IntegerParsing, source, version)
     }
 
     #[test]

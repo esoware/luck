@@ -1,20 +1,19 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Outside Roblox, `shared` is an ordinary name.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GlobalUsage;
 
-impl_rule!(
+declare_lint_rule!(
     GlobalUsage,
-    "global_usage",
     Style,
     Warning,
     "use of the global environment tables `_G` or `shared`"
 );
 
-impl RuleRunner for GlobalUsage {
+impl Rule for GlobalUsage {
     fn run_once(&self, context: &LintContext<'_>) {
         let is_roblox = context.semantic.target().is_roblox();
         let tree = context.scoping();
@@ -40,38 +39,42 @@ impl RuleRunner for GlobalUsage {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     #[test]
     fn flags_global_environment_reads_and_writes() {
-        let diags = run_rule_roblox(&GlobalUsage, "_G.value = shared.value; shared = {}");
+        let diags = run_rule_roblox(RuleId::GlobalUsage, "_G.value = shared.value; shared = {}");
         assert_eq!(diags.len(), 3, "{diags:?}");
     }
 
     #[test]
     fn flags_global_environment_table_outside_roblox() {
-        let diags = run_rule(&GlobalUsage, "_G.value = 1", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::GlobalUsage, "_G.value = 1", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
     #[test]
     fn ignores_shared_outside_roblox() {
-        let diags =
-            run_rule(&GlobalUsage, "local function init() shared = {} end", LuaVersion::Lua54);
+        let diags = run_rule(
+            RuleId::GlobalUsage,
+            "local function init() shared = {} end",
+            LuaVersion::Lua54,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_ordinary_globals() {
-        let diags = run_rule(&GlobalUsage, "print(pairs(items)); custom = 1", LuaVersion::Lua54);
+        let diags =
+            run_rule(RuleId::GlobalUsage, "print(pairs(items)); custom = 1", LuaVersion::Lua54);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn ignores_local_shadowing_and_fields() {
         let diags = run_rule_roblox(
-            &GlobalUsage,
+            RuleId::GlobalUsage,
             "local _G, shared = {}, {}; _G.x = shared.x; object._G = object.shared",
         );
         assert!(diags.is_empty(), "{diags:?}");

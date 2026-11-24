@@ -2,22 +2,21 @@ use luck_diagnostics::Tag;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Semantic analysis resolves each `goto` to the label it jumps to, as
 /// `lparser.c` does, so a label is used exactly when one reaches it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedLabel;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedLabel,
-    "unused_label",
     Style,
     Warning,
     "label declared but never targeted by a `goto` in the same function"
 );
 
-impl RuleRunner for UnusedLabel {
+impl Rule for UnusedLabel {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
         for label in tree.labels().iter().filter(|label| !label.is_used) {
@@ -37,12 +36,12 @@ impl RuleRunner for UnusedLabel {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnusedLabel, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnusedLabel, source, LuaVersion::Lua54)
     }
 
     #[test]

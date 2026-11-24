@@ -121,25 +121,25 @@
 //! # }
 //! ```
 //!
-//! Lint, with feature `linter`, against a target's standard library.
-//! `linter::lint_parsed` lints a parse a caller already holds, and
-//! `linter::fix` applies the fixes of the kinds asked for until none is left,
+//! Lint, with feature `linter`, against a target's standard library. A
+//! `linter::Linter` compiles its settings once and lints parse after parse,
+//! and its `fix` applies the fixes of the kinds asked for until none is left,
 //! returning the fixed source's parse and diagnostics:
 //!
 //! ```
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
-//! use luck::linter::{FixKind, LintConfig};
+//! use luck::linter::{FixKind, LintConfig, Linter};
 //! use luck::token::LuaTarget;
 //!
 //! let allocator = Allocator::new();
-//! let config = LintConfig::default();
+//! let linter = Linter::new(LintConfig::default());
 //! let stdlib = luck::stdlib::library_for(LuaTarget::Lua54);
-//! let source = b"print(undefined_name)";
-//! let diags = luck::linter::lint(&allocator, source, stdlib, &config, FixKind::empty());
+//! let parse = luck::parser::parse(&allocator, b"print(undefined_name)", LuaTarget::Lua54.version());
+//! let diags = linter.run(&parse, stdlib, FixKind::empty());
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = luck::linter::fix(&allocator, b"unpack(t)", stdlib, &config, FixKind::Fix);
+//! let fixed = linter.fix(&allocator, b"unpack(t)", stdlib, FixKind::Fix);
 //! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"table.unpack(t)"[..]));
 //! # }
 //! ```

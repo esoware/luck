@@ -1,23 +1,15 @@
-use luck_allocator::Allocator;
-use luck_linter::{FixKind, LintConfig};
-use luck_stdlib::library_for;
+use luck_linter::{FixKind, LintConfig, RuleId};
 use luck_token::{LuaTarget, Span};
 
-use crate::common::{enable, lint};
+use crate::common::{enable, lint, lint_bytes};
 
 /// A Latin-1 source lints as Lua reads it, and an escape of one of its bytes
 /// names the byte.
 #[test]
 fn flags_a_lenient_escape_of_a_byte_that_is_not_utf8() {
     let source = b"print('caf\\\xE9') -- d\xE9j\xE0";
-    let config = enable("bad_string_escape");
-    let diags = luck_linter::lint(
-        &Allocator::new(),
-        source,
-        library_for(LuaTarget::Lua51),
-        &config,
-        FixKind::empty(),
-    );
+    let config = enable(RuleId::BadStringEscape);
+    let diags = lint_bytes(source, LuaTarget::Lua51, &config, FixKind::empty());
     let found: Vec<(&str, &str, Span)> =
         diags.iter().map(|diag| (diag.code, &*diag.message, diag.span())).collect();
     assert_eq!(found, [("bad_string_escape", "invalid string escape `\\xe9`", Span::new(10, 12))]);
@@ -123,14 +115,14 @@ fn flags_type_check_inside_call() {
 
 #[test]
 fn flags_reversed_for_loop() {
-    let config = enable("reversed_for_loop");
+    let config = enable(RuleId::ReversedForLoop);
     let diags = lint("for i = 10, 1 do end", LuaTarget::Lua54, &config);
     assert!(diags.iter().any(|diag| diag.code == "reversed_for_loop"));
 }
 
 #[test]
 fn flags_unbalanced_assignment() {
-    let config = enable("unbalanced_assignment");
+    let config = enable(RuleId::UnbalancedAssignment);
     let diags = lint("local a, b, c = 1, 2", LuaTarget::Lua54, &config);
     assert!(diags.iter().any(|diag| diag.code == "unbalanced_assignment"));
 }
@@ -143,7 +135,7 @@ fn flags_incorrect_stdlib_use_with_too_few_args() {
 
 #[test]
 fn flags_must_use() {
-    let config = enable("must_use");
+    let config = enable(RuleId::MustUse);
     let diags = lint("tostring(42)", LuaTarget::Lua54, &config);
     assert!(diags.iter().any(|diag| diag.code == "must_use"));
 }

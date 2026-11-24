@@ -6,23 +6,20 @@ use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::number::number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RobloxIncorrectColor3NewBounds;
 
-impl_rule!(
+declare_lint_rule!(
     RobloxIncorrectColor3NewBounds,
-    "roblox_incorrect_color3_new_bounds",
     Correctness,
     Error,
     "`Color3.new` component outside the 0 to 1 range"
 );
 
-impl RuleRunner for RobloxIncorrectColor3NewBounds {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for RobloxIncorrectColor3NewBounds {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
         host.semantic.target().is_roblox()
@@ -62,12 +59,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule_roblox(&RobloxIncorrectColor3NewBounds, source)
+        run_rule_roblox(RuleId::RobloxIncorrectColor3NewBounds, source)
     }
 
     #[test]
@@ -115,7 +112,7 @@ mod tests {
     #[test]
     fn ignores_standalone_environment() {
         let diags = run_rule(
-            &RobloxIncorrectColor3NewBounds,
+            RuleId::RobloxIncorrectColor3NewBounds,
             "local c = Color3.new(255, 0, 0)",
             LuaVersion::Luau,
         );

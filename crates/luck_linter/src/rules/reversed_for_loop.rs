@@ -4,23 +4,20 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::number_value;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ReversedForLoop;
 
-impl_rule!(
+declare_lint_rule!(
     ReversedForLoop,
-    "reversed_for_loop",
     Suspicious,
     Warning,
     "numeric `for` loop counts down without a negative step"
 );
 
-impl RuleRunner for ReversedForLoop {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::NumericFor])
-    }
+impl Rule for ReversedForLoop {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::NumericFor]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         if let AstKind::NumericFor(numeric_for) = node.kind()
@@ -46,12 +43,12 @@ impl RuleRunner for ReversedForLoop {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&ReversedForLoop, source, LuaVersion::Lua54)
+        run_rule(RuleId::ReversedForLoop, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -99,7 +96,7 @@ for i = 10, n do print(i) end");
     #[test]
     fn ignores_hex_limit_above_i64_on_luau() {
         let source = "for i = 1, 0xFFFFFFFFFFFFFFFF do print(i) end";
-        let diags = run_rule(&ReversedForLoop, source, LuaVersion::Luau);
+        let diags = run_rule(RuleId::ReversedForLoop, source, LuaVersion::Luau);
         assert!(diags.is_empty(), "Luau reads this limit as 1.8e19, not -1: {diags:?}");
     }
 }

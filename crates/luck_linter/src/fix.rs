@@ -12,9 +12,8 @@ use luck_parser::ParseResult;
 use luck_stdlib::StdlibLibrary;
 use luck_token::Span;
 
-use crate::config::LintConfig;
 use crate::diagnostic::Message;
-use crate::driver::lint_parsed;
+use crate::linter::Linter;
 
 /// `ESLint` stops at the same count. Needing more almost always means two
 /// rules are undoing each other.
@@ -97,7 +96,7 @@ impl RuleFixer {
     }
 }
 
-/// What [`fix`] leaves once no fix of the kinds it applies is left.
+/// What [`Linter::fix`] leaves once no fix of the kinds it applies is left.
 #[derive(Debug)]
 pub struct Fixed<'ast> {
     /// The fixed source's parse, which is the parse of the source itself
@@ -132,58 +131,64 @@ impl fmt::Display for FixError {
 
 impl Error for FixError {}
 
-/// Lints `source` against `stdlib` and applies its fixes of the kinds `fixes`
-/// holds, round after round, until none is left. Each round's text is parsed
-/// into `allocator` once, both to check it and to lint it.
-///
-/// Of two overlapping fixes a round applies one, and the next round lints
-/// again and applies the other if it still holds.
-///
-/// # Errors
-///
-/// [`FixError::BudgetExhausted`] when fixes are still coming after 10
-/// rounds, and [`FixError::ReparseFailed`] when a round's fixes break the
-/// syntax. Neither leaves a fixed text, so a caller writes back all of the
-/// fixes or none.
-///
-/// # Panics
-///
-/// In debug builds, as [`lint_parsed`] does.
-pub fn fix<'ast>(
-    allocator: &'ast Allocator,
-    source: &'ast [u8],
-    stdlib: &StdlibLibrary<'_>,
-    config: &LintConfig,
-    fixes: FixKind,
-) -> Result<Fixed<'ast>, FixError> {
-    fix_within(allocator, source, stdlib, config, fixes, ROUND_BUDGET)
-}
-
-/// # Errors
-///
-/// As for [`fix`], with `budget` as the limit.
-fn fix_within<'ast>(
-    allocator: &'ast Allocator,
-    source: &'ast [u8],
-    stdlib: &StdlibLibrary<'_>,
-    config: &LintConfig,
-    fixes: FixKind,
-    budget: usize,
-) -> Result<Fixed<'ast>, FixError> {
-    let version = stdlib.target.version();
-    let mut parse = luck_parser::parse(allocator, source, version);
-    for round in 1..=budget {
-        let messages = lint_parsed(&parse, stdlib, config, fixes);
-        let Some(text) = apply(parse.source, &messages, fixes) else {
-            return Ok(Fixed { parse, messages });
-        };
-        let mut reparse = luck_parser::parse(allocator, allocator.alloc_slice_copy(&text), version);
-        if !reparse.errors.is_empty() {
-            return Err(FixError::ReparseFailed { round, error: reparse.errors.swap_remove(0) });
-        }
-        parse = reparse;
+impl Linter {
+    /// Lints `source` against `stdlib` and applies its fixes of the kinds
+    /// `fixes` holds, round after round, until none is left. Each round's
+    /// text is parsed into `allocator` once, both to check it and to lint it.
+    ///
+    /// Of two overlapping fixes a round applies one, and the next round lints
+    /// again and applies the other if it still holds.
+    ///
+    /// # Errors
+    ///
+    /// [`FixError::BudgetExhausted`] when fixes are still coming after 10
+    /// rounds, and [`FixError::ReparseFailed`] when a round's fixes break the
+    /// syntax. Neither leaves a fixed text, so a caller writes back all of
+    /// the fixes or none.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, as [`Linter::run_analyzed`] does.
+    pub fn fix<'ast>(
+        &self,
+        allocator: &'ast Allocator,
+        source: &'ast [u8],
+        stdlib: &StdlibLibrary<'_>,
+        fixes: FixKind,
+    ) -> Result<Fixed<'ast>, FixError> {
+        self.fix_within(allocator, source, stdlib, fixes, ROUND_BUDGET)
     }
-    Err(FixError::BudgetExhausted { rounds: budget })
+
+    /// # Errors
+    ///
+    /// As for [`Self::fix`], with `budget` as the limit.
+    fn fix_within<'ast>(
+        &self,
+        allocator: &'ast Allocator,
+        source: &'ast [u8],
+        stdlib: &StdlibLibrary<'_>,
+        fixes: FixKind,
+        budget: usize,
+    ) -> Result<Fixed<'ast>, FixError> {
+        let version = stdlib.target.version();
+        let mut parse = luck_parser::parse(allocator, source, version);
+        for round in 1..=budget {
+            let messages = self.run(&parse, stdlib, fixes);
+            let Some(text) = apply(parse.source, &messages, fixes) else {
+                return Ok(Fixed { parse, messages });
+            };
+            let mut reparse =
+                luck_parser::parse(allocator, allocator.alloc_slice_copy(&text), version);
+            if !reparse.errors.is_empty() {
+                return Err(FixError::ReparseFailed {
+                    round,
+                    error: reparse.errors.swap_remove(0),
+                });
+            }
+            parse = reparse;
+        }
+        Err(FixError::BudgetExhausted { rounds: budget })
+    }
 }
 
 /// `source` with the fixes of `messages` of the kinds `fixes` holds that
@@ -260,8 +265,9 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::config::RuleLevel;
+    use crate::config::{LintConfig, RuleLevel};
     use crate::fixtures::message;
+    use crate::rules::RuleId;
 
     fn diag_with_fix(kind: FixKind, replacements: &[(u32, u32, &'static str)]) -> Message {
         let edits: Box<[TextEdit]> = replacements
@@ -281,21 +287,22 @@ mod tests {
         diag_with_fix(FixKind::Fix, &[(start, end, replacement)])
     }
 
-    fn enable(names: &[&str]) -> LintConfig {
+    fn enable(rules: &[RuleId]) -> Linter {
         let mut config = LintConfig::default();
-        for name in names {
-            config.rules.set_level(name, RuleLevel::Warn);
+        for &rule in rules {
+            config.rules.set_level(rule, RuleLevel::Warn);
         }
-        config
+        Linter::new(config)
     }
 
     /// # Errors
     ///
-    /// As for [`fix_within`].
-    fn fixed_within(source: &str, config: &LintConfig, budget: usize) -> Result<String, FixError> {
+    /// As for [`Linter::fix_within`].
+    fn fixed_within(source: &str, linter: &Linter, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
         let stdlib = library_for(LuaTarget::Lua54);
-        fix_within(&allocator, source.as_bytes(), stdlib, config, FixKind::Fix, budget)
+        linter
+            .fix_within(&allocator, source.as_bytes(), stdlib, FixKind::Fix, budget)
             .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())
     }
 
@@ -358,13 +365,13 @@ local _bar = 2"[..]
     fn fixes_from_two_rules_land_in_one_round() {
         // Their edits don't overlap, so the first round applies both, and
         // the second only confirms that none is left.
-        let config = enable(&["redundant_nil_init", "string_index_to_field"]);
+        let linter = enable(&[RuleId::RedundantNilInit, RuleId::StringIndexToField]);
         let source = "\
 local a = t[\"key\"]
 local b = nil
 return a, b";
         assert_eq!(
-            fixed_within(source, &config, 2),
+            fixed_within(source, &linter, 2),
             Ok("\
 local a = t.key
 local b
@@ -377,11 +384,11 @@ return a, b"
     fn spends_a_round_confirming_that_no_fix_is_left() {
         // The inner negation wins the first round, since the outer fix
         // overlaps it, and the outer one applies in the second.
-        let config = enable(&["unnecessary_negation"]);
+        let linter = enable(&[RuleId::UnnecessaryNegation]);
         let source = "return not (a == (not (b == c)))";
-        assert_eq!(fixed_within(source, &config, 3), Ok("return a ~= (b ~= c)".to_owned()));
+        assert_eq!(fixed_within(source, &linter, 3), Ok("return a ~= (b ~= c)".to_owned()));
         assert_eq!(
-            fixed_within(source, &config, 2),
+            fixed_within(source, &linter, 2),
             Err(FixError::BudgetExhausted { rounds: 2 }),
             "two rounds apply both fixes, and only a third confirms that none is left"
         );

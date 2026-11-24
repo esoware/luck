@@ -4,23 +4,20 @@ use luck_token::MAX_ACTIVE_LOCALS;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DuplicateParameter;
 
-impl_rule!(
+declare_lint_rule!(
     DuplicateParameter,
-    "duplicate_parameter",
     Correctness,
     Error,
     "function declares two parameters with the same name"
 );
 
-impl RuleRunner for DuplicateParameter {
-    fn node_types(&self) -> AstTypesBitset {
-        FunctionNode::NODE_TYPES
-    }
+impl Rule for DuplicateParameter {
+    const NODE_TYPES: AstTypesBitset = FunctionNode::NODE_TYPES;
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         if let Some(function) = FunctionNode::of(node, context.nodes) {
@@ -62,12 +59,12 @@ fn check_params(function: FunctionNode<'_>, context: &LintContext<'_>) {
 mod tests {
     use luck_token::{LuaVersion, offset_to_index};
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
+        run_rule(RuleId::DuplicateParameter, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -110,7 +107,8 @@ function t:m(self) end");
 
     #[test]
     fn flags_duplicate_in_global_function() {
-        let diags = run_rule(&DuplicateParameter, "global function f(a, a) end", LuaVersion::Lua55);
+        let diags =
+            run_rule(RuleId::DuplicateParameter, "global function f(a, a) end", LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
@@ -137,7 +135,7 @@ function t.m(self) end");
     #[test]
     fn flags_named_vararg_matching_parameter() {
         let source = "local function f(a, ...a) return a end";
-        let diags = run_rule(&DuplicateParameter, source, LuaVersion::Lua55);
+        let diags = run_rule(RuleId::DuplicateParameter, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");
     }
 

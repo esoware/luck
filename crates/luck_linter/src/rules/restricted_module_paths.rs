@@ -1,37 +1,61 @@
+use crate::config::concat;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, RuleOptions, declare_lint_rule};
 
 /// Checks each `require` site semantic analysis finds by its module path.
 ///
 /// The path's value counts, however it's spelled. A computed path like
 /// `require(x .. y)` can't be checked, and a call of a `require` the chunk
 /// shadows or rebinds loads nothing the chunk can know of.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RestrictedModulePaths;
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RestrictedModulePaths {
+    paths: Box<[String]>,
+}
 
-impl_rule!(
+declare_lint_rule!(
     RestrictedModulePaths,
-    "restricted_module_paths",
     Correctness,
     Error,
-    "`require` of a module listed in `restricted_module_paths`"
+    "`require` of a module listed in `restricted_module_paths`",
+    options = RestrictedModulePathsOptions
 );
 
-impl RuleRunner for RestrictedModulePaths {
-    fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        restricted_paths(host).is_some_and(|paths| !paths.is_empty())
+/// Options of the `restricted_module_paths` rule, which reports nothing
+/// until they list `paths`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+pub(crate) struct RestrictedModulePathsOptions {
+    /// Modules that can't be required. A trailing `.*` also covers
+    /// submodules: `forbidden.*` matches `forbidden` and `forbidden.sub`.
+    paths: Vec<String>,
+}
+
+impl RuleOptions for RestrictedModulePathsOptions {
+    fn merge_onto(self, base: Self) -> Self {
+        Self { paths: concat(self.paths, base.paths) }
+    }
+}
+
+impl From<RestrictedModulePathsOptions> for RestrictedModulePaths {
+    fn from(options: RestrictedModulePathsOptions) -> Self {
+        Self { paths: options.paths.into() }
+    }
+}
+
+impl Rule for RestrictedModulePaths {
+    fn should_run(&self, _host: &ContextHost<'_>) -> bool {
+        !self.paths.is_empty()
     }
 
     fn run_once(&self, context: &LintContext<'_>) {
-        let Some(paths) = restricted_paths(context) else {
-            return;
-        };
         for literal in context.semantic.semantic().requires().iter().filter_map(|site| site.path) {
             let Some(path) = literal.as_str() else {
                 continue;
             };
-            if let Some(pattern) = paths.iter().find(|pattern| path_matches(path, pattern)) {
+            if let Some(pattern) = self.paths.iter().find(|pattern| path_matches(path, pattern)) {
                 context.diagnostic(
                     Finding::new(format!("`require` of restricted module `{path}`"), literal.span)
                         .with_help(format!("`{pattern}` is listed in `restricted_module_paths`")),
@@ -39,10 +63,6 @@ impl RuleRunner for RestrictedModulePaths {
             }
         }
     }
-}
-
-fn restricted_paths<'host>(host: &'host ContextHost<'_>) -> Option<&'host [String]> {
-    Some(&host.config.rules.restricted_module_paths.as_ref()?.options()?.paths)
 }
 
 /// Exact match, except that a pattern ending in `.*` matches the module and
@@ -58,50 +78,49 @@ fn path_matches(path: &str, pattern: &str) -> bool {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
-    use crate::config::{LintConfig, RestrictedModulePathsOptions, RuleLevel, RuleSetting};
+    use crate::config::LintConfig;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule_with_config;
+    use crate::rules::RuleId;
 
-    fn run(source: &str, paths: Vec<String>) -> Vec<Message> {
-        let mut config = LintConfig::default();
-        config.rules.restricted_module_paths = Some(RuleSetting::WithOptions(
-            RuleLevel::Error,
-            RestrictedModulePathsOptions { paths },
-        ));
-        run_rule_with_config(&RestrictedModulePaths, source, LuaVersion::Lua54, &config)
+    fn run(source: &str, paths: &[&str]) -> Vec<Message> {
+        let lint = serde_json::json!({
+            "rules": { "restricted_module_paths": ["error", { "paths": paths }] }
+        });
+        let config: LintConfig = serde_json::from_value(lint).expect("a valid `lint` section");
+        run_rule_with_config(RuleId::RestrictedModulePaths, source, LuaVersion::Lua54, &config)
     }
 
     #[test]
     fn flags_matching_path() {
-        let diags = run("require(\"forbidden.lib\")", vec!["forbidden.lib".to_owned()]);
+        let diags = run("require(\"forbidden.lib\")", &["forbidden.lib"]);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
         assert!(diags[0].message.contains("forbidden.lib"), "{diags:?}");
     }
 
     #[test]
     fn ignores_unrelated_path() {
-        let diags = run("require(\"ok.lib\")", vec!["forbidden.lib".to_owned()]);
+        let diags = run("require(\"ok.lib\")", &["forbidden.lib"]);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn ignores_empty_config() {
-        let diags = run("require(\"anything\")", Vec::new());
+        let diags = run("require(\"anything\")", &[]);
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
     #[test]
     fn flags_bare_quoted_form() {
         // `require"x"` parses as a single-string-arg call (no parens).
-        let diags = run("require\"forbidden.lib\"", vec!["forbidden.lib".to_owned()]);
+        let diags = run("require\"forbidden.lib\"", &["forbidden.lib"]);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
 
     #[test]
     fn flags_a_require_through_the_global_table() {
         for source in ["_G.require(\"forbidden.lib\")", "_ENV[\"require\"](\"forbidden.lib\")"] {
-            let diags = run(source, vec!["forbidden.lib".to_owned()]);
+            let diags = run(source, &["forbidden.lib"]);
             assert_eq!(diags.len(), 1, "{source}: {diags:?}");
         }
     }
@@ -112,7 +131,7 @@ mod tests {
             "\
 local x = {}
 x:require(\"forbidden.lib\")",
-            vec!["forbidden.lib".to_owned()],
+            &["forbidden.lib"],
         );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -124,7 +143,7 @@ x:require(\"forbidden.lib\")",
             "\
 local p = \"forbidden.lib\"
 require(p)",
-            vec!["forbidden.lib".to_owned()],
+            &["forbidden.lib"],
         );
         assert!(diags.is_empty(), "got: {diags:?}");
     }
@@ -132,14 +151,14 @@ require(p)",
     #[test]
     fn flags_wildcard_module_and_submodules() {
         for source in ["require(\"forbidden\")", "require(\"forbidden.sub\")"] {
-            let diags = run(source, vec!["forbidden.*".to_owned()]);
+            let diags = run(source, &["forbidden.*"]);
             assert_eq!(diags.len(), 1, "{diags:?}");
         }
     }
 
     #[test]
     fn ignores_name_extending_wildcard_prefix() {
-        let diags = run("require(\"forbiddenly\")", vec!["forbidden.*".to_owned()]);
+        let diags = run("require(\"forbiddenly\")", &["forbidden.*"]);
         assert!(diags.is_empty(), "{diags:?}");
     }
 
@@ -148,7 +167,7 @@ require(p)",
         for source in
             [r#"require("forbidden\46sub")"#, "require[[forbidden]]", "require'\\x66orbidden'"]
         {
-            let diags = run(source, vec!["forbidden.*".to_owned()]);
+            let diags = run(source, &["forbidden.*"]);
             assert_eq!(diags.len(), 1, "{source}: {diags:?}");
         }
     }

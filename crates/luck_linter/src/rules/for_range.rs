@@ -6,28 +6,25 @@ use luck_value::ValueContext;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::number_value;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags numeric `for` ranges that can't iterate or are likely off by one.
 ///
 /// That covers a zero step, a step pointing away from the limit, `0, #t`,
 /// `#t, 0` or `#t, 1` with no `-1` step, and a limit the step never lands
 /// on. A start above the limit with no step is left to `reversed_for_loop`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ForRange;
 
-impl_rule!(
+declare_lint_rule!(
     ForRange,
-    "for_range",
     Correctness,
     Error,
     "numeric `for` range can't iterate or is off by one"
 );
 
-impl RuleRunner for ForRange {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::NumericFor])
-    }
+impl Rule for ForRange {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::NumericFor]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         if let AstKind::NumericFor(numeric_for) = node.kind()
@@ -173,12 +170,12 @@ fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&ForRange, source, LuaVersion::Lua54)
+        run_rule(RuleId::ForRange, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -290,7 +287,8 @@ for i = #t, 1, -1 do print(i) end");
 
     #[test]
     fn flags_underscore_separated_bound_on_luau() {
-        let diags = run_rule(&ForRange, "for i = 1_000, 1, 1 do print(i) end", LuaVersion::Luau);
+        let diags =
+            run_rule(RuleId::ForRange, "for i = 1_000, 1, 1 do print(i) end", LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "1_000 is a number literal above the limit: {diags:?}");
     }
 }

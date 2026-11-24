@@ -2,20 +2,19 @@ use luck_semantic::SymbolKind;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Shadowing;
 
-impl_rule!(
+declare_lint_rule!(
     Shadowing,
-    "shadowing",
     Style,
     Warning,
     "variable shadows an outer variable with the same name"
 );
 
-impl RuleRunner for Shadowing {
+impl Rule for Shadowing {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
 
@@ -52,12 +51,12 @@ impl RuleRunner for Shadowing {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&Shadowing, source, LuaVersion::Lua54)
+        run_rule(RuleId::Shadowing, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -113,7 +112,7 @@ return M");
     #[test]
     fn ignores_local_arg_in_a_lua51_vararg_function() {
         let source = "local function f(...) local arg = { ... } return arg end";
-        let diags = run_rule(&Shadowing, source, LuaVersion::Lua51);
+        let diags = run_rule(RuleId::Shadowing, source, LuaVersion::Lua51);
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

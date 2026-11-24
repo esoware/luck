@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use luck_config::{CONFIG_FILE_NAME, Editorconfigs, Project, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
-use luck_linter::LintConfig;
+use luck_linter::Linter;
 use luck_resolver::{ResolveOptions, Resolver};
 use luck_stdlib::Stdlib;
 use luck_token::LuaVersion;
@@ -31,10 +31,10 @@ pub(crate) struct DocumentSettings {
     /// The standard library of the document's dialect, with the project's
     /// std definitions over it.
     pub stdlib: Stdlib,
-    /// The project's lint settings, with the overrides the path matches.
-    /// Publishing, code actions, and fix-all all lint with these, so none of
-    /// them fixes a diagnostic the user was never shown.
-    pub lint: Arc<LintConfig>,
+    /// The linter of the project's lint settings, with the overrides the
+    /// path matches. Publishing, code actions, and fix-all all lint with it,
+    /// so none of them fixes a diagnostic the user was never shown.
+    pub linter: Arc<Linter>,
     pub format: FormatOptions,
     /// Whether the project's `include` and `exclude` take the document in.
     /// One they leave out gets no diagnostics and no fixes.
@@ -183,7 +183,7 @@ impl SettingsCache {
         let settings = DocumentSettings {
             project: Arc::clone(&project),
             stdlib: loaded.stdlib_for(path).clone(),
-            lint: loaded.lint_for(path),
+            linter: loaded.linter_for(path),
             format: loaded.format_options(path, Some(&editorconfigs)),
             is_included: path.is_none_or(|file| loaded.filter().is_included(file)),
         };

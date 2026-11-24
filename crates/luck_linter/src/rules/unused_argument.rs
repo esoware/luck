@@ -4,7 +4,7 @@ use luck_semantic::SymbolKind;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 use crate::underscore_fix::prefix_underscore;
 
 /// Flags a function parameter that's never referenced (Luacheck 212).
@@ -12,19 +12,18 @@ use crate::underscore_fix::prefix_underscore;
 /// Callbacks and methods often ignore parameters their interface requires,
 /// so this has its own toggle, separate from `unused_variable`, which skips
 /// parameters.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedArgument;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedArgument,
-    "unused_argument",
     Style,
     Warning,
     "function parameter is declared but never referenced",
-    Suggestion
+    fix = Suggestion
 );
 
-impl RuleRunner for UnusedArgument {
+impl Rule for UnusedArgument {
     fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
@@ -61,19 +60,19 @@ impl RuleRunner for UnusedArgument {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{applied, fix_and_reparse, run_rule};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnusedArgument, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnusedArgument, source, LuaVersion::Lua54)
     }
 
     #[test]
     fn flags_unused_named_vararg() {
         // Lua 5.5 named vararg binds like a parameter.
         let source = "local function f(...args) end";
-        let diags = run_rule(&UnusedArgument, source, LuaVersion::Lua55);
+        let diags = run_rule(RuleId::UnusedArgument, source, LuaVersion::Lua55);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua55);
         assert_eq!(fixed, "local function f(..._args) end");
@@ -82,7 +81,7 @@ mod tests {
     #[test]
     fn ignores_used_named_vararg() {
         let diags = run_rule(
-            &UnusedArgument,
+            RuleId::UnusedArgument,
             "local function f(...args) return args end",
             LuaVersion::Lua55,
         );

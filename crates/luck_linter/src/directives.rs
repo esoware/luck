@@ -15,7 +15,7 @@ use luck_token::{
     has_line_break,
 };
 
-use crate::rules::RULES;
+use crate::rules::{RuleId, RuleTable};
 
 /// Past the last offset, so a range to the end of the file also holds a
 /// diagnostic there.
@@ -23,8 +23,7 @@ const FILE_END: u32 = u32::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Target {
-    /// The rule at this index of `RULES`.
-    Rule(usize),
+    Rule(RuleId),
     /// `*`.
     Every,
     /// A name no rule has, which covers nothing.
@@ -93,8 +92,8 @@ pub(crate) struct Directives {
     /// `end` that closes none.
     errors: Vec<DirectiveProblem>,
     /// By rule, whether a `deny` or `warn` names it, which runs it here
-    /// whatever config says. Empty when none does.
-    enabled: Vec<bool>,
+    /// whatever config says.
+    enabled: RuleTable<bool>,
 }
 
 impl Directives {
@@ -137,9 +136,9 @@ impl Directives {
         for name in directive.rules(source) {
             let target = match name.text(source) {
                 b"*" => Target::Every,
-                text => RULES
-                    .iter()
-                    .position(|entry| entry.rule().name().as_bytes() == text)
+                text => str::from_utf8(text)
+                    .ok()
+                    .and_then(RuleId::from_name)
                     .map_or(Target::Unknown, Target::Rule),
             };
             if verb != LintVerb::Allow {
@@ -179,16 +178,9 @@ impl Directives {
     }
 
     fn enable(&mut self, target: Target) {
-        if target != Target::Unknown && self.enabled.is_empty() {
-            self.enabled = vec![false; RULES.len()];
-        }
         match target {
-            Target::Rule(slot) => {
-                if let Some(is_enabled) = self.enabled.get_mut(slot) {
-                    *is_enabled = true;
-                }
-            }
-            Target::Every => self.enabled.fill(true),
+            Target::Rule(rule) => self.enabled[rule] = true,
+            Target::Every => self.enabled = RuleTable::from_fn(|_| true),
             Target::Unknown => {}
         }
     }
@@ -277,16 +269,15 @@ impl Directives {
         &self.errors
     }
 
-    /// Whether a `deny` or `warn` names the rule at `slot`, or `*`.
-    pub(crate) fn enables(&self, slot: usize) -> bool {
-        self.enabled.get(slot).copied().unwrap_or(false)
+    /// Whether a `deny` or `warn` names `rule`, or `*`.
+    pub(crate) fn enables(&self, rule: RuleId) -> bool {
+        self.enabled[rule]
     }
 
-    /// The walk over the ranges that can cover the diagnostics of the rule at
-    /// `slot`.
-    pub(crate) fn cover_of(&self, slot: usize) -> Cover<'_> {
+    /// The walk over the ranges that can cover `rule`'s diagnostics.
+    pub(crate) fn cover_of(&self, rule: RuleId) -> Cover<'_> {
         Cover {
-            own: self.intervals_of(Target::Rule(slot)),
+            own: self.intervals_of(Target::Rule(rule)),
             every: self.intervals_of(Target::Every),
             open: Vec::new(),
         }
@@ -366,17 +357,17 @@ mod tests {
 
     use super::*;
     use crate::config::LintConfig;
-    use crate::driver::analyze;
+    use crate::linter::Linter;
 
     /// What the directives in `source` set at each offset `needles` start
     /// at, for `rule`.
-    fn verbs_at(source: &str, rule: &str, needles: &[&str]) -> Vec<Option<LintVerb>> {
+    fn verbs_at(source: &str, rule: RuleId, needles: &[&str]) -> Vec<Option<LintVerb>> {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let analysis = analyze(&parse, library_for(LuaTarget::Lua54), &LintConfig::default());
-        let slot = RULES.iter().position(|entry| entry.rule().name() == rule).expect("a rule");
-        let mut cover = analysis.directives().cover_of(slot);
+        let linter = Linter::new(LintConfig::default());
+        let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+        let mut cover = analysis.directives().cover_of(rule);
         let mut offsets: Vec<u32> = needles
             .iter()
             .map(|needle| u32::try_from(source.find(needle).expect("in the source")).expect("fits"))
@@ -391,7 +382,7 @@ mod tests {
 local a = 1 local b = 2 -- luck: allow(shadowing)
 local c = 3";
         assert_eq!(
-            verbs_at(source, "shadowing", &["a =", "b =", "c ="]),
+            verbs_at(source, RuleId::Shadowing, &["a =", "b =", "c ="]),
             [None, Some(LintVerb::Allow), None]
         );
     }
@@ -399,7 +390,7 @@ local c = 3";
     #[test]
     fn a_statement_directive_skips_a_separator() {
         let source = "local a = 1; -- luck: allow(shadowing)";
-        assert_eq!(verbs_at(source, "shadowing", &["a ="]), [Some(LintVerb::Allow)]);
+        assert_eq!(verbs_at(source, RuleId::Shadowing, &["a ="]), [Some(LintVerb::Allow)]);
     }
 
     #[test]
@@ -411,7 +402,7 @@ local function f()
 end
 local after = 2";
         assert_eq!(
-            verbs_at(source, "shadowing", &["function", "inner", "after"]),
+            verbs_at(source, RuleId::Shadowing, &["function", "inner", "after"]),
             [None, Some(LintVerb::Deny), None]
         );
     }
@@ -425,7 +416,7 @@ local t = {
 }
 local after = 2";
         assert_eq!(
-            verbs_at(source, "duplicate_keys", &["t =", "a = 2", "after"]),
+            verbs_at(source, RuleId::DuplicateKeys, &["t =", "a = 2", "after"]),
             [Some(LintVerb::Allow), Some(LintVerb::Allow), None]
         );
     }
@@ -438,7 +429,10 @@ do
   -- luck: allow(shadowing)
 end
 local after = 2";
-        assert_eq!(verbs_at(source, "shadowing", &["do", "after"]), [Some(LintVerb::Allow), None]);
+        assert_eq!(
+            verbs_at(source, RuleId::Shadowing, &["do", "after"]),
+            [Some(LintVerb::Allow), None]
+        );
     }
 
     #[test]
@@ -456,7 +450,7 @@ local d = 4
 local e = 5
 -- #luck: warn(shadowing)";
         assert_eq!(
-            verbs_at(source, "shadowing", &["a =", "b =", "c =", "d =", "e ="]),
+            verbs_at(source, RuleId::Shadowing, &["a =", "b =", "c =", "d =", "e ="]),
             [
                 Some(LintVerb::Allow),
                 Some(LintVerb::Deny),
@@ -476,10 +470,10 @@ local a = 1
 local b = 2
 local c = 3";
         assert_eq!(
-            verbs_at(source, "shadowing", &["a =", "b =", "c ="]),
+            verbs_at(source, RuleId::Shadowing, &["a =", "b =", "c ="]),
             [Some(LintVerb::Deny), Some(LintVerb::Allow), Some(LintVerb::Deny)]
         );
-        assert_eq!(verbs_at(source, "empty_block", &["b ="]), [Some(LintVerb::Deny)]);
+        assert_eq!(verbs_at(source, RuleId::EmptyBlock, &["b ="]), [Some(LintVerb::Deny)]);
     }
 
     fn directives_of(source: &str) -> Directives {
@@ -496,11 +490,10 @@ local c = 3";
 -- luck: allow(empty_block)
 local a = 1",
         );
-        let slot = |rule: &str| RULES.iter().position(|entry| entry.rule().name() == rule);
-        assert!(slot("shadowing").is_some_and(|found| directives.enables(found)));
-        assert!(slot("empty_block").is_some_and(|found| !directives.enables(found)));
+        assert!(directives.enables(RuleId::Shadowing));
+        assert!(!directives.enables(RuleId::EmptyBlock));
         let every = directives_of("-- luck: deny(*)");
-        assert!((0..RULES.len()).all(|found| every.enables(found)));
+        assert!(RuleId::ALL.into_iter().all(|rule| every.enables(rule)));
     }
 
     #[test]

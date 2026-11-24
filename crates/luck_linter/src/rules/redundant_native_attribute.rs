@@ -6,28 +6,25 @@ use luck_token::{Span, leading_hot_comments, offset_to_index};
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RedundantNativeAttribute;
 
-impl_rule!(
+declare_lint_rule!(
     RedundantNativeAttribute,
-    "redundant_native_attribute",
     Style,
     Warning,
     "`@native` attribute is redundant in a `--!native` module",
-    Fix
+    fix = Fix
 );
 
-impl RuleRunner for RedundantNativeAttribute {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[
-            AstType::FunctionDecl,
-            AstType::LocalFunction,
-            AstType::FunctionDef,
-        ])
-    }
+impl Rule for RedundantNativeAttribute {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+        AstType::FunctionDecl,
+        AstType::LocalFunction,
+        AstType::FunctionDef,
+    ]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
         has_native_directive(host)
@@ -123,12 +120,12 @@ fn has_native_directive(host: &ContextHost<'_>) -> bool {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&RedundantNativeAttribute, source, LuaVersion::Luau)
+        run_rule(RuleId::RedundantNativeAttribute, source, LuaVersion::Luau)
     }
 
     #[test]
@@ -223,7 +220,7 @@ local _x = 1
     #[test]
     fn ignores_non_luau() {
         let diags = run_rule(
-            &RedundantNativeAttribute,
+            RuleId::RedundantNativeAttribute,
             "\
 --!native
 local _x = 1",

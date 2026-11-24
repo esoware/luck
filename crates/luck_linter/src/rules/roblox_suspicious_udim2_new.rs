@@ -6,23 +6,20 @@ use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::number::number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RobloxSuspiciousUdim2New;
 
-impl_rule!(
+declare_lint_rule!(
     RobloxSuspiciousUdim2New,
-    "roblox_suspicious_udim2_new",
     Suspicious,
     Warning,
     "`UDim2.new` called with fewer components than expected"
 );
 
-impl RuleRunner for RobloxSuspiciousUdim2New {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for RobloxSuspiciousUdim2New {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
         host.semantic.target().is_roblox()
@@ -68,12 +65,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule_roblox(&RobloxSuspiciousUdim2New, source)
+        run_rule_roblox(RuleId::RobloxSuspiciousUdim2New, source)
     }
 
     #[test]
@@ -129,8 +126,11 @@ mod tests {
 
     #[test]
     fn ignores_standalone_environment() {
-        let diags =
-            run_rule(&RobloxSuspiciousUdim2New, "local u = UDim2.new(1, 2)", LuaVersion::Luau);
+        let diags = run_rule(
+            RuleId::RobloxSuspiciousUdim2New,
+            "local u = UDim2.new(1, 2)",
+            LuaVersion::Luau,
+        );
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

@@ -3,23 +3,21 @@ use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnbalancedAssignment;
 
-impl_rule!(
+declare_lint_rule!(
     UnbalancedAssignment,
-    "unbalanced_assignment",
     Suspicious,
     Warning,
     "assignment has a different number of targets and values"
 );
 
-impl RuleRunner for UnbalancedAssignment {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::LocalAssignment, AstType::Assignment])
-    }
+impl Rule for UnbalancedAssignment {
+    const NODE_TYPES: AstTypesBitset =
+        AstTypesBitset::from_types(&[AstType::LocalAssignment, AstType::Assignment]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let kind = node.kind();
@@ -55,12 +53,12 @@ impl RuleRunner for UnbalancedAssignment {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnbalancedAssignment, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnbalancedAssignment, source, LuaVersion::Lua54)
     }
 
     #[test]

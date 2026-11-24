@@ -1,7 +1,7 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::local_flow::is_field_write_prefix;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Luacheck 321: a local declared without a value is read where no assignment
 /// can have reached it.
@@ -10,18 +10,17 @@ use crate::rule::{RuleRunner, impl_rule};
 /// `b` of `local a, b = 1`. `local x = nil` is initialized, and
 /// `redundant_nil_init` covers it instead. A field or index write through the
 /// local is `mutating_uninitialized`'s (Luacheck 341).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AccessingUninitialized;
 
-impl_rule!(
+declare_lint_rule!(
     AccessingUninitialized,
-    "accessing_uninitialized",
     Correctness,
     Warning,
     "local is read before any value is assigned to it"
 );
 
-impl RuleRunner for AccessingUninitialized {
+impl Rule for AccessingUninitialized {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
         for &(symbol_id, reference_id) in &context.local_flow().first_unassigned_uses {
@@ -49,12 +48,12 @@ mod tests {
 
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&AccessingUninitialized, source, LuaVersion::Lua54)
+        run_rule(RuleId::AccessingUninitialized, source, LuaVersion::Lua54)
     }
 
     #[test]

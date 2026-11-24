@@ -6,7 +6,7 @@ use luck_token::Span;
 use crate::cfg::FlowGraph;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags code no path through its function's control-flow graph reaches.
 ///
@@ -18,21 +18,18 @@ use crate::rule::{RuleRunner, impl_rule};
 /// whose statement is unreachable is part of that statement's finding, and a
 /// function's body has its own graph, so a function defined in unreachable
 /// code is reported once, as the code that defines it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnreachableCode;
 
-impl_rule!(
+declare_lint_rule!(
     UnreachableCode,
-    "unreachable_code",
     Suspicious,
     Warning,
     "code that no path through its function reaches"
 );
 
-impl RuleRunner for UnreachableCode {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::Block])
-    }
+impl Rule for UnreachableCode {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::Block(block) = node.kind() else {
@@ -119,17 +116,17 @@ fn report(run: Option<Span>, context: &LintContext<'_>) {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnreachableCode, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnreachableCode, source, LuaVersion::Lua54)
     }
 
     /// The text of each finding's span.
     fn flagged(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(&UnreachableCode, source, version)
+        run_rule(RuleId::UnreachableCode, source, version)
             .iter()
             .map(|diag| String::from_utf8_lossy(diag.span().text(source.as_bytes())).into_owned())
             .collect()

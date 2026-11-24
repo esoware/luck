@@ -3,7 +3,7 @@ use luck_semantic::SymbolKind;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a local that's assigned after its declaration but never read
 /// (Luacheck 231).
@@ -11,18 +11,17 @@ use crate::rule::{RuleRunner, impl_rule};
 /// A lone `local x = 1` with no other references is left to
 /// `unused_variable`; this rule needs at least one later write, such as
 /// `x = 1`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SetButNeverRead;
 
-impl_rule!(
+declare_lint_rule!(
     SetButNeverRead,
-    "set_but_never_read",
     Style,
     Warning,
     "local is written to but its value is never read"
 );
 
-impl RuleRunner for SetButNeverRead {
+impl Rule for SetButNeverRead {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
 
@@ -68,12 +67,12 @@ impl RuleRunner for SetButNeverRead {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&SetButNeverRead, source, LuaVersion::Lua54)
+        run_rule(RuleId::SetButNeverRead, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -121,7 +120,7 @@ x = 2");
     #[test]
     fn ignores_exported_local_only_written() {
         let diags = run_rule(
-            &SetButNeverRead,
+            RuleId::SetButNeverRead,
             "\
 export local counter = 0
 counter = 1",

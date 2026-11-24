@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use luck_bundler::DynamicRequire;
 use luck_config::{Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
-use luck_linter::{Category, LintConfig, RuleLevel};
+use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
 use luck_token::{LuaTarget, LuaVersion};
 
 use crate::common::{load_error, loaded, project_with};
@@ -17,7 +17,7 @@ fn defaults_take_every_lua_file_in_the_dialect_of_its_extension() {
     assert_eq!(project.target_for(Some(Path::new("a"))), LuaTarget::Lua54);
     assert_eq!(project.target_for(None), LuaTarget::Lua54);
     assert!(project.filter().is_included(Path::new("src/a.lua")));
-    assert_eq!(*project.lint_for(None), LintConfig::default());
+    assert_eq!(*project.linter_for(None).config(), LintConfig::default());
     assert_eq!(project.files(), Vec::<PathBuf>::new());
 }
 
@@ -81,20 +81,22 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
             ]
         }"#,
     )]);
-    let lint_at = |relative: &str| project.lint_for(Some(&directory.path().join(relative)));
+    let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
 
-    assert_eq!(lint_at("src/a.lua").rules.level("shadowing"), Some(RuleLevel::Warn));
+    let base = linter_at("src/a.lua");
+    assert_eq!(base.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
 
-    let spec = lint_at("spec/a.lua");
-    assert_eq!(spec.rules.level("shadowing"), Some(RuleLevel::Off));
-    assert_eq!(spec.extra_globals, ["a", "it"]);
-    assert_eq!(spec.categories.level(Category::Style), None);
+    let spec = linter_at("spec/a.lua");
+    assert_eq!(spec.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Off));
+    assert_eq!(spec.config().extra_globals, ["a", "it"]);
+    assert_eq!(spec.config().categories.level(Category::Style), None);
 
-    let slow = lint_at("spec/slow/a.lua");
-    assert_eq!(slow.rules.level("shadowing"), Some(RuleLevel::Off));
-    assert_eq!(slow.categories.level(Category::Style), Some(RuleLevel::Error));
+    let slow = linter_at("spec/slow/a.lua");
+    assert_eq!(slow.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Off));
+    assert_eq!(slow.config().categories.level(Category::Style), Some(RuleLevel::Error));
 
-    assert_eq!(lint_at("spec/fixtures/a.lua").rules.level("shadowing"), Some(RuleLevel::Warn));
+    let fixture = linter_at("spec/fixtures/a.lua");
+    assert_eq!(fixture.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
 }
 
 #[test]
@@ -106,8 +108,8 @@ fn an_extended_override_matches_from_the_loaded_config_s_directory() {
         ),
         ("luck.json", r#"{ "extends": ["shared/base.json"] }"#),
     ]);
-    let lint = project.lint_for(Some(&directory.path().join("spec/a.lua")));
-    assert_eq!(lint.extra_globals, ["it"]);
+    let linter = project.linter_for(Some(&directory.path().join("spec/a.lua")));
+    assert_eq!(linter.config().extra_globals, ["it"]);
 }
 
 #[test]
@@ -117,12 +119,13 @@ fn an_overlay_wins_over_every_override() {
         r#"{ "overrides": [{ "files": ["spec/**"], "lint": { "rules": { "shadowing": "warn" } } }] }"#,
     )]);
     let mut overlay = LintConfig::default();
-    overlay.rules.set_level("shadowing", RuleLevel::Error);
+    overlay.rules.set_level(RuleId::Shadowing, RuleLevel::Error);
     overlay.extra_globals.push("vim".to_owned());
     project.overlay_lint(&overlay);
     for relative in ["src/a.lua", "spec/a.lua"] {
-        let lint = project.lint_for(Some(&directory.path().join(relative)));
-        assert_eq!(lint.rules.level("shadowing"), Some(RuleLevel::Error), "{relative}");
+        let linter = project.linter_for(Some(&directory.path().join(relative)));
+        let lint = linter.config();
+        assert_eq!(lint.rules.level(RuleId::Shadowing), Some(RuleLevel::Error), "{relative}");
         assert_eq!(lint.extra_globals, ["vim"], "{relative}");
     }
 }

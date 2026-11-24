@@ -1,19 +1,18 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SettingGlobal;
 
-impl_rule!(
+declare_lint_rule!(
     SettingGlobal,
-    "setting_global",
     Correctness,
     Warning,
     "implicit global variable assignment (missing `local`?)"
 );
 
-impl RuleRunner for SettingGlobal {
+impl Rule for SettingGlobal {
     fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
@@ -47,12 +46,12 @@ impl RuleRunner for SettingGlobal {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&SettingGlobal, source, LuaVersion::Lua54)
+        run_rule(RuleId::SettingGlobal, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -73,7 +72,7 @@ x = 1",
 global function f() end
 f = nil",
         ] {
-            let diags = run_rule(&SettingGlobal, source, LuaVersion::Lua55);
+            let diags = run_rule(RuleId::SettingGlobal, source, LuaVersion::Lua55);
             assert!(diags.is_empty(), "{source}: {diags:?}");
         }
     }
@@ -105,7 +104,7 @@ x = 1");
     #[test]
     fn ignores_write_after_global_star() {
         let diags = run_rule(
-            &SettingGlobal,
+            RuleId::SettingGlobal,
             "\
 global *
 x = 1",

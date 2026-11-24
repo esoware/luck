@@ -3,23 +3,20 @@ use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct IfSameThenElse;
 
-impl_rule!(
+declare_lint_rule!(
     IfSameThenElse,
-    "if_same_then_else",
     Suspicious,
     Warning,
     "`if` and `else` branches have identical bodies"
 );
 
-impl RuleRunner for IfSameThenElse {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::IfStatement])
-    }
+impl Rule for IfSameThenElse {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::IfStatement]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::IfStatement(if_stmt) = node.kind() else {
@@ -45,12 +42,12 @@ impl RuleRunner for IfSameThenElse {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&IfSameThenElse, source, LuaVersion::Lua54)
+        run_rule(RuleId::IfSameThenElse, source, LuaVersion::Lua54)
     }
 
     #[test]

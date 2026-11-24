@@ -13,7 +13,7 @@ Each tool defines the type of its own section, so `transforms`, `dynamic_require
 A project gives each file its settings:
 
 - `target_for` picks its dialect: the `luau` key for a `.luau` file and the `lua` key for any other, and either can name any dialect. `stdlib_for` gives that dialect's standard library with the `std` definitions layered over it, which the linter and the language server read.
-- `lint_for` layers the `overrides` the file's path matches over the `lint` section, in order, as oxlint's `overrides` do. `overlay_lint` layers command-line flags over every file's, overrides included.
+- `linter_for` gives the `luck_linter::Linter` of the `lint` section with the `overrides` the file's path matches layered over it, in order, as oxlint's `overrides` do. The section compiles once at load, and each set of overrides with `lint` settings compiles once, for the first file that matches it, so every file it covers shares that linter. `overlay_lint` layers command-line flags over every file's, overrides included.
 - `format_options` layers the defaults, then `.editorconfig`, then the `format` section, then the matching `overrides`.
 - `filter` holds `include` and `exclude`, and `bundle_options` and `search_paths` resolve modules from the project's root.
 - `builds` turns the build keys and a profile into the bundles `luck build` writes.
@@ -36,6 +36,6 @@ let project = match find_config(directory) {
 };
 let file = Path::new("src/main.lua");
 let target = project.target_for(Some(file));
-let lint = project.lint_for(Some(file));
+let linter = project.linter_for(Some(file));
 let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 ```

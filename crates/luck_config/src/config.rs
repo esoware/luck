@@ -223,6 +223,8 @@ impl<'de> Visitor<'de> for EntriesVisitor {
 mod tests {
     use std::fs;
 
+    use luck_linter::RuleId;
+
     use super::*;
     use crate::fixtures::parsed;
 
@@ -373,7 +375,8 @@ mod tests {
         assert_eq!(merged.search_paths.unwrap(), ["b/?.lua", "c/?.lua", "a/?.lua"]);
         let lint = merged.lint.unwrap();
         assert_eq!(lint.extra_globals, ["a", "b"]);
-        assert_eq!(lint.rules.names().collect::<Vec<_>>(), ["empty_block", "shadowing"]);
+        let rules: Vec<&str> = lint.rules.rules().map(RuleId::name).collect();
+        assert_eq!(rules, ["empty_block", "shadowing"]);
     }
 
     #[test]

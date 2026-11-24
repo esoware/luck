@@ -1,24 +1,23 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags every read or write of a global, stdlib names like `print`
 /// included, unless it's listed in `extra_globals`.
 ///
 /// This enforces a policy where every dependency arrives through a local or a
 /// parameter. Off by default, like every `Style` rule.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct NoImplicitGlobals;
 
-impl_rule!(
+declare_lint_rule!(
     NoImplicitGlobals,
-    "no_implicit_globals",
     Style,
     Warning,
     "implicit global reference, including standard-library globals"
 );
 
-impl RuleRunner for NoImplicitGlobals {
+impl Rule for NoImplicitGlobals {
     fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
@@ -45,17 +44,17 @@ impl RuleRunner for NoImplicitGlobals {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::config::LintConfig;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule_with_config;
+    use crate::rules::RuleId;
 
     fn run(source: &str, extra_globals: &[&str]) -> Vec<Message> {
         let config = LintConfig {
             extra_globals: extra_globals.iter().map(ToString::to_string).collect(),
             ..LintConfig::default()
         };
-        run_rule_with_config(&NoImplicitGlobals, source, LuaVersion::Lua54, &config)
+        run_rule_with_config(RuleId::NoImplicitGlobals, source, LuaVersion::Lua54, &config)
     }
 
     #[test]

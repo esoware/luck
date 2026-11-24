@@ -5,26 +5,23 @@ use luck_token::Span;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags `nil` initializers on locals, as in `local x = nil` or the trailing
 /// `nil` in `local a, b = 1, nil`, since a local starts out `nil` anyway.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RedundantNilInit;
 
-impl_rule!(
+declare_lint_rule!(
     RedundantNilInit,
-    "redundant_nil_init",
     Style,
     Warning,
     "local variable initialized to `nil` (the default value)",
-    Fix
+    fix = Fix
 );
 
-impl RuleRunner for RedundantNilInit {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::LocalAssignment])
-    }
+impl Rule for RedundantNilInit {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::LocalAssignment]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         if let AstKind::LocalAssignment(local) = node.kind()
@@ -121,12 +118,12 @@ fn last_binding_end(local: &LocalAssignment<'_>) -> u32 {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&RedundantNilInit, source, LuaVersion::Lua54)
+        run_rule(RuleId::RedundantNilInit, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -211,7 +208,7 @@ mod tests {
     #[test]
     fn flags_and_fixes_keeping_type_annotation() {
         let source = "local x: number? = nil";
-        let diags = run_rule(&RedundantNilInit, source, LuaVersion::Luau);
+        let diags = run_rule(RuleId::RedundantNilInit, source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(fixed, "local x: number?", "the fix should keep the annotation");
@@ -219,7 +216,7 @@ mod tests {
 
     #[test]
     fn ignores_luau_const_nil() {
-        let diags = run_rule(&RedundantNilInit, "const x = nil", LuaVersion::Luau);
+        let diags = run_rule(RuleId::RedundantNilInit, "const x = nil", LuaVersion::Luau);
         assert!(diags.is_empty(), "Luau requires an initializer on `const`: {diags:?}");
     }
 
@@ -249,7 +246,7 @@ mod tests {
     #[test]
     fn flags_and_fixes_luau_export_nil() {
         let source = "export local x = nil";
-        let diags = run_rule(&RedundantNilInit, source, LuaVersion::Luau);
+        let diags = run_rule(RuleId::RedundantNilInit, source, LuaVersion::Luau);
         assert_eq!(diags.len(), 1, "{diags:?}");
         let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
         assert_eq!(fixed, "export local x");

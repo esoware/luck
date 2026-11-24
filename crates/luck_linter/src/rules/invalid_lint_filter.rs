@@ -5,24 +5,23 @@ use luck_token::{DirectiveError, DirectiveErrorKind};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::directives::{DirectiveProblem, Target};
-use crate::rule::{Rule, RuleRunner, impl_rule};
-use crate::rules::{closest_rule_name, rules};
+use crate::rule::{Rule, declare_lint_rule};
+use crate::rules::closest_rule_name;
 
 /// Flags a `luck:` comment that's no directive, and a directive's rule name
 /// no rule has, such as a parse error's code, `E008`. Either would otherwise
 /// do nothing.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct InvalidLintFilter;
 
-impl_rule!(
+declare_lint_rule!(
     InvalidLintFilter,
-    "invalid_lint_filter",
     Correctness,
     Warning,
     "malformed `luck:` directive, or a rule name in one that no rule has"
 );
 
-impl RuleRunner for InvalidLintFilter {
+impl Rule for InvalidLintFilter {
     fn run_once(&self, context: &LintContext<'_>) {
         let directives = context.directives;
         let malformed = directives.errors().iter().map(|problem| match *problem {
@@ -38,29 +37,28 @@ impl RuleRunner for InvalidLintFilter {
                 name,
             ),
         });
-        let unknown = directives
-            .entries()
-            .iter()
-            .filter(|entry| entry.target == Target::Unknown)
-            .map(|entry| {
-                let name = String::from_utf8_lossy(entry.name.text(context.source));
-                let (message, help) = closest_rule_name(&name, rules().map(Rule::name))
-                    .map_or_else(
+        let unknown =
+            directives.entries().iter().filter(|entry| entry.target == Target::Unknown).map(
+                |entry| {
+                    let name = String::from_utf8_lossy(entry.name.text(context.source));
+                    let (message, help) = closest_rule_name(&name).map_or_else(
                         || {
                             (
                                 format!("unknown lint rule `{name}`"),
                                 "no lint rule has this name".to_owned(),
                             )
                         },
-                        |suggestion| {
+                        |rule| {
+                            let suggestion = rule.name();
                             (
                                 format!("unknown lint rule `{name}`, did you mean `{suggestion}`?"),
                                 format!("rename it to `{suggestion}`"),
                             )
                         },
                     );
-                Finding::new(message, entry.name).with_help(help)
-            });
+                    Finding::new(message, entry.name).with_help(help)
+                },
+            );
         for finding in malformed.chain(unknown) {
             context.diagnostic(finding);
         }
@@ -97,12 +95,12 @@ fn malformed_message(error: DirectiveError, source: &[u8]) -> Cow<'static, str> 
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&InvalidLintFilter, source, LuaVersion::Lua54)
+        run_rule(RuleId::InvalidLintFilter, source, LuaVersion::Lua54)
     }
 
     #[test]

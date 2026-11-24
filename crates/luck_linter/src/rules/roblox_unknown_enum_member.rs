@@ -4,26 +4,23 @@ use luck_token::Span;
 
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Indexing `Enum` with an unknown name throws at runtime on Roblox, so a
 /// typo here is always a bug. Only the first segment that fails to resolve is
 /// reported; accesses built on a broken prefix stay silent.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RobloxUnknownEnumMember;
 
-impl_rule!(
+declare_lint_rule!(
     RobloxUnknownEnumMember,
-    "roblox_unknown_enum_member",
     Correctness,
     Error,
     "unknown Roblox enum type, item, or item member"
 );
 
-impl RuleRunner for RobloxUnknownEnumMember {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for RobloxUnknownEnumMember {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
         host.semantic.target().is_roblox()
@@ -89,12 +86,12 @@ fn unknown_member(prefix: ChainHead<'_>, last_segment: &str, span: Span) -> Find
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::RobloxUnknownEnumMember;
     use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run_roblox(source: &str) -> Vec<Message> {
-        run_rule_roblox(&RobloxUnknownEnumMember, source)
+        run_rule_roblox(RuleId::RobloxUnknownEnumMember, source)
     }
 
     #[test]
@@ -152,7 +149,7 @@ local m = Enum.Materialz",
     #[test]
     fn ignores_standalone_environment() {
         let diags =
-            run_rule(&RobloxUnknownEnumMember, "local m = Enum.Materialz", LuaVersion::Luau);
+            run_rule(RuleId::RobloxUnknownEnumMember, "local m = Enum.Materialz", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 }

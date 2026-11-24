@@ -1,6 +1,6 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags backslash escapes in strings that the dialect doesn't define, which
 /// Lua 5.1 and Luau read as the bare character.
@@ -8,18 +8,17 @@ use crate::rule::{RuleRunner, impl_rule};
 /// The lexer notes each where it reads it. Every other version rejects these
 /// in the lexer, so a file on those targets that reaches the rules has none
 /// to flag.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct BadStringEscape;
 
-impl_rule!(
+declare_lint_rule!(
     BadStringEscape,
-    "bad_string_escape",
     Correctness,
     Warning,
     "invalid backslash escape in string literal"
 );
 
-impl RuleRunner for BadStringEscape {
+impl Rule for BadStringEscape {
     fn run_once(&self, context: &LintContext<'_>) {
         if context.lenient_escapes.is_empty() {
             return;
@@ -55,12 +54,12 @@ impl RuleRunner for BadStringEscape {
 mod tests {
     use luck_token::{LuaVersion, offset_to_index};
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(&BadStringEscape, source, version)
+        run_rule(RuleId::BadStringEscape, source, version)
     }
 
     #[test]

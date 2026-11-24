@@ -7,7 +7,7 @@ use memchr::memmem;
 
 use crate::context::ContextHost;
 use crate::fix::{Fix, FixKind, RuleFixer};
-use crate::rule::Rule;
+use crate::rules::RuleId;
 
 /// A group of lint rules, which `categories` sets the level of together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,7 +75,7 @@ impl Deref for Message {
     }
 }
 
-/// What a rule found, which the driver makes a [`Message`] coded with the
+/// What a rule found, which the linter makes a [`Message`] coded with the
 /// rule's name, at the severity it resolves, once no directive drops it, so
 /// a dropped one never builds its diagnostic.
 ///
@@ -178,7 +178,7 @@ impl Finding {
         self.span
     }
 
-    pub(crate) fn into_message(self, rule: &dyn Rule, severity: Severity) -> Message {
+    pub(crate) fn into_message(self, rule: RuleId, severity: Severity) -> Message {
         let Self { message, span, labels, help, tag, fix } = self;
         let mut diagnostic =
             Diagnostic::lint(rule.name(), severity, span, message).with_url(rule.docs_url());

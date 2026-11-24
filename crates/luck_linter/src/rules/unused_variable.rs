@@ -4,24 +4,23 @@ use luck_semantic::SymbolKind;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 use crate::underscore_fix::prefix_underscore;
 
 /// The `_` prefix is a suggestion, because it silences the warning rather
 /// than answering it, and an unused variable is often a misspelled use.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedVariable;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedVariable,
-    "unused_variable",
     Correctness,
     Warning,
     "variable is declared but never read",
-    Suggestion
+    fix = Suggestion
 );
 
-impl RuleRunner for UnusedVariable {
+impl Rule for UnusedVariable {
     fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
@@ -79,9 +78,10 @@ mod tests {
     use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{applied, fix_and_reparse, run_rule};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnusedVariable, source, LuaVersion::Luau)
+        run_rule(RuleId::UnusedVariable, source, LuaVersion::Luau)
     }
 
     #[test]
@@ -154,13 +154,13 @@ print(_x)";
         let source = "\
 local lock <close> = acquire()
 print(1)";
-        let diags = run_rule(&UnusedVariable, source, LuaVersion::Lua54);
+        let diags = run_rule(RuleId::UnusedVariable, source, LuaVersion::Lua54);
         assert!(diags.is_empty(), "a `<close>` local is used by its scope exit: {diags:?}");
     }
 
     #[test]
     fn flags_without_fix_that_would_bind_env() {
-        let diags = run_rule(&UnusedVariable, "local ENV = 1", LuaVersion::Lua54);
+        let diags = run_rule(RuleId::UnusedVariable, "local ENV = 1", LuaVersion::Lua54);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].fix.is_none(), "a local `_ENV` redirects every global: {diags:?}");
     }

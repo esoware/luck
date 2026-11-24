@@ -6,26 +6,19 @@ use crate::binary::operator_pairs;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::has_number_value;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Float division by zero gives `inf` or `nan`, and from Lua 5.3 integer
 /// `%` and `//` by zero raise an error. Either way a divisor that's always
 /// zero is a mistake.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DivideByZero;
 
-impl_rule!(
-    DivideByZero,
-    "divide_by_zero",
-    Correctness,
-    Warning,
-    "division or modulo by a constant zero"
-);
+declare_lint_rule!(DivideByZero, Correctness, Warning, "division or modulo by a constant zero");
 
-impl RuleRunner for DivideByZero {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::BinaryOp, AstType::CompoundAssignment])
-    }
+impl Rule for DivideByZero {
+    const NODE_TYPES: AstTypesBitset =
+        AstTypesBitset::from_types(&[AstType::BinaryOp, AstType::CompoundAssignment]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let kind = node.kind();
@@ -104,12 +97,12 @@ const fn compound_divisive_op_name(op: CompoundOp) -> Option<&'static str> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(&DivideByZero, source, version)
+        run_rule(RuleId::DivideByZero, source, version)
     }
 
     #[test]

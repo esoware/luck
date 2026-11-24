@@ -7,24 +7,21 @@ use crate::binary::operator_pairs;
 use crate::call::{CallArgs, is_global_call};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 use crate::suggest::closest;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnknownType;
 
-impl_rule!(
+declare_lint_rule!(
     UnknownType,
-    "unknown_type",
     Correctness,
     Warning,
     "`type()` or `typeof()` result compared against an unknown type name"
 );
 
-impl RuleRunner for UnknownType {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::BinaryOp])
-    }
+impl Rule for UnknownType {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::BinaryOp(run) = node.kind() else {
@@ -120,12 +117,12 @@ const fn primitive_type_names(version: LuaVersion) -> &'static [&'static str] {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::UnknownType;
     use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(&UnknownType, source, version)
+        run_rule(RuleId::UnknownType, source, version)
     }
 
     #[test]
@@ -211,13 +208,13 @@ local ok = type(x) == \"strng\"",
 
     #[test]
     fn ignores_roblox_class_names_in_typeof() {
-        let diags = run_rule_roblox(&UnknownType, "local ok = typeof(x) == \"Instance\"");
+        let diags = run_rule_roblox(RuleId::UnknownType, "local ok = typeof(x) == \"Instance\"");
         assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn flags_roblox_typeof_case_typo() {
-        let diags = run_rule_roblox(&UnknownType, "local ok = typeof(x) == \"Number\"");
+        let diags = run_rule_roblox(RuleId::UnknownType, "local ok = typeof(x) == \"Number\"");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 

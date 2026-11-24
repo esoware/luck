@@ -7,23 +7,20 @@ use crate::call::{calls_in, dotted_callee};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::has_number_value;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TableOperations;
 
-impl_rule!(
+declare_lint_rule!(
     TableOperations,
-    "table_operations",
     Suspicious,
     Warning,
     "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`"
 );
 
-impl RuleRunner for TableOperations {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for TableOperations {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -169,12 +166,12 @@ fn same_target(left: &Expression<'_>, right: &Expression<'_>) -> bool {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(&TableOperations, source, version)
+        run_rule(RuleId::TableOperations, source, version)
     }
 
     #[test]

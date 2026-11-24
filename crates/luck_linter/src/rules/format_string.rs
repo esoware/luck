@@ -10,25 +10,22 @@ use crate::format_pattern::{
     PatternError, validate_format, validate_gsub_replacement, validate_lua_pattern,
     validate_os_date, validate_pack_format,
 };
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Both `string.format("...", ...)` and `("..."):format(...)` are checked.
 /// So are literal `string.gsub` replacements and `os.date` formats.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FormatString;
 
-impl_rule!(
+declare_lint_rule!(
     FormatString,
-    "format_string",
     Correctness,
     Warning,
     "malformed format, pattern, pack, or date literal, or wrong argument count"
 );
 
-impl RuleRunner for FormatString {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for FormatString {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     /// Only a call that reaches the stdlib's function is checked, so a
     /// shadowed `string` isn't.
@@ -231,12 +228,12 @@ fn literal_error(
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&FormatString, source, LuaVersion::Lua54)
+        run_rule(RuleId::FormatString, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -431,7 +428,8 @@ os.date(\"%Q\")");
 
     #[test]
     fn ignores_luau_star_format_specifier() {
-        let diags = run_rule(&FormatString, "local s = string.format(\"%*\", 1)", LuaVersion::Luau);
+        let diags =
+            run_rule(RuleId::FormatString, "local s = string.format(\"%*\", 1)", LuaVersion::Luau);
         assert!(diags.is_empty(), "Luau accepts the `%*` conversion: {diags:?}");
     }
 
@@ -444,7 +442,7 @@ os.date(\"%Q\")");
     #[test]
     fn flags_percent_a_format_on_lua51() {
         let diags =
-            run_rule(&FormatString, "local s = string.format(\"%a\", 1)", LuaVersion::Lua51);
+            run_rule(RuleId::FormatString, "local s = string.format(\"%a\", 1)", LuaVersion::Lua51);
         assert_eq!(diags.len(), 1, "Lua 5.1 rejects the `%a` conversion: {diags:?}");
     }
 
@@ -589,9 +587,9 @@ local i = s:match(\"[\")");
     #[test]
     fn flags_pack_on_lua53_but_not_lua51() {
         let source = "local p = string.pack(\"i17\", 1)";
-        let on_53 = run_rule(&FormatString, source, LuaVersion::Lua53);
+        let on_53 = run_rule(RuleId::FormatString, source, LuaVersion::Lua53);
         assert_eq!(on_53.len(), 1, "{on_53:?}");
-        let on_51 = run_rule(&FormatString, source, LuaVersion::Lua51);
+        let on_51 = run_rule(RuleId::FormatString, source, LuaVersion::Lua51);
         assert!(on_51.is_empty(), "Lua 5.1 has no `string.pack`: {on_51:?}");
     }
 

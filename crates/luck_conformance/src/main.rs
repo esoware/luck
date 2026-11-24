@@ -73,8 +73,10 @@ fn run(suite: &'static Suite, filter: Option<&str>) -> io::Result<()> {
     let files = suite.files(&root, filter)?;
     let pool =
         ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build().map_err(io::Error::other)?;
-    let reports: Vec<FileReport> =
-        pool.install(|| files.par_iter().map(|file| tools::check(suite, &root, file)).collect());
+    let linter = tools::every_rule();
+    let reports: Vec<FileReport> = pool.install(|| {
+        files.par_iter().map(|file| tools::check(suite, &root, file, &linter)).collect()
+    });
 
     let stages: [(&str, StageResult); 5] = [
         ("parser", |report| Some(&report.parser)),

@@ -1,13 +1,13 @@
 use luck_allocator::Allocator;
 use luck_benchmark::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use luck_benchmark_files::{test_files, test_projects};
-use luck_linter::{CategoryLevels, FixKind, LintConfig, RuleLevel};
+use luck_linter::{CategoryLevels, FixKind, LintConfig, Linter, RuleLevel};
 use luck_stdlib::library_for;
 
 /// Each iteration analyzes and lints a parse made once, since the linter's
-/// node table is built in the analysis walk.
+/// node table is built in the analysis walk, with a linter compiled once.
 fn bench_linter(criterion: &mut Criterion) {
-    let config = LintConfig {
+    let linter = Linter::new(LintConfig {
         categories: CategoryLevels {
             correctness: Some(RuleLevel::Warn),
             suspicious: Some(RuleLevel::Warn),
@@ -15,7 +15,7 @@ fn bench_linter(criterion: &mut Criterion) {
             performance: Some(RuleLevel::Warn),
         },
         ..LintConfig::default()
-    };
+    });
     let mut group = criterion.benchmark_group("linter");
 
     for file in test_files() {
@@ -24,12 +24,7 @@ fn bench_linter(criterion: &mut Criterion) {
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                luck_linter::lint_parsed(
-                    black_box(&parse_result),
-                    library_for(file.target),
-                    &config,
-                    FixKind::empty(),
-                )
+                linter.run(black_box(&parse_result), library_for(file.target), FixKind::empty())
             });
         });
     }
@@ -41,10 +36,9 @@ fn bench_linter(criterion: &mut Criterion) {
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 for parse_result in &parse_results {
-                    black_box(luck_linter::lint_parsed(
+                    black_box(linter.run(
                         black_box(parse_result),
                         library_for(project.target),
-                        &config,
                         FixKind::empty(),
                     ));
                 }

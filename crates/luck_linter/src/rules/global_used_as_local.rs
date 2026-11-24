@@ -2,20 +2,19 @@ use luck_semantic::{Reference, ScopeId, ScopeKind, Scoping};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GlobalUsedAsLocal;
 
-impl_rule!(
+declare_lint_rule!(
     GlobalUsedAsLocal,
-    "global_used_as_local",
     Style,
     Warning,
     "global variable is only used inside one function; use a local"
 );
 
-impl RuleRunner for GlobalUsedAsLocal {
+impl Rule for GlobalUsedAsLocal {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
@@ -67,12 +66,12 @@ fn enclosing_function(tree: &Scoping, scope: ScopeId) -> Option<ScopeId> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&GlobalUsedAsLocal, source, LuaVersion::Lua54)
+        run_rule(RuleId::GlobalUsedAsLocal, source, LuaVersion::Lua54)
     }
 
     #[test]

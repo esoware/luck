@@ -1,5 +1,3 @@
-use alloc::rc::Rc;
-
 use luck_allocator::Allocator;
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_stdlib::library_for;
@@ -8,21 +6,20 @@ use luck_token::{LuaTarget, LuaVersion, Span};
 use crate::config::LintConfig;
 use crate::context::ContextHost;
 use crate::diagnostic::Message;
-use crate::driver;
 use crate::fix::{self, FixKind};
-use crate::rule::Rule;
-use crate::rules::{RULES, RuleEntry};
+use crate::linter::Linter;
+use crate::rules::RuleId;
 
-pub(crate) fn run_rule(rule: &dyn Rule, source: &str, version: LuaVersion) -> Vec<Message> {
+pub(crate) fn run_rule(rule: RuleId, source: &str, version: LuaVersion) -> Vec<Message> {
     run_rule_with_config(rule, source, version, &LintConfig::default())
 }
 
-pub(crate) fn run_rule_roblox(rule: &dyn Rule, source: &str) -> Vec<Message> {
+pub(crate) fn run_rule_roblox(rule: RuleId, source: &str) -> Vec<Message> {
     check(rule, source, LuaTarget::LuauRoblox, &LintConfig::default())
 }
 
 pub(crate) fn run_rule_with_config(
-    rule: &dyn Rule,
+    rule: RuleId,
     source: &str,
     version: LuaVersion,
     config: &LintConfig,
@@ -40,9 +37,8 @@ pub(crate) fn with_host<T>(
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse of {source:?}: {:?}", parse.errors);
-    let config = LintConfig::default();
-    let analysis = driver::analyze(&parse, library_for(target), &config);
-    answer(&ContextHost::new(&parse, &analysis, &config, FixKind::all()))
+    let analysis = Linter::new(LintConfig::default()).analyze(&parse, library_for(target));
+    answer(&ContextHost::new(&parse, &analysis, FixKind::all()))
 }
 
 /// Applies one round of the messages' fixes, whatever their kind, as
@@ -63,39 +59,14 @@ pub(crate) fn applied(source: &str, diags: &[Message]) -> String {
         .map_or_else(|| source.to_owned(), |fixed| String::from_utf8(fixed).unwrap())
 }
 
-fn check(rule: &dyn Rule, source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
+/// `rule`'s messages on `source`, which it reports even where `config` turns
+/// it off, at its own severity.
+fn check(rule: RuleId, source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse: {:?}", parse.errors);
-    let analysis = driver::analyze(&parse, library_for(target), config);
-    let host = Rc::new(ContextHost::new(&parse, &analysis, config, FixKind::all()));
-    let slot = RULES
-        .iter()
-        .position(|entry| entry.rule().name() == rule.name())
-        .expect("only registered rules are tested");
-    let findings = match RULES[slot] {
-        RuleEntry::Rule(runner) => {
-            if !runner.should_run(&host) {
-                return Vec::new();
-            }
-            driver::execute(&[runner], &host, &|| false)
-                .and_then(|mut findings| findings.pop())
-                .unwrap_or_default()
-        }
-        // It reads what the others reported, so the whole lint runs.
-        RuleEntry::UnusedLintFilter(_) => {
-            return driver::lint_analyzed(&parse, &analysis, config, FixKind::all(), &|| false)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|diag| diag.code == rule.name())
-                .collect();
-        }
-    };
-    // A rule the config leaves off still runs here, at its own severity.
-    let severity = driver::rule_severity(rule, config).unwrap_or_else(|| rule.default_severity());
-    let mut diags = Vec::new();
-    driver::report(slot, findings, Some(severity), analysis.directives(), None, &mut diags);
-    diags
+    let linter = Linter::new(config.clone());
+    linter.run_rule(rule, &parse, &linter.analyze(&parse, library_for(target)))
 }
 
 /// The text each of `message`'s labels points at in `source`, in order.

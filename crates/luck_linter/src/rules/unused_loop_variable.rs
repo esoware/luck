@@ -4,7 +4,7 @@ use luck_semantic::SymbolKind;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 use crate::underscore_fix::prefix_underscore;
 
 /// Flags a `for` loop variable that's never read (Luacheck 213).
@@ -12,19 +12,18 @@ use crate::underscore_fix::prefix_underscore;
 /// It's separate from `unused_variable`, which skips loop variables, so a
 /// project can allow loops that only count iterations and still catch unused
 /// locals.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedLoopVariable;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedLoopVariable,
-    "unused_loop_variable",
     Style,
     Warning,
     "for-loop variable is declared but never read in the loop body",
-    Suggestion
+    fix = Suggestion
 );
 
-impl RuleRunner for UnusedLoopVariable {
+impl Rule for UnusedLoopVariable {
     fn run_once(&self, context: &LintContext<'_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
@@ -63,12 +62,12 @@ impl RuleRunner for UnusedLoopVariable {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{applied, fix_and_reparse, run_rule};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnusedLoopVariable, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnusedLoopVariable, source, LuaVersion::Lua54)
     }
 
     #[test]

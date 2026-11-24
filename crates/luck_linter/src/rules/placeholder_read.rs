@@ -2,25 +2,24 @@ use luck_semantic::ReferenceKind;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags reads of `_`, which by convention names a value being thrown away.
 ///
 /// A read usually means the author grabbed the wrong binding, or a nearer `_`
 /// shadows the one they meant. Only a plain read counts, so not Luau's
 /// `_ += 1`, which does read `_`, but is rare and clearly deliberate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PlaceholderRead;
 
-impl_rule!(
+declare_lint_rule!(
     PlaceholderRead,
-    "placeholder_read",
     Suspicious,
     Warning,
     "use of `_` as a value; convention reserves it for ignored bindings"
 );
 
-impl RuleRunner for PlaceholderRead {
+impl Rule for PlaceholderRead {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
         let Some(placeholder) = tree.name_id("_") else {
@@ -44,12 +43,12 @@ impl RuleRunner for PlaceholderRead {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&PlaceholderRead, source, LuaVersion::Lua54)
+        run_rule(RuleId::PlaceholderRead, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -80,7 +79,7 @@ _.x = 2");
 
     #[test]
     fn ignores_compound_assignment_target() {
-        let diags = run_rule(&PlaceholderRead, "_ += 1", LuaVersion::Luau);
+        let diags = run_rule(RuleId::PlaceholderRead, "_ += 1", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 

@@ -5,23 +5,20 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use crate::call::{CallArgs, calls_in, is_global_call};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnnecessaryAssert;
 
-impl_rule!(
+declare_lint_rule!(
     UnnecessaryAssert,
-    "unnecessary_assert",
     Suspicious,
     Warning,
     "`assert` on a constant value always passes or always errors"
 );
 
-impl RuleRunner for UnnecessaryAssert {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for UnnecessaryAssert {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -55,12 +52,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&UnnecessaryAssert, source, LuaVersion::Lua54)
+        run_rule(RuleId::UnnecessaryAssert, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -119,7 +116,7 @@ mod tests {
     fn ignores_an_interpolated_string_with_an_expression_on_luau() {
         // Its `format` comes through the string metatable, which a program
         // can change.
-        let diags = run_rule(&UnnecessaryAssert, "assert(`a{x}`)", LuaVersion::Luau);
+        let diags = run_rule(RuleId::UnnecessaryAssert, "assert(`a{x}`)", LuaVersion::Luau);
         assert!(diags.is_empty(), "{diags:?}");
     }
 

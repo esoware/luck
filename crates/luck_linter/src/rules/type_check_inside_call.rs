@@ -6,24 +6,21 @@ use luck_token::BinOp;
 use crate::call::{calls_in, is_global_call};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags `type(x == "string")` written for `type(x) == "string"`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TypeCheckInsideCall;
 
-impl_rule!(
+declare_lint_rule!(
     TypeCheckInsideCall,
-    "type_check_inside_call",
     Correctness,
     Error,
     "type comparison is inside the call instead of outside"
 );
 
-impl RuleRunner for TypeCheckInsideCall {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for TypeCheckInsideCall {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -62,12 +59,12 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&TypeCheckInsideCall, source, LuaVersion::Lua54)
+        run_rule(RuleId::TypeCheckInsideCall, source, LuaVersion::Lua54)
     }
 
     #[test]

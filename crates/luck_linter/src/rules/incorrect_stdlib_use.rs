@@ -5,27 +5,24 @@ use luck_stdlib::{ResolvedCallee, StdlibEntry, StdlibFunction};
 use crate::call::{CallArg, CallArgs, calls_in, string_literal_value};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// How many allowed values a message lists. Generated sets (Roblox service
 /// and class names) run to hundreds of values.
 const LISTED_VALUE_LIMIT: usize = 8;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct IncorrectStdlibUse;
 
-impl_rule!(
+declare_lint_rule!(
     IncorrectStdlibUse,
-    "incorrect_stdlib_use",
     Correctness,
     Error,
     "wrong argument count or invalid constant in a standard library call"
 );
 
-impl RuleRunner for IncorrectStdlibUse {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for IncorrectStdlibUse {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
@@ -119,18 +116,18 @@ fn invalid_constant_args(
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::IncorrectStdlibUse;
     use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(&IncorrectStdlibUse, source, version)
+        run_rule(RuleId::IncorrectStdlibUse, source, version)
             .into_iter()
             .map(|diag| diag.message.to_string())
             .collect()
     }
 
     fn run_roblox(source: &str) -> Vec<String> {
-        run_rule_roblox(&IncorrectStdlibUse, source)
+        run_rule_roblox(RuleId::IncorrectStdlibUse, source)
             .into_iter()
             .map(|diag| diag.message.to_string())
             .collect()

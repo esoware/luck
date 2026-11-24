@@ -184,7 +184,7 @@ impl DocumentState {
         line_index: Arc<LineIndex>,
         arena: Arena,
     ) -> Self {
-        let analyzed = Analyzed::new(text, settings.stdlib.clone(), &settings.lint, arena);
+        let analyzed = Analyzed::new(text, settings.stdlib.clone(), &settings.linter, arena);
         Self {
             settings,
             line_index,
@@ -273,17 +273,16 @@ impl DocumentState {
         self.line_index.full_document_range(self.text())
     }
 
-    /// Lints with the config the analysis was built under, building every
-    /// kind of fix, since a suggestion is still a quick fix, or `None` once
+    /// Lints with the linter that built the analysis, building every kind
+    /// of fix, since a suggestion is still a quick fix, or `None` once
     /// `is_cancelled` stops it. A document the project leaves out has none.
     pub(crate) fn lint(&self, is_cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Vec<Message>> {
         if !self.settings.is_included {
             return Some(Vec::new());
         }
-        luck_linter::lint_analyzed(
+        self.settings.linter.run_analyzed(
             self.parse(),
             self.analysis(),
-            &self.settings.lint,
             FixKind::all(),
             is_cancelled,
         )

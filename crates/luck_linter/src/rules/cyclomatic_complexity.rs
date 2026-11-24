@@ -4,32 +4,54 @@ use crate::cfg::decision_points;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, RuleOptions, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CyclomaticComplexity;
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CyclomaticComplexity {
+    max: Option<u32>,
+}
 
 // `Category` has no complexity variant, and `Style` fits pressure to refactor best.
-impl_rule!(
+declare_lint_rule!(
     CyclomaticComplexity,
-    "cyclomatic_complexity",
     Style,
     Warning,
-    "function exceeds the configured cyclomatic complexity threshold"
+    "function exceeds the configured cyclomatic complexity threshold",
+    options = CyclomaticComplexityOptions
 );
 
-impl RuleRunner for CyclomaticComplexity {
-    fn node_types(&self) -> AstTypesBitset {
-        FunctionNode::NODE_TYPES
-    }
+/// Options of the `cyclomatic_complexity` rule, which reports nothing until
+/// they set `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+pub(crate) struct CyclomaticComplexityOptions {
+    /// Complexity above which a function is flagged.
+    max: u32,
+}
 
-    fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        threshold(host).is_some()
+impl RuleOptions for CyclomaticComplexityOptions {
+    fn merge_onto(self, _base: Self) -> Self {
+        self
+    }
+}
+
+impl From<CyclomaticComplexityOptions> for CyclomaticComplexity {
+    fn from(options: CyclomaticComplexityOptions) -> Self {
+        Self { max: Some(options.max) }
+    }
+}
+
+impl Rule for CyclomaticComplexity {
+    const NODE_TYPES: AstTypesBitset = FunctionNode::NODE_TYPES;
+
+    fn should_run(&self, _host: &ContextHost<'_>) -> bool {
+        self.max.is_some()
     }
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
-        let (Some(threshold), Some(function)) =
-            (threshold(context), FunctionNode::of(node, context.nodes))
+        let (Some(threshold), Some(function)) = (self.max, FunctionNode::of(node, context.nodes))
         else {
             return;
         };
@@ -55,31 +77,31 @@ impl RuleRunner for CyclomaticComplexity {
     }
 }
 
-/// The configured threshold. With none, the rule checks nothing.
-fn threshold(host: &ContextHost<'_>) -> Option<u32> {
-    Some(host.config.rules.cyclomatic_complexity.as_ref()?.options()?.max)
-}
-
 #[cfg(test)]
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
-    use crate::config::{CyclomaticComplexityOptions, LintConfig, RuleLevel, RuleSetting};
+    use crate::config::LintConfig;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule_with_config;
+    use crate::rules::RuleId;
 
     fn config(threshold: Option<u32>) -> LintConfig {
-        let mut config = LintConfig::default();
-        config.rules.cyclomatic_complexity =
-            Some(threshold.map_or(RuleSetting::Level(RuleLevel::Warn), |max| {
-                RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max })
-            }));
-        config
+        let setting = threshold.map_or_else(
+            || r#""warn""#.to_owned(),
+            |max| format!(r#"["warn", {{ "max": {max} }}]"#),
+        );
+        serde_json::from_str(&format!(r#"{{ "rules": {{ "cyclomatic_complexity": {setting} }} }}"#))
+            .expect("a valid `lint` section")
     }
 
     fn run(source: &str, threshold: Option<u32>) -> Vec<Message> {
-        run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Lua54, &config(threshold))
+        run_rule_with_config(
+            RuleId::CyclomaticComplexity,
+            source,
+            LuaVersion::Lua54,
+            &config(threshold),
+        )
     }
 
     #[test]
@@ -168,8 +190,12 @@ function m.sub:run() if a then end end";
             "function comp_value() t[1] += a or b end",
             "function comp_target() t[a or b] += 1 end",
         ] {
-            let diags =
-                run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Luau, &config);
+            let diags = run_rule_with_config(
+                RuleId::CyclomaticComplexity,
+                source,
+                LuaVersion::Luau,
+                &config,
+            );
             assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
         }
     }
@@ -178,7 +204,8 @@ function m.sub:run() if a then end end";
     fn flags_type_function_bodies() {
         let config = config(Some(1));
         let source = "type function t1(a) if a then return a end end";
-        let diags = run_rule_with_config(&CyclomaticComplexity, source, LuaVersion::Luau, &config);
+        let diags =
+            run_rule_with_config(RuleId::CyclomaticComplexity, source, LuaVersion::Luau, &config);
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].message, "function `t1` has cyclomatic complexity 2 (threshold: 1)");
     }

@@ -2,24 +2,23 @@ use luck_token::{CommentContent, Span, is_lua_whitespace};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 use crate::suggest::closest;
 
 const KNOWN_DIRECTIVES: &[&str] =
     &["nolint", "nocheck", "nonstrict", "strict", "optimize", "native"];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct CommentDirective;
 
-impl_rule!(
+declare_lint_rule!(
     CommentDirective,
-    "comment_directive",
     Correctness,
     Warning,
     "invalid or misplaced `--!` comment directive"
 );
 
-impl RuleRunner for CommentDirective {
+impl Rule for CommentDirective {
     fn run_once(&self, context: &LintContext<'_>) {
         let first_token_start = context.chunk.block.span.start;
         let mut first_mode: Option<Span> = None;
@@ -132,12 +131,12 @@ impl<'body> HotComment<'body> {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&CommentDirective, source, LuaVersion::Luau)
+        run_rule(RuleId::CommentDirective, source, LuaVersion::Luau)
     }
 
     #[test]
@@ -255,7 +254,7 @@ local _x = 1");
     #[test]
     fn ignores_non_luau() {
         let diags = run_rule(
-            &CommentDirective,
+            RuleId::CommentDirective,
             "\
 --!foobar
 local _x = 1",

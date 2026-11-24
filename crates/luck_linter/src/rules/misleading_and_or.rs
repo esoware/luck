@@ -6,25 +6,22 @@ use luck_value::ToBoolean as _;
 use crate::binary::operator_pairs;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags the `(cond and a) or b` ternary idiom when `a` is a literal `false`
 /// or `nil`, which makes it always evaluate to `b`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MisleadingAndOr;
 
-impl_rule!(
+declare_lint_rule!(
     MisleadingAndOr,
-    "misleading_and_or",
     Correctness,
     Warning,
     "`and`/`or` ternary with a falsy middle operand always returns the right-hand value"
 );
 
-impl RuleRunner for MisleadingAndOr {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::BinaryOp])
-    }
+impl Rule for MisleadingAndOr {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::BinaryOp(run) = node.kind() else {
@@ -56,12 +53,12 @@ impl RuleRunner for MisleadingAndOr {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&MisleadingAndOr, source, LuaVersion::Lua54)
+        run_rule(RuleId::MisleadingAndOr, source, LuaVersion::Lua54)
     }
 
     #[test]

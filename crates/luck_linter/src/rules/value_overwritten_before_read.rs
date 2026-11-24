@@ -2,24 +2,23 @@ use luck_diagnostics::Tag;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a value written to a local that some path overwrites and no path
 /// reads first (Luacheck 311).
 ///
 /// A captured local is skipped, since a closure can read it at any time.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ValueOverwrittenBeforeRead;
 
-impl_rule!(
+declare_lint_rule!(
     ValueOverwrittenBeforeRead,
-    "value_overwritten_before_read",
     Correctness,
     Warning,
     "value assigned to a local is overwritten before it is read"
 );
 
-impl RuleRunner for ValueOverwrittenBeforeRead {
+impl Rule for ValueOverwrittenBeforeRead {
     fn run_once(&self, context: &LintContext<'_>) {
         let tree = context.scoping();
         for &(symbol_id, span) in &context.local_flow().overwritten_values {
@@ -42,12 +41,12 @@ impl RuleRunner for ValueOverwrittenBeforeRead {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&ValueOverwrittenBeforeRead, source, LuaVersion::Lua54)
+        run_rule(RuleId::ValueOverwrittenBeforeRead, source, LuaVersion::Lua54)
     }
 
     #[test]

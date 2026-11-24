@@ -10,27 +10,24 @@ use crate::call::is_global_call;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::number::has_number_value;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// The help suggests `table.clone(src)` where the target's stdlib has it, and
 /// `table.move(src, 1, #src, 1, {})` otherwise. A target with neither gets no
 /// finding.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ManualTableClone;
 
 // Manual copy loops are slower than a single stdlib call.
-impl_rule!(
+declare_lint_rule!(
     ManualTableClone,
-    "manual_table_clone",
     Performance,
     Warning,
     "manual table copy; use `table.clone` or `table.move`"
 );
 
-impl RuleRunner for ManualTableClone {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::Block])
-    }
+impl Rule for ManualTableClone {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
         Suggestion::for_target(host.semantic).is_some()
@@ -256,12 +253,12 @@ fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &Scoping) -> 
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(&ManualTableClone, source, version)
+        run_rule(RuleId::ManualTableClone, source, version)
     }
 
     #[test]

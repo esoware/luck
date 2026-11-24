@@ -5,14 +5,13 @@ use luck_token::Span;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct BuiltinGlobalWrite;
 
-impl_rule!(
+declare_lint_rule!(
     BuiltinGlobalWrite,
-    "builtin_global_write",
     Correctness,
     Warning,
     "overwriting a standard-library global or one of its fields"
@@ -20,14 +19,12 @@ impl_rule!(
 
 /// Every write of a name or a field is an assignment's, a compound
 /// assignment's, or a `function` statement's.
-impl RuleRunner for BuiltinGlobalWrite {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[
-            AstType::Assignment,
-            AstType::CompoundAssignment,
-            AstType::FunctionDecl,
-        ])
-    }
+impl Rule for BuiltinGlobalWrite {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+        AstType::Assignment,
+        AstType::CompoundAssignment,
+        AstType::FunctionDecl,
+    ]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let kind = node.kind();
@@ -159,13 +156,13 @@ fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::config::LintConfig;
     use crate::diagnostic::Message;
     use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&BuiltinGlobalWrite, source, LuaVersion::Lua54)
+        run_rule(RuleId::BuiltinGlobalWrite, source, LuaVersion::Lua54)
     }
 
     #[test]
@@ -263,7 +260,7 @@ function table.foo() end");
 
     #[test]
     fn ignores_shared_field_write_on_roblox() {
-        let diags = run_rule_roblox(&BuiltinGlobalWrite, "shared.score = 1");
+        let diags = run_rule_roblox(RuleId::BuiltinGlobalWrite, "shared.score = 1");
         assert!(diags.is_empty(), "got: {diags:?}");
     }
 
@@ -292,7 +289,7 @@ function table.foo() end");
     fn ignores_extra_global_write() {
         let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
-            &BuiltinGlobalWrite,
+            RuleId::BuiltinGlobalWrite,
             "\
 vim = 5
 vim.api = 1",
@@ -309,7 +306,7 @@ vim.api = 1",
         let config =
             LintConfig { extra_globals: vec!["table".to_owned()], ..LintConfig::default() };
         let diags = run_rule_with_config(
-            &BuiltinGlobalWrite,
+            RuleId::BuiltinGlobalWrite,
             "\
 table = 5
 table.insert = 1
@@ -334,7 +331,7 @@ function table.foo() end",
 
     #[test]
     fn ignores_roblox_instance_property_write() {
-        let diags = run_rule_roblox(&BuiltinGlobalWrite, "script.Parent.Visible = false");
+        let diags = run_rule_roblox(RuleId::BuiltinGlobalWrite, "script.Parent.Visible = false");
         assert!(diags.is_empty(), "this sets a property, not a builtin: {diags:?}");
     }
 

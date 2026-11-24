@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use luck_config::Project;
 use luck_formatter::FormatOptions;
-use luck_linter::LintConfig;
+use luck_linter::{LintConfig, Linter};
 use luck_stdlib::Stdlib;
 use luck_token::LuaTarget;
 
@@ -20,25 +20,25 @@ pub(crate) fn document(text: &str, target: LuaTarget) -> DocumentState {
 
 /// `text` as an untitled document under `project`'s settings.
 pub(crate) fn document_in(text: &str, target: LuaTarget, project: Project) -> DocumentState {
-    let lint = project.lint_for(None);
-    document_with(text, target, project, lint)
+    let linter = project.linter_for(None);
+    document_with(text, target, project, linter)
 }
 
 /// `text` as an untitled document linted under `lint`.
 pub(crate) fn document_linted_by(text: &str, target: LuaTarget, lint: LintConfig) -> DocumentState {
-    document_with(text, target, Project::defaults(PathBuf::from(".")), Arc::new(lint))
+    document_with(text, target, Project::defaults(PathBuf::from(".")), Arc::new(Linter::new(lint)))
 }
 
 fn document_with(
     text: &str,
     target: LuaTarget,
     project: Project,
-    lint: Arc<LintConfig>,
+    linter: Arc<Linter>,
 ) -> DocumentState {
     let settings = DocumentSettings {
         project: Arc::new(LoadedProject::new(project)),
         stdlib: Stdlib::new(target),
-        lint,
+        linter,
         format: FormatOptions::default(),
         is_included: true,
     };

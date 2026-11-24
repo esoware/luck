@@ -4,7 +4,7 @@ use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
 /// hides the first one from all the code after it.
@@ -12,21 +12,18 @@ use crate::rule::{RuleRunner, impl_rule};
 /// `shadowing` reports any redeclaration of a visible name, including ones
 /// from enclosing blocks. Doing it in the same block is most often a
 /// copy-paste bug, so it gets its own toggle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RedefiningLocal;
 
-impl_rule!(
+declare_lint_rule!(
     RedefiningLocal,
-    "redefining_local",
     Style,
     Warning,
     "local redeclared with the same name in the same block"
 );
 
-impl RuleRunner for RedefiningLocal {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::Block])
-    }
+impl Rule for RedefiningLocal {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::Block(block) = node.kind() else {
@@ -74,12 +71,12 @@ mod tests {
 
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&RedefiningLocal, source, LuaVersion::Lua54)
+        run_rule(RuleId::RedefiningLocal, source, LuaVersion::Lua54)
     }
 
     #[test]

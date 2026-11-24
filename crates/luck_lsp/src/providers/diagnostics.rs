@@ -89,7 +89,7 @@ where
 #[cfg(test)]
 mod tests {
     use ls_types::Position;
-    use luck_linter::{Category, LintConfig, RuleLevel};
+    use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
     use luck_token::LuaTarget;
 
     use super::*;
@@ -107,7 +107,7 @@ mod tests {
     }
 
     /// `text`'s lints under the one rule `rule`, converted.
-    fn linted(text: &str, rule: &str) -> Vec<LspDiagnostic> {
+    fn linted(text: &str, rule: RuleId) -> Vec<LspDiagnostic> {
         let mut config = LintConfig::default();
         config.categories.set_level(Category::Correctness, RuleLevel::Off);
         config.rules.set_level(rule, RuleLevel::Warn);
@@ -154,7 +154,7 @@ note: names matter"
 local x = 1
 do local x = 2 print(x) end
 print(x)",
-            "shadowing",
+            RuleId::Shadowing,
         ))
         .expect("one lint");
         let related = diag.related_information.expect("the outer variable");
@@ -166,15 +166,15 @@ print(x)",
 
     #[test]
     fn tags_unnecessary_and_deprecated_code() {
-        let unused = linted("local unused = 1", "unused_variable");
+        let unused = linted("local unused = 1", RuleId::UnusedVariable);
         assert_eq!(unused[0].tags, Some(vec![DiagnosticTag::UNNECESSARY]), "{unused:?}");
-        let deprecated = linted("return unpack(t)", "deprecated");
+        let deprecated = linted("return unpack(t)", RuleId::Deprecated);
         assert_eq!(deprecated[0].tags, Some(vec![DiagnosticTag::DEPRECATED]), "{deprecated:?}");
     }
 
     #[test]
     fn links_each_lint_to_its_rule() {
-        let diags = linted("local unused = 1", "unused_variable");
+        let diags = linted("local unused = 1", RuleId::UnusedVariable);
         let href = diags[0].code_description.as_ref().map(|description| description.href.as_str());
         assert!(
             href.is_some_and(

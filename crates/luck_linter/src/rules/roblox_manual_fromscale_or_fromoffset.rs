@@ -7,24 +7,21 @@ use crate::diagnostic::Finding;
 use crate::fix::FixKind;
 use crate::number::number_value;
 use crate::roblox::global_new_call;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RobloxManualFromScaleOrFromOffset;
 
-impl_rule!(
+declare_lint_rule!(
     RobloxManualFromScaleOrFromOffset,
-    "roblox_manual_fromscale_or_fromoffset",
     Style,
     Warning,
     "`UDim2.new` that could be `UDim2.fromScale` or `UDim2.fromOffset`",
-    Fix
+    fix = Fix
 );
 
-impl RuleRunner for RobloxManualFromScaleOrFromOffset {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::SuffixedExpression])
-    }
+impl Rule for RobloxManualFromScaleOrFromOffset {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
         host.semantic.target().is_roblox()
@@ -94,12 +91,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule_roblox(&RobloxManualFromScaleOrFromOffset, source)
+        run_rule_roblox(RuleId::RobloxManualFromScaleOrFromOffset, source)
     }
 
     #[test]
@@ -167,7 +164,7 @@ mod tests {
     #[test]
     fn ignores_standalone_environment() {
         let diags = run_rule(
-            &RobloxManualFromScaleOrFromOffset,
+            RuleId::RobloxManualFromScaleOrFromOffset,
             "local u = UDim2.new(0.5, 0, 1, 0)",
             LuaVersion::Luau,
         );

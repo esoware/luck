@@ -2,8 +2,8 @@
 //!
 //! Loads a `luck.json`, through the files it `extends`, into one validated
 //! [`Project`], which every luck command and the language server ask for
-//! each file's dialect and standard library, lint settings, and format
-//! options, and for the build's entries and module resolution.
+//! each file's dialect and standard library, linter, and format options, and
+//! for the build's entries and module resolution.
 //!
 //! Everything is checked at load: the JSON5 syntax, every key, the dialects,
 //! the globs, the lint rule names and options, the build keys that can't go
@@ -38,7 +38,7 @@
 //! };
 //! let file = Path::new("src/main.lua");
 //! let target = project.target_for(Some(file));
-//! let lint = project.lint_for(Some(file));
+//! let linter = project.linter_for(Some(file));
 //! let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 //! ```
 

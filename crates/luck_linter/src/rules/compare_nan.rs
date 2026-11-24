@@ -6,23 +6,20 @@ use crate::binary::operator_pairs;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::number_value;
-use crate::rule::{RuleRunner, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct CompareNan;
 
-impl_rule!(
+declare_lint_rule!(
     CompareNan,
-    "compare_nan",
     Correctness,
     Error,
     "comparison with NaN (`0/0`) always has the same result"
 );
 
-impl RuleRunner for CompareNan {
-    fn node_types(&self) -> AstTypesBitset {
-        AstTypesBitset::from_types(&[AstType::BinaryOp])
-    }
+impl Rule for CompareNan {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
         let AstKind::BinaryOp(run) = node.kind() else {
@@ -52,12 +49,12 @@ impl RuleRunner for CompareNan {
 mod tests {
     use luck_token::LuaVersion;
 
-    use super::*;
     use crate::diagnostic::Message;
     use crate::fixtures::run_rule;
+    use crate::rules::RuleId;
 
     fn run(source: &str) -> Vec<Message> {
-        run_rule(&CompareNan, source, LuaVersion::Lua54)
+        run_rule(RuleId::CompareNan, source, LuaVersion::Lua54)
     }
 
     #[test]
