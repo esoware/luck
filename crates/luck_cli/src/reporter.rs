@@ -47,8 +47,8 @@ pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
     let _ = io::stderr().write_all(&output);
 }
 
-/// Writes the diagnostics in `text`, a document that isn't on disk, such as
-/// stdin or a bundle being minified, to stderr in the default format.
+/// Writes the diagnostics in `text`, a document already read, such as stdin,
+/// which `label` names, to stderr in the default format.
 pub(crate) fn print_document(label: &str, text: &[u8], diags: &[Diagnostic], version: LuaVersion) {
     let mut output = Vec::new();
     DefaultReporter.render(SourceFile { label, text: Some(text), version }, diags, &mut output);

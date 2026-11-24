@@ -1,4 +1,4 @@
-use std::io::{self, BufWriter, Write as _};
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -7,9 +7,9 @@ use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_semantic::SemanticBuilder;
 
 use crate::exit::Exit;
-use crate::output::OUTPUT_BUFFER_BYTES;
-use crate::project::{ProjectFile, for_each_outcome_in_order, project_files};
+use crate::project::{ProjectFile, project_files};
 use crate::reporter::{DefaultReporter, Reporter as _, SourceFile};
+use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -38,21 +38,17 @@ impl CheckArgs {
         )?;
 
         let mut has_errors = false;
-        {
-            // One lock and one flush for the whole run.
-            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
-            for_each_outcome_in_order(
-                &files,
-                |file, allocator| check_file(allocator, file),
-                |outcome| {
-                    if let Some(rendered) = outcome {
-                        has_errors = true;
-                        let _ = stderr.write_all(&rendered);
-                    }
-                    Ok(())
-                },
-            )
-        }?;
+        for_each_outcome_in_order(
+            &files,
+            |file, allocator| check_file(allocator, file),
+            |outcome, output| {
+                if let Some(rendered) = outcome {
+                    has_errors = true;
+                    let _ = output.stderr.write_all(&rendered);
+                }
+                Ok(())
+            },
+        )?;
 
         if has_errors {
             return Err(Exit::Failure);
@@ -108,7 +104,8 @@ mod tests {
     use clap::Parser as _;
 
     use super::CheckArgs;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     #[test]
     fn check_is_top_level_command_with_paths_and_config() {

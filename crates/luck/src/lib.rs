@@ -37,12 +37,12 @@
 //! # Arenas
 //!
 //! A tree lives in an [`allocator::Allocator`] the caller owns, and borrows
-//! the source it was parsed from, so both outlive it. Every stage takes the
-//! arena first and builds what it needs there. Nothing in an arena is dropped
-//! on its own: [`reset`](allocator::Allocator::reset) frees it all at once
-//! and keeps the memory, so one arena serves file after file. Threads take
-//! arenas from an [`allocator::AllocatorPool`], whose guard resets each one
-//! and hands it back when it drops. The bundler reads modules on rayon's
+//! the source it was parsed from, so both outlive it. Every stage that builds
+//! nodes takes the arena first and builds them there. Nothing in an arena is
+//! dropped on its own: [`reset`](allocator::Allocator::reset) frees it all at
+//! once and keeps the memory, so one arena serves file after file. Threads
+//! take arenas from an [`allocator::AllocatorPool`], whose guard resets each
+//! one and hands it back when it drops. The bundler reads modules on rayon's
 //! pool, each into the arena its thread gets from an
 //! [`allocator::ThreadAllocators`].
 //!

@@ -1,22 +1,14 @@
-use std::num::NonZero;
-use std::panic;
-use std::panic::AssertUnwindSafe;
 use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
-use std::sync::Arc;
-use std::sync::mpsc;
-use std::{env, thread};
-use std::{iter, mem};
+use std::sync::{Arc, mpsc};
+use std::{env, mem};
 
 use globset::GlobSet;
 use ignore::{DirEntry, WalkBuilder, WalkState};
-use luck_allocator::{Allocator, AllocatorPool};
-use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_config::{CONFIG_FILE_NAME, Project, ProjectFilter, find_config, glob_set};
 use luck_linter::LintConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs, lexically_normalized};
 use luck_token::LuaVersion;
-use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
@@ -28,16 +20,6 @@ pub(crate) fn current_directory() -> Result<PathBuf, Exit> {
 pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     let path = Path::new(input);
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
-}
-
-/// Builds rayon's global pool, which a command that works on many files runs
-/// them on, with `threads` threads, each with the stack a deep file needs.
-pub(crate) fn start_thread_pool(threads: NonZero<usize>) -> Result<(), Exit> {
-    ThreadPoolBuilder::new()
-        .num_threads(threads.get())
-        .stack_size(MIN_STACK_BYTES)
-        .build_global()
-        .map_err(|e| operation_error(format!("can't start {threads} threads: {e}")))
 }
 
 /// How `bundle` and `graph` resolve and read modules: as `project` says, with
@@ -120,8 +102,9 @@ pub(crate) struct ProjectFile {
 /// processed once.
 ///
 /// Every project gets `lint_overlay` layered over its lint settings. Each
-/// loads here, before the parallel commands' locked output sections, which
-/// hold the stdio locks on the main thread while rayon workers run, so a
+/// loads here, before
+/// [`for_each_outcome_in_order`](crate::thread_pool::for_each_outcome_in_order)
+/// holds the stdio locks on the calling thread while rayon workers run, so a
 /// worker reporting a config error would deadlock.
 pub(crate) fn project_files(
     config_path: Option<&Path>,
@@ -475,62 +458,6 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
     FileSystemOs
         .canonicalize(directory)
         .map_err(|e| usage_error(format!("`{}`: {e}", directory.display())))
-}
-
-/// Runs `work` over `files` on the rayon pool and hands `take` each outcome
-/// on the calling thread, in input order.
-///
-/// An error from `take` ends the run once the files already started finish.
-/// Each file gets an arena from a pool, reset when its outcome is done, so a
-/// run allocates about one arena per thread. A file starts as soon as a
-/// thread is free and is less than a window of files past the outcome `take`
-/// waits for, which keeps memory flat on huge projects without a thread ever
-/// waiting for a batch to finish.
-pub(crate) fn for_each_outcome_in_order<Outcome>(
-    files: &[ProjectFile],
-    work: impl Fn(&ProjectFile, &Allocator) -> Outcome + Sync,
-    mut take: impl FnMut(Outcome) -> Result<(), Exit>,
-) -> Result<(), Exit>
-where
-    Outcome: Send,
-{
-    let thread_count = rayon::current_num_threads();
-    let pool = AllocatorPool::new(thread_count);
-    // A smaller window leaves threads idle behind a slow file, and a larger
-    // one gains nothing.
-    let window = thread_count * 16;
-    let (sender, receiver) = mpsc::channel::<(usize, thread::Result<Outcome>)>();
-    let mut ready: Vec<Option<Outcome>> = iter::repeat_with(|| None).take(window).collect();
-    let mut next_outcome = |index: usize| loop {
-        if let Some(outcome) = ready[index % window].take() {
-            return outcome;
-        }
-        let (finished, result) =
-            receiver.recv().expect("`sender` outlives this, so a job still out always arrives");
-        let outcome = result.unwrap_or_else(|payload| panic::resume_unwind(payload));
-        ready[finished % window] = Some(outcome);
-    };
-    // Spawned from outside the pool, the jobs queue in file order.
-    rayon::in_place_scope(|scope| {
-        let start = |index: usize| {
-            if let Some(file) = files.get(index) {
-                let (job_work, job_pool, job_sender) = (&work, &pool, sender.clone());
-                scope.spawn(move |_| {
-                    // A panic would otherwise leave the caller waiting forever.
-                    let result =
-                        panic::catch_unwind(AssertUnwindSafe(|| job_work(file, &job_pool.get())));
-                    let _ = job_sender.send((index, result));
-                });
-            }
-        };
-        (0..window).for_each(start);
-        for index in 0..files.len() {
-            let outcome = next_outcome(index);
-            start(index + window);
-            take(outcome)?;
-        }
-        Ok(())
-    })
 }
 
 #[cfg(test)]

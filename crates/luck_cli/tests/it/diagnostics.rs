@@ -3,7 +3,7 @@ use std::fs;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 const MISTYPED_TYPE_CHECK: &str = "\
 local x = 1
@@ -120,6 +120,21 @@ return value
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.is_ascii(), "{stderr}");
     assert!(stderr.contains("->") && stderr.contains("done in"), "{stderr}");
+}
+
+#[test]
+fn build_reports_a_size_increase_without_a_double_minus() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "return 1\n");
+    write_file(
+        directory.path(),
+        "luck.json",
+        r#"{"entry":"main.lua","output":"bundle.lua","minify":true,"preamble":"a preamble long enough to outweigh the code"}"#,
+    );
+
+    let stderr = stderr_text(&run(directory.path(), &["build"]));
+
+    assert!(!stderr.contains("(--"), "a grown bundle must not report `(--N%)`:\n{stderr}");
 }
 
 #[test]

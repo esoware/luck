@@ -8,7 +8,7 @@ use std::time::Duration;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 #[test]
 fn lint_clean_file_exits_success() {
@@ -176,84 +176,6 @@ fn check_bad_dialect_with_multiple_files_exits_usage() {
         .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
-/// `--fix` over stdin re-lints the fixed text, so spans index that text.
-///
-/// A fix that grows the file pushes spans past the end of the original, and a
-/// renderer panic also exits 1, so the rendered location is the proof.
-#[test]
-fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
-    let directory = TempDir::new().unwrap();
-
-    luck_in(directory.path())
-        .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
-        .write_stdin(
-            "\
-local t = unpack({})
-return t, missingglobal",
-        )
-        .assert()
-        .code(1)
-        .stdout(
-            "\
-local t = table.unpack({})
-return t, missingglobal",
-        )
-        .stderr(predicate::str::contains("buffer.lua:2:11"));
-}
-
-/// `--fix` leaves a suggestion, which may change what the code does, and
-/// `--fix-suggestions` applies it.
-#[test]
-fn lint_stdin_fix_applies_suggestions_only_when_asked() {
-    let directory = TempDir::new().unwrap();
-    let source = "\
-local unused = 1
-return 1";
-
-    luck_in(directory.path())
-        .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
-        .write_stdin(source)
-        .assert()
-        .code(0)
-        .stdout(source);
-    luck_in(directory.path())
-        .args(["lint", "--fix-suggestions", "--stdin-filepath", "buffer.lua"])
-        .write_stdin(source)
-        .assert()
-        .code(0)
-        .stdout(
-            "\
-local _unused = 1
-return 1",
-        );
-}
-
-/// A fix that shrinks the file keeps every span in bounds of the original, so
-/// rendering against the original misplaces the snippet without any panic.
-#[test]
-fn lint_stdin_fix_renders_spans_against_the_shortened_text() {
-    let directory = TempDir::new().unwrap();
-
-    luck_in(directory.path())
-        .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
-        .args(["-W", "redundant_nil_init"])
-        .write_stdin(
-            "\
-local a = nil
-return a, missingglobal
-",
-        )
-        .assert()
-        .code(1)
-        .stdout(
-            "\
-local a
-return a, missingglobal
-",
-        )
-        .stderr(predicate::str::contains("buffer.lua:2:11"));
-}
-
 /// An empty `entries` list is a config error, not a panic or a silent exit 0.
 #[test]
 fn build_empty_entries_exits_usage() {
@@ -274,47 +196,36 @@ fn build_empty_entries_exits_usage() {
 }
 
 #[test]
-fn fmt_range_formats_only_covered_stmt() {
+fn build_rejects_release_with_dev() {
     let directory = TempDir::new().unwrap();
-    // Two unformatted statements; the range covers only the second line.
-    let path = write_file(
+    write_file(directory.path(), "main.lua", "return 1\n");
+    write_file(
         directory.path(),
-        "partial.lua",
-        "\
-local    a=1
-local    b=2
-",
+        "luck.json",
+        r#"{"entry":"main.lua","output":"bundle.lua","profiles":{"dev":{},"release":{}}}"#,
     );
 
-    luck_in(directory.path()).args(["fmt", "--range-start", "13", "partial.lua"]).assert().code(0);
-    let contents = fs::read_to_string(&path).unwrap();
-    assert!(contents.contains("local    a=1"), "{contents}");
-    assert!(contents.contains("local b = 2"), "{contents}");
+    let output = run(directory.path(), &["build", "--release", "--dev", "--dry-run"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the shorthands select contradictory profiles, as `--profile` given twice does"
+    );
 }
 
 #[test]
-fn fmt_range_with_multiple_files_exits_usage() {
+fn minify_missing_input_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "a.lua", "local a = 1\n");
-    write_file(directory.path(), "b.lua", "local b = 2\n");
 
-    luck_in(directory.path())
-        .args(["fmt", "--range-start", "0", "a.lua", "b.lua"])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("exactly one input file"));
-}
+    let output = run(directory.path(), &["minify", "missing.lua"]);
 
-#[test]
-fn fmt_range_reversed_bounds_exits_usage() {
-    let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "a.lua", "local a = 1\n");
-
-    luck_in(directory.path())
-        .args(["fmt", "--range-start", "9", "--range-end", "2", "a.lua"])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("invalid format range"));
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a path that doesn't exist exits 2, as it does for every other command:\n{}",
+        stderr_text(&output)
+    );
 }
 
 #[test]
@@ -332,18 +243,6 @@ fn bad_target_flag_is_reported_before_the_config() {
             .stderr(predicate::str::contains("invalid target `lua99`"))
             .stderr(predicate::str::contains("not_a_real_key").not());
     }
-}
-
-#[test]
-fn bad_init_target_exits_usage_and_writes_nothing() {
-    let directory = TempDir::new().unwrap();
-
-    luck_in(directory.path())
-        .args(["init", "-t", "lua99"])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"));
-    assert!(!directory.path().join("luck.json").exists());
 }
 
 #[test]

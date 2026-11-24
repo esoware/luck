@@ -2,12 +2,9 @@ use std::num::NonZero;
 use std::process::ExitCode;
 use std::thread;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
-use crate::commands::{
-    BuildArgs, BundleArgs, CheckArgs, FmtArgs, GraphArgs, InitArgs, LintArgs, LspArgs, MinifyArgs,
-};
-use crate::project::start_thread_pool;
+use crate::commands::Command;
 use crate::verbosity::Verbosity;
 
 #[derive(Parser)]
@@ -24,57 +21,11 @@ pub(crate) struct Cli {
 
     /// Hide progress, summaries, and warnings.
     #[arg(long, global = true)]
-    pub quiet: bool,
+    quiet: bool,
 
     /// How many threads to work on files with [default: one per CPU core].
     #[arg(long, global = true, value_name = "INT")]
-    pub threads: Option<NonZero<usize>>,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum Command {
-    /// Create luck.json and a src/main entry file in the current directory.
-    Init(InitArgs),
-
-    /// Build the project in luck.json: bundle, then minify if enabled.
-    Build(BuildArgs),
-
-    /// Bundle a multi-file project into a single file.
-    Bundle(BundleArgs),
-
-    /// Minify a source file.
-    Minify(MinifyArgs),
-
-    /// Print the dependency graph of an entry file.
-    Graph(GraphArgs),
-
-    /// Lint Lua/Luau source files.
-    Lint(LintArgs),
-
-    /// Format Lua/Luau source files.
-    Fmt(FmtArgs),
-
-    /// Check Lua/Luau source files for syntax and compile errors.
-    Check(CheckArgs),
-
-    /// Run the language server (LSP) over stdio, or TCP with --socket.
-    Lsp(LspArgs),
-}
-
-impl Command {
-    /// Whether the command works on its files on rayon's pool. The language
-    /// server starts threads of its own.
-    const fn uses_thread_pool(&self) -> bool {
-        match self {
-            Self::Build(_)
-            | Self::Bundle(_)
-            | Self::Graph(_)
-            | Self::Lint(_)
-            | Self::Fmt(_)
-            | Self::Check(_) => true,
-            Self::Init(_) | Self::Minify(_) | Self::Lsp(_) => false,
-        }
-    }
+    threads: Option<NonZero<usize>>,
 }
 
 pub(crate) fn run() -> ExitCode {
@@ -84,24 +35,7 @@ pub(crate) fn run() -> ExitCode {
     let threads = cli
         .threads
         .unwrap_or_else(|| thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN));
-    if cli.command.uses_thread_pool()
-        && let Err(exit) = start_thread_pool(threads)
-    {
-        return exit.into();
-    }
-
-    let outcome = match cli.command {
-        Command::Init(args) => args.run(verbosity),
-        Command::Build(args) => args.run(verbosity),
-        Command::Bundle(args) => args.run(verbosity),
-        Command::Minify(args) => args.run(),
-        Command::Graph(args) => args.run(verbosity),
-        Command::Lint(args) => args.run(verbosity),
-        Command::Fmt(args) => args.run(verbosity),
-        Command::Check(args) => args.run(verbosity),
-        Command::Lsp(args) => args.run(threads),
-    };
-    match outcome {
+    match cli.command.run(verbosity, threads) {
         Ok(()) => ExitCode::SUCCESS,
         Err(exit) => exit.into(),
     }

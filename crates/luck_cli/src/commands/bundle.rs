@@ -7,6 +7,7 @@ use luck_bundler::{DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
 use luck_resolver::to_slash_lossy;
 use luck_token::LuaTarget;
+use serde_json::{Value, json};
 
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
@@ -92,17 +93,17 @@ impl BundleArgs {
 }
 
 fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit> {
-    let entries: Vec<serde_json::Value> = line_map
+    let entries: Vec<Value> = line_map
         .iter()
         .map(|entry| {
-            serde_json::json!({
+            json!({
                 "bundleStartLine": entry.bundle_start_line,
                 "bundleEndLine": entry.bundle_end_line,
                 "path": to_slash_lossy(&entry.path),
             })
         })
         .collect();
-    let map_json = serde_json::json!({ "version": 1, "entries": entries });
+    let map_json = json!({ "version": 1, "entries": entries });
     fs::write(map_path, format!("{map_json:#}\n"))
         .map_err(|e| operation_error(format!("cannot write `{}`: {e}", map_path.display())))
 }
@@ -113,7 +114,8 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::BundleArgs;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     #[test]
     fn bundle_is_top_level_command_with_target_flag() {

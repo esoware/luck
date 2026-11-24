@@ -5,10 +5,11 @@ use luck_allocator::Allocator;
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaTarget;
 
-use crate::exit::{Exit, fail_with_document_errors, operation_error};
+use crate::exit::{Exit, operation_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::{format_size, read_stdin_source, write_output};
 use crate::project::{existing_file, one_shot_project};
+use crate::reporter::print_document;
 
 #[derive(Args)]
 pub(crate) struct MinifyArgs {
@@ -44,7 +45,7 @@ impl MinifyArgs {
         let target = self.target.unwrap_or_else(|| project.target_for(Some(input)));
         let transforms = self.minify_flags.apply_to(project.transforms());
 
-        let (source, file_path) = if self.input == "-" {
+        let (source, label) = if self.input == "-" {
             (read_stdin_source()?, "<stdin>".to_owned())
         } else {
             let source = FileSystemOs
@@ -57,7 +58,10 @@ impl MinifyArgs {
 
         let version = target.version();
         let minified = luck_minifier::minify(&Allocator::new(), &source, version, &transforms)
-            .map_err(|errors| fail_with_document_errors(&file_path, &source, &errors, version))?;
+            .map_err(|errors| {
+                print_document(&label, &source, &errors, version);
+                Exit::Failure
+            })?;
 
         if self.stats {
             let minified_size = minified.len();
@@ -85,7 +89,8 @@ mod tests {
     use clap::Parser as _;
 
     use super::MinifyArgs;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     #[test]
     fn minify_target_is_optional() {

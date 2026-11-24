@@ -2,10 +2,10 @@ use std::fmt::Display;
 use std::process::ExitCode;
 use std::slice;
 
-use luck_diagnostics::{Diagnostic, FileDiagnostics};
+use luck_diagnostics::FileDiagnostics;
 use luck_token::LuaVersion;
 
-use crate::reporter::{print_document, print_files};
+use crate::reporter::print_files;
 
 /// How a command failed, once it has reported why. A command that ran and
 /// found no problems returns `Ok` and exits 0.
@@ -52,16 +52,4 @@ pub(crate) fn config_error(file: &FileDiagnostics) -> Exit {
     // Lua 5.4 ends a line where JSON5 does, but at the rare LS and PS.
     print_files(slice::from_ref(file), LuaVersion::Lua54);
     Exit::Usage
-}
-
-/// `source` is a document that isn't on disk, such as a bundle being minified
-/// or stdin, which `label` names.
-pub(crate) fn fail_with_document_errors(
-    label: &str,
-    source: &[u8],
-    errors: &[Diagnostic],
-    version: LuaVersion,
-) -> Exit {
-    print_document(label, source, errors, version);
-    Exit::Failure
 }

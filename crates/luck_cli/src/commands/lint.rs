@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufWriter, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
@@ -14,11 +14,10 @@ use luck_stdlib::StdlibLibrary;
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, operation_error, usage_error};
-use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source, write_output};
-use crate::project::{
-    ProjectFile, for_each_outcome_in_order, one_shot_project, project_files, working_project,
-};
+use crate::output::{read_stdin_source, write_output};
+use crate::project::{ProjectFile, one_shot_project, project_files, working_project};
 use crate::reporter::{DefaultReporter, GithubReporter, JsonReporter, Reporter, SourceFile};
+use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -49,27 +48,34 @@ impl LintFormat {
     }
 }
 
-/// Each flag's id and long name, short name, level, and help.
-const LEVEL_FLAGS: [(&str, char, RuleLevel, &str); 3] = [
-    (
-        "allow",
-        'A',
-        RuleLevel::Off,
-        "Turn off a rule or a category (repeatable). -A, -W, and -D apply in the order given, \
-         and a rule's own level wins over its category's",
-    ),
-    (
-        "warn",
-        'W',
-        RuleLevel::Warn,
-        "Report a rule, or every rule in a category, as a warning (repeatable)",
-    ),
-    (
-        "deny",
-        'D',
-        RuleLevel::Error,
-        "Report a rule, or every rule in a category, as an error (repeatable)",
-    ),
+/// A `-A`, `-W`, or `-D` flag, whose long name is also its id.
+struct LevelFlag {
+    id: &'static str,
+    short: char,
+    level: RuleLevel,
+    help: &'static str,
+}
+
+const LEVEL_FLAGS: [LevelFlag; 3] = [
+    LevelFlag {
+        id: "allow",
+        short: 'A',
+        level: RuleLevel::Off,
+        help: "Turn off a rule or a category (repeatable). -A, -W, and -D apply in the order \
+               given, and a rule's own level wins over its category's",
+    },
+    LevelFlag {
+        id: "warn",
+        short: 'W',
+        level: RuleLevel::Warn,
+        help: "Report a rule, or every rule in a category, as a warning (repeatable)",
+    },
+    LevelFlag {
+        id: "deny",
+        short: 'D',
+        level: RuleLevel::Error,
+        help: "Report a rule, or every rule in a category, as an error (repeatable)",
+    },
 ];
 
 /// What a `-A`, `-W`, or `-D` flag names.
@@ -94,7 +100,7 @@ struct LevelFlags(LintConfig);
 impl FromArgMatches for LevelFlags {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
         let mut flags: Vec<(usize, RuleLevel, Leveled)> = Vec::new();
-        for (id, _, level, _) in LEVEL_FLAGS {
+        for LevelFlag { id, level, .. } in LEVEL_FLAGS {
             let indices = matches.indices_of(id).into_iter().flatten();
             let names = matches.get_many::<Leveled>(id).into_iter().flatten();
             flags.extend(indices.zip(names).map(|(index, name)| (index, level, *name)));
@@ -118,7 +124,7 @@ impl FromArgMatches for LevelFlags {
 
 impl Args for LevelFlags {
     fn augment_args(cmd: clap::Command) -> clap::Command {
-        LEVEL_FLAGS.into_iter().fold(cmd, |augmented, (id, short, _, help)| {
+        LEVEL_FLAGS.into_iter().fold(cmd, |augmented, LevelFlag { id, short, help, .. }| {
             augmented.arg(
                 Arg::new(id)
                     .short(short)
@@ -239,14 +245,13 @@ impl LintArgs {
             return Ok(());
         }
 
-        let is_quiet = verbosity == Verbosity::Quiet;
         let timings = self.timings.then(RuleTimings::new);
 
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
             let mut project = one_shot_project(self.config.as_deref(), Path::new(stdin_path))?;
             project.overlay_lint(&overlay);
-            let status = self.run_stdin(stdin_path, &project, timings.as_ref(), is_quiet);
+            let status = self.run_stdin(stdin_path, &project, timings.as_ref(), verbosity);
             if let Some(rule_timings) = &timings {
                 print_rule_timings(rule_timings);
             }
@@ -263,45 +268,41 @@ impl LintArgs {
         let mut total_errors = 0;
         let mut total_warnings = 0;
         let mut total_fixed = 0;
-        {
-            // One lock and one flush per stream for the whole run.
-            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
-            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
-            for_each_outcome_in_order(
-                &files,
-                |file, allocator| self.lint_file(allocator, file, timings.as_ref(), is_quiet),
-                |outcome| {
-                    if let Some(note) = &outcome.note {
-                        let _ = writeln!(stderr, "{note}");
-                    }
-                    let _ = if self.format.is_for_tools() {
-                        stdout.write_all(&outcome.rendered)
-                    } else {
-                        stderr.write_all(&outcome.rendered)
-                    };
-                    total_errors += outcome.error_count;
-                    total_warnings += outcome.warning_count;
-                    total_fixed += usize::from(outcome.is_fixed);
-                    Ok(())
-                },
-            )
-        }?;
+        for_each_outcome_in_order(
+            &files,
+            |file, allocator| self.lint_file(allocator, file, timings.as_ref(), verbosity),
+            |outcome, output| {
+                if let Some(note) = &outcome.note {
+                    let _ = writeln!(output.stderr, "{note}");
+                }
+                let _ = if self.format.is_for_tools() {
+                    output.stdout.write_all(&outcome.rendered)
+                } else {
+                    output.stderr.write_all(&outcome.rendered)
+                };
+                total_errors += outcome.error_count;
+                total_warnings += outcome.warning_count;
+                total_fixed += usize::from(outcome.is_fixed);
+                Ok(())
+            },
+        )?;
 
-        if !self.silent && total_fixed > 0 && !is_quiet {
-            eprintln!("Fixed {total_fixed} file(s)");
-        }
-
-        if !self.silent && !is_quiet && (total_errors > 0 || total_warnings > 0) {
-            eprintln!(
-                "{total_errors} error(s), {total_warnings} warning(s) in {} file(s)",
-                files.len()
-            );
+        if !self.silent && verbosity != Verbosity::Quiet {
+            if total_fixed > 0 {
+                eprintln!("Fixed {total_fixed} file(s)");
+            }
+            if total_errors > 0 || total_warnings > 0 {
+                eprintln!(
+                    "{total_errors} error(s), {total_warnings} warning(s) in {} file(s)",
+                    files.len()
+                );
+            }
         }
         if let Some(rule_timings) = &timings {
             print_rule_timings(rule_timings);
         }
 
-        self.exit_status(total_errors, total_warnings, is_quiet)
+        self.exit_status(total_errors, total_warnings, verbosity)
     }
 
     /// `--fix` writes the fixed source to stdout, never to disk, and findings
@@ -312,7 +313,7 @@ impl LintArgs {
         stdin_path: &str,
         project: &Project,
         timings: Option<&RuleTimings>,
-        is_quiet: bool,
+        verbosity: Verbosity,
     ) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
@@ -336,14 +337,14 @@ impl LintArgs {
         let total_errors = finding_errors + usize::from(fix_error.is_some());
         let version = stdlib.target.version();
 
-        let rendered = self.rendered(stdin_path, current_source, messages, version, is_quiet);
+        let rendered = self.rendered(stdin_path, current_source, messages, version, verbosity);
         let _ = if self.format.is_for_tools() && fixes.is_empty() {
             io::stdout().write_all(&rendered)
         } else {
             io::stderr().write_all(&rendered)
         };
 
-        self.exit_status(total_errors, total_warnings, is_quiet)
+        self.exit_status(total_errors, total_warnings, verbosity)
     }
 
     /// The kinds of fix the run applies.
@@ -361,7 +362,7 @@ impl LintArgs {
         &self,
         total_errors: usize,
         total_warnings: usize,
-        is_quiet: bool,
+        verbosity: Verbosity,
     ) -> Result<(), Exit> {
         if total_errors > 0 {
             return Err(Exit::Failure);
@@ -371,7 +372,7 @@ impl LintArgs {
             && total_warnings > limit
         {
             // `--quiet` printed none of the warnings that fail the run.
-            return Err(if is_quiet && !self.silent {
+            return Err(if verbosity == Verbosity::Quiet && !self.silent {
                 operation_error(format!("{total_warnings} warning(s) exceed the limit of {limit}"))
             } else {
                 Exit::Failure
@@ -385,7 +386,7 @@ impl LintArgs {
         allocator: &Allocator,
         file: &ProjectFile,
         timings: Option<&RuleTimings>,
-        is_quiet: bool,
+        verbosity: Verbosity,
     ) -> LintOutcome {
         let file_path = file.path.as_path();
         let source = match FileSystemOs.read(file_path) {
@@ -423,7 +424,7 @@ impl LintArgs {
         let (finding_errors, warning_count) = severity_counts(&messages);
         let version = stdlib.target.version();
         let label = file_path.to_string_lossy();
-        let rendered = self.rendered(&label, current_source, messages, version, is_quiet);
+        let rendered = self.rendered(&label, current_source, messages, version, verbosity);
         // Fixes that couldn't be made or written fail the run, as an unread
         // file does.
         let error_count = finding_errors + usize::from(note.is_some());
@@ -439,7 +440,7 @@ impl LintArgs {
         source: &[u8],
         messages: Vec<Message>,
         version: LuaVersion,
-        is_quiet: bool,
+        verbosity: Verbosity,
     ) -> Vec<u8> {
         let mut rendered = Vec::new();
         if self.silent {
@@ -448,7 +449,7 @@ impl LintArgs {
         let diags: Vec<Diagnostic> = messages
             .into_iter()
             .map(|message| message.diagnostic)
-            .filter(|diag| !is_quiet || diag.is_error())
+            .filter(|diag| verbosity != Verbosity::Quiet || diag.is_error())
             .collect();
         let file = SourceFile { label, text: Some(source), version };
         self.format.reporter().render(file, &diags, &mut rendered);
@@ -562,7 +563,8 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     fn lint_args(flags: &[&str]) -> LintArgs {
         let command_line = ["luck", "lint"].iter().chain(flags);
@@ -615,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn lint_long_flag_aliases_parse() {
+    fn lint_long_flags_parse() {
         let LintArgs {
             levels,
             max_warnings,
@@ -757,20 +759,20 @@ local unused = 1
 print(undefined_var)";
         let diags = lint_source(source, LuaTarget::Lua54, &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
-        let lines_when = |is_quiet: bool| {
+        let lines_when = |verbosity: Verbosity| {
             let rendered = args.rendered(
                 "a.lua",
                 source.as_bytes(),
                 diags.clone(),
                 LuaVersion::Lua54,
-                is_quiet,
+                verbosity,
             );
             String::from_utf8(rendered).expect("JSON is UTF-8")
         };
 
-        let all_lines = lines_when(false);
+        let all_lines = lines_when(Verbosity::Normal);
         assert_eq!(all_lines.lines().count(), 2, "{all_lines}");
-        let quiet_lines = lines_when(true);
+        let quiet_lines = lines_when(Verbosity::Quiet);
         assert_eq!(quiet_lines.lines().count(), 1, "{quiet_lines}");
         assert!(quiet_lines.contains(r#""severity":"error""#), "{quiet_lines}");
     }
@@ -785,7 +787,7 @@ print(undefined_var)";
             b"print(undefined_var)",
             diags,
             LuaVersion::Lua54,
-            false,
+            Verbosity::Normal,
         );
         assert!(rendered.is_empty(), "{}", String::from_utf8_lossy(&rendered));
     }

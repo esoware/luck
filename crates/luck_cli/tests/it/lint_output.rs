@@ -6,7 +6,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 /// `unused_variable` is a warning by default and `undefined_variable` an
 /// error.
@@ -116,6 +116,47 @@ fn github_format_prints_annotations_on_stdout() {
             "::error file={file},line=2,endLine=2,col=7,endColumn=21,\
              title=undefined_variable::",
         )));
+}
+
+#[test]
+fn lint_renders_a_span_ending_inside_a_multibyte_char() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "print(string.format(\"%\u{e9}\", 1))\n");
+
+    let output = run(directory.path(), &["lint", "main.lua"]);
+    let stderr = stderr_text(&output);
+
+    assert!(
+        !stderr.contains("panicked"),
+        "a finding that ends inside a multibyte character must render, not panic:\n{stderr}"
+    );
+    assert_eq!(output.status.code(), Some(0), "one warning exits 0:\n{stderr}");
+}
+
+#[test]
+fn lint_line_numbers_do_not_count_a_form_feed_as_a_newline() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "-- a\u{c}\nreturn missingglobal\n");
+
+    let stderr = stderr_text(&run(directory.path(), &["lint", "main.lua"]));
+
+    assert!(
+        stderr.contains("main.lua:2:8"),
+        "Lua counts only CR and LF as line breaks, so the finding is on line 2:\n{stderr}"
+    );
+}
+
+#[test]
+fn lint_column_does_not_count_a_bom() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "\u{feff}return missingglobal\n");
+
+    let stderr = stderr_text(&run(directory.path(), &["lint", "main.lua"]));
+
+    assert!(
+        stderr.contains("main.lua:1:8"),
+        "a BOM is not a column, so the finding is at 1:8:\n{stderr}"
+    );
 }
 
 #[test]

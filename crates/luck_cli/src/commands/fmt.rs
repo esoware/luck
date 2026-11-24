@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufWriter, Write as _};
+use std::io::{self, Write as _};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -11,9 +11,10 @@ use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
-use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source, write_output};
-use crate::project::{ProjectFile, for_each_outcome_in_order, one_shot_project, project_files};
+use crate::output::{read_stdin_source, write_output};
+use crate::project::{ProjectFile, one_shot_project, project_files};
 use crate::reporter::{DefaultReporter, Reporter as _, SourceFile};
+use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -115,41 +116,35 @@ impl FmtArgs {
 
         let mut changed_paths: Vec<String> = Vec::new();
         let mut has_failed_file = false;
-        {
-            // One lock and one flush per stream for the whole run (the early
-            // returns flush on drop).
-            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
-            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
-            let editorconfigs = Editorconfigs::default();
-            for_each_outcome_in_order(
-                &files,
-                |file, allocator| self.format_file(allocator, &editorconfigs, file),
-                |outcome| {
-                    match outcome {
-                        FileOutcome::Failed(rendered) => {
-                            let _ = stderr.write_all(&rendered);
-                            has_failed_file = true;
-                        }
-                        FileOutcome::RangeError(message) => {
-                            let _ = writeln!(stderr, "{message}");
-                            return Err(Exit::Usage);
-                        }
-                        FileOutcome::Unchanged => {}
-                        FileOutcome::Changed(path) => changed_paths.push(path),
-                        FileOutcome::WriteError(message) => {
-                            let _ = writeln!(stderr, "{message}");
-                            return Err(Exit::Failure);
-                        }
-                        FileOutcome::Written(path) => {
-                            if verbosity != Verbosity::Quiet {
-                                let _ = writeln!(stdout, "{path}");
-                            }
+        let editorconfigs = Editorconfigs::default();
+        for_each_outcome_in_order(
+            &files,
+            |file, allocator| self.format_file(allocator, &editorconfigs, file),
+            |outcome, output| {
+                match outcome {
+                    FileOutcome::Failed(rendered) => {
+                        let _ = output.stderr.write_all(&rendered);
+                        has_failed_file = true;
+                    }
+                    FileOutcome::RangeError(message) => {
+                        let _ = writeln!(output.stderr, "{message}");
+                        return Err(Exit::Usage);
+                    }
+                    FileOutcome::Unchanged => {}
+                    FileOutcome::Changed(path) => changed_paths.push(path),
+                    FileOutcome::WriteError(message) => {
+                        let _ = writeln!(output.stderr, "{message}");
+                        return Err(Exit::Failure);
+                    }
+                    FileOutcome::Written(path) => {
+                        if verbosity != Verbosity::Quiet {
+                            let _ = writeln!(output.stdout, "{path}");
                         }
                     }
-                    Ok(())
-                },
-            )
-        }?;
+                }
+                Ok(())
+            },
+        )?;
 
         if self.is_report_only() {
             for path in &changed_paths {
@@ -314,7 +309,8 @@ mod tests {
     use clap::Parser as _;
 
     use super::*;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     fn fmt_args(flags: &[&str]) -> FmtArgs {
         let command_line = ["luck", "fmt"].iter().chain(flags);

@@ -3,7 +3,7 @@ use std::fs;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{HELPER_MODULE, TWO_MODULE_ENTRY, luck_in, run, stderr_text, write_file};
 
 fn project_with_generated_code(config: &str) -> TempDir {
     let project = TempDir::new().expect("project");
@@ -63,6 +63,25 @@ fn bundle_and_graph_resolve_through_the_project_s_search_paths() {
 }
 
 #[test]
+fn graph_resolves_modules_next_to_the_entry_as_bundle_does() {
+    let directory = TempDir::new().unwrap();
+    fs::create_dir_all(directory.path().join("sources")).unwrap();
+    write_file(directory.path(), "sources/main.lua", TWO_MODULE_ENTRY);
+    write_file(directory.path(), "sources/helper.lua", HELPER_MODULE);
+    let bundled = run(directory.path(), &["bundle", "sources/main.lua", "-o", "bundle.lua"]);
+    assert_eq!(bundled.status.code(), Some(0), "{}", stderr_text(&bundled));
+
+    let output = run(directory.path(), &["graph", "sources/main.lua"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`graph` must find the modules `bundle` finds for the same entry:\n{}",
+        stderr_text(&output)
+    );
+}
+
+#[test]
 fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
     let project = TempDir::new().expect("project");
     write_file(
@@ -100,6 +119,40 @@ end
     let formatted = |name: &str| fs::read_to_string(project.path().join(name)).expect("read");
     assert!(formatted("a.lua").contains("\n  print(1)"), "{}", formatted("a.lua"));
     assert!(formatted("vendor/b.lua").contains("\n    print(1)"), "{}", formatted("vendor/b.lua"));
+}
+
+#[test]
+fn fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
+    let directory = TempDir::new().unwrap();
+    let sources = directory.path().join("sources");
+    fs::create_dir_all(&sources).unwrap();
+    write_file(
+        directory.path(),
+        ".editorconfig",
+        "\
+root = true
+[sources/*.lua]
+indent_style = space
+indent_size = 3
+",
+    );
+    let path = write_file(
+        &sources,
+        "main.lua",
+        "\
+local function f()
+return 1
+end
+",
+    );
+
+    run(&sources, &["fmt", "main.lua"]);
+    let formatted = fs::read_to_string(path).unwrap();
+
+    assert!(
+        formatted.contains("\n   return 1"),
+        "the section matches this file whichever directory runs `fmt`:\n{formatted}"
+    );
 }
 
 #[test]

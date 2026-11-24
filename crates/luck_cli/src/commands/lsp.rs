@@ -29,7 +29,8 @@ mod tests {
     use clap::Parser as _;
 
     use super::LspArgs;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     #[test]
     fn lsp_subcommand_parses() {

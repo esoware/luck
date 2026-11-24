@@ -6,6 +6,7 @@ use luck_allocator::ThreadAllocators;
 use luck_bundler::{DependencyGraph, DynamicRequire, ModuleId};
 use luck_resolver::to_slash_lossy;
 use luck_token::LuaTarget;
+use serde_json::{Map, Value, json};
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{bundle_options, existing_file, one_shot_project};
@@ -69,8 +70,6 @@ impl GraphArgs {
 }
 
 fn print_graph_json(dependency_graph: &DependencyGraph<'_>) {
-    use serde_json::{Map, Value, json};
-
     let module_path = |id: ModuleId| to_slash_lossy(&dependency_graph.modules[id.0].path);
 
     let mut modules_map = Map::new();
@@ -120,7 +119,8 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::{GraphArgs, GraphFormat};
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     #[test]
     fn graph_accepts_target_and_format() {

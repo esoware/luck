@@ -3,8 +3,9 @@
 //! The `luck` command-line interface: `init`, `build`, `bundle`, `minify`,
 //! `graph`, `lint`, `fmt`, `check`, and `lsp`.
 //!
-//! `cli` holds the [`clap`] model and dispatch, and each command's arguments
-//! and handler live in its own module under `commands`.
+//! `cli` holds the [`clap`] model's global flags, and `commands` the
+//! subcommands and their dispatch, with each command's arguments and handler
+//! in a module of its own.
 
 #![expect(
     clippy::print_stderr,
@@ -19,6 +20,7 @@ mod minify_flags;
 mod output;
 mod project;
 mod reporter;
+mod thread_pool;
 mod verbosity;
 
 use std::process::ExitCode;
