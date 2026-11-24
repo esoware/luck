@@ -36,12 +36,18 @@ static GLOBAL: TrackedAllocator = TrackedAllocator;
 const STAGES: [&str; 7] =
     ["lexer", "parser", "semantic", "linter", "codegen", "formatter", "minifier"];
 
+#[derive(Clone, Copy)]
+enum Report {
+    Stages,
+    Rules,
+}
+
 /// The stages run on a thread with the stack every stage needs, as the CLI's
 /// do.
 fn main() -> io::Result<()> {
-    let is_rules = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
-        [] => false,
-        [mode] if mode == "rules" => true,
+    let report = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => Report::Stages,
+        [mode] if mode == "rules" => Report::Rules,
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -51,12 +57,12 @@ fn main() -> io::Result<()> {
     };
     thread::Builder::new()
         .stack_size(MIN_STACK_BYTES)
-        .spawn(move || run(is_rules))?
+        .spawn(move || run(report))?
         .join()
         .unwrap_or_else(|payload| panic::resume_unwind(payload))
 }
 
-fn run(is_rules: bool) -> io::Result<()> {
+fn run(report: Report) -> io::Result<()> {
     let files = test_files();
 
     // Running everything once first grows the arena to the size the largest
@@ -67,22 +73,24 @@ fn run(is_rules: bool) -> io::Result<()> {
         allocator.reset();
         measure(&allocator, file);
     }
-    if is_rules {
-        return rules::run(&mut allocator, &files);
-    }
 
-    let mut entries: [Vec<(&TestFile, StageStats)>; STAGES.len()] = Default::default();
-    for file in &files {
-        allocator.reset();
-        for (stage_entries, stats) in entries.iter_mut().zip(measure(&allocator, file)) {
-            stage_entries.push((file, stats));
+    match report {
+        Report::Rules => rules::write_report(&mut allocator, &files),
+        Report::Stages => {
+            let mut entries: [Vec<(&TestFile, StageStats)>; STAGES.len()] = Default::default();
+            for file in &files {
+                allocator.reset();
+                for (stage_entries, stats) in entries.iter_mut().zip(measure(&allocator, file)) {
+                    stage_entries.push((file, stats));
+                }
+            }
+            let directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+            for (stage, stage_entries) in STAGES.iter().zip(&entries) {
+                write_snapshot(&directory.join(format!("allocs_{stage}.yaml")), stage_entries)?;
+            }
+            Ok(())
         }
     }
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for (stage, stage_entries) in STAGES.iter().zip(&entries) {
-        write_snapshot(&directory.join(format!("allocs_{stage}.yaml")), stage_entries)?;
-    }
-    Ok(())
 }
 
 /// Every stage on `file`, in `STAGES`' order, in a freshly reset
@@ -110,7 +118,7 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
                 .build(&parse.chunk),
         );
     });
-    let every_rule = Linter::new(every_rule());
+    let every_rule = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
         drop(every_rule.run(&parse, library_for(target), FixKind::empty(), None));
     });
@@ -132,14 +140,9 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
 }
 
 /// Every category on, as the linter bench runs it.
-fn every_rule() -> LintConfig {
-    LintConfig {
-        categories: CategoryLevels {
-            correctness: Some(RuleLevel::Warn),
-            suspicious: Some(RuleLevel::Warn),
-            style: Some(RuleLevel::Warn),
-            performance: Some(RuleLevel::Warn),
-        },
+fn every_rule() -> Linter {
+    Linter::new(LintConfig {
+        categories: CategoryLevels::all(RuleLevel::Warn),
         ..LintConfig::default()
-    }
+    })
 }

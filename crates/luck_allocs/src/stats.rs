@@ -5,7 +5,8 @@ use crate::heap::{HEAP, HeapCounters};
 /// One stage's activity on one file.
 #[derive(Debug)]
 pub(crate) struct StageStats {
-    pub counters: Counters,
+    pub heap: HeapCounters,
+    pub arena: AllocationCounts,
     /// The arena isn't reset between stages, so this includes what earlier
     /// stages left in it, such as the tree the parser built.
     pub arena_used_bytes: usize,
@@ -15,12 +16,12 @@ pub(crate) struct StageStats {
 }
 
 impl StageStats {
-    /// Every metric a snapshot holds, in order. This is the one place that
-    /// decides what gets snapshotted.
-    pub(crate) fn metrics(&self, file_bytes: usize) -> Vec<Metric> {
-        let Counters { heap, arena } = &self.counters;
-        vec![
-            Metric::bytes("file size", file_bytes, 0),
+    /// Every metric a snapshot holds of the stage, in order. A stage's
+    /// snapshot heads them with [`Metric::file_size`], and the per-rule
+    /// report leaves that out.
+    pub(crate) fn metrics(&self) -> [Metric; 8] {
+        let Self { heap, arena, arena_used_bytes, sys_peak_growth_bytes } = *self;
+        [
             Metric::count("sys allocs", heap.allocs),
             Metric::count("sys reallocs", heap.reallocs),
             Metric::count("sys deallocs", heap.deallocs),
@@ -31,59 +32,41 @@ impl StageStats {
             ),
             Metric::bytes(
                 "sys peak growth",
-                self.sys_peak_growth_bytes,
-                relative_tolerance(self.sys_peak_growth_bytes),
+                sys_peak_growth_bytes,
+                relative_tolerance(sys_peak_growth_bytes),
             ),
             Metric::count("arena allocs", arena.allocations),
             Metric::count("arena reallocs", arena.reallocations),
-            Metric::bytes("arena size", self.arena_used_bytes, ARENA_SIZE_TOLERANCE_BYTES),
+            Metric::bytes("arena size", arena_used_bytes, ARENA_SIZE_TOLERANCE_BYTES),
         ]
     }
 }
 
-/// The heap's and the arena's counters, as a reading or as the difference
-/// between two.
-#[derive(Debug)]
-pub(crate) struct Counters {
-    pub heap: HeapCounters,
-    pub arena: AllocationCounts,
-}
-
-impl Counters {
-    fn record(allocator: &Allocator) -> Self {
-        Self { heap: HEAP.read(), arena: allocator.allocation_counts() }
-    }
-
-    /// Chunk operations need no correction here, because the global
-    /// allocator already left them out, and every remaining counter grows
-    /// with element counts, which are the same on every platform.
-    const fn since(&self, before: &Self) -> Self {
-        Self {
-            heap: HeapCounters {
-                allocs: self.heap.allocs - before.heap.allocs,
-                reallocs: self.heap.reallocs - before.heap.reallocs,
-                deallocs: self.heap.deallocs - before.heap.deallocs,
-                alloc_bytes: self.heap.alloc_bytes - before.heap.alloc_bytes,
-            },
-            arena: AllocationCounts {
-                allocations: self.arena.allocations - before.arena.allocations,
-                reallocations: self.arena.reallocations - before.arena.reallocations,
-            },
-        }
-    }
-}
-
 /// Runs `stage` and records what it allocated.
+///
+/// Chunk operations need no correction here, because the global allocator
+/// already left them out, and every remaining counter grows with element
+/// counts, which are the same on every platform.
 pub(crate) fn record_stats_in<R>(
     allocator: &Allocator,
     stage: impl FnOnce() -> R,
 ) -> (R, StageStats) {
-    let before = Counters::record(allocator);
+    let (heap_before, arena_before) = (HEAP.read(), allocator.allocation_counts());
     let live_bytes_before = HEAP.live_bytes();
     HEAP.reset_peak();
     let result = stage();
+    let (heap, arena) = (HEAP.read(), allocator.allocation_counts());
     let stats = StageStats {
-        counters: Counters::record(allocator).since(&before),
+        heap: HeapCounters {
+            allocs: heap.allocs - heap_before.allocs,
+            reallocs: heap.reallocs - heap_before.reallocs,
+            deallocs: heap.deallocs - heap_before.deallocs,
+            alloc_bytes: heap.alloc_bytes - heap_before.alloc_bytes,
+        },
+        arena: AllocationCounts {
+            allocations: arena.allocations - arena_before.allocations,
+            reallocations: arena.reallocations - arena_before.reallocations,
+        },
         arena_used_bytes: allocator.used_bytes(),
         sys_peak_growth_bytes: HEAP.peak_bytes().saturating_sub(live_bytes_before),
     };
@@ -127,6 +110,11 @@ pub(crate) enum MetricKind {
 }
 
 impl Metric {
+    /// The measured file's size, which heads its entry in a stage's snapshot.
+    pub(crate) const fn file_size(bytes: usize) -> Self {
+        Self::bytes("file size", bytes, 0)
+    }
+
     const fn count(label: &'static str, value: usize) -> Self {
         Self { label, value, kind: MetricKind::Count }
     }

@@ -6,8 +6,6 @@
 
 mod benchmark_files;
 mod download;
-#[cfg(test)]
-mod fixtures;
 
 pub use benchmark_files::{
     ProjectFile, TestFile, TestProject, bundle_project_root, test_files, test_projects,

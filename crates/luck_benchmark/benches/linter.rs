@@ -8,12 +8,7 @@ use luck_stdlib::library_for;
 /// node table is built in the analysis walk, with a linter compiled once.
 fn bench_linter(criterion: &mut Criterion) {
     let linter = Linter::new(LintConfig {
-        categories: CategoryLevels {
-            correctness: Some(RuleLevel::Warn),
-            suspicious: Some(RuleLevel::Warn),
-            style: Some(RuleLevel::Warn),
-            performance: Some(RuleLevel::Warn),
-        },
+        categories: CategoryLevels::all(RuleLevel::Warn),
         ..LintConfig::default()
     });
     let mut group = criterion.benchmark_group("linter");

@@ -150,6 +150,15 @@ pub struct CategoryLevels {
 }
 
 impl CategoryLevels {
+    pub const fn all(level: RuleLevel) -> Self {
+        Self {
+            correctness: Some(level),
+            suspicious: Some(level),
+            style: Some(level),
+            performance: Some(level),
+        }
+    }
+
     pub const fn level(self, category: Category) -> Option<RuleLevel> {
         match category {
             Category::Correctness => self.correctness,

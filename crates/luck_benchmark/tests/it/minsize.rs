@@ -19,7 +19,7 @@ use flate2::write::GzEncoder;
 use luck_allocator::Allocator;
 use luck_benchmark_files::{test_files, test_projects};
 use luck_minifier::TransformConfig;
-use luck_token::LuaTarget;
+use luck_token::LuaVersion;
 
 const SNAPSHOT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/minsize.snap");
 const REGENERATE_COMMAND: &str =
@@ -32,17 +32,11 @@ struct Row {
     gzip_bytes: usize,
 }
 
-fn gzipped_byte_count(bytes: &[u8]) -> Result<usize, Box<dyn Error>> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(bytes)?;
-    Ok(encoder.finish()?.len())
-}
-
 fn measure(
     allocator: &mut Allocator,
     name: &str,
     source: &[u8],
-    target: LuaTarget,
+    version: LuaVersion,
 ) -> Result<Row, Box<dyn Error>> {
     // Downloaded benchmark files keep whatever line endings upstream committed.
     let normalized: Vec<u8> = source
@@ -53,7 +47,6 @@ fn measure(
         .collect();
     let config = TransformConfig::default();
     allocator.reset();
-    let version = target.version();
     let minified = luck_minifier::minify(allocator, &normalized, version, &config)
         .map_err(|errors| format!("{name} failed to minify: {errors:?}"))?;
     let again = luck_minifier::minify(allocator, &minified, version, &config)
@@ -61,11 +54,13 @@ fn measure(
     if again != minified {
         return Err(format!("{name}'s minified output changed when minified again").into());
     }
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&minified)?;
     Ok(Row {
         name: name.to_owned(),
         original_bytes: normalized.len(),
         minified_bytes: minified.len(),
-        gzip_bytes: gzipped_byte_count(&minified)?,
+        gzip_bytes: encoder.finish()?.len(),
     })
 }
 
@@ -74,15 +69,15 @@ fn collect_rows() -> Result<Vec<Row>, Box<dyn Error>> {
     let mut allocator = Allocator::new();
     let mut rows = Vec::new();
     for file in test_files() {
-        rows.push(measure(&mut allocator, file.file_name, &file.source_text, file.target)?);
+        let version = file.target.version();
+        rows.push(measure(&mut allocator, file.file_name, &file.source_text, version)?);
     }
     for project in test_projects() {
+        let version = project.target.version();
         let file_rows = project
             .files
             .iter()
-            .map(|file| {
-                measure(&mut allocator, &file.relative_path, &file.source_text, project.target)
-            })
+            .map(|file| measure(&mut allocator, &file.relative_path, &file.source_text, version))
             .collect::<Result<Vec<_>, _>>()?;
         rows.push(Row {
             name: format!("{} ({} files)", project.name, project.files.len()),

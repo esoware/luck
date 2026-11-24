@@ -60,12 +60,7 @@ impl FileReport {
 /// The linter the `linter` stage runs, with every rule on.
 pub(crate) fn every_rule() -> Linter {
     Linter::new(LintConfig {
-        categories: CategoryLevels {
-            correctness: Some(RuleLevel::Warn),
-            suspicious: Some(RuleLevel::Warn),
-            style: Some(RuleLevel::Warn),
-            performance: Some(RuleLevel::Warn),
-        },
+        categories: CategoryLevels::all(RuleLevel::Warn),
         ..LintConfig::default()
     })
 }

@@ -87,7 +87,7 @@ fn benchmark_file(root: &Path, file_name: &'static str, target: LuaTarget) -> Te
     TestFile { file_name, source_text, target }
 }
 
-fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
+fn collect_lua_files(root: &Path) -> Vec<ProjectFile> {
     let mut files = Vec::new();
     let mut pending_directories = vec![root.to_path_buf()];
     while let Some(directory) = pending_directories.pop() {
@@ -107,9 +107,6 @@ fn collect_lua_files(root: &Path, filter: &str) -> Vec<ProjectFile> {
                 .expect("a walked path is under the root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if !relative_path.contains(filter) {
-                continue;
-            }
             let source_text = fs::read(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
             files.push(ProjectFile { relative_path, source_text });
@@ -151,12 +148,12 @@ pub fn test_projects() -> Vec<TestProject> {
     vec![
         TestProject {
             name: "roact",
-            files: collect_lua_files(&roact_root.join("src"), ""),
+            files: collect_lua_files(&roact_root.join("src")),
             target: LuaTarget::LuauRoblox,
         },
         TestProject {
             name: "penlight",
-            files: collect_lua_files(&penlight_root.join("lua"), "pl/"),
+            files: collect_lua_files(&penlight_root.join("lua")),
             target: LuaTarget::Lua51,
         },
     ]

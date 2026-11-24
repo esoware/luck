@@ -87,7 +87,7 @@ pub(crate) static HEAP: HeapTracker = HeapTracker {
     peak_bytes: AtomicCounter::new(),
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct HeapCounters {
     pub allocs: usize,
     pub reallocs: usize,

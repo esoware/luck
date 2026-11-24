@@ -22,11 +22,10 @@ fn bench_parser(criterion: &mut Criterion) {
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
         let version = project.target.version();
-        let files = project.files;
         let mut allocator = Allocator::new();
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for file in &files {
+                for file in &project.files {
                     allocator.reset();
                     let source_text = black_box(file.source_text.as_slice());
                     black_box(luck_parser::parse(&allocator, source_text, version));

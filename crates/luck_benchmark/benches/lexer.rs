@@ -18,10 +18,9 @@ fn bench_lexer(criterion: &mut Criterion) {
     for project in test_projects() {
         let id = BenchmarkId::from_parameter(project.name);
         let version = project.target.version();
-        let files = project.files;
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                for file in &files {
+                for file in &project.files {
                     black_box(luck_lexer::lex(black_box(file.source_text.as_slice()), version));
                 }
             });
