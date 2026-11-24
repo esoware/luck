@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use std::{fs, io, thread};
+use std::{fs, io};
 
 use flate2::read::GzDecoder;
+use luck_benchmark_files::fetch_bytes;
 use luck_token::LuaTarget;
 use tar::Archive;
 
@@ -13,17 +13,17 @@ pub(crate) struct Suite {
     /// The name the snapshots carry, such as `lua54`, which is also the name
     /// of the feature that links its interpreter.
     pub name: &'static str,
-    pub is_linked: bool,
+    is_linked: bool,
     pub target: LuaTarget,
     /// The linked interpreter's `_VERSION`.
-    pub interpreter: &'static str,
-    pub url: &'static str,
+    interpreter: &'static str,
+    url: &'static str,
     /// Where the tests sit in the tarball.
-    pub tarball_directory: &'static str,
+    tarball_directory: &'static str,
     /// The cache directory the tests unpack into, which the snapshots name
     /// each file under.
-    pub directory: &'static str,
-    pub extension: &'static str,
+    directory: &'static str,
+    extension: &'static str,
     pub runner: Runner,
     /// The Luau flags for what luck reads ahead of the pinned release:
     /// integer literals and their library, and exported values.
@@ -129,7 +129,7 @@ pub(crate) struct SuiteFile {
     pub name: String,
     /// The suite directory and the name, as the snapshots name the file.
     pub path: String,
-    pub bytes: Vec<u8>,
+    pub source: Vec<u8>,
 }
 
 impl Suite {
@@ -177,8 +177,8 @@ impl Suite {
         Ok(root)
     }
 
-    /// The suite's test files in `root`, in name order, or only those whose
-    /// path contains `filter`.
+    /// The suite's test files in `root`, or only those whose path contains
+    /// `filter`, in path order, which every snapshot lists them in.
     pub(crate) fn files(&self, root: &Path, filter: Option<&str>) -> io::Result<Vec<SuiteFile>> {
         let mut files = Vec::new();
         for entry in fs::read_dir(root)? {
@@ -196,26 +196,10 @@ impl Suite {
             files.push(SuiteFile {
                 name: name.to_owned(),
                 path: suite_path,
-                bytes: fs::read(&path)?,
+                source: fs::read(&path)?,
             });
         }
-        files.sort_by(|a, b| a.name.cmp(&b.name));
+        files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
     }
-}
-
-/// Retried, because CI runners see transient connection resets.
-fn fetch_bytes(url: &str) -> io::Result<Vec<u8>> {
-    let mut last_error = String::new();
-    for delay in [Duration::ZERO, Duration::from_secs(1), Duration::from_secs(2)] {
-        thread::sleep(delay);
-        match ureq::get(url).call() {
-            Ok(mut response) => match response.body_mut().read_to_vec() {
-                Ok(bytes) => return Ok(bytes),
-                Err(error) => last_error = error.to_string(),
-            },
-            Err(error) => last_error = error.to_string(),
-        }
-    }
-    Err(io::Error::other(format!("failed to fetch {url} after 3 attempts: {last_error}")))
 }

@@ -2,8 +2,7 @@
 //! its own output.
 
 use std::any::Any;
-use std::panic;
-use std::panic::AssertUnwindSafe;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::slice;
 
@@ -11,13 +10,13 @@ use luck_allocator::Allocator;
 use luck_codegen::LiteralSpelling;
 use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
-use luck_linter::{CategoryLevels, FixKind, LintConfig, Linter, RuleLevel};
+use luck_linter::{FixKind, Linter};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticBuilder;
 use luck_stdlib::library_for;
 use luck_testgen::tree_shape;
-use luck_token::{LineIndex, LuaVersion};
+use luck_token::{LineIndex, LuaTarget, LuaVersion};
 
 use crate::snapshot::{LintLine, TestResult};
 use crate::suite::{Suite, SuiteFile};
@@ -30,8 +29,6 @@ use crate::{execute, runtime};
 /// grammar, as `luck check` does.
 #[derive(Debug)]
 pub(crate) struct FileReport {
-    /// The reference interpreter rejects the file.
-    pub should_fail: bool,
     pub parser: TestResult,
     pub codegen: Option<TestResult>,
     pub formatter: Option<TestResult>,
@@ -44,51 +41,42 @@ pub(crate) struct FileReport {
 
 impl FileReport {
     /// A report of a file every stage stopped on where the parser did.
-    fn stopped(suite: &Suite, file: &SuiteFile, result: &TestResult) -> Self {
+    fn stopped(suite: &Suite, file: &SuiteFile, result: TestResult) -> Self {
         Self {
-            should_fail: false,
             parser: result.clone(),
             codegen: Some(result.clone()),
             formatter: Some(result.clone()),
             minifier: Some(result.clone()),
             linter: Some(Err(result.clone())),
-            runtime: runtime::is_runnable(suite, file).then(|| result.clone()),
+            runtime: runtime::is_runnable(suite, file).then_some(result),
         }
     }
 }
 
-/// The linter the `linter` stage runs, with every rule on.
-pub(crate) fn every_rule() -> Linter {
-    Linter::new(LintConfig {
-        categories: CategoryLevels::all(RuleLevel::Warn),
-        ..LintConfig::default()
-    })
-}
-
 /// `root` is the suite's directory, which the programs run in.
 pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile, linter: &Linter) -> FileReport {
-    let source = file.bytes.as_slice();
+    let source = file.source.as_slice();
     let version = suite.target.version();
     let allocator = Allocator::new();
     let parse = match guard(|| luck_parser::parse_with_tokens(&allocator, source, version)) {
         Ok(parse) => parse,
-        Err(panicked) => return FileReport::stopped(suite, file, &panicked),
+        Err(panicked) => return FileReport::stopped(suite, file, panicked),
     };
     let lines = LineIndex::new(source, version);
-    let compile_errors = if parse.errors.is_empty() {
+    let semantic_errors = if parse.errors.is_empty() {
         match guard(|| SemanticBuilder::new().with_check(true).build(&parse.chunk).errors) {
             Ok(errors) => errors,
-            Err(panicked) => return FileReport::stopped(suite, file, &panicked),
+            Err(panicked) => return FileReport::stopped(suite, file, panicked),
         }
     } else {
-        parse.errors.clone()
+        Vec::new()
     };
-    if !execute::compiles(&file.bytes) {
-        let parser = compile_errors.first().map_or(TestResult::IncorrectlyPassed, |error| {
+    if !execute::compiles(source) {
+        let first_error = parse.errors.first().or_else(|| semantic_errors.first());
+        let parser = first_error.map_or(TestResult::IncorrectlyPassed, |error| {
             TestResult::CorrectError(render_errors(slice::from_ref(error), &lines))
         });
         return FileReport {
-            should_fail: true,
             parser,
             codegen: None,
             formatter: None,
@@ -98,29 +86,25 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile, linter: &Linte
         };
     }
     if !parse.errors.is_empty() {
-        return FileReport::stopped(
-            suite,
-            file,
-            &TestResult::ParseError(render_errors(&parse.errors, &lines)),
-        );
+        let result = TestResult::ParseError(render_errors(&parse.errors, &lines));
+        return FileReport::stopped(suite, file, result);
     }
     // The tree is whole, so every other stage still has something to check.
-    let parser = if compile_errors.is_empty() {
+    let parser = if semantic_errors.is_empty() {
         TestResult::Passed
     } else {
-        TestResult::ParseError(render_errors(&compile_errors, &lines))
+        TestResult::ParseError(render_errors(&semantic_errors, &lines))
     };
-    let codegen = guard(|| codegen(&allocator, &parse)).unwrap_or_else(|error| error);
+    let codegen = guard(|| codegen(&allocator, &parse)).unwrap_or_else(|panicked| panicked);
     let (formatter, format_output) =
-        guard(|| formatter(&allocator, &parse)).unwrap_or_else(|error| (error, None));
+        guard(|| formatter(&allocator, &parse)).unwrap_or_else(|panicked| (panicked, None));
     let (minifier, minify_output) =
-        guard(|| minifier(&allocator, source, version)).unwrap_or_else(|error| (error, None));
-    let linted = guard(|| lint(suite, linter, &parse, &lines));
+        guard(|| minifier(&allocator, source, version)).unwrap_or_else(|panicked| (panicked, None));
+    let linted = guard(|| lint(linter, &parse, suite.target, &lines));
     let runtime = runtime::is_runnable(suite, file).then(|| {
         runtime::check(suite, root, file, format_output.as_deref(), minify_output.as_deref())
     });
     FileReport {
-        should_fail: false,
         parser,
         codegen: Some(codegen),
         formatter: Some(formatter),
@@ -130,7 +114,7 @@ pub(crate) fn check(suite: &Suite, root: &Path, file: &SuiteFile, linter: &Linte
     }
 }
 
-/// `run`'s result.
+/// `run`'s result, or the message it panicked with.
 fn guard<T>(run: impl FnOnce() -> T) -> Result<T, TestResult> {
     panic::catch_unwind(AssertUnwindSafe(run))
         .map_err(|payload| TestResult::GenericError("Panic", panic_message(payload.as_ref())))
@@ -157,60 +141,28 @@ fn render_errors(errors: &[Diagnostic], lines: &LineIndex) -> String {
 
 /// The output reparses, to the same tree, and prints as itself.
 fn codegen(allocator: &Allocator, parse: &ParseResult<'_>) -> TestResult {
-    let version = parse.chunk.version;
     let output = luck_codegen::compact(&parse.chunk, LiteralSpelling::Shortest);
-    let reparsed = luck_parser::parse(allocator, &output, version);
-    if !reparsed.errors.is_empty() {
-        let lines = LineIndex::new(&output, version);
-        return TestResult::GenericError("Reparse", render_errors(&reparsed.errors, &lines));
-    }
-    let (expected, actual) = (tree_shape(&parse.chunk), tree_shape(&reparsed.chunk));
-    if actual != expected {
-        return TestResult::Mismatch("Round trip", actual, expected);
-    }
-    let again = luck_codegen::compact(&reparsed.chunk, LiteralSpelling::Shortest);
-    if again != output {
-        return TestResult::Mismatch("Idempotency", lossy(&again), lossy(&output));
-    }
-    TestResult::Passed
-}
-
-/// A stage's output, which is bytes, as a snapshot shows it.
-fn lossy(output: &[u8]) -> String {
-    String::from_utf8_lossy(output).into_owned()
+    let reparsed = luck_parser::parse(allocator, &output, parse.chunk.version);
+    round_trip(parse, &reparsed).unwrap_or_else(|| {
+        idempotency(&luck_codegen::compact(&reparsed.chunk, LiteralSpelling::Shortest), &output)
+    })
 }
 
 /// The output reparses, to the same tree, and formats as itself.
+///
+/// The parse has no errors, so formatting reports none.
 fn formatter<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
 ) -> (TestResult, Option<Vec<u8>>) {
-    let version = parse.chunk.version;
     let options = FormatOptions::default();
-    let first = luck_formatter::format_parsed(allocator, parse, &options);
-    if !first.errors.is_empty() {
-        let lines = LineIndex::new(parse.source, version);
-        return (TestResult::GenericError("Format", render_errors(&first.errors, &lines)), None);
-    }
-    let output = first.output;
+    let output = luck_formatter::format_parsed(allocator, parse, &options).output;
     let result = {
-        let reparsed = luck_parser::parse_with_tokens(allocator, &output, version);
-        if reparsed.errors.is_empty() {
-            let (expected, actual) = (tree_shape(&parse.chunk), tree_shape(&reparsed.chunk));
-            if actual == expected {
-                let again = luck_formatter::format_parsed(allocator, &reparsed, &options);
-                if again.output == output {
-                    TestResult::Passed
-                } else {
-                    TestResult::Mismatch("Idempotency", lossy(&again.output), lossy(&output))
-                }
-            } else {
-                TestResult::Mismatch("Round trip", actual, expected)
-            }
-        } else {
-            let lines = LineIndex::new(&output, version);
-            TestResult::GenericError("Reparse", render_errors(&reparsed.errors, &lines))
-        }
+        let reparsed = luck_parser::parse_with_tokens(allocator, &output, parse.chunk.version);
+        round_trip(parse, &reparsed).unwrap_or_else(|| {
+            let again = luck_formatter::format_parsed(allocator, &reparsed, &options);
+            idempotency(&again.output, &output)
+        })
     };
     (result, Some(output))
 }
@@ -230,8 +182,7 @@ fn minifier(
         }
     };
     let result = match luck_minifier::minify(allocator, &output, version, &config) {
-        Ok(again) if again == output => TestResult::Passed,
-        Ok(again) => TestResult::Mismatch("Idempotency", lossy(&again), lossy(&output)),
+        Ok(again) => idempotency(&again, &output),
         Err(errors) => {
             let lines = LineIndex::new(&output, version);
             TestResult::GenericError("Reparse", render_errors(&errors, &lines))
@@ -240,15 +191,40 @@ fn minifier(
     (result, Some(output))
 }
 
-/// `linter`'s diagnostics.
+/// Why `reparsed`, the parse of a stage's output, isn't `parse`'s tree, if it
+/// isn't.
+fn round_trip(parse: &ParseResult<'_>, reparsed: &ParseResult<'_>) -> Option<TestResult> {
+    if !reparsed.errors.is_empty() {
+        let lines = LineIndex::new(reparsed.source, parse.chunk.version);
+        return Some(TestResult::GenericError("Reparse", render_errors(&reparsed.errors, &lines)));
+    }
+    let (expected, actual) = (tree_shape(&parse.chunk), tree_shape(&reparsed.chunk));
+    (actual != expected).then_some(TestResult::Mismatch { check: "Round trip", actual, expected })
+}
+
+/// Whether a stage given its own `output` writes it `again`, with each shown
+/// as a snapshot shows bytes.
+fn idempotency(again: &[u8], output: &[u8]) -> TestResult {
+    if again == output {
+        TestResult::Passed
+    } else {
+        TestResult::Mismatch {
+            check: "Idempotency",
+            actual: String::from_utf8_lossy(again).into_owned(),
+            expected: String::from_utf8_lossy(output).into_owned(),
+        }
+    }
+}
+
+/// `linter`'s diagnostics against `target`'s stdlib.
 fn lint(
-    suite: &Suite,
     linter: &Linter,
     parse: &ParseResult<'_>,
+    target: LuaTarget,
     lines: &LineIndex,
 ) -> Vec<LintLine> {
     linter
-        .run(parse, library_for(suite.target), FixKind::empty(), None)
+        .run(parse, library_for(target), FixKind::empty(), None)
         .iter()
         .map(|message| {
             let (line, column) = lines.line_column(message.span().start);

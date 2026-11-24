@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use std::{fs, thread};
+use std::{fs, io, thread};
 
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -8,7 +8,9 @@ use tar::Archive;
 pub(crate) fn fetch_project_tarball(owner: &str, repository: &str, sha: &str) -> PathBuf {
     let cache_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("cache");
     let url = format!("https://codeload.github.com/{owner}/{repository}/tar.gz/{sha}");
-    extract_once(&cache_directory, &format!("{repository}-{sha}"), &url, fetch_bytes)
+    extract_once(&cache_directory, &format!("{repository}-{sha}"), &url, |url| {
+        fetch_bytes(url).unwrap_or_else(|e| panic!("{e}"))
+    })
 }
 
 /// The directory `extracted_name` in `cache_directory`, the one directory
@@ -37,21 +39,26 @@ fn extract_once(
     extracted
 }
 
-/// CI runners see transient connection resets from GitHub's codeload host,
-/// and one failed fetch would fail the whole bench job.
-fn fetch_bytes(url: &str) -> Vec<u8> {
+/// The body at `url`, retried, because CI runners see transient connection
+/// resets, such as from GitHub's codeload host, and one failed fetch would
+/// fail the whole job.
+///
+/// # Errors
+///
+/// Returns the last attempt's error once three attempts have failed.
+pub fn fetch_bytes(url: &str) -> io::Result<Vec<u8>> {
     let mut last_error = String::new();
     for delay in [Duration::ZERO, Duration::from_secs(1), Duration::from_secs(2)] {
         thread::sleep(delay);
         match ureq::get(url).call() {
             Ok(mut response) => match response.body_mut().read_to_vec() {
-                Ok(bytes) => return bytes,
+                Ok(bytes) => return Ok(bytes),
                 Err(error) => last_error = error.to_string(),
             },
             Err(error) => last_error = error.to_string(),
         }
     }
-    panic!("failed to fetch {url} after 3 attempts: {last_error}")
+    Err(io::Error::other(format!("failed to fetch {url} after 3 attempts: {last_error}")))
 }
 
 #[cfg(test)]

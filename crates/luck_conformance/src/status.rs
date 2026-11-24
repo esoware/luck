@@ -1,7 +1,7 @@
 //! What the runtime check expects less of, each with why, the way oxc's
 //! runtime conformance lists the test262 cases it skips.
 
-use crate::suite::Suite;
+use luck_token::LuaTarget::{self, Lua51, Lua52, Lua53, Lua54, Lua55, Luau};
 
 /// A program luck wrote for a suite file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,8 +11,6 @@ pub(crate) enum Variant {
 }
 
 impl Variant {
-    pub(crate) const ALL: [Self; 2] = [Self::Formatted, Self::Minified];
-
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Formatted => "Formatted",
@@ -21,22 +19,22 @@ impl Variant {
     }
 }
 
-const PUC_RIO: &[&str] = &["lua51", "lua52", "lua53", "lua54", "lua55"];
-const LUAU: &[&str] = &["luau"];
+const PUC_RIO: &[LuaTarget] = &[Lua51, Lua52, Lua53, Lua54, Lua55];
+const LUAU: &[LuaTarget] = &[Luau];
 
-/// A file the harness can't run, in the suites named.
+/// A file the harness can't run, in the suites of the dialects named.
 #[derive(Debug)]
 struct Skip {
-    suites: &'static [&'static str],
+    suites: &'static [LuaTarget],
     file: &'static str,
     reason: &'static str,
 }
 
 /// A file whose programs luck wrote can't end the way the original does, in
-/// the suites named.
+/// the suites of the dialects named.
 #[derive(Debug)]
 struct KnownDifference {
-    suites: &'static [&'static str],
+    suites: &'static [LuaTarget],
     file: &'static str,
     variants: &'static [Variant],
     reason: &'static str,
@@ -50,22 +48,22 @@ const NOT_RUNNABLE: &[Skip] = &[
     Skip { suites: PUC_RIO, file: "all.lua", reason: "runs every other test, main.lua among them" },
     Skip { suites: PUC_RIO, file: "main.lua", reason: "runs the standalone interpreter" },
     Skip {
-        suites: &["lua51"],
+        suites: &[Lua51],
         file: "big.lua",
         reason: "expects a string length overflow that only a 32-bit build reaches",
     },
     Skip {
-        suites: &["lua51"],
+        suites: &[Lua51],
         file: "files.lua",
         reason: "renames a file its default input still holds open, which Windows refuses",
     },
     Skip {
-        suites: &["lua55"],
+        suites: &[Lua55],
         file: "files.lua",
         reason: "writes to `/dev/full` whatever `_port` says, which only Linux has",
     },
     Skip {
-        suites: &["lua54"],
+        suites: &[Lua54],
         file: "gc.lua",
         reason: "counts, as memory a collection frees, the buffer metatable that its first long \
                  string makes, which all.lua's earlier tests make first",
@@ -114,50 +112,50 @@ const GARBAGE: &str = "measures the garbage its unused locals make, which minify
 const ADDRESSES: &str = "compares string addresses, which folding a concatenation changes";
 
 const MINIFIED: &[Variant] = &[Variant::Minified];
-const BOTH: &[Variant] = &Variant::ALL;
+const BOTH: &[Variant] = &[Variant::Formatted, Variant::Minified];
 
 const KNOWN_DIFFERENCES: &[KnownDifference] = &[
     KnownDifference { suites: PUC_RIO, file: "calls.lua", variants: MINIFIED, reason: NAMES },
     KnownDifference {
-        suites: &["lua52", "lua53", "lua54", "lua55"],
+        suites: &[Lua52, Lua53, Lua54, Lua55],
         file: "closure.lua",
         variants: MINIFIED,
         reason: UPVALUES,
     },
-    KnownDifference { suites: &["lua51"], file: "closure.lua", variants: BOTH, reason: LINES },
+    KnownDifference { suites: &[Lua51], file: "closure.lua", variants: BOTH, reason: LINES },
     KnownDifference {
-        suites: &["lua54", "lua55"],
+        suites: &[Lua54, Lua55],
         file: "constructs.lua",
         variants: MINIFIED,
         reason: NAMES,
     },
     KnownDifference {
-        suites: &["lua52", "lua53", "lua54", "lua55"],
+        suites: &[Lua52, Lua53, Lua54, Lua55],
         file: "coroutine.lua",
         variants: BOTH,
         reason: LINES,
     },
     KnownDifference { suites: PUC_RIO, file: "db.lua", variants: BOTH, reason: LINES },
     KnownDifference {
-        suites: &["lua51", "lua53", "lua54", "lua55"],
+        suites: &[Lua51, Lua53, Lua54, Lua55],
         file: "errors.lua",
         variants: BOTH,
         reason: LINES,
     },
     KnownDifference {
-        suites: &["lua51", "lua52", "lua53"],
+        suites: &[Lua51, Lua52, Lua53],
         file: "gc.lua",
         variants: MINIFIED,
         reason: GARBAGE,
     },
     KnownDifference {
-        suites: &["lua54", "lua55"],
+        suites: &[Lua54, Lua55],
         file: "literals.lua",
         variants: MINIFIED,
         reason: ADDRESSES,
     },
     KnownDifference {
-        suites: &["lua54", "lua55"],
+        suites: &[Lua54, Lua55],
         file: "locals.lua",
         variants: MINIFIED,
         reason: NAMES,
@@ -168,17 +166,18 @@ const KNOWN_DIFFERENCES: &[KnownDifference] = &[
     KnownDifference { suites: LUAU, file: "tmerror.luau", variants: BOTH, reason: LINES },
 ];
 
-/// Why the harness can't run `file`, if it can't.
-pub(crate) fn not_runnable(suite: &Suite, file: &str) -> Option<&'static str> {
+/// Why the harness can't run `file` of `target`'s suite, if it can't.
+pub(crate) fn not_runnable(target: LuaTarget, file: &str) -> Option<&'static str> {
     NOT_RUNNABLE
         .iter()
-        .find(|skip| skip.file == file && skip.suites.contains(&suite.name))
+        .find(|skip| skip.file == file && skip.suites.contains(&target))
         .map(|skip| skip.reason)
 }
 
-/// Why `file` can't end the same once `variant` rewrote it, if it can't.
+/// Why `file` of `target`'s suite can't end the same once `variant` rewrote
+/// it, if it can't.
 pub(crate) fn known_difference(
-    suite: &Suite,
+    target: LuaTarget,
     file: &str,
     variant: Variant,
 ) -> Option<&'static str> {
@@ -186,7 +185,7 @@ pub(crate) fn known_difference(
         .iter()
         .find(|difference| {
             difference.file == file
-                && difference.suites.contains(&suite.name)
+                && difference.suites.contains(&target)
                 && difference.variants.contains(&variant)
         })
         .map(|difference| difference.reason)

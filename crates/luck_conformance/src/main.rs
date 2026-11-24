@@ -21,21 +21,22 @@
 mod execute;
 mod runtime;
 mod snapshot;
+mod stages;
 mod status;
 mod suite;
-mod tools;
 
 use std::path::Path;
 use std::{env, io};
 
 use luck_ast::MIN_STACK_BYTES;
+use luck_linter::{CategoryLevels, LintConfig, Linter, RuleLevel};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use similar::TextDiff;
 
-use crate::snapshot::{CoverageResult, LintLine, TestResult};
+use crate::snapshot::{CoverageResult, LintLine, Snapshot, TestResult};
+use crate::stages::FileReport;
 use crate::suite::Suite;
-use crate::tools::FileReport;
 
 /// With `--filter` and part of a path, checks only the files whose path holds
 /// it, prints each failure in full, and writes no snapshot.
@@ -44,7 +45,7 @@ fn main() -> io::Result<()> {
     execute::start(suite)?;
     match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [mode, chunk_name, verdict_path] if mode == execute::MODE => {
-            execute::run(suite, chunk_name, Path::new(verdict_path))
+            execute::run(suite.runner, chunk_name, Path::new(verdict_path))
         }
         [] => run(suite, None),
         [flag, filter] if flag == "--filter" => run(suite, Some(filter)),
@@ -57,14 +58,17 @@ fn main() -> io::Result<()> {
 
 type StageResult = fn(&FileReport) -> Option<&TestResult>;
 
-fn run(suite: &'static Suite, filter: Option<&str>) -> io::Result<()> {
+fn run(suite: &Suite, filter: Option<&str>) -> io::Result<()> {
     let root = suite.fetch()?;
     let files = suite.files(&root, filter)?;
     let pool =
         ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build().map_err(io::Error::other)?;
-    let linter = tools::every_rule();
+    let linter = Linter::new(LintConfig {
+        categories: CategoryLevels::all(RuleLevel::Warn),
+        ..LintConfig::default()
+    });
     let reports: Vec<FileReport> = pool.install(|| {
-        files.par_iter().map(|file| tools::check(suite, &root, file, &linter)).collect()
+        files.par_iter().map(|file| stages::check(suite, &root, file, &linter)).collect()
     });
 
     let stages: [(&str, StageResult); 5] = [
@@ -75,51 +79,40 @@ fn run(suite: &'static Suite, filter: Option<&str>) -> io::Result<()> {
         ("runtime", |report| report.runtime.as_ref()),
     ];
     for (stage, result_of) in stages {
-        let name = format!("{stage}_{}", suite.name);
-        let results: Vec<CoverageResult> = files
+        let results: Vec<CoverageResult<'_>> = files
             .iter()
             .zip(&reports)
             .filter_map(|(file, report)| {
-                result_of(report).map(|result| CoverageResult {
-                    path: file.path.clone(),
-                    should_fail: report.should_fail,
-                    result: result.clone(),
-                })
+                result_of(report).map(|result| CoverageResult { path: &file.path, result })
             })
             .collect();
-        let summary = snapshot::summary(&name, &results);
-        let failures = snapshot::failures(&results);
-        report(&name, &summary, &failures, filter.is_some().then_some(results.as_slice()))?;
+        let snapshot = snapshot::coverage(format!("{stage}_{}", suite.name), &results);
+        report(&snapshot, filter.is_some().then_some(results.as_slice()))?;
     }
 
-    let name = format!("linter_{}", suite.name);
     let linted: Vec<(&str, &Result<Vec<LintLine>, TestResult>)> = files
         .iter()
         .zip(&reports)
         .filter_map(|(file, report)| report.linter.as_ref().map(|lint| (file.path.as_str(), lint)))
         .collect();
-    let (summary, diagnostics) = snapshot::lint(&name, &linted);
-    report(&name, &summary, &diagnostics, filter.is_some().then_some(&[]))
+    let snapshot = snapshot::lint(format!("linter_{}", suite.name), &linted);
+    report(&snapshot, filter.is_some().then_some(&[]))
 }
 
-/// Prints a stage's summary, and with `filtered`, its failures and a diff for
-/// each mismatch, or else writes its snapshot.
+/// Prints a stage's summary and writes its snapshot, or with `filtered`, the
+/// results of the files a filter kept, prints the whole snapshot and a diff
+/// for each mismatch among them.
 #[expect(clippy::print_stdout, reason = "the console report is this tool's output")]
-fn report(
-    name: &str,
-    summary: &str,
-    failures: &str,
-    filtered: Option<&[CoverageResult]>,
-) -> io::Result<()> {
+fn report(snapshot: &Snapshot, filtered: Option<&[CoverageResult<'_>]>) -> io::Result<()> {
     let Some(results) = filtered else {
-        println!("{summary}");
-        return snapshot::save(name, &format!("{summary}\n{failures}"));
+        println!("{}", snapshot.summary);
+        return snapshot.save();
     };
-    println!("{summary}\n{failures}");
-    for CoverageResult { path, result, .. } in results {
-        if let TestResult::Mismatch(case, actual, expected) = result {
+    println!("{snapshot}");
+    for &CoverageResult { path, result } in results {
+        if let TestResult::Mismatch { check, actual, expected } = result {
             let diff = TextDiff::from_lines(expected, actual);
-            println!("{case}: {path}\n{}", diff.unified_diff().header("expected", "actual"));
+            println!("{check}: {path}\n{}", diff.unified_diff().header("expected", "actual"));
         }
     }
     Ok(())

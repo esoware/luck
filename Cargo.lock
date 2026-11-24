@@ -1002,6 +1002,7 @@ dependencies = [
  "flate2",
  "luck_allocator",
  "luck_ast",
+ "luck_benchmark_files",
  "luck_codegen",
  "luck_diagnostics",
  "luck_formatter",
@@ -1017,7 +1018,6 @@ dependencies = [
  "similar",
  "tar",
  "tempfile",
- "ureq",
 ]
 
 [[package]]

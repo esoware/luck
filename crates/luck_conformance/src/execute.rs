@@ -15,13 +15,44 @@ use crate::suite::{Runner, Suite};
 /// instead of a suite.
 pub(crate) const MODE: &str = "execute";
 
-/// A verdict file starts with one of these lines.
-pub(crate) const RETURNED: &str = "returned";
-pub(crate) const FAILED: &str = "failed";
-
 /// Twice the 1 GiB buffer `buffers.luau` makes, and a bound on the tests that
 /// exhaust memory on purpose.
 const MEMORY_LIMIT_BYTES: usize = 1 << 31;
+
+/// How a program ended in the interpreter, which the child writes to its
+/// verdict file.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// What the program returned, one value per line.
+    Returned(String),
+    Failed(String),
+}
+
+/// A verdict file starts with one of these lines, and the values or the
+/// error follow it.
+const RETURNED: &str = "returned";
+const FAILED: &str = "failed";
+
+impl Verdict {
+    fn write(&self, path: &Path) -> io::Result<()> {
+        let (kind, payload) = match self {
+            Self::Returned(values) => (RETURNED, values),
+            Self::Failed(error) => (FAILED, error),
+        };
+        fs::write(path, format!("{kind}\n{payload}"))
+    }
+
+    /// The verdict a child wrote to `path`, if it wrote one.
+    pub(crate) fn read(path: &Path) -> Option<Self> {
+        let verdict = fs::read_to_string(path).ok()?;
+        let (kind, payload) = verdict.split_once('\n').unwrap_or((&verdict, ""));
+        match kind {
+            RETURNED => Some(Self::Returned(payload.to_owned())),
+            FAILED => Some(Self::Failed(payload.to_owned())),
+            _ => None,
+        }
+    }
+}
 
 /// Sets up the interpreter for `suite`, before anything else in this process
 /// uses it, and checks it's the release the suite is pinned to.
@@ -59,19 +90,16 @@ pub(crate) fn compiles(program: &[u8]) -> bool {
     Lua::new().load(program).into_function().is_ok()
 }
 
-/// Runs the program on standard input as the chunk `chunk_name` of `suite`,
-/// in the current directory.
-///
-/// It writes how the program ended to `verdict_path`: the [`RETURNED`] line
-/// and each value it returned on a line of its own, or the [`FAILED`] line and
-/// the error.
-pub(crate) fn run(suite: &Suite, chunk_name: &str, verdict_path: &Path) -> io::Result<()> {
+/// Runs the program on standard input as the chunk `chunk_name`, set up as
+/// `runner` sets up a test, in the current directory, and writes its
+/// [`Verdict`] to `verdict_path`.
+pub(crate) fn run(runner: Runner, chunk_name: &str, verdict_path: &Path) -> io::Result<()> {
     let mut program = Vec::new();
     io::stdin().read_to_end(&mut program)?;
-    fs::write(verdict_path, execute(suite, chunk_name, program))
+    execute(runner, chunk_name, program).write(verdict_path)
 }
 
-fn execute(suite: &Suite, chunk_name: &str, program: Vec<u8>) -> String {
+fn execute(runner: Runner, chunk_name: &str, program: Vec<u8>) -> Verdict {
     // SAFETY: The suites need the `debug` library, which mlua counts as
     // unsafe because Lua code can use it to break mlua's invariants. The
     // programs are the suites' own tests and luck's output for them, and each
@@ -81,7 +109,7 @@ fn execute(suite: &Suite, chunk_name: &str, program: Vec<u8>) -> String {
     let lua = unsafe { Lua::unsafe_new_with(StdLib::ALL, LuaOptions::default()) };
     let ran = lua.set_memory_limit(MEMORY_LIMIT_BYTES).and_then(|_unlimited| {
         let main = lua.load(program).set_name(chunk_name);
-        match suite.runner {
+        match runner {
             Runner::PucRio => {
                 // Skip the tests that take long or much memory, the ones
                 // whose results differ between platforms, and the messages
@@ -122,12 +150,8 @@ fn execute(suite: &Suite, chunk_name: &str, program: Vec<u8>) -> String {
     });
     // The values are only readable while `lua` lives.
     match ran {
-        Ok(values) => values.iter().fold(String::from(RETURNED), |mut verdict, value| {
-            verdict.push('\n');
-            verdict.push_str(&render(value));
-            verdict
-        }),
-        Err(error) => format!("{FAILED}\n{}", message(&error)),
+        Ok(values) => Verdict::Returned(values.iter().map(render).collect::<Vec<_>>().join("\n")),
+        Err(error) => Verdict::Failed(message(&error)),
     }
 }
 
