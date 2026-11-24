@@ -230,7 +230,7 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
             callee.text = entry_point.into();
         }
         if callee_suffixes > 0
-            && let Some(suffixes) = OneOrMore::from_list(chain.suffixes.split_off_rest())
+            && let Some(suffixes) = OneOrMore::from_list(chain.suffixes.split_off(1))
         {
             chain.suffixes = suffixes;
         }

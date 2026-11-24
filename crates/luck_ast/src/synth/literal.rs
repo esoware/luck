@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn number_f64_handles_special_values() {
+    fn number_f64_puts_a_negative_value_under_a_minus() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         assert_eq!(number_value(&synth.number_f64(1.5)), LuaNumber::Float(1.5));
@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn nan_encoding_is_deliberately_not_bit_exact() {
+    fn every_nan_builds_zero_over_zero() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         for bits in [

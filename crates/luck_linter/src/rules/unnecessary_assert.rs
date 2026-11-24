@@ -2,7 +2,7 @@ use luck_ast::{AstKind, AstType, Call, GetSpan as _};
 use luck_diagnostics::Tag;
 use luck_semantic::{AstNode, AstTypesBitset};
 
-use crate::call::{CallArgs, calls_in, is_global_call};
+use crate::call::{CallArgs, is_global_call};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
@@ -24,7 +24,7 @@ impl Rule for UnnecessaryAssert {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (_, call) in calls_in(chain) {
+        for (_, call) in chain.calls() {
             if let Some(finding) = check_call(call, context) {
                 context.diagnostic(finding);
             }

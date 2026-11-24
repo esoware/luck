@@ -1,4 +1,4 @@
-use luck_token::{CompoundOp, LuaVersion};
+use luck_token::CompoundOp;
 
 use crate::expr::{Expression, Var};
 use crate::function::{FunctionAttribute, Parameter};
@@ -487,10 +487,8 @@ impl<'ast> Synth<'ast> {
         let given = stmts.into_iter();
         let last_index = given.len().saturating_sub(1);
         let ended = given.enumerate().map(|(i, stmt)| {
-            let has_to_end_block = match self.version {
-                Some(version) => stmt.has_to_end_block(version),
-                None => LuaVersion::ALL.iter().any(|&version| stmt.has_to_end_block(version)),
-            };
+            let has_to_end_block =
+                self.versions().iter().any(|&version| stmt.has_to_end_block(version));
             if i < last_index && has_to_end_block {
                 let block = Block::new(self.next_span(), self.list([stmt]));
                 Statement::new_do_block(self.next_span(), block, self.allocator)
@@ -550,7 +548,7 @@ impl<'ast> Synth<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::BinOp;
+    use luck_token::{BinOp, LuaVersion};
 
     use super::*;
     use crate::fixtures::Fixture;

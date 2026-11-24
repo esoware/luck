@@ -1,7 +1,6 @@
 use luck_ast::{AstKind, AstType, Call, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 
-use crate::call::calls_in;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::FixKind;
@@ -33,7 +32,7 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
             return;
         };
         let last = if context.is_statement(node) { chain.suffixes.len() } else { usize::MAX };
-        for (index, call) in calls_in(chain) {
+        for (index, call) in chain.calls() {
             if index + 1 != last {
                 check_call(call, context);
             }

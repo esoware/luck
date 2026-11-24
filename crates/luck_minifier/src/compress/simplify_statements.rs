@@ -7,7 +7,6 @@ use std::{iter, mem};
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
     BinaryLink, BinaryOp, Block, Expression, GetSpan as _, IfStatement, OneOrMore, Statement,
-    is_multi_value,
 };
 use luck_token::{BinOp, LuaVersion};
 use luck_value::ToBoolean as _;
@@ -209,7 +208,7 @@ impl<'ast> Compressor<'_, 'ast> {
         };
         // `return f()` returns every value f does, but as the `or` fallback it
         // would be truncated to one, so leave the chain alone.
-        if is_multi_value(fallback) {
+        if fallback.is_multi_value() {
             return;
         }
         // The guards and the fallback make one run of `or`s whatever its

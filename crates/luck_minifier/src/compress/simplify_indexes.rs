@@ -1,9 +1,7 @@
 //! `t["foo"]` becomes `t.foo`, `{["foo"] = 1}` becomes `{foo = 1}`, and
 //! `{[1] = a, [2] = b}` becomes `{a, b}`.
 
-use luck_ast::{
-    Expression, Field, Name, Suffix, TableConstructor, is_multi_value, is_valid_identifier_in,
-};
+use luck_ast::{Expression, Field, Name, Suffix, TableConstructor, is_valid_identifier_in};
 use luck_token::LuaVersion;
 
 /// The name a `["name"]` key's value is, when it's an identifier, however
@@ -64,7 +62,7 @@ fn is_sequential_from_one(fields: &[Field<'_>]) -> bool {
     // a call or `...`.
     let has_multi_value_tail = matches!(
         fields.last(),
-        Some(Field::Bracketed { value, .. }) if is_multi_value(value)
+        Some(Field::Bracketed { value, .. }) if value.is_multi_value()
     );
     !fields.is_empty() && has_sequential_keys && !has_multi_value_tail
 }

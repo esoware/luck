@@ -8,7 +8,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{
     AttributedName, Block, Expression, FunctionBody, GetSpan as _, MethodCall, NumericFor,
-    Parameter, Statement, Suffix, SuffixedExpression, Type, VarArgParam, VisitMut, is_multi_value,
+    Parameter, Statement, Suffix, SuffixedExpression, Type, VarArgParam, VisitMut,
 };
 
 pub(crate) fn strip_types<'ast>(allocator: &'ast Allocator, block: &mut Block<'ast>) {
@@ -41,7 +41,7 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
         match expr {
             Expression::TypeCast(cast) => {
                 let inner = cast.expr.take();
-                *expr = if is_multi_value(&inner) {
+                *expr = if inner.is_multi_value() {
                     let span = inner.span();
                     Expression::new_parenthesized(span, inner, self.allocator)
                 } else {
@@ -51,7 +51,7 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
             Expression::Suffixed(chain) if chain.suffixes.iter().all(is_instantiation) => {
                 let mut prefix = chain.prefix.take();
                 if let Expression::Parenthesized(parenthesized) = &mut prefix
-                    && !is_multi_value(&parenthesized.expr)
+                    && !parenthesized.expr.is_multi_value()
                 {
                     prefix = parenthesized.expr.take();
                 }

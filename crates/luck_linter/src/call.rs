@@ -1,24 +1,11 @@
 use std::slice;
 
 use luck_ast::{
-    Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, SuffixedExpression,
-    TableConstructor, is_multi_value,
+    Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, TableConstructor,
 };
 use luck_stdlib::SemanticAnalysis;
 use luck_token::Span;
 use luck_value::{ToBoolean as _, ValueContext};
-
-/// Each call in `chain`, first to last, with the index of its suffix, which
-/// [`ChainCallees::callee`](luck_stdlib::ChainCallees::callee) takes.
-pub(crate) fn calls_in<'ast>(
-    chain: &'ast SuffixedExpression<'ast>,
-) -> impl Iterator<Item = (usize, Call<'ast>)> {
-    chain
-        .suffixes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, suffix)| Some((index, Call::new(chain.head(index), suffix)?)))
-}
 
 /// Whether `call` is a plain `name(...)` call to the host's global `name`. A
 /// method call, or a `name` the chunk shadows or rebinds, is user code.
@@ -72,7 +59,7 @@ impl<'ast> CallArg<'ast> {
     /// Whether it's a call or `...`, which as the last argument can expand
     /// to any number of values, none included.
     pub(crate) fn is_multi_value(self) -> bool {
-        matches!(self, Self::Expr(expr) if is_multi_value(expr))
+        matches!(self, Self::Expr(expr) if expr.is_multi_value())
     }
 
     /// Whether the argument's value is truthy, when that's known.

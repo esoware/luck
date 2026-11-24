@@ -24,7 +24,7 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
     let mut names: BTreeSet<String> =
         schema.types.iter().map(|type_def| type_def.name.clone()).collect();
     let mut options = BTreeSet::new();
-    for (ty, tokens) in schema.field_types_with_tokens() {
+    for (ty, tokens) in schema.field_types() {
         if let FieldType::Option(inner) = ty
             && !matches!(**inner, FieldType::Box(_))
         {

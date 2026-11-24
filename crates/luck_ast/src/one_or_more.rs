@@ -44,12 +44,6 @@ impl<'ast, T> OneOrMore<'ast, T> {
         self.0.insert(index, item, allocator);
     }
 
-    /// Removes every item after the first and returns them in order, without
-    /// allocating, as [`List::split_off`] does.
-    pub fn split_off_rest(&mut self) -> List<'ast, T> {
-        self.0.split_off(1)
-    }
-
     /// Keeps the first `at` items and returns the rest in order, without
     /// allocating, as [`List::split_off`] does.
     ///

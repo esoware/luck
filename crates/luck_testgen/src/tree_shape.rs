@@ -13,7 +13,7 @@ use luck_ast::{
     FunctionAttribute, FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList,
     GenericTypeParam, IfStatement, Name, NumberLiteral, Parameter, Statement, StringLiteral,
     Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration,
-    TypeDeclarationValue, TypeField, Var, is_multi_value, unwrap_parentheses,
+    TypeDeclarationValue, TypeField, Var,
 };
 use luck_token::{Associativity, LuaNumber, UnOp};
 
@@ -255,8 +255,8 @@ impl Printer {
             Expression::Name(name) => self.name("Name", name),
             Expression::Suffixed(chain) => self.suffixed("Suffixed", chain),
             Expression::Parenthesized(parenthesized) => {
-                let inner = unwrap_parentheses(&parenthesized.expr);
-                if is_expanded && is_multi_value(inner) {
+                let inner = parenthesized.expr.unwrap_parentheses();
+                if is_expanded && inner.is_multi_value() {
                     self.open("OneValue");
                     self.expr(inner);
                     self.close();
@@ -272,7 +272,7 @@ impl Printer {
                 // negates an integer, which raises.
                 if unary.op == UnOp::Neg
                     && let Expression::Parenthesized(parenthesized) = &unary.operand
-                    && let Expression::Integer(literal) = unwrap_parentheses(&parenthesized.expr)
+                    && let Expression::Integer(literal) = parenthesized.expr.unwrap_parentheses()
                 {
                     self.line(&format!("Parenthesized Integer {}", literal.value));
                 } else {

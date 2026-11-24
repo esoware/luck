@@ -1,7 +1,7 @@
 use luck_allocator::List;
 use luck_ast::{
-    Attribute, AttributedName, FunctionAttribute, FunctionName, GetSpan as _, LocalAssignmentKind,
-    LocalFunctionKind, Name, Statement, TypeDeclarationValue, is_multi_value,
+    Attribute, AttributedName, Expression, FunctionAttribute, FunctionName, GetSpan as _,
+    LocalAssignmentKind, LocalFunctionKind, Name, Statement, TypeDeclarationValue,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
@@ -157,7 +157,8 @@ impl<'ast> Parser<'ast> {
         // that a last call or `...` may supply the rest.
         if kind.is_const()
             && !(has_values
-                && (exprs.len() == names.len() || exprs.last().is_some_and(is_multi_value)))
+                && (exprs.len() == names.len()
+                    || exprs.last().is_some_and(Expression::is_multi_value)))
         {
             self.error(span, "missing initializer in `const` declaration");
         }

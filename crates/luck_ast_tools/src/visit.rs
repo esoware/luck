@@ -91,15 +91,17 @@ fn generate(schema: &Schema, access: Access, description: &str) -> TokenStream {
         Shape::Struct(fields) => walk_struct(schema, access, type_def, fields),
         Shape::Enum(variants) => walk_enum(schema, access, type_def, variants),
     });
-    let (trait_name, kind_ty, enter_text) = match access {
+    let (trait_name, kind_name, kind_ty, enter_text) = match access {
         Access::Shared => (
             "Visit",
+            "AstKind",
             quote!(AstKind<'ast>),
             "Called on entering each node, before what it holds, and always paired with \
              [`Visit::leave_node`].",
         ),
         Access::Mutable => (
             "VisitMut",
+            "AstType",
             quote!(AstType),
             "Called on entering each node, with its type, before what it holds, and always \
              paired with [`VisitMut::leave_node`].",
@@ -112,14 +114,7 @@ fn generate(schema: &Schema, access: Access, description: &str) -> TokenStream {
         levels_doc(schema)
     );
     let names = visited.iter().map(|type_def| type_def.name.as_str());
-    let kind_name = if access == Access::Shared { "AstKind" } else { "AstType" };
-    let mut imported: Vec<&str> = names.chain([kind_name]).collect();
-    if access == Access::Mutable {
-        imported.extend(["BinaryOp", "SuffixedExpression"]);
-    }
-    imported.sort_unstable();
-    imported.dedup();
-    let imports = schema.imports(imported);
+    let imports = schema.imports(names.chain([kind_name]));
     let separator = line_break();
     let (trait_doc, enter_doc) = (doc(description), doc(enter_text));
     let descend_doc = doc(&descend_text);
@@ -240,11 +235,11 @@ fn walk_enum(
             Payload::Single(payload, tokens) if schema.visits(payload) => {
                 let snake = snake_case(payload.node().expect("a visited payload holds a node"));
                 let payload_binding = binding_for(&snake);
-                let visits = visit_value(schema, payload, &quote!(#payload_binding), &snake);
+                let steps = visit_value(schema, payload, &quote!(#payload_binding), &snake);
                 matched.push(
                     &format!("{payload_binding}: {tokens}"),
                     quote!(#ident::#variant_ident(#payload_binding)),
-                    arm_body(&visits),
+                    arm_body(&steps),
                 );
             }
             Payload::Single(..) => matched.push("", quote!(#ident::#variant_ident(_)), quote!({})),
@@ -254,7 +249,7 @@ fn walk_enum(
                 let idents = bound.iter().map(|field| field.ident());
                 let rest = (bound.len() < fields.len()).then(|| quote!(..));
                 let pattern = quote!(#ident::#variant_ident { #(#idents,)* #rest });
-                let visits: Vec<Visit> = bound
+                let steps: Vec<Step> = bound
                     .iter()
                     .flat_map(|field| {
                         let field_ident = field.ident();
@@ -263,7 +258,7 @@ fn walk_enum(
                     .collect();
                 let bindings: Vec<String> =
                     bound.iter().map(|field| format!("{}: {}", field.name, field.tokens)).collect();
-                matched.push(&bindings.join(", "), pattern, arm_body(&visits));
+                matched.push(&bindings.join(", "), pattern, arm_body(&steps));
             }
         }
     }
@@ -279,24 +274,24 @@ fn walk_enum(
 }
 
 /// One step of a walk: a call, which a statement ends with `;`, or a block.
-struct Visit {
+struct Step {
     tokens: TokenStream,
     is_call: bool,
 }
 
-fn statements(visits: &[Visit]) -> TokenStream {
-    let statements = visits.iter().map(|visit| {
-        let tokens = &visit.tokens;
-        if visit.is_call { quote!(#tokens;) } else { quote!(#tokens) }
+fn statements(steps: &[Step]) -> TokenStream {
+    let statements = steps.iter().map(|step| {
+        let tokens = &step.tokens;
+        if step.is_call { quote!(#tokens;) } else { quote!(#tokens) }
     });
     quote!(#(#statements)*)
 }
 
-fn arm_body(visits: &[Visit]) -> TokenStream {
-    match visits {
-        [visit] if visit.is_call => visit.tokens.clone(),
+fn arm_body(steps: &[Step]) -> TokenStream {
+    match steps {
+        [step] if step.is_call => step.tokens.clone(),
         _ => {
-            let statements = statements(visits);
+            let statements = statements(steps);
             quote!({ #statements })
         }
     }
@@ -304,12 +299,12 @@ fn arm_body(visits: &[Visit]) -> TokenStream {
 
 /// The visit of `field` at `target`, inside a level of its own when it's
 /// marked one.
-fn visit_field(schema: &Schema, field: &FieldDef, target: &TokenStream) -> Vec<Visit> {
+fn visit_field(schema: &Schema, field: &FieldDef, target: &TokenStream) -> Vec<Step> {
     if !field.is_level {
         return visit_value(schema, &field.ty, target, &field.name);
     }
-    let in_level = |visits: &[Visit]| {
-        let statements = statements(visits);
+    let in_level = |steps: &[Step]| {
+        let statements = statements(steps);
         quote! {
             if self.descend() {
                 #statements
@@ -329,29 +324,29 @@ fn visit_field(schema: &Schema, field: &FieldDef, target: &TokenStream) -> Vec<V
         let level = in_level(&visit_value(schema, &field.ty, target, &field.name));
         quote!({ #level })
     };
-    vec![Visit { tokens, is_call: false }]
+    vec![Step { tokens, is_call: false }]
 }
 
 /// The visits of what `ty` at `target` holds. An `Option` that holds a value
 /// binds it as `name`.
-fn visit_value(schema: &Schema, ty: &FieldType, target: &TokenStream, name: &str) -> Vec<Visit> {
+fn visit_value(schema: &Schema, ty: &FieldType, target: &TokenStream, name: &str) -> Vec<Step> {
     match ty {
         FieldType::Node(node) => {
             let visit = schema.get(node).expect("every node is in the schema").visit_ident();
-            vec![Visit { tokens: quote!(self.#visit(#target)), is_call: true }]
+            vec![Step { tokens: quote!(self.#visit(#target)), is_call: true }]
         }
         FieldType::Box(inner) => visit_value(schema, inner, target, name),
         FieldType::List(inner) | FieldType::OneOrMore(inner) => {
             let snake = snake_case(inner.node().expect("a visited list holds nodes"));
             let item = binding_for(&snake);
             let body = statements(&visit_value(schema, inner, &quote!(#item), &snake));
-            vec![Visit { tokens: quote!(for #item in #target { #body }), is_call: false }]
+            vec![Step { tokens: quote!(for #item in #target { #body }), is_call: false }]
         }
         FieldType::Option(inner) => {
             let present = binding_for(name);
             let body = statements(&visit_value(schema, inner, &quote!(#present), name));
             let tokens = quote!(if let Some(#present) = #target { #body });
-            vec![Visit { tokens, is_call: false }]
+            vec![Step { tokens, is_call: false }]
         }
         FieldType::Span | FieldType::Other => Vec::new(),
     }

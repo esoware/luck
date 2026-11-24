@@ -9,7 +9,7 @@ use luck_stdlib::{
 };
 use luck_token::{index_to_offset, is_lua_whitespace};
 
-use crate::call::{CallArgs, calls_in, string_literal_value};
+use crate::call::{CallArgs, string_literal_value};
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, FixKind, RuleFixer};
@@ -37,7 +37,7 @@ impl Rule for Deprecated {
         };
         // A call statement's call is its chain's last.
         let statement_call = context.is_statement(node).then(|| chain.suffixes.len() - 1);
-        for (index, call) in calls_in(chain) {
+        for (index, call) in chain.calls() {
             if let Some(callee) = context.callee(node, index) {
                 check_call(call, callee, statement_call == Some(index), context);
             }

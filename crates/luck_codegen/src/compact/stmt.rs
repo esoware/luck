@@ -3,7 +3,6 @@ use luck_ast::{
     FunctionAttribute, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction,
     GlobalStar, IfStatement, LocalAssignment, LocalFunction, LocalFunctionKind, NumericFor,
     Parameter, RepeatLoop, Slot, Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
-    leading_prefix,
 };
 
 use super::Printer;
@@ -329,7 +328,7 @@ impl Printer {
 }
 
 fn starts_with_paren(stmt: &Statement<'_>) -> bool {
-    leading_prefix(stmt).is_some_and(|prefix| {
+    stmt.leading_prefix().is_some_and(|prefix| {
         matches!(prefix, Expression::Parenthesized(_)) || prefix.needs_parens(Slot::PREFIX)
     })
 }

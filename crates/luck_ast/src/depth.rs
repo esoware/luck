@@ -44,7 +44,7 @@ pub const MIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
 pub fn block_nesting_depth(block: &Block<'_>) -> usize {
-    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    let mut meter = DepthMeter::default();
     meter.visit_block(block);
     meter.deepest
 }
@@ -54,7 +54,7 @@ pub fn block_nesting_depth(block: &Block<'_>) -> usize {
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
 pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
-    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    let mut meter = DepthMeter::default();
     meter.visit_expr(expr);
     meter.deepest
 }
@@ -64,7 +64,7 @@ pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
 ///
 /// The walk stops there, so it is safe on a type of any depth.
 pub fn type_nesting_depth(ty: &Type<'_>) -> usize {
-    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    let mut meter = DepthMeter::default();
     meter.visit_type(ty);
     meter.deepest
 }
@@ -80,6 +80,7 @@ pub fn spans_past_nesting_cap(block: &Block<'_>, depth: usize) -> Vec<Span> {
     finder.spans
 }
 
+#[derive(Default)]
 struct DepthMeter {
     depth: usize,
     deepest: usize,
@@ -142,9 +143,7 @@ mod tests {
     use luck_token::{BinOp, UnOp};
 
     use super::*;
-    use crate::expr::BinaryLink;
     use crate::fixtures::Fixture;
-    use crate::one_or_more::OneOrMore;
     use crate::synth::{FunctionSignature, Synth};
 
     fn return_depth<'ast>(synth: Synth<'ast>, expr: Expression<'ast>) -> usize {
@@ -239,12 +238,8 @@ mod tests {
         // `(a .. b) .. c`, which prints with its parentheses.
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
-        let run = |first, operand| {
-            let links = OneOrMore::new(BinaryLink::new(BinOp::Concat, operand), allocator);
-            Expression::new_binary_op(Span::default(), first, links, allocator)
-        };
-        let nested = run(run(synth.name_expr("a"), synth.name_expr("b")), synth.name_expr("c"));
+        let head = fixture.unspliced_run(synth.name_expr("a"), BinOp::Concat, synth.name_expr("b"));
+        let nested = fixture.unspliced_run(head, BinOp::Concat, synth.name_expr("c"));
         assert_eq!(expr_nesting_depth(&nested), 2);
     }
 

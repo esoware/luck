@@ -1,4 +1,4 @@
-use luck_ast::{AstKind, AstType, Expression, GetSpan as _, LocalAssignment, is_multi_value};
+use luck_ast::{AstKind, AstType, Expression, GetSpan as _, LocalAssignment};
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 
@@ -63,7 +63,7 @@ fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_>) -> Option
 
     // A call or `...` that ended up last would expand to fill the names the
     // `nil`s covered, so leave those alone.
-    if is_multi_value(last_kept_expr) {
+    if last_kept_expr.is_multi_value() {
         return None;
     }
 

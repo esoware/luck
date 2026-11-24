@@ -9,7 +9,6 @@ use crate::expr::{
 };
 use crate::function::FunctionAttribute;
 use crate::one_or_more::OneOrMore;
-use crate::query::is_multi_value;
 use crate::stmt::Block;
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{Type, TypeArgs};
@@ -142,7 +141,7 @@ impl<'ast> Synth<'ast> {
     /// Use it at the end of a call, return, or assignment list when exactly
     /// one value is meant, such as a bytecode `CALL` that requests one result.
     pub fn single_value(&self, expr: Expression<'ast>) -> Expression<'ast> {
-        if is_multi_value(&expr) {
+        if expr.is_multi_value() {
             Expression::new_parenthesized(self.next_span(), expr, self.allocator)
         } else {
             expr

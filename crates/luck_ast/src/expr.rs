@@ -1,3 +1,5 @@
+use std::mem;
+
 use luck_allocator::{Box, List};
 use luck_ast_macros::Ast;
 use luck_token::{BinOp, Span, UnOp};
@@ -34,6 +36,54 @@ pub enum Expression<'ast> {
     InterpolatedString(Box<'ast, InterpolatedString<'ast>>),
     TypeCast(Box<'ast, TypeCast<'ast>>),
     Error(Span),
+}
+
+impl Expression<'_> {
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, which costs no allocation. Assign the replacement back.
+    #[must_use]
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::new(0, 0)))
+    }
+
+    /// Whether this is a call or `...`, the only forms that can yield any
+    /// number of values, none included.
+    ///
+    /// Parenthesizing one, or moving it out of the last position of a list,
+    /// truncates it to exactly one value.
+    pub fn is_multi_value(&self) -> bool {
+        match self {
+            Self::VarArg(_) => true,
+            Self::Suffixed(chain) => chain.is_call(),
+            Self::Nil(_)
+            | Self::False(_)
+            | Self::True(_)
+            | Self::Number(_)
+            | Self::Integer(_)
+            | Self::StringLiteral(_)
+            | Self::FunctionDef(_)
+            | Self::Name(_)
+            | Self::Parenthesized(_)
+            | Self::TableConstructor(_)
+            | Self::BinaryOp(_)
+            | Self::UnaryOp(_)
+            | Self::IfExpression(_)
+            | Self::InterpolatedString(_)
+            | Self::TypeCast(_)
+            | Self::Error(_) => false,
+        }
+    }
+
+    /// What's inside every [`Expression::Parenthesized`] around this, for a
+    /// place where taking one value, or reading a Luau integer as a value,
+    /// changes nothing.
+    pub fn unwrap_parentheses(&self) -> &Self {
+        let mut current = self;
+        while let Self::Parenthesized(parenthesized) = current {
+            current = &parenthesized.expr;
+        }
+        current
+    }
 }
 
 /// An assignment target.

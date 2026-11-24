@@ -3,7 +3,7 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::BinOp;
 
-use crate::call::{calls_in, is_global_call};
+use crate::call::is_global_call;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
@@ -26,7 +26,7 @@ impl Rule for TypeCheckInsideCall {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (_, call) in calls_in(chain) {
+        for (_, call) in chain.calls() {
             if let Some(finding) = check_call(call, context.semantic) {
                 context.diagnostic(finding);
             }

@@ -30,7 +30,7 @@ pub(crate) fn signature_help(
     let innermost = nodes.node_at(offset)?;
     let (call, args) =
         iter::once(innermost).chain(nodes.ancestor_ids(innermost)).find_map(|id| {
-            nodes.kind(id).as_suffixed_expr()?.calls().find_map(|call| {
+            nodes.kind(id).as_suffixed_expr()?.calls().find_map(|(_, call)| {
                 let FunctionArgs::Parenthesized { span: parens, args } = call.args else {
                     return None;
                 };

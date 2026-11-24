@@ -65,6 +65,7 @@
 //! assert!(matches!(expr, Expression::Number(literal) if literal.value.to_f64() == 0.5));
 //! ```
 
+mod binary_run;
 mod chain;
 mod content_eq;
 mod counts;
@@ -74,14 +75,13 @@ mod expr;
 mod fixtures;
 mod function;
 mod generated;
+mod identifier;
 mod leaf;
 mod one_or_more;
 mod parens;
-mod query;
 mod span;
 mod stmt;
 mod synth;
-mod take;
 mod types;
 
 pub use chain::{Call, ChainHead, DottedPath};
@@ -98,10 +98,12 @@ pub use expr::{
 };
 pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
 pub use generated::{AST_TYPE_MAX, AstKind, AstType, Visit, VisitMut};
+pub use identifier::{
+    is_valid_identifier, is_valid_identifier_in, sanitize_identifier, sanitize_identifier_in,
+};
 pub use leaf::{IntegerLiteral, Name, NameIndex, NumberLiteral, StringLiteral};
 pub use one_or_more::OneOrMore;
-pub use parens::{Follower, Slot};
-pub use query::{is_multi_value, leading_prefix, unwrap_parentheses};
+pub use parens::Slot;
 pub use span::GetSpan;
 pub use stmt::{
     Assignment, Attribute, AttributedName, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
@@ -112,8 +114,7 @@ pub use stmt::{
 };
 pub use synth::{
     FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, SyntheticComment,
-    TypeFieldSpec, is_valid_identifier, is_valid_identifier_in, sanitize_identifier,
-    sanitize_identifier_in,
+    TypeFieldSpec,
 };
 pub use types::{
     FunctionType, FunctionTypeParam, GenericPackType, GenericTypeList, GenericTypeParam,

@@ -2,7 +2,7 @@ use luck_allocator::{Box, List, ThinBytes};
 use luck_ast::{
     BinaryLink, ElseIfExprClause, Expression, Field, FunctionArgs, GetSpan as _,
     InterpolatedSegment, OneOrMore, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
-    TypeArgs, is_multi_value,
+    TypeArgs,
 };
 use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 
@@ -205,7 +205,7 @@ impl<'ast> Parser<'ast> {
         self.grouping_depth -= 1;
         let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
         let parens = open.merge(close);
-        let grouped = if is_multi_value(&expr) || matches!(expr, Expression::Integer(_)) {
+        let grouped = if expr.is_multi_value() || matches!(expr, Expression::Integer(_)) {
             if !self.enter_wrapper(level) {
                 return Expression::Error(parens);
             }

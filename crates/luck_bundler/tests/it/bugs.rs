@@ -261,7 +261,7 @@ struct EnvCalls(usize);
 
 impl<'ast> Visit<'ast> for EnvCalls {
     fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
-        for call in suffixed_expr.calls() {
+        for (_, call) in suffixed_expr.calls() {
             if call.callee.as_name().is_some_and(|name| name.text == "_ENV") {
                 self.0 += 1;
             }

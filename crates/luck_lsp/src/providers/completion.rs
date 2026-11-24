@@ -187,7 +187,7 @@ fn constant_value_completions(
     } else {
         nodes.kind(parent).as_suffixed_expr()?
     };
-    let (call, arg_index) = chain.calls().find_map(|call| {
+    let (call, arg_index) = chain.calls().find_map(|(_, call)| {
         let index = match call.args {
             FunctionArgs::Parenthesized { args, .. } => args.iter().position(|arg| {
                 matches!(arg, Expression::StringLiteral(string) if ptr::eq(string.as_ref(), literal))

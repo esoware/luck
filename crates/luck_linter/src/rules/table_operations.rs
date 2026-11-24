@@ -3,7 +3,7 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{BinOp, UnOp};
 use luck_value::ValueContext;
 
-use crate::call::{calls_in, dotted_callee};
+use crate::call::dotted_callee;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::has_number_value;
@@ -26,7 +26,7 @@ impl Rule for TableOperations {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (_, call) in calls_in(chain) {
+        for (_, call) in chain.calls() {
             check_call(call, context);
         }
     }

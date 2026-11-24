@@ -1,3 +1,5 @@
+use std::mem;
+
 use luck_allocator::{Box, List};
 use luck_ast_macros::Ast;
 use luck_token::{CompoundOp, LuaVersion, Span};
@@ -29,6 +31,15 @@ pub struct Chunk<'ast> {
 pub struct Block<'ast> {
     pub span: Span,
     pub stmts: List<'ast, Statement<'ast>>,
+}
+
+impl Block<'_> {
+    /// Moves the value out of a `&mut` and leaves an empty block behind, as
+    /// [`Expression::take`] does.
+    #[must_use]
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::new(Span::new(0, 0), List::new()))
+    }
 }
 
 /// Two words, like [`Expression`].
@@ -68,7 +79,58 @@ pub enum Statement<'ast> {
     Error(Span),
 }
 
-impl Statement<'_> {
+impl<'ast> Statement<'ast> {
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
+    #[must_use]
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::new(0, 0)))
+    }
+
+    /// The prefix a call or an assignment starts with, inside any chain it
+    /// starts.
+    ///
+    /// A printer that writes it in parentheses starts the statement with `(`,
+    /// which glues onto a statement before it that ends in an expression and
+    /// reads back as a call, so it puts a `;` between them.
+    pub fn leading_prefix(&self) -> Option<&Expression<'ast>> {
+        let mut current = match self {
+            Self::FunctionCall(chain) => &chain.prefix,
+            Self::Assignment(assignment) => match assignment.targets.first()? {
+                Var::Name(_) => return None,
+                Var::Suffixed(chain) => &chain.prefix,
+            },
+            // Luau
+            Self::CompoundAssignment(compound) => match &compound.var {
+                Var::Name(_) => return None,
+                Var::Suffixed(chain) => &chain.prefix,
+            },
+            Self::DoBlock(_)
+            | Self::WhileLoop(_)
+            | Self::RepeatLoop(_)
+            | Self::IfStatement(_)
+            | Self::NumericFor(_)
+            | Self::GenericFor(_)
+            | Self::FunctionDecl(_)
+            | Self::LocalFunction(_)
+            | Self::LocalAssignment(_)
+            | Self::Return(_)
+            | Self::Break(_)
+            | Self::Continue(_)
+            | Self::Goto(_)
+            | Self::Label(_)
+            | Self::GlobalDeclaration(_)
+            | Self::GlobalFunction(_)
+            | Self::GlobalStar(_)
+            | Self::TypeDeclaration(_)
+            | Self::Error(_) => return None,
+        };
+        while let Expression::Suffixed(chain) = current {
+            current = &chain.prefix;
+        }
+        Some(current)
+    }
+
     /// Whether `version`'s grammar takes the statement only as the last of
     /// its block: a `return`, a `continue`, or a `break` where it has
     /// [`has_last_stmt_break`](LuaVersion::has_last_stmt_break).

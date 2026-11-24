@@ -10,7 +10,7 @@ use luck_ast::{
     Assignment, Attribute, AttributedName, Block, CompoundAssignment, Expression,
     FunctionAttribute, FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment,
     LocalFunctionKind, NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration,
-    TypeDeclarationValue, unwrap_parentheses,
+    TypeDeclarationValue,
 };
 
 use crate::CollapseSimpleStatement;
@@ -193,7 +193,7 @@ impl<'ast> Formatter<'ast> {
     /// An operator chain breaks level with its first operand unless
     /// `is_indented`, for a condition that sits on an indented line of its own.
     fn write_condition(&mut self, condition: &Expression<'ast>, is_indented: bool) {
-        let unwrapped = unwrap_parentheses(condition);
+        let unwrapped = condition.unwrap_parentheses();
         let outer = self.grouping_around(condition.span()).unwrap_or_else(|| condition.span());
         if self.comments().has_comment_outside(outer, iter::once(unwrapped.span())) {
             self.write_expr(condition);

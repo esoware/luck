@@ -1,7 +1,7 @@
 use std::ptr;
 
 use luck_allocator::Allocator;
-use luck_ast::{Call, Expression, Statement, TreeCounts};
+use luck_ast::{Expression, Statement, TreeCounts};
 use luck_stdlib::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
     expand_replace_template, library_for,
@@ -1088,15 +1088,9 @@ fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
         panic!("the last statement must be a call");
     };
-    let call_indexes = chain
-        .suffixes
-        .iter()
-        .enumerate()
-        .filter(|&(index, suffix)| Call::new(chain.head(index), suffix).is_some())
-        .map(|(index, _)| index);
     let mut callees = analysis.chain_callees(chain);
     let mut names = Vec::new();
-    for (index, call) in call_indexes.zip(chain.calls()) {
+    for (index, call) in chain.calls() {
         let name = callees.callee(index).map(|callee| callee.name());
         assert_eq!(name, analysis.resolve_callee(call).map(|callee| callee.name()));
         names.push(name);

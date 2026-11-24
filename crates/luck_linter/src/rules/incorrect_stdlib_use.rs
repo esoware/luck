@@ -2,7 +2,7 @@ use luck_ast::{AstKind, AstType, Call, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{ResolvedCallee, StdlibEntry, StdlibFunction};
 
-use crate::call::{CallArg, CallArgs, calls_in, string_literal_value};
+use crate::call::{CallArg, CallArgs, string_literal_value};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
@@ -28,7 +28,7 @@ impl Rule for IncorrectStdlibUse {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (index, call) in calls_in(chain) {
+        for (index, call) in chain.calls() {
             if let Some(callee) = context.callee(node, index) {
                 check_call(call, &callee, context);
             }

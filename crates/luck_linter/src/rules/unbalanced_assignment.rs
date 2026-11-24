@@ -1,4 +1,4 @@
-use luck_ast::{AstKind, AstType, is_multi_value};
+use luck_ast::{AstKind, AstType, Expression};
 use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::context::LintContext;
@@ -24,7 +24,7 @@ impl Rule for UnbalancedAssignment {
         if let AstKind::LocalAssignment(local) = kind {
             let name_count = local.names.len();
             let value_count = local.exprs.len();
-            if !local.exprs.last().is_some_and(is_multi_value)
+            if !local.exprs.last().is_some_and(Expression::is_multi_value)
                 && name_count != value_count
                 && value_count > 0
             {
@@ -38,7 +38,8 @@ impl Rule for UnbalancedAssignment {
         if let AstKind::Assignment(assignment) = kind {
             let target_count = assignment.targets.len();
             let value_count = assignment.values.len();
-            if !assignment.values.last().is_some_and(is_multi_value) && target_count != value_count
+            if !assignment.values.last().is_some_and(Expression::is_multi_value)
+                && target_count != value_count
             {
                 context.diagnostic(Finding::new(
                     format!("{target_count} target(s) but {value_count} value(s) in assignment"),

@@ -70,7 +70,7 @@ mod tests {
     use crate::fixtures::Fixture;
 
     #[test]
-    fn identifier_validity() {
+    fn a_name_is_valid_where_some_dialect_reads_it_as_an_identifier() {
         assert!(is_valid_identifier("x"));
         assert!(is_valid_identifier("_private"));
         assert!(is_valid_identifier("snake_case2"));
@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_always_yields_valid_identifiers() {
+    fn sanitizing_yields_a_valid_identifier_in_each_version() {
         let hostile_names = [
             "",
             "1st",
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_keeps_valid_names_and_is_idempotent() {
+    fn sanitizing_borrows_a_valid_name_and_is_idempotent() {
         for name in ["x", "_private", "snake_case2", "type", "continue"] {
             assert!(matches!(sanitize_identifier(name), Cow::Borrowed(kept) if kept == name));
         }
@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_forms() {
+    fn sanitizing_underscores_bad_bytes_and_prefixes_a_bad_start() {
         assert_eq!(sanitize_identifier(""), "_");
         assert_eq!(sanitize_identifier("1st"), "_1st");
         assert_eq!(sanitize_identifier("a b"), "a_b");
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_respects_pinned_version() {
+    fn sanitizing_for_a_version_reserves_only_its_keywords() {
         assert_eq!(sanitize_identifier_in("goto", LuaVersion::Luau), "goto");
         assert_eq!(sanitize_identifier_in("goto", LuaVersion::Lua54), "_goto");
         assert_eq!(sanitize_identifier_in("global", LuaVersion::Lua54), "global");
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn identifier_validity_per_version() {
+    fn a_name_is_valid_in_a_version_that_does_not_reserve_it() {
         assert!(is_valid_identifier_in("goto", LuaVersion::Lua51));
         assert!(is_valid_identifier_in("goto", LuaVersion::Luau));
         assert!(!is_valid_identifier_in("goto", LuaVersion::Lua54));

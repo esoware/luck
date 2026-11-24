@@ -16,9 +16,17 @@ use crate::output::line_break;
 /// define them and then of their definitions.
 pub(crate) struct Schema {
     pub types: Vec<TypeDef>,
-    /// The crate each name the definitions use comes from: `crate` for one
-    /// `luck_ast` defines.
-    pub origins: BTreeMap<String, String>,
+    /// Where each name the definitions use comes from.
+    origins: BTreeMap<String, Origin>,
+}
+
+/// The crate a name comes from. Another crate sorts first, as its `use` item
+/// does.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Origin {
+    External(String),
+    /// `luck_ast` itself.
+    Crate,
 }
 
 pub(crate) struct TypeDef {
@@ -84,8 +92,12 @@ impl Schema {
             files.push(file);
         }
         let items: Vec<&Item> = files.iter().flat_map(|file| &file.items).collect();
-        let node_names: BTreeSet<String> =
-            items.iter().filter_map(|item| ast_definition(item)).map(ToString::to_string).collect();
+        let node_names: BTreeSet<String> = items
+            .iter()
+            .filter_map(|item| public_type(item))
+            .filter(|(_, attrs)| derives_ast(attrs))
+            .map(|(ident, _)| ident.to_string())
+            .collect();
         let mut origins = BTreeMap::new();
         for item in &items {
             // A `pub use` re-exports this crate's own modules.
@@ -96,10 +108,10 @@ impl Schema {
             }
         }
         for (defined, _) in items.iter().filter_map(|item| public_type(item)) {
-            origins.insert(defined.to_string(), "crate".to_owned());
+            origins.insert(defined.to_string(), Origin::Crate);
         }
         for generated in ["AstKind", "AstType", "ContentEq", "GetSpan"] {
-            origins.insert(generated.to_owned(), "crate".to_owned());
+            origins.insert(generated.to_owned(), Origin::Crate);
         }
         let mut types = Vec::new();
         for item in items {
@@ -153,21 +165,16 @@ impl Schema {
             }
         }
         let mut boxed = BTreeSet::new();
-        for ty in self.field_types() {
+        for (ty, _) in self.field_types() {
             collect(ty, &mut boxed);
         }
         boxed.retain(|name| self.get(name).is_some_and(TypeDef::is_struct));
         boxed
     }
 
-    /// Every field's and variant payload's type, in definition order.
-    pub(crate) fn field_types(&self) -> impl Iterator<Item = &FieldType> {
-        self.field_types_with_tokens().map(|(ty, _)| ty)
-    }
-
-    pub(crate) fn field_types_with_tokens(
-        &self,
-    ) -> impl Iterator<Item = (&FieldType, &TokenStream)> {
+    /// Every field's and variant payload's type, and the type as written, in
+    /// definition order.
+    pub(crate) fn field_types(&self) -> impl Iterator<Item = (&FieldType, &TokenStream)> {
         self.types.iter().flat_map(|type_def| {
             let pairs: Vec<(&FieldType, &TokenStream)> = match &type_def.shape {
                 Shape::Struct(fields) => {
@@ -195,20 +202,22 @@ impl Schema {
     where
         Names: IntoIterator<Item = &'name str>,
     {
-        let mut by_crate: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        let mut by_origin: BTreeMap<&Origin, BTreeSet<&str>> = BTreeMap::new();
         for name in names {
             if let Some(origin) = self.origins.get(name) {
-                by_crate.entry(origin).or_default().insert(name);
+                by_origin.entry(origin).or_default().insert(name);
             }
         }
-        let own = by_crate.remove("crate");
         let mut tokens = TokenStream::new();
-        for (krate, crate_names) in by_crate {
-            tokens.extend(use_item(krate, &crate_names));
-        }
-        if let Some(crate_names) = own {
-            tokens.extend(line_break());
-            tokens.extend(use_item("crate", &crate_names));
+        for (origin, origin_names) in by_origin {
+            let root = match origin {
+                Origin::External(krate) => krate.as_str(),
+                Origin::Crate => {
+                    tokens.extend(line_break());
+                    "crate"
+                }
+            };
+            tokens.extend(use_item(root, &origin_names));
         }
         tokens.extend(line_break());
         tokens
@@ -227,7 +236,7 @@ impl Schema {
 
     fn validate(&self) -> io::Result<()> {
         let mut names: BTreeSet<String> = ["Allocator", "Box", "Span"].map(str::to_owned).into();
-        for (_, tokens) in self.field_types_with_tokens() {
+        for (_, tokens) in self.field_types() {
             type_names(tokens, &mut names);
         }
         if let Some(unknown) = names.iter().find(|name| !self.origins.contains_key(*name)) {
@@ -280,7 +289,8 @@ impl TypeDef {
             let Fields::Named(named) = &item_struct.fields else {
                 return Err(invalid(&format!("`{}` needs named fields", item_struct.ident)));
             };
-            let field_defs = named.named.iter().map(|field| field_def(field, nodes, true));
+            let field_defs =
+                named.named.iter().map(|field| field_def(field, nodes, Site::StructField));
             let shape = Shape::Struct(field_defs.collect::<io::Result<_>>()?);
             (&item_struct.ident, &item_struct.generics, &item_struct.attrs, shape)
         } else if let Item::Enum(item_enum) = item
@@ -293,8 +303,11 @@ impl TypeDef {
             return Ok(None);
         };
         let has_lifetime = check_generics(name, generics)?;
-        let is_struct = matches!(shape, Shape::Struct(_));
-        let is_level = check_helpers(attrs, is_struct, false)?.is_level;
+        let site = match shape {
+            Shape::Struct(_) => Site::Struct,
+            Shape::Enum(_) => Site::Other,
+        };
+        let is_level = check_helpers(attrs, site)?.is_level;
         Ok(Some(Self { name: name.to_string(), has_lifetime, is_level, shape }))
     }
 
@@ -442,13 +455,8 @@ fn public_type(item: &Item) -> Option<(&Ident, &[Attribute])> {
     None
 }
 
-/// The name of a struct or enum that derives `Ast`.
-fn ast_definition(item: &Item) -> Option<&Ident> {
-    public_type(item).filter(|(_, attrs)| derives_ast(attrs)).map(|(ident, _)| ident)
-}
-
 fn variant_def(variant: &syn::Variant, nodes: &BTreeSet<String>) -> io::Result<VariantDef> {
-    check_helpers(&variant.attrs, false, false)?;
+    check_helpers(&variant.attrs, Site::Other)?;
     let payload = match &variant.fields {
         Fields::Unit => Payload::Unit,
         Fields::Unnamed(unnamed) => {
@@ -456,11 +464,12 @@ fn variant_def(variant: &syn::Variant, nodes: &BTreeSet<String>) -> io::Result<V
             let [field] = unnamed_fields.as_slice() else {
                 return Err(invalid(&format!("`{}` needs one unnamed field", variant.ident)));
             };
-            check_helpers(&field.attrs, false, false)?;
+            check_helpers(&field.attrs, Site::Other)?;
             Payload::Single(field_type(&field.ty, nodes), field.ty.to_token_stream())
         }
         Fields::Named(named) => {
-            let field_defs = named.named.iter().map(|field| field_def(field, nodes, false));
+            let field_defs =
+                named.named.iter().map(|field| field_def(field, nodes, Site::VariantField));
             Payload::Named(field_defs.collect::<io::Result<_>>()?)
         }
     };
@@ -474,8 +483,9 @@ fn derives_ast(attrs: &[Attribute]) -> bool {
     })
 }
 
-/// Records where each name a `use` tree brings in comes from.
-fn collect_origins(tree: &UseTree, root: Option<&str>, origins: &mut BTreeMap<String, String>) {
+/// Records where each name a `use` tree brings in from another crate comes
+/// from.
+fn collect_origins(tree: &UseTree, root: Option<&str>, origins: &mut BTreeMap<String, Origin>) {
     match tree {
         UseTree::Path(use_path) => {
             let segment = use_path.ident.to_string();
@@ -484,7 +494,7 @@ fn collect_origins(tree: &UseTree, root: Option<&str>, origins: &mut BTreeMap<St
         UseTree::Name(use_name) => {
             if let Some(krate) = root.filter(|krate| !matches!(*krate, "crate" | "super" | "self"))
             {
-                origins.insert(use_name.ident.to_string(), krate.to_owned());
+                origins.insert(use_name.ident.to_string(), Origin::External(krate.to_owned()));
             }
         }
         UseTree::Group(group) => {
@@ -513,19 +523,47 @@ fn check_generics(name: &Ident, generics: &Generics) -> io::Result<bool> {
     }
 }
 
+/// What the tool's attributes are written on, which decides which apply.
+#[derive(Clone, Copy)]
+enum Site {
+    Struct,
+    StructField,
+    VariantField,
+    /// An enum, a variant, or a variant's unnamed field, which take none.
+    Other,
+}
+
+impl Site {
+    /// Whether `#[visit(level)]` applies.
+    const fn takes_level(self) -> bool {
+        match self {
+            Self::Struct | Self::StructField => true,
+            Self::VariantField | Self::Other => false,
+        }
+    }
+
+    /// Whether `#[content_eq(skip)]` applies.
+    const fn takes_skip(self) -> bool {
+        match self {
+            Self::StructField | Self::VariantField => true,
+            Self::Struct | Self::Other => false,
+        }
+    }
+}
+
 struct Helpers {
     is_level: bool,
     skips_content_eq: bool,
 }
 
-/// The tool's attributes in `attrs`.
-fn check_helpers(attrs: &[Attribute], can_be_level: bool, can_skip: bool) -> io::Result<Helpers> {
+/// The tool's attributes in `attrs`, written on `site`.
+fn check_helpers(attrs: &[Attribute], site: Site) -> io::Result<Helpers> {
     let mut helpers = Helpers { is_level: false, skips_content_eq: false };
     for attr in attrs {
         let (expected, is_allowed, flag) = if attr.path().is_ident("visit") {
-            ("level", can_be_level, &mut helpers.is_level)
+            ("level", site.takes_level(), &mut helpers.is_level)
         } else if attr.path().is_ident("content_eq") {
-            ("skip", can_skip, &mut helpers.skips_content_eq)
+            ("skip", site.takes_skip(), &mut helpers.skips_content_eq)
         } else {
             continue;
         };
@@ -542,12 +580,8 @@ fn check_helpers(attrs: &[Attribute], can_be_level: bool, can_skip: bool) -> io:
     Ok(helpers)
 }
 
-fn field_def(
-    field: &syn::Field,
-    nodes: &BTreeSet<String>,
-    can_be_level: bool,
-) -> io::Result<FieldDef> {
-    let helpers = check_helpers(&field.attrs, can_be_level, true)?;
+fn field_def(field: &syn::Field, nodes: &BTreeSet<String>, site: Site) -> io::Result<FieldDef> {
+    let helpers = check_helpers(&field.attrs, site)?;
     let name = field.ident.as_ref().expect("only a named field reaches here").to_string();
     Ok(FieldDef {
         name,

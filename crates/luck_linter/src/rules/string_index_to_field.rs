@@ -1,6 +1,5 @@
-use luck_ast::{AstKind, AstType, Expression, Suffix};
+use luck_ast::{AstKind, AstType, Expression, Suffix, is_valid_identifier_in};
 use luck_semantic::{AstNode, AstTypesBitset};
-use luck_token::TokenKind;
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
@@ -41,9 +40,7 @@ fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_>) -> Option<Finding
     };
     // The key is its value, however it's spelled.
     let name = literal.as_str()?;
-    if !TokenKind::is_identifier_shaped(name)
-        || TokenKind::is_reserved(name, context.semantic.version())
-    {
+    if !is_valid_identifier_in(name, context.semantic.version()) {
         return None;
     }
 

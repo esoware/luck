@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Expression, GetSpan as _, MAX_NESTING_DEPTH, expr_nesting_depth, is_multi_value};
+use luck_ast::{Expression, GetSpan as _, MAX_NESTING_DEPTH, expr_nesting_depth};
 
 /// How many levels of nesting a rewrite may add, so a run of rewrites can't
 /// trade a flat program for one nested to the parser's cap.
@@ -52,5 +52,5 @@ pub(crate) fn truncate_multi_value<'ast>(
     allocator: &'ast Allocator,
     expr: Expression<'ast>,
 ) -> Expression<'ast> {
-    if is_multi_value(&expr) { parenthesize(allocator, expr) } else { expr }
+    if expr.is_multi_value() { parenthesize(allocator, expr) } else { expr }
 }

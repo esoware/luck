@@ -2,7 +2,6 @@ use luck_ast::{AstKind, AstType, Call, FunctionArgs, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{LuaVersion, Span, has_line_break};
 
-use crate::call::calls_in;
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
@@ -24,7 +23,7 @@ impl Rule for AmbiguousNewlineCall {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (_, call) in calls_in(chain) {
+        for (_, call) in chain.calls() {
             if let Some(finding) = check_call(call, context.source, context.semantic.version()) {
                 context.diagnostic(finding);
             }

@@ -3,7 +3,7 @@ use std::ptr;
 use luck_ast::{AstKind, AstType, Call, Expression, FunctionBody, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset, Symbol};
 
-use crate::call::{CallArg, CallArgs, calls_in};
+use crate::call::{CallArg, CallArgs};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
@@ -25,7 +25,7 @@ impl Rule for MismatchedArgCount {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (_, call) in calls_in(chain) {
+        for (_, call) in chain.calls() {
             if let Some(finding) = check_call(call, context) {
                 context.diagnostic(finding);
             }

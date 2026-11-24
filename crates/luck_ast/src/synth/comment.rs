@@ -36,7 +36,7 @@ mod tests {
     use crate::fixtures::Fixture;
 
     #[test]
-    fn comment_helpers_anchor_on_stmts() {
+    fn a_comment_anchors_at_the_start_of_its_statement_or_block() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let stmt = synth.local(&["x"], [synth.number_i64(1)]);

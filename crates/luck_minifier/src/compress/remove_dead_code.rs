@@ -336,7 +336,7 @@ impl<'ast> Compressor<'_, 'ast> {
         self.drop_expr(&outer.first);
         let allocator = self.allocator;
         let kept = outer.links[0].operand.take();
-        match OneOrMore::from_list(outer.links.split_off_rest()) {
+        match OneOrMore::from_list(outer.links.split_off(1)) {
             Some(rest) => {
                 outer.first = kept;
                 outer.links = rest;

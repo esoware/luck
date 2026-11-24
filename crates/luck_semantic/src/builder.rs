@@ -285,7 +285,7 @@ fn require_call<'ast>(
     } else {
         return None;
     };
-    let call = Call::new(chain.head(callee_suffixes), chain.suffixes.get(callee_suffixes)?)?;
+    let call = chain.call_at(callee_suffixes)?;
     call.method.is_none().then_some(call)
 }
 

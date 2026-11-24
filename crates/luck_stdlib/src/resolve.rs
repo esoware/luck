@@ -294,7 +294,7 @@ impl<'chain> ChainCallees<'chain> {
     /// never below an earlier one.
     pub fn callee(&mut self, index: usize) -> Option<ResolvedCallee<'chain>> {
         let suffixes: &'chain [Suffix<'chain>] = &self.chain.suffixes;
-        let call = Call::new(self.chain.head(index), suffixes.get(index)?)?;
+        let call = self.chain.call_at(index)?;
         let unread = suffixes.get(self.read_count..index).unwrap_or_default();
         self.state = self.resolver.read(self.state, unread);
         self.read_count = index;

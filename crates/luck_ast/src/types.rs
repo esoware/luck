@@ -3,6 +3,8 @@
 //!
 //! Outside Luau these nodes never occur; the parser gates on `LuaVersion::has_type_syntax`.
 
+use std::mem;
+
 use luck_allocator::{Box, List};
 use luck_ast_macros::Ast;
 use luck_token::Span;
@@ -34,6 +36,15 @@ pub enum Type<'ast> {
     Variadic(Box<'ast, VariadicType<'ast>>),
     GenericPack(Box<'ast, GenericPackType<'ast>>),
     Error(Span),
+}
+
+impl Type<'_> {
+    /// Moves the value out of a `&mut` and leaves an error placeholder
+    /// behind, as [`Expression::take`] does.
+    #[must_use]
+    pub const fn take(&mut self) -> Self {
+        mem::replace(self, Self::Error(Span::new(0, 0)))
+    }
 }
 
 /// A bare `Name` is a [`Type::Name`] instead. The parser and `Synth` only

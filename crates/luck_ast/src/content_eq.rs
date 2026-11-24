@@ -26,71 +26,32 @@ where
     }
 }
 
-impl ContentEq for str {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
+/// `ContentEq` as `==`, for a value that holds no span or spelling.
+macro_rules! content_eq_is_eq {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl ContentEq for $ty {
+                fn content_eq(&self, other: &Self) -> bool {
+                    self == other
+                }
+            }
+        )*
+    };
 }
 
-impl ContentEq for ThinStr<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for ThinBytes<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for LuaNumber {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for i64 {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for bool {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for u32 {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for BinOp {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for UnOp {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for CompoundOp {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl ContentEq for LuaVersion {
-    fn content_eq(&self, other: &Self) -> bool {
-        self == other
-    }
-}
+content_eq_is_eq!(
+    str,
+    ThinStr<'_>,
+    ThinBytes<'_>,
+    LuaNumber,
+    i64,
+    bool,
+    u32,
+    BinOp,
+    UnOp,
+    CompoundOp,
+    LuaVersion,
+);
 
 impl<T> ContentEq for Option<T>
 where

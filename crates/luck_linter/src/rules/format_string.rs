@@ -3,7 +3,7 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::{Span, index_to_offset};
 use luck_value::ValueContext;
 
-use crate::call::{CallArg, CallArgs, calls_in, dotted_callee};
+use crate::call::{CallArg, CallArgs, dotted_callee};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::format_pattern::{
@@ -33,7 +33,7 @@ impl Rule for FormatString {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        for (index, call) in calls_in(chain) {
+        for (index, call) in chain.calls() {
             let Some(dsl) = DslKind::of_call(call) else {
                 continue;
             };

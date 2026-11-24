@@ -10,7 +10,7 @@ use crate::types::Type;
 /// What a printer writes right after an expression, as far as reading the
 /// output back goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Follower {
+enum Follower {
     /// Nothing an expression could take in: the end, a closer, a separator,
     /// or a keyword.
     Nothing,
@@ -143,23 +143,8 @@ fn ends_in_bare_name(ty: &Type<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_allocator::Allocator;
-    use luck_token::Span;
-
     use super::*;
-    use crate::expr::BinaryLink;
     use crate::fixtures::Fixture;
-    use crate::one_or_more::OneOrMore;
-
-    fn run<'ast>(
-        first: Expression<'ast>,
-        op: BinOp,
-        operand: Expression<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Expression<'ast> {
-        let links = OneOrMore::new(BinaryLink::new(op, operand), allocator);
-        Expression::new_binary_op(Span::default(), first, links, allocator)
-    }
 
     fn operand_slots(expr: &Expression<'_>, outer: Slot) -> Vec<Slot> {
         let Expression::BinaryOp(binary_op) = expr else {
@@ -172,15 +157,14 @@ mod tests {
     fn a_run_takes_parentheses_under_an_operator_as_tight_or_tighter() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
-        let sum = || run(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"), allocator);
-        let product = run(synth.name_expr("x"), BinOp::Mul, synth.name_expr("y"), allocator);
+        let sum = || fixture.unspliced_run(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"));
+        let product = fixture.unspliced_run(synth.name_expr("x"), BinOp::Mul, synth.name_expr("y"));
         let [multiplicand, multiplier] = *operand_slots(&product, Slot::FREE) else {
             panic!("expected two operands");
         };
         assert!(sum().needs_parens(multiplicand), "`(a + b) * y`");
         assert!(sum().needs_parens(multiplier), "`x * (a + b)`");
-        let total = run(synth.name_expr("x"), BinOp::Add, synth.name_expr("y"), allocator);
+        let total = fixture.unspliced_run(synth.name_expr("x"), BinOp::Add, synth.name_expr("y"));
         let [augend, addend] = *operand_slots(&total, Slot::FREE) else {
             panic!("expected two operands");
         };
@@ -189,7 +173,7 @@ mod tests {
         assert!(!product.needs_parens(augend), "`x * y + y`");
         assert!(!sum().needs_parens(Slot::FREE));
         assert!(sum().needs_parens(Slot::FREE.unary_operand()), "`-(a + b)`");
-        let power = run(synth.name_expr("a"), BinOp::Pow, synth.name_expr("b"), allocator);
+        let power = fixture.unspliced_run(synth.name_expr("a"), BinOp::Pow, synth.name_expr("b"));
         assert!(!power.needs_parens(Slot::FREE.unary_operand()), "`-a ^ b`");
         assert!(sum().needs_parens(Slot::PREFIX));
         assert!(sum().needs_parens(Slot::CAST_OPERAND));
@@ -199,15 +183,14 @@ mod tests {
     fn a_unary_operator_takes_parentheses_before_what_its_operand_reads_on_through() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
         let negation = synth.unary_op(UnOp::Neg, synth.name_expr("a"));
-        let power = run(synth.name_expr("x"), BinOp::Pow, synth.name_expr("y"), allocator);
+        let power = fixture.unspliced_run(synth.name_expr("x"), BinOp::Pow, synth.name_expr("y"));
         let [base, exponent] = *operand_slots(&power, Slot::FREE) else {
             panic!("expected two operands");
         };
         assert!(negation.needs_parens(base), "`(-a) ^ y`");
         assert!(!negation.needs_parens(exponent), "`x ^ -a`");
-        let product = run(synth.name_expr("x"), BinOp::Mul, synth.name_expr("y"), allocator);
+        let product = fixture.unspliced_run(synth.name_expr("x"), BinOp::Mul, synth.name_expr("y"));
         assert!(!negation.needs_parens(operand_slots(&product, Slot::FREE)[0]), "`-a * y`");
         assert!(negation.needs_parens(Slot::CAST_OPERAND), "`(-a) :: T`");
         assert!(negation.needs_parens(Slot::PREFIX));
@@ -217,9 +200,8 @@ mod tests {
     fn an_if_expression_takes_parentheses_before_anything() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
         let if_expr = synth.if_expr(synth.name_expr("c"), synth.nil(), [], synth.nil());
-        let sum = run(synth.name_expr("x"), BinOp::Add, synth.name_expr("y"), allocator);
+        let sum = fixture.unspliced_run(synth.name_expr("x"), BinOp::Add, synth.name_expr("y"));
         let [first, last] = *operand_slots(&sum, Slot::FREE) else {
             panic!("expected two operands");
         };
@@ -236,10 +218,9 @@ mod tests {
     fn a_cast_takes_parentheses_before_what_a_type_reads_on_through() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
         let cast = synth.type_cast(synth.name_expr("a"), synth.ty_named("T"));
         for (op, is_wrapped) in [(BinOp::Lt, true), (BinOp::Gt, false), (BinOp::Add, false)] {
-            let comparison = run(synth.name_expr("x"), op, synth.name_expr("y"), allocator);
+            let comparison = fixture.unspliced_run(synth.name_expr("x"), op, synth.name_expr("y"));
             let [first, last] = *operand_slots(&comparison, Slot::FREE) else {
                 panic!("expected two operands");
             };
@@ -248,7 +229,8 @@ mod tests {
         }
         assert!(cast.needs_parens(Slot::CAST_OPERAND), "`(a :: T) :: U`");
         assert!(!cast.needs_parens(Slot::FREE.unary_operand()), "`-a :: T`");
-        let comparison = run(synth.name_expr("x"), BinOp::Lt, synth.name_expr("y"), allocator);
+        let comparison =
+            fixture.unspliced_run(synth.name_expr("x"), BinOp::Lt, synth.name_expr("y"));
         let before_less = operand_slots(&comparison, Slot::FREE)[0];
         let generic = synth.ty_generic("T", [synth.ty_named("U")]);
         for (ty, is_wrapped) in [

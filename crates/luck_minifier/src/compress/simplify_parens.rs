@@ -8,7 +8,7 @@
 //! held in a run at its level prints with where it groups the same without.
 
 use luck_allocator::Allocator;
-use luck_ast::{Expression, FunctionArgs, Slot, Suffix, SuffixedExpression, is_multi_value};
+use luck_ast::{Expression, FunctionArgs, Slot, Suffix, SuffixedExpression};
 
 /// Where an expression the walk leaves stands, as far as its parentheses
 /// go.
@@ -33,7 +33,7 @@ pub(super) fn strip(expr: &mut Expression<'_>, place: Place) -> bool {
         return false;
     };
     let is_kept = match place {
-        Place::AllValues => is_multi_value(&paren.expr),
+        Place::AllValues => paren.expr.is_multi_value(),
         Place::OneValue => false,
         Place::Negated => matches!(paren.expr, Expression::Integer(_)),
     };
@@ -57,7 +57,7 @@ pub(super) fn strip_prefix<'ast>(
         return false;
     };
     let is_instantiated = matches!(chain.suffixes.first(), Suffix::TypeInstantiation { .. });
-    if paren.expr.needs_parens(Slot::PREFIX) || (is_instantiated && is_multi_value(&paren.expr)) {
+    if paren.expr.needs_parens(Slot::PREFIX) || (is_instantiated && paren.expr.is_multi_value()) {
         return false;
     }
     chain.prefix = paren.expr.take();

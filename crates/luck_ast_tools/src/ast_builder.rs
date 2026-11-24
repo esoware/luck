@@ -60,7 +60,7 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
             return None;
         }
         names.insert(type_def.name.clone());
-        let (generics, ty) = (lifetime(type_def), type_def.ty());
+        let (generics, ty) = (type_def.has_lifetime.then(|| quote!(<'ast>)), type_def.ty());
         Some(quote! {
             impl #generics #ty {
                 #(#separator #methods)*
@@ -81,8 +81,11 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
     }
 }
 
-fn lifetime(type_def: &TypeDef) -> TokenStream {
-    if type_def.has_lifetime { quote!(<'ast>) } else { TokenStream::new() }
+/// The expectation a constructor of `count` parameters needs, if any.
+fn too_many_arguments(count: usize) -> Option<TokenStream> {
+    (count > MAX_ARGUMENTS).then(|| {
+        quote!(#[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")])
+    })
 }
 
 /// `new`, and `boxed` when the struct is boxed somewhere.
@@ -90,12 +93,7 @@ fn struct_methods(type_def: &TypeDef, fields: &[FieldDef], is_boxed: bool) -> Ve
     let idents: Vec<_> = fields.iter().map(FieldDef::ident).collect();
     let types = fields.iter().map(|field| with_self(&field.tokens, &type_def.name));
     let params = quote!(#(#idents: #types),*);
-    let too_many = |count: usize| {
-        (count > MAX_ARGUMENTS).then(|| {
-            quote!(#[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")])
-        })
-    };
-    let new_expectation = too_many(idents.len());
+    let new_expectation = too_many_arguments(idents.len());
     let mut methods = vec![quote! {
         #[inline]
         #new_expectation
@@ -104,7 +102,7 @@ fn struct_methods(type_def: &TypeDef, fields: &[FieldDef], is_boxed: bool) -> Ve
         }
     }];
     if is_boxed {
-        let boxed_expectation = too_many(idents.len() + 1);
+        let boxed_expectation = too_many_arguments(idents.len() + 1);
         let generics = (!type_def.has_lifetime).then(|| quote!(<'ast>));
         methods.push(quote! {
             #[inline]
@@ -139,10 +137,7 @@ fn variant_method(
     } else {
         (TokenStream::new(), quote!(#inner_ident::new(#(#idents),*)), quote!(const))
     };
-    let count = idents.len() + usize::from(is_boxed);
-    let expectation = (count > MAX_ARGUMENTS).then(|| {
-        quote!(#[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")])
-    });
+    let expectation = too_many_arguments(idents.len() + usize::from(is_boxed));
     quote! {
         #[inline]
         #expectation

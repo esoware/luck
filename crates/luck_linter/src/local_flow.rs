@@ -1,6 +1,6 @@
 use std::{mem, ptr};
 
-use luck_ast::{AstKind, Expression, is_multi_value};
+use luck_ast::{AstKind, Expression};
 use luck_semantic::{
     AstNodes, Reference, ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind,
 };
@@ -131,7 +131,7 @@ fn is_uninitialized(symbol: &Symbol, nodes: &AstNodes<'_>) -> bool {
         return false;
     };
     // A call or `...` last can fill every name after it.
-    !local.exprs.last().is_some_and(is_multi_value)
+    !local.exprs.last().is_some_and(Expression::is_multi_value)
         && local
             .names
             .iter()

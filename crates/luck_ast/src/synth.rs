@@ -1,7 +1,6 @@
 mod comment;
 mod expr;
 mod function;
-mod identifier;
 mod literal;
 mod stmt;
 mod types;
@@ -9,17 +8,16 @@ mod types;
 pub use comment::SyntheticComment;
 pub use expr::FieldSpec;
 pub use function::FunctionSignature;
-pub use identifier::{
-    is_valid_identifier, is_valid_identifier_in, sanitize_identifier, sanitize_identifier_in,
-};
 pub use literal::InterpolatedStringPart;
 pub use types::TypeFieldSpec;
 
+use std::slice;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_token::{LuaVersion, Span};
 
+use crate::identifier::is_valid_identifier_in;
 use crate::leaf::Name;
 
 /// Node constructors for trees built without source text.
@@ -104,10 +102,11 @@ use crate::leaf::Name;
 ///   table keys with [`Synth::record`], which fall back to the bracketed
 ///   string form. Other name positions (locals, params, labels, function and
 ///   method names) have no bracketed spelling, so rewrite those names with
-///   [`sanitize_identifier`] / [`sanitize_identifier_in`], or check them with
-///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
-///   yourself. Sanitized names are deterministic but can collide, so
-///   deduplication is up to the caller.
+///   [`sanitize_identifier`](crate::sanitize_identifier) /
+///   [`sanitize_identifier_in`](crate::sanitize_identifier_in), or check them
+///   with [`is_valid_identifier`](crate::is_valid_identifier) /
+///   [`is_valid_identifier_in`] and rename them yourself. Sanitized names are
+///   deterministic but can collide, so deduplication is up to the caller.
 /// - **Spellings.** A literal built with its own constructor, with spans
 ///   from [`Synth::next_span`], may carry a spelling, which the printers
 ///   print unchecked, so one that doesn't spell its value prints output that
@@ -221,28 +220,32 @@ impl<'ast> Synth<'ast> {
     /// loudly instead of producing output that won't re-parse. Names that may
     /// not be identifiers belong in [`Synth::field_or_index`],
     /// [`Synth::record`], or [`Synth::string`], or need
-    /// [`sanitize_identifier`] / [`sanitize_identifier_in`] first.
+    /// [`sanitize_identifier`](crate::sanitize_identifier) /
+    /// [`sanitize_identifier_in`](crate::sanitize_identifier_in) first.
     ///
     /// # Panics
     ///
     /// Panics if `text` isn't an identifier under the pinned version, or in
     /// any dialect when none is pinned.
     pub fn name(&self, text: &str) -> Name<'ast> {
-        let is_valid = match self.version {
-            Some(version) => is_valid_identifier_in(text, version),
-            None => is_valid_identifier(text),
-        };
+        let is_valid = self.versions().iter().any(|&version| is_valid_identifier_in(text, version));
         assert!(is_valid, "synth: {text:?} is not a valid identifier");
         Name::new(ThinStr::new(self.allocator.alloc_str(text)), None, self.next_span())
     }
 
-    /// Whether `name` works as a `.name` field or `name =` key: an identifier
-    /// in the pinned dialect, or in every dialect when none is pinned.
-    fn is_safe_field_name(&self, name: &str) -> bool {
-        match self.version {
-            Some(version) => is_valid_identifier_in(name, version),
-            None => LuaVersion::ALL.iter().all(|&version| is_valid_identifier_in(name, version)),
+    /// The dialects the synthesizer builds for: the pinned one, or every one
+    /// when none is pinned.
+    fn versions(&self) -> &[LuaVersion] {
+        match &self.version {
+            Some(version) => slice::from_ref(version),
+            None => &LuaVersion::ALL,
         }
+    }
+
+    /// Whether `name` works as a `.name` field or `name =` key: an identifier
+    /// in every dialect the synthesizer builds for.
+    fn is_safe_field_name(&self, name: &str) -> bool {
+        self.versions().iter().all(|&version| is_valid_identifier_in(name, version))
     }
 
     fn list<T, Items>(&self, items: Items) -> List<'ast, T>
@@ -272,7 +275,7 @@ mod tests {
     use crate::stmt::Statement;
 
     #[test]
-    fn spans_are_monotonic() {
+    fn each_node_takes_a_later_span() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let first = synth.nil();
@@ -283,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn starting_at_offsets_spans() {
+    fn a_counter_started_at_an_offset_gives_spans_from_it() {
         let allocator = Allocator::new();
         let spans = SpanCounter::starting_at(1000);
         assert_eq!(Synth::new(&allocator, &spans).nil().span().start, 1000);
@@ -369,18 +372,6 @@ mod tests {
         let unique: FxHashSet<u32> = offsets.iter().copied().collect();
         assert_eq!(unique.len(), offsets.len());
         assert_eq!(offsets.len(), 4 * 251);
-    }
-
-    #[test]
-    fn with_version_pins_field_names() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth().with_version(LuaVersion::Luau);
-        // `goto` is an identifier only under the pinned Luau dialect, so the
-        // dot form proves the pin.
-        let Expression::Suffixed(chain) = synth.field_or_index(synth.name_expr("t"), "goto") else {
-            panic!("expected a field");
-        };
-        assert!(matches!(chain.suffixes.last(), Suffix::Field(_)));
     }
 
     #[test]

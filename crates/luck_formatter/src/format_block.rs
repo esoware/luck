@@ -10,7 +10,7 @@
 use std::iter::{self, Peekable};
 use std::ops::Range;
 
-use luck_ast::{Block, GetSpan as _, Statement, Visit, leading_prefix};
+use luck_ast::{Block, GetSpan as _, Statement, Visit};
 use luck_parser::{Groupings, ParseResult};
 use luck_token::{LuaVersion, Span, is_lua_whitespace, strip_line_break};
 
@@ -272,7 +272,7 @@ impl<'ast> Formatter<'ast> {
             BlockItem::Stmt(stmt) => match self.comments().source_text() {
                 Some(source) if is_opted_out => source[stmt.span().start as usize] == b'(',
                 Some(_) | None => {
-                    leading_prefix(stmt).is_some_and(|prefix| self.starts_with_paren(prefix))
+                    stmt.leading_prefix().is_some_and(|prefix| self.starts_with_paren(prefix))
                 }
             },
             BlockItem::Verbatim { has_leading_paren, .. } => has_leading_paren,
