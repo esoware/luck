@@ -19,7 +19,7 @@ declare_lint_rule!(
 impl Rule for ReversedForLoop {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::NumericFor]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         if let AstKind::NumericFor(numeric_for) = node.kind()
             && numeric_for.step.is_none()
             && let Some(start) = number_value(&numeric_for.start, context)

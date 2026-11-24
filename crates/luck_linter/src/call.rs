@@ -30,6 +30,26 @@ pub(crate) fn dotted_callee(call: Call<'_>) -> Option<(&Name<'_>, &str)> {
     (!field.text.is_empty()).then_some((root, field.text.as_str()))
 }
 
+/// The arguments when `call` is a parenthesized `<global>.new(...)` call,
+/// and `<global>` isn't shadowed by a local.
+pub(crate) fn global_new_call<'ast>(
+    call: Call<'ast>,
+    global: &str,
+    semantic: &SemanticAnalysis<'_>,
+) -> Option<&'ast [Expression<'ast>]> {
+    let (root, field) = dotted_callee(call)?;
+    if field != "new" || root.text != global {
+        return None;
+    }
+    if semantic.scoping().resolves_to_local(root) {
+        return None;
+    }
+    let FunctionArgs::Parenthesized { args, .. } = call.args else {
+        return None;
+    };
+    Some(args)
+}
+
 /// An argument as a call passes it. `f"..."` and `f{...}` pass theirs with
 /// no list around it, and mean what `f("...")` and `f({...})` do.
 #[derive(Debug, Clone, Copy)]

@@ -85,9 +85,8 @@ use crate::config::setting_schema;
 #[cfg(feature = "serde")]
 use crate::config::{RuleLevel, next_setting, serialize_entry};
 use crate::context::{ContextHost, LintContext};
-use crate::diagnostic::Category;
 use crate::fix::FixKind;
-use crate::rule::{Rule, RuleMeta};
+use crate::rule::{Category, Rule, RuleMeta};
 use crate::suggest::closest;
 
 /// Generates what reads every rule by id, from each rule's module, which is
@@ -193,13 +192,13 @@ macro_rules! declare_all_lint_rules {
                 }
             }
 
-            pub(crate) fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+            pub(crate) fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
                 match self {
                     $(Self::$rule(rule) => rule.run(node, context),)+
                 }
             }
 
-            pub(crate) fn run_once(&self, context: &LintContext<'_>) {
+            pub(crate) fn run_once(&self, context: &LintContext<'_, '_>) {
                 match self {
                     $(Self::$rule(rule) => rule.run_once(context),)+
                 }

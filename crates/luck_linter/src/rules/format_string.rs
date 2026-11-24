@@ -29,7 +29,7 @@ impl Rule for FormatString {
 
     /// Only a call that reaches the stdlib's function is checked, so a
     /// shadowed `string` isn't.
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };

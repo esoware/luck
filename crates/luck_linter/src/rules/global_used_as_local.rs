@@ -15,7 +15,7 @@ declare_lint_rule!(
 );
 
 impl Rule for GlobalUsedAsLocal {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
         global_references.sort_by_key(|reference| reference.name);

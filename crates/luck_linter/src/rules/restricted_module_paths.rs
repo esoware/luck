@@ -50,7 +50,7 @@ impl Rule for RestrictedModulePaths {
         !self.paths.is_empty()
     }
 
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         for literal in context.semantic.semantic().requires().iter().filter_map(|site| site.path) {
             let Some(path) = literal.as_str() else {
                 continue;

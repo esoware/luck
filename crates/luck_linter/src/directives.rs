@@ -9,9 +9,10 @@ use std::cmp::Reverse;
 use std::ops::Range;
 
 use luck_ast::{GetSpan as _, Statement};
+use luck_parser::ParseResult;
 use luck_semantic::AstNodes;
 use luck_token::{
-    Comment, CommentContent, DirectiveError, LintDirective, LintExtent, LintVerb, LuaVersion, Span,
+    CommentContent, DirectiveError, LintDirective, LintExtent, LintVerb, LuaVersion, Span,
     has_line_break,
 };
 
@@ -97,12 +98,13 @@ pub(crate) struct Directives {
 }
 
 impl Directives {
-    /// The directives in `comments`. Those on a statement cover nothing until
-    /// [`Self::cover_statements`] finds it.
-    pub(crate) fn new(comments: &[Comment], source: &[u8]) -> Self {
+    /// The directives in `parse`'s comments, where those on a statement
+    /// cover one of the statements of `nodes`' blocks.
+    pub(crate) fn new(parse: &ParseResult<'_>, nodes: &AstNodes<'_>) -> Self {
+        let source = parse.source;
         let mut directives = Self::default();
         let mut open_regions: Vec<OpenRegion<'_>> = Vec::new();
-        for comment in comments {
+        for comment in &parse.comments {
             if !matches!(
                 comment.content,
                 CommentContent::LintDirective | CommentContent::InvalidDirective
@@ -120,6 +122,8 @@ impl Directives {
         for region in open_regions {
             directives.cover(region.entry, region.from, FILE_END);
         }
+        directives.cover_statements(nodes, source, parse.chunk.version);
+        directives.intervals.sort_unstable_by_key(|interval| (interval.target, interval.rank()));
         directives
     }
 
@@ -189,64 +193,59 @@ impl Directives {
         }
     }
 
-    /// Finishes the table with the statements of `nodes`' blocks.
+    /// Covers, for each directive on a statement, a statement of `nodes`'
+    /// blocks.
     ///
     /// Each directive on a statement covers the one it trails on its line, or
     /// else the next to start, or else the one it's inside. A statement that
     /// isn't inside the innermost one around the directive is neither of the
     /// first two, so a directive never reaches past the statement it's
     /// written in.
-    pub(crate) fn cover_statements(
-        &mut self,
-        nodes: &AstNodes<'_>,
-        source: &[u8],
-        version: LuaVersion,
-    ) {
-        if self.list.iter().any(|directive| directive.extent == LintExtent::Statement) {
-            let mut stmts: Vec<Span> = nodes
-                .iter()
-                .filter_map(|node| node.kind().as_block())
-                .flat_map(|block| &block.stmts)
-                .filter(|stmt| !matches!(stmt, Statement::Error(_)))
-                .map(Statement::span)
-                .collect();
-            stmts.sort_unstable_by_key(|stmt| stmt.start);
-            let mut remaining = stmts.into_iter().peekable();
-            // The statements around the directive, innermost last, and the
-            // one that ended last before it.
-            let mut open: Vec<Span> = Vec::new();
-            let mut last_closed: Option<Span> = None;
-            let mut covered: Vec<(Range<usize>, Span)> = Vec::new();
-            for directive in &self.list {
-                if directive.extent != LintExtent::Statement {
-                    continue;
-                }
-                let at = directive.span.start;
-                while let Some(stmt) = remaining.next_if(|stmt| stmt.start < at) {
-                    close_before(&mut open, &mut last_closed, stmt.start);
-                    open.push(stmt);
-                }
-                close_before(&mut open, &mut last_closed, at);
-                let around = open.last().copied();
-                let is_inside = |stmt: &Span| {
-                    around.is_none_or(|outer| (outer.start..outer.end).contains(&stmt.start))
-                };
-                let trailed = last_closed.filter(|stmt| {
-                    is_inside(stmt)
-                        && !has_line_break(Span::new(stmt.end, at).text(source), version)
-                });
-                let next = remaining.peek().copied().filter(is_inside);
-                if let Some(stmt) = trailed.or(next).or(around) {
-                    covered.push((directive.entries.clone(), stmt));
-                }
+    fn cover_statements(&mut self, nodes: &AstNodes<'_>, source: &[u8], version: LuaVersion) {
+        if !self.list.iter().any(|directive| directive.extent == LintExtent::Statement) {
+            return;
+        }
+        let mut stmts: Vec<Span> = nodes
+            .iter()
+            .filter_map(|node| node.kind().as_block())
+            .flat_map(|block| &block.stmts)
+            .filter(|stmt| !matches!(stmt, Statement::Error(_)))
+            .map(Statement::span)
+            .collect();
+        stmts.sort_unstable_by_key(|stmt| stmt.start);
+        let mut remaining = stmts.into_iter().peekable();
+        // The statements around the directive, innermost last, and the one
+        // that ended last before it.
+        let mut open: Vec<Span> = Vec::new();
+        let mut last_closed: Option<Span> = None;
+        let mut covered: Vec<(Range<usize>, Span)> = Vec::new();
+        for directive in &self.list {
+            if directive.extent != LintExtent::Statement {
+                continue;
             }
-            for (entries, stmt) in covered {
-                for entry in entries {
-                    self.cover(entry, stmt.start, stmt.end);
-                }
+            let at = directive.span.start;
+            while let Some(stmt) = remaining.next_if(|stmt| stmt.start < at) {
+                close_before(&mut open, &mut last_closed, stmt.start);
+                open.push(stmt);
+            }
+            close_before(&mut open, &mut last_closed, at);
+            let around = open.last().copied();
+            let is_inside = |stmt: &Span| {
+                around.is_none_or(|outer| (outer.start..outer.end).contains(&stmt.start))
+            };
+            let trailed = last_closed.filter(|stmt| {
+                is_inside(stmt) && !has_line_break(Span::new(stmt.end, at).text(source), version)
+            });
+            let next = remaining.peek().copied().filter(is_inside);
+            if let Some(stmt) = trailed.or(next).or(around) {
+                covered.push((directive.entries.clone(), stmt));
             }
         }
-        self.intervals.sort_unstable_by_key(|interval| (interval.target, interval.rank()));
+        for (entries, stmt) in covered {
+            for entry in entries {
+                self.cover(entry, stmt.start, stmt.end);
+            }
+        }
     }
 
     pub(crate) fn directives(&self) -> &[Directive] {
@@ -348,18 +347,22 @@ mod tests {
     use luck_token::LuaTarget;
 
     use super::*;
-    use crate::config::LintConfig;
-    use crate::linter::Linter;
+
+    /// The directives of `source`, which parses as Lua 5.4.
+    fn directives_of(source: &str) -> Directives {
+        let allocator = Allocator::new();
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        assert!(parse.errors.is_empty(), "{:?}", parse.errors);
+        let stdlib = library_for(LuaTarget::Lua54);
+        let (semantic, _) = luck_stdlib::analyze(&parse.chunk, parse.counts, stdlib);
+        Directives::new(&parse, semantic.semantic().nodes())
+    }
 
     /// What the directives in `source` set at each offset `needles` start
     /// at, for `rule`.
     fn verbs_at(source: &str, rule: RuleId, needles: &[&str]) -> Vec<Option<LintVerb>> {
-        let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let linter = Linter::new(LintConfig::default());
-        let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
-        let mut cover = analysis.directives().cover_of(rule);
+        let directives = directives_of(source);
+        let mut cover = directives.cover_of(rule);
         let mut offsets: Vec<u32> = needles
             .iter()
             .map(|needle| u32::try_from(source.find(needle).expect("in the source")).expect("fits"))
@@ -466,12 +469,6 @@ local c = 3";
             [Some(LintVerb::Deny), Some(LintVerb::Allow), Some(LintVerb::Deny)]
         );
         assert_eq!(verbs_at(source, RuleId::EmptyBlock, &["b ="]), [Some(LintVerb::Deny)]);
-    }
-
-    fn directives_of(source: &str) -> Directives {
-        let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-        Directives::new(&parse.comments, source.as_bytes())
     }
 
     #[test]

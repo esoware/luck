@@ -20,7 +20,7 @@ declare_lint_rule!(
 impl Rule for UnnecessaryAssert {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -32,7 +32,7 @@ impl Rule for UnnecessaryAssert {
     }
 }
 
-fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
+fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
     if !is_global_call(call, "assert", context.semantic) {
         return None;
     }

@@ -22,7 +22,7 @@ declare_lint_rule!(
 impl Rule for TableOperations {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -32,7 +32,7 @@ impl Rule for TableOperations {
     }
 }
 
-fn check_call(call: Call<'_>, context: &LintContext<'_>) {
+fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
     let Some(function_name) = table_stdlib_function(call, context) else {
         return;
     };
@@ -111,7 +111,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 /// and this version's stdlib has that function.
 fn table_stdlib_function<'call>(
     call: Call<'call>,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
     if root.text != "table" || context.semantic.scoping().resolves_to_local(root) {

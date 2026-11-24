@@ -30,7 +30,7 @@ impl Rule for RedundantNativeAttribute {
         has_native_directive(host)
     }
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         let attributes = if let AstKind::FunctionDecl(function_decl) = kind {
             &function_decl.attributes
@@ -45,7 +45,7 @@ impl Rule for RedundantNativeAttribute {
     }
 }
 
-fn check_attributes(attributes: &[FunctionAttribute<'_>], context: &LintContext<'_>) {
+fn check_attributes(attributes: &[FunctionAttribute<'_>], context: &LintContext<'_, '_>) {
     for attribute in attributes {
         if attribute.name.text != "native" {
             continue;

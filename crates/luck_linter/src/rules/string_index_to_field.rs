@@ -20,7 +20,7 @@ declare_lint_rule!(
 impl Rule for StringIndexToField {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -34,7 +34,7 @@ impl Rule for StringIndexToField {
 
 /// The fix replaces just the brackets, since parentheses the tree leaves
 /// out can close between the head and them.
-fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_>) -> Option<Finding> {
+fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
     let Suffix::Index { span: brackets, index: Expression::StringLiteral(literal) } = suffix else {
         return None;
     };

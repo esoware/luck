@@ -21,7 +21,7 @@ declare_lint_rule!(
 impl Rule for CompareNan {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };

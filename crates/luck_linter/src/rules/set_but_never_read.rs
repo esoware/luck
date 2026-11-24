@@ -22,7 +22,7 @@ declare_lint_rule!(
 );
 
 impl Rule for SetButNeverRead {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
 
         for symbol in tree.symbols() {

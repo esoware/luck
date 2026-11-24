@@ -31,7 +31,7 @@ pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<(
             .map(|(rule, linter)| {
                 let arena_bytes_before = allocator.used_bytes();
                 let ((), mut stats) = record_stats_in(allocator, || {
-                    drop(linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| false));
+                    drop(linter.run_analyzed(&analysis, FixKind::empty(), None, &|| false));
                 });
                 stats.arena_used_bytes = allocator.used_bytes() - arena_bytes_before;
                 (rule.name(), stats)

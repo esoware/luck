@@ -29,7 +29,7 @@ impl Rule for LoopExecutesOnce {
         AstType::GenericFor,
     ]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         let (span, loop_name) = if let AstKind::WhileLoop(while_loop) = kind {
             (while_loop.span, "`while`")

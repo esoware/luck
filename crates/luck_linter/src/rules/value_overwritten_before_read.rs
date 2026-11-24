@@ -19,7 +19,7 @@ declare_lint_rule!(
 );
 
 impl Rule for ValueOverwrittenBeforeRead {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
         for &(symbol_id, span) in &context.local_flow().overwritten_values {
             context.diagnostic(

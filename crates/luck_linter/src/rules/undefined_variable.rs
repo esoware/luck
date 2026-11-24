@@ -8,7 +8,7 @@ pub(crate) struct UndefinedVariable;
 declare_lint_rule!(UndefinedVariable, Correctness, Error, "use of undefined variable");
 
 impl Rule for UndefinedVariable {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
         for reference in tree.global_references() {

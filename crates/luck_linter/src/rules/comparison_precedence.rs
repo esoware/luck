@@ -23,7 +23,7 @@ declare_lint_rule!(
 impl Rule for ComparisonPrecedence {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
@@ -38,7 +38,7 @@ impl Rule for ComparisonPrecedence {
 
 /// A comparison's operand that is itself a comparison is the run's
 /// operators on that side, since a bare one would have joined the run.
-fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>) {
+fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_, '_>) {
     let chained_side = if pair.lhs.is_none() {
         Some("left")
     } else if pair.rhs.is_none() {

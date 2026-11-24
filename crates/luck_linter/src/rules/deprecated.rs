@@ -31,7 +31,7 @@ declare_lint_rule!(
 impl Rule for Deprecated {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -50,7 +50,7 @@ fn check_call(
     call: Call<'_>,
     callee: ResolvedCallee<'_>,
     is_statement: bool,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) {
     let entry = callee.entry();
 
@@ -260,7 +260,7 @@ fn is_followed_by_tighter_binding(offset: u32, context: &ContextHost<'_>) -> boo
 fn check_field_accesses(
     node: &AstNode<'_>,
     chain: &SuffixedExpression<'_>,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) {
     let semantic = context.semantic;
     let (Expression::Name(root), Suffix::Field(_)) = (&chain.prefix, chain.suffixes.first()) else {

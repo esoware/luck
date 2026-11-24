@@ -20,7 +20,7 @@ impl Rule for DivideByZero {
     const NODE_TYPES: AstTypesBitset =
         AstTypesBitset::from_types(&[AstType::BinaryOp, AstType::CompoundAssignment]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         // Luau
         if let AstKind::CompoundAssignment(compound) = kind {

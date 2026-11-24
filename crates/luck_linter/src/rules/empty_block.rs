@@ -22,7 +22,7 @@ impl Rule for EmptyBlock {
         AstType::RepeatLoop,
     ]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         let (block, message, span) = if let AstKind::IfStatement(if_stmt) = kind {
             (&if_stmt.block, "empty `if` block", if_stmt.span)

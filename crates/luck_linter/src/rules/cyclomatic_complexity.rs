@@ -50,7 +50,7 @@ impl Rule for CyclomaticComplexity {
         self.max.is_some()
     }
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let (Some(threshold), Some(function)) = (self.max, FunctionNode::of(node, context.nodes))
         else {
             return;

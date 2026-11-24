@@ -19,7 +19,7 @@ declare_lint_rule!(
 );
 
 impl Rule for CommentDirective {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let first_token_start = context.chunk.block.span.start;
         let mut first_mode: Option<Span> = None;
         for comment in context.comments {

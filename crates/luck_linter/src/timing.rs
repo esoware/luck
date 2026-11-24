@@ -1,7 +1,6 @@
 use std::cmp::Reverse;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::rules::{RuleId, RuleTable};
 

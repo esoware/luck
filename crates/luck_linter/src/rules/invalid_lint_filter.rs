@@ -22,7 +22,7 @@ declare_lint_rule!(
 );
 
 impl Rule for InvalidLintFilter {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let directives = context.directives;
         let malformed = directives.errors().iter().map(|problem| match *problem {
             DirectiveProblem::Malformed(error) => {

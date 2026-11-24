@@ -19,7 +19,7 @@ impl Rule for UnbalancedAssignment {
     const NODE_TYPES: AstTypesBitset =
         AstTypesBitset::from_types(&[AstType::LocalAssignment, AstType::Assignment]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         if let AstKind::LocalAssignment(local) = kind {
             let name_count = local.names.len();

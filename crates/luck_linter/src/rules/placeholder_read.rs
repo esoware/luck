@@ -20,7 +20,7 @@ declare_lint_rule!(
 );
 
 impl Rule for PlaceholderRead {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
         let Some(placeholder) = tree.name_id("_") else {
             return;

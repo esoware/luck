@@ -1,10 +1,10 @@
 use luck_ast::{AstKind, AstType, Call, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::call::global_new_call;
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::number::number_value;
-use crate::roblox::global_new_call;
 use crate::rule::{Rule, declare_lint_rule};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -25,7 +25,7 @@ impl Rule for RobloxSuspiciousUdim2New {
     }
 
     /// A call statement's value goes unused, so it isn't checked.
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -38,7 +38,7 @@ impl Rule for RobloxSuspiciousUdim2New {
     }
 }
 
-fn check_call(call: Call<'_>, context: &LintContext<'_>) {
+fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
     let Some(args) = global_new_call(call, "UDim2", context.semantic) else {
         return;
     };

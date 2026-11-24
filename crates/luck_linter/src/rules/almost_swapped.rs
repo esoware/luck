@@ -18,7 +18,7 @@ declare_lint_rule!(
 impl Rule for AlmostSwapped {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::Block(block) = node.kind() else {
             return;
         };

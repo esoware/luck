@@ -20,7 +20,7 @@ declare_lint_rule!(
 impl Rule for DuplicateConditions {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::IfStatement]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::IfStatement(if_stmt) = node.kind() else {
             return;
         };

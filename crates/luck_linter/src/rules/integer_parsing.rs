@@ -24,7 +24,7 @@ declare_lint_rule!(
 impl Rule for IntegerParsing {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::NumberLiteral]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         if let AstKind::NumberLiteral(literal) = node.kind()
             && let Some(finding) = check_number(literal, context.semantic.version())
         {

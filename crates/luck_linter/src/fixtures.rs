@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::slice;
 
 use luck_allocator::Allocator;
-use luck_diagnostics::{Diagnostic, Severity, Tag};
+use luck_diagnostics::{Severity, Tag};
 use luck_stdlib::library_for;
 use luck_token::{LuaTarget, LuaVersion, Span, line_breaks};
 use serde_json::{Value, json};
@@ -14,7 +14,11 @@ use crate::context::ContextHost;
 use crate::diagnostic::Message;
 use crate::fix::{self, FixKind};
 use crate::linter::Linter;
+use crate::rule::Category;
 use crate::rules::RuleId;
+
+pub(crate) const CATEGORIES: [Category; 4] =
+    [Category::Correctness, Category::Suspicious, Category::Style, Category::Performance];
 
 /// A source a rule's test lints, as oxlint's `TestCase` is.
 ///
@@ -381,10 +385,5 @@ pub(crate) fn with_host<T>(
     let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
     assert!(parse.errors.is_empty(), "parse of {source:?}: {:?}", parse.errors);
     let analysis = Linter::new(LintConfig::default()).analyze(&parse, library_for(target));
-    answer(&ContextHost::new(&parse, &analysis, FixKind::all()))
-}
-
-/// A message with no fix, at `span`.
-pub(crate) fn message(span: Span) -> Message {
-    Message { diagnostic: Diagnostic::lint("test", Severity::Warning, span, "test"), fix: None }
+    answer(&ContextHost::new(&analysis, FixKind::all()))
 }

@@ -23,7 +23,7 @@ declare_lint_rule!(
 impl Rule for RedundantNilInit {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::LocalAssignment]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         if let AstKind::LocalAssignment(local) = node.kind()
             && let Some(finding) = check_local(local, context)
         {
@@ -32,7 +32,7 @@ impl Rule for RedundantNilInit {
     }
 }
 
-fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_>) -> Option<Finding> {
+fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
     // Luau requires a `const` to have an initializer.
     if local.kind.is_const() {
         return None;
@@ -90,7 +90,7 @@ fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_>) -> Option
 fn whole_initializer_span(
     local: &LocalAssignment<'_>,
     first_expr: &Expression<'_>,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> Span {
     let binding_end = last_binding_end(local);
     let gap = Span::new(binding_end, context.extent(first_expr).start);

@@ -1,7 +1,6 @@
 use std::cell::RefCell;
-use std::rc::Rc;
 
-use luck_ast::{AST_TYPE_MAX, AstType};
+use luck_ast::AST_TYPE_MAX;
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_parser::ParseResult;
 use luck_semantic::AstTypesBitset;
@@ -59,15 +58,13 @@ impl Linter {
     /// parsed as, with the config's extra globals defined.
     pub fn analyze<'ast>(
         &self,
-        parse: &'ast ParseResult<'_>,
+        parse: &'ast ParseResult<'ast>,
         stdlib: &'ast StdlibLibrary<'ast>,
     ) -> Analysis<'ast> {
-        let chunk = &parse.chunk;
-        let mut directives = Directives::new(&parse.comments, parse.source);
-        let (mut semantic, errors) = luck_stdlib::analyze(chunk, parse.counts, stdlib);
-        directives.cover_statements(semantic.semantic().nodes(), parse.source, chunk.version);
+        let (mut semantic, errors) = luck_stdlib::analyze(&parse.chunk, parse.counts, stdlib);
+        let directives = Directives::new(parse, semantic.semantic().nodes());
         semantic.add_extra_globals(self.config.extra_globals.iter().map(String::as_str));
-        Analysis { semantic, errors, directives }
+        Analysis { parse, semantic, errors, directives }
     }
 
     /// Lints `parse`, knowing the globals `stdlib` declares, and builds the
@@ -95,12 +92,11 @@ impl Linter {
             return error_messages(&parse.errors);
         }
         let analysis = self.analyze(parse, stdlib);
-        self.run_analyzed(parse, &analysis, fixes, timings, &|| false)
-            .expect("nothing cancels the lint")
+        self.run_analyzed(&analysis, fixes, timings, &|| false).expect("nothing cancels the lint")
     }
 
-    /// [`Self::run`] on a parse and the analysis [`Self::analyze`] built of
-    /// it, which a host like the language server keeps for its providers.
+    /// [`Self::run`] on the analysis [`Self::analyze`] built of a parse,
+    /// which a host like the language server keeps for its providers.
     ///
     /// `is_cancelled` is asked between rules and between runs of nodes, and
     /// once it says so, the lint stops and returns `None`.
@@ -111,20 +107,19 @@ impl Linter {
     /// acts on, or when a rule offers a fix of a kind its `FIX` leaves out.
     pub fn run_analyzed(
         &self,
-        parse: &ParseResult<'_>,
         analysis: &Analysis<'_>,
         fixes: FixKind,
         timings: Option<&RuleTimings>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Option<Vec<Message>> {
-        if !parse.errors.is_empty() {
-            return Some(error_messages(&parse.errors));
+        if !analysis.parse.errors.is_empty() {
+            return Some(error_messages(&analysis.parse.errors));
         }
         if !analysis.errors.is_empty() {
             return Some(error_messages(&analysis.errors));
         }
-        let host = ContextHost::new(parse, analysis, fixes);
-        let mut messages = self.run_rules(&Rc::new(host), timings, is_cancelled)?;
+        let host = ContextHost::new(analysis, fixes);
+        let mut messages = self.run_rules(&host, timings, is_cancelled)?;
         messages.sort_by_key(|message| message.span().start);
         Some(messages)
     }
@@ -143,22 +138,20 @@ impl Linter {
     /// `unused_lint_filter`, so a stopped lint never passes for a whole one.
     fn run_rules(
         &self,
-        host: &Rc<ContextHost<'_>>,
+        host: &ContextHost<'_>,
         timings: Option<&RuleTimings>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Option<Vec<Message>> {
         let directives = host.directives;
         let runs = |rule: RuleId| self.severities[rule].is_some() || directives.enables(rule);
         let mut rules: Vec<&RuleEnum> = Vec::new();
-        let mut is_filtering_allows = false;
         #[cfg(debug_assertions)]
         let mut skipped_rules: Vec<&RuleEnum> = Vec::new();
-        for rule in RuleId::ALL.into_iter().filter(|&rule| runs(rule)).map(|rule| &self.rules[rule])
-        {
-            if matches!(rule, RuleEnum::UnusedLintFilter(_)) {
-                is_filtering_allows = true;
-                continue;
-            }
+        // `unused_lint_filter` reads which `allow`s the other rules'
+        // diagnostics met, so it runs apart, after them.
+        let pass_rules =
+            RuleId::ALL.into_iter().filter(|&rule| rule != RuleId::UnusedLintFilter && runs(rule));
+        for rule in pass_rules.map(|rule| &self.rules[rule]) {
             if !rule.should_run(host) {
                 continue;
             }
@@ -192,16 +185,14 @@ impl Linter {
             if !rule_findings.is_empty() {
                 let id = rule.id();
                 let severity = self.severities[id];
-                report(id, rule_findings, severity, directives, Some(&mut used), &mut messages);
+                report(id, rule_findings, severity, directives, &mut used, &mut messages);
             }
         }
-        // It reads which `allow`s the other rules' diagnostics met, so it runs
-        // last.
-        if is_filtering_allows {
+        let id = RuleId::UnusedLintFilter;
+        if runs(id) {
             if is_cancelled() {
                 return None;
             }
-            let id = RuleId::UnusedLintFilter;
             let check = || UnusedLintFilter::check(host, &used, runs);
             let rule_findings = match timings {
                 Some(run_timings) => {
@@ -212,16 +203,17 @@ impl Linter {
                 }
                 None => check(),
             };
-            report(id, rule_findings, self.severities[id], directives, None, &mut messages);
+            report(id, rule_findings, self.severities[id], directives, &mut used, &mut messages);
         }
         Some(messages)
     }
 }
 
-/// A parse's semantic analysis, with the compile-time errors it found, and
-/// its lint directives.
+/// A parse, its semantic analysis, with the compile-time errors it found,
+/// and its lint directives.
 #[derive(Debug)]
 pub struct Analysis<'ast> {
+    parse: &'ast ParseResult<'ast>,
     semantic: SemanticAnalysis<'ast>,
     errors: Vec<Diagnostic>,
     directives: Directives,
@@ -230,6 +222,10 @@ pub struct Analysis<'ast> {
 impl<'ast> Analysis<'ast> {
     pub const fn semantic(&self) -> &SemanticAnalysis<'ast> {
         &self.semantic
+    }
+
+    pub(crate) const fn parse(&self) -> &'ast ParseResult<'ast> {
+        self.parse
     }
 
     pub(crate) const fn directives(&self) -> &Directives {
@@ -250,12 +246,11 @@ fn error_messages(errors: &[Diagnostic]) -> Vec<Message> {
 /// times each, and else nothing is timed.
 fn execute<const TIMED: bool>(
     rules: &[&RuleEnum],
-    host: &Rc<ContextHost<'_>>,
+    host: &ContextHost<'_>,
     spent: &mut [Spent],
     is_cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<Vec<Finding>>> {
-    let contexts: Vec<LintContext<'_>> =
-        rules.iter().map(|_| LintContext::new(Rc::clone(host))).collect();
+    let contexts: Vec<LintContext<'_, '_>> = rules.iter().map(|_| LintContext::new(host)).collect();
     let is_finished = RULE_BUCKETS.with_borrow_mut(|buckets| {
         for bucket in buckets.iter_mut() {
             bucket.clear();
@@ -279,7 +274,7 @@ fn execute<const TIMED: bool>(
             if i.is_multiple_of(NODES_PER_CANCEL_CHECK) && is_cancelled() {
                 return false;
             }
-            for &slot in &buckets[bucket_of(node.kind().ty())] {
+            for &slot in &buckets[node.kind().ty() as usize] {
                 let (rule, context) = (rules[slot], &contexts[slot]);
                 if TIMED {
                     spent[slot].time(|| rule.run(node, context));
@@ -293,10 +288,6 @@ fn execute<const TIMED: bool>(
     is_finished.then(|| contexts.into_iter().map(LintContext::into_findings).collect())
 }
 
-const fn bucket_of(ty: AstType) -> usize {
-    ty as usize
-}
-
 /// Re-runs every rule on every node and checks that bucketed dispatch and
 /// the per-file skipping changed nothing, as oxlint's debug builds do.
 #[cfg(debug_assertions)]
@@ -304,7 +295,7 @@ fn assert_dispatch_is_pure(
     rules: &[&RuleEnum],
     skipped_rules: &[&RuleEnum],
     findings: &[Vec<Finding>],
-    host: &Rc<ContextHost<'_>>,
+    host: &ContextHost<'_>,
 ) {
     for ((rule, bucketed), reference) in
         rules.iter().zip(findings).zip(run_on_every_node(rules, host))
@@ -328,11 +319,11 @@ fn assert_dispatch_is_pure(
 }
 
 #[cfg(debug_assertions)]
-fn run_on_every_node(rules: &[&RuleEnum], host: &Rc<ContextHost<'_>>) -> Vec<Vec<Finding>> {
+fn run_on_every_node(rules: &[&RuleEnum], host: &ContextHost<'_>) -> Vec<Vec<Finding>> {
     rules
         .iter()
         .map(|rule| {
-            let context = LintContext::new(Rc::clone(host));
+            let context = LintContext::new(host);
             rule.run_once(&context);
             for node in host.nodes.iter() {
                 rule.run(node, &context);
@@ -346,13 +337,13 @@ fn run_on_every_node(rules: &[&RuleEnum], host: &Rc<ContextHost<'_>>) -> Vec<Vec
 ///
 /// Each takes the level the directive that wins over it sets, or else
 /// `severity`, which is `None` for a rule only a directive runs. An `allow`
-/// drops a finding, and one that does is marked in `used`, when given.
+/// drops a finding, and its entry is marked in `used`.
 fn report(
     rule: RuleId,
     mut findings: Vec<Finding>,
     severity: Option<Severity>,
     directives: &Directives,
-    mut used: Option<&mut [bool]>,
+    used: &mut [bool],
     messages: &mut Vec<Message>,
 ) {
     let mut cover = directives.cover_of(rule);
@@ -362,9 +353,7 @@ fn report(
     for finding in findings {
         let level = match cover.at(finding.span().start) {
             Some((LintVerb::Allow, entry)) => {
-                if let Some(marks) = used.as_deref_mut() {
-                    marks[entry] = true;
-                }
+                used[entry] = true;
                 continue;
             }
             Some((LintVerb::Deny, _)) => Severity::Error,
@@ -394,7 +383,7 @@ mod tests {
 
     use super::*;
     use crate::config::RuleLevel;
-    use crate::diagnostic::Category;
+    use crate::rule::Category;
 
     fn silent() -> LintConfig {
         let mut config = LintConfig::default();
@@ -413,7 +402,7 @@ print(x, y)";
         let linter = Linter::new(silent());
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
         let diags = linter
-            .run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| false)
+            .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
             .expect("nothing cancels it");
         let found: Vec<(&str, u32, Severity)> =
             diags.iter().map(|diag| (diag.code, diag.span().start, diag.severity)).collect();
@@ -427,7 +416,7 @@ print(x, y)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let linter = Linter::new(silent());
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
-        let cancelled = linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| true);
+        let cancelled = linter.run_analyzed(&analysis, FixKind::empty(), None, &|| true);
         assert_eq!(cancelled, None, "a rule only a directive runs stops too");
     }
 
@@ -444,7 +433,7 @@ print(x)";
             let asked = AtomicUsize::new(0);
             let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
             let whole = linter
-                .run_analyzed(&parse, &analysis, FixKind::empty(), None, &counted)
+                .run_analyzed(&analysis, FixKind::empty(), None, &counted)
                 .expect("nothing cancels it");
             (asked.load(Ordering::Relaxed), whole)
         };
@@ -459,7 +448,7 @@ print(x)";
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
         let answered = AtomicUsize::new(0);
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed) + 1 == asked;
-        let stopped = linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &cancels_last);
+        let stopped = linter.run_analyzed(&analysis, FixKind::empty(), None, &cancels_last);
         assert_eq!(stopped, None, "diagnostics missing the unused `allow` would pass for whole");
     }
 

@@ -24,7 +24,7 @@ declare_lint_rule!(
 impl Rule for IncorrectStdlibUse {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -36,7 +36,7 @@ impl Rule for IncorrectStdlibUse {
     }
 }
 
-fn check_call(call: Call<'_>, callee: &ResolvedCallee<'_>, context: &LintContext<'_>) {
+fn check_call(call: Call<'_>, callee: &ResolvedCallee<'_>, context: &LintContext<'_, '_>) {
     let StdlibEntry::Function(function) = callee.entry() else {
         return;
     };

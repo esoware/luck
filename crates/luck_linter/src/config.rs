@@ -22,8 +22,7 @@ use serde::de::{
 #[cfg(feature = "serde")]
 use serde::ser::{Serialize, SerializeMap, Serializer};
 
-use crate::diagnostic::Category;
-use crate::rule::RuleOptions;
+use crate::rule::{Category, RuleOptions};
 use crate::rules::{OptionSettings, RuleId, RuleTable};
 
 /// Linter settings from luck.json.
@@ -423,6 +422,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::CATEGORIES;
 
     fn lint_config(lint_json: &str) -> LintConfig {
         serde_json::from_str(lint_json).expect("deserialize")
@@ -436,9 +436,6 @@ mod tests {
     fn rules_json(lint: &LintConfig) -> String {
         serde_json::to_string(&lint.rules).expect("serialize")
     }
-
-    const CATEGORIES: [Category; 4] =
-        [Category::Correctness, Category::Suspicious, Category::Style, Category::Performance];
 
     #[test]
     fn parses_every_lint_option() {
@@ -654,22 +651,6 @@ mod tests {
     fn parses_the_perf_category_alias() {
         let lint = lint_config(r#"{ "categories": { "perf": "warn" } }"#);
         assert_eq!(lint.categories.level(Category::Performance), Some(RuleLevel::Warn));
-    }
-
-    /// `name` is what `--rules` and `--print-config` print, so a `name` that
-    /// `from_name` doesn't take back would break scripts feeding them to `-A`.
-    #[test]
-    fn category_names_round_trip_through_from_name() {
-        for category in CATEGORIES {
-            assert_eq!(Category::from_name(category.name()), Some(category));
-        }
-    }
-
-    #[test]
-    fn category_from_name_recognizes_categories_and_the_perf_alias() {
-        assert_eq!(Category::from_name("style"), Some(Category::Style));
-        assert_eq!(Category::from_name("perf"), Some(Category::Performance));
-        assert_eq!(Category::from_name("undefined_variable"), None);
     }
 
     /// A category's `luck.json` key is its `name`, so `--print-config` output

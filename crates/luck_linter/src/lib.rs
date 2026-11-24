@@ -39,7 +39,6 @@ mod function_node;
 mod linter;
 mod local_flow;
 mod number;
-mod roblox;
 mod rule;
 mod rules;
 mod suggest;
@@ -47,8 +46,9 @@ mod timing;
 mod underscore_fix;
 
 pub use config::{CategoryLevels, LintConfig, RuleLevel, RuleSettings};
-pub use diagnostic::{Category, Message};
+pub use diagnostic::Message;
 pub use fix::{Fix, FixError, FixKind, Fixed, TextEdit, non_overlapping_edits};
 pub use linter::{Analysis, Linter};
+pub use rule::Category;
 pub use rules::RuleId;
 pub use timing::{RuleTiming, RuleTimings};

@@ -31,7 +31,7 @@ declare_lint_rule!(
 impl Rule for UnreachableCode {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::Block(block) = node.kind() else {
             return;
         };
@@ -58,7 +58,7 @@ impl Rule for UnreachableCode {
 
 /// Whether the code before `block`'s first statement can run: a function's
 /// or the chunk's always does, and an `if` clause runs where its `if` does.
-fn is_entered(block: &AstNode<'_>, graph: &FlowGraph, context: &LintContext<'_>) -> bool {
+fn is_entered(block: &AstNode<'_>, graph: &FlowGraph, context: &LintContext<'_, '_>) -> bool {
     let nodes = context.nodes;
     let Some(parent) = nodes.parent_node(block.id()) else {
         return true;
@@ -106,7 +106,7 @@ fn is_declaration(stmt: &Statement<'_>) -> bool {
     }
 }
 
-fn report(run: Option<Span>, context: &LintContext<'_>) {
+fn report(run: Option<Span>, context: &LintContext<'_, '_>) {
     if let Some(span) = run {
         context.diagnostic(Finding::new("unreachable code", span).with_tag(Tag::Unnecessary));
     }

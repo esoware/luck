@@ -1,11 +1,10 @@
 use std::cell::{OnceCell, RefCell};
 use std::ops::Deref;
-use std::rc::Rc;
 use std::{iter, ptr};
 
 use luck_ast::{AstKind, Block, Chunk, Expression, GetSpan as _, Name, Var};
-use luck_parser::{Groupings, ParseResult};
-use luck_semantic::{AstNode, AstNodes, NodeId, ScopeId, Scoping};
+use luck_parser::Groupings;
+use luck_semantic::{AstNode, AstNodes, NodeId, Reference, ScopeId, Scoping};
 use luck_stdlib::{ResolvedCallee, SemanticAnalysis};
 use luck_token::{Comment, LineIndex, LuaVersion, Span};
 use luck_value::ValueContext;
@@ -37,17 +36,17 @@ pub(crate) struct ContextHost<'ast> {
     pub fixes: FixKind,
     /// Each function's control-flow graph, by its scope's index, which
     /// [`Self::cfg`] builds.
-    pub graphs: OnceCell<Box<[OnceCell<Box<FlowGraph>>]>>,
-    pub local_flow: OnceCell<LocalFlow>,
-    pub line_index: OnceCell<LineIndex>,
+    graphs: OnceCell<Box<[OnceCell<Box<FlowGraph>>]>>,
+    local_flow: OnceCell<LocalFlow>,
+    line_index: OnceCell<LineIndex>,
     /// The chain a rule last asked [`Self::callee`] about. Every rule that
     /// runs on a node runs before the pass moves on, so they share one
     /// resolution of its calls.
-    pub resolved_chain: RefCell<ResolvedChain<'ast>>,
+    resolved_chain: RefCell<ResolvedChain<'ast>>,
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ResolvedChain<'ast> {
+struct ResolvedChain<'ast> {
     chain: Option<NodeId>,
     /// What each suffix calls, by its index: `None` for one that's no call,
     /// or calls nothing the stdlib knows.
@@ -55,11 +54,8 @@ pub(crate) struct ResolvedChain<'ast> {
 }
 
 impl<'ast> ContextHost<'ast> {
-    pub(crate) fn new(
-        parse: &'ast ParseResult<'_>,
-        analysis: &'ast Analysis<'ast>,
-        fixes: FixKind,
-    ) -> Self {
+    pub(crate) fn new(analysis: &'ast Analysis<'ast>, fixes: FixKind) -> Self {
+        let parse = analysis.parse();
         let semantic = analysis.semantic();
         Self {
             chunk: &parse.chunk,
@@ -100,7 +96,7 @@ impl<'ast> ContextHost<'ast> {
     }
 
     /// The block of the function or chunk that opens `function`.
-    pub(crate) fn function_block(&self, function: ScopeId) -> Option<&'ast Block<'ast>> {
+    fn function_block(&self, function: ScopeId) -> Option<&'ast Block<'ast>> {
         let opener = self.nodes.kind(self.scoping().scope(function).node);
         if let AstKind::FunctionBody(body) = opener {
             return Some(&body.block);
@@ -172,6 +168,21 @@ impl<'ast> ContextHost<'ast> {
         // Luau
         matches!(parent, Some(AstKind::CompoundAssignment(compound)) if is_chain(&compound.var))
     }
+
+    /// Whether `reference` is the name a field or index write goes through
+    /// directly, as the `x` of `x.foo = 1`, which the scope tree records as a
+    /// plain read.
+    pub(crate) fn is_field_write_prefix(&self, reference: &Reference) -> bool {
+        let Some(chain_node) = self.nodes.parent_node(reference.node) else {
+            return false;
+        };
+        let AstKind::SuffixedExpression(chain) = chain_node.kind() else {
+            return false;
+        };
+        chain.suffixes.len() == 1
+            && matches!(&chain.prefix, Expression::Name(name) if name.span == reference.span)
+            && self.is_assignment_target(chain_node)
+    }
 }
 
 /// A free name reads a global, or a field of a local `_ENV`, so either may
@@ -189,13 +200,13 @@ impl ValueContext for ContextHost<'_> {
 /// One rule's view of a file: the [`ContextHost`] every rule shares, and
 /// the findings this rule reports, as oxlint's `LintContext`.
 #[derive(Debug)]
-pub(crate) struct LintContext<'ast> {
-    host: Rc<ContextHost<'ast>>,
+pub(crate) struct LintContext<'host, 'ast> {
+    host: &'host ContextHost<'ast>,
     findings: RefCell<Vec<Finding>>,
 }
 
-impl<'ast> LintContext<'ast> {
-    pub(crate) const fn new(host: Rc<ContextHost<'ast>>) -> Self {
+impl<'host, 'ast> LintContext<'host, 'ast> {
+    pub(crate) const fn new(host: &'host ContextHost<'ast>) -> Self {
         Self { host, findings: RefCell::new(Vec::new()) }
     }
 
@@ -208,17 +219,17 @@ impl<'ast> LintContext<'ast> {
     }
 }
 
-impl<'ast> Deref for LintContext<'ast> {
+impl<'ast> Deref for LintContext<'_, 'ast> {
     type Target = ContextHost<'ast>;
 
     fn deref(&self) -> &Self::Target {
-        &self.host
+        self.host
     }
 }
 
-impl ValueContext for LintContext<'_> {
+impl ValueContext for LintContext<'_, '_> {
     fn version(&self) -> LuaVersion {
-        self.host.semantic.version()
+        self.host.version()
     }
 
     fn is_global_reference(&self, name: &Name<'_>) -> bool {

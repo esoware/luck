@@ -26,7 +26,7 @@ declare_lint_rule!(
 impl Rule for ImplicitReturn {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         if !matches!(node.kind(), AstKind::Block(_)) {
             return;
         }

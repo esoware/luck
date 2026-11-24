@@ -24,7 +24,7 @@ declare_lint_rule!(
 );
 
 impl Rule for UnusedArgument {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let semantic = context.semantic;
         let tree = semantic.scoping();
 

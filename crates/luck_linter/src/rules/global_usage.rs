@@ -14,7 +14,7 @@ declare_lint_rule!(
 );
 
 impl Rule for GlobalUsage {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let is_roblox = context.semantic.target().is_roblox();
         let tree = context.scoping();
         for reference in tree.global_references() {

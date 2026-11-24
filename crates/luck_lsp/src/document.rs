@@ -306,13 +306,7 @@ impl DocumentState {
         if !self.settings.is_included {
             return Some(Vec::new());
         }
-        self.settings.linter.run_analyzed(
-            self.parse(),
-            self.analysis(),
-            FixKind::all(),
-            None,
-            is_cancelled,
-        )
+        self.settings.linter.run_analyzed(self.analysis(), FixKind::all(), None, is_cancelled)
     }
 
     /// Formats the whole text, or with `range`, the statements it touches.

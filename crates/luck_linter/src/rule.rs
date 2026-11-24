@@ -2,8 +2,44 @@ use luck_diagnostics::Severity;
 use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::context::{ContextHost, LintContext};
-use crate::diagnostic::Category;
 use crate::fix::FixKind;
+
+/// A group of lint rules, which `categories` sets the level of together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    /// Outright wrong or useless code.
+    Correctness,
+    /// Most likely wrong or useless.
+    Suspicious,
+    /// Idiomatic code style.
+    Style,
+    /// Performance improvements.
+    Performance,
+}
+
+impl Category {
+    /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Correctness => "correctness",
+            Self::Suspicious => "suspicious",
+            Self::Style => "style",
+            Self::Performance => "performance",
+        }
+    }
+
+    /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
+    /// it names no category.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "correctness" => Some(Self::Correctness),
+            "suspicious" => Some(Self::Suspicious),
+            "style" => Some(Self::Style),
+            "performance" | "perf" => Some(Self::Performance),
+            _ => None,
+        }
+    }
+}
 
 /// A rule's identity and defaults, which [`declare_lint_rule!`] gives it, as
 /// oxlint's `declare_oxc_lint!` gives its `RuleMeta`.
@@ -48,9 +84,9 @@ pub(crate) trait Rule: RuleMeta + Default {
 
     /// Checks `node`, which it matches by kind itself, since the linter's
     /// debug check hands it every node of the tree.
-    fn run<'ast>(&self, _node: &AstNode<'ast>, _context: &LintContext<'ast>) {}
+    fn run<'ast>(&self, _node: &AstNode<'ast>, _context: &LintContext<'_, 'ast>) {}
 
-    fn run_once(&self, _context: &LintContext<'_>) {}
+    fn run_once(&self, _context: &LintContext<'_, '_>) {}
 }
 
 /// What `[level, options]` gives one rule.
@@ -96,8 +132,7 @@ macro_rules! declare_lint_rule {
         $(,)?
     ) => {
         impl $crate::rule::RuleMeta for $rule {
-            const CATEGORY: $crate::diagnostic::Category =
-                $crate::diagnostic::Category::$category;
+            const CATEGORY: $crate::rule::Category = $crate::rule::Category::$category;
             const DEFAULT_SEVERITY: luck_diagnostics::Severity =
                 luck_diagnostics::Severity::$severity;
             const DESCRIPTION: &'static str = $description;
@@ -124,3 +159,25 @@ macro_rules! declare_lint_rule {
 }
 
 pub(crate) use declare_lint_rule;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::CATEGORIES;
+
+    /// `name` is what `--rules` and `--print-config` print, so a `name` that
+    /// `from_name` doesn't take back would break scripts feeding them to `-A`.
+    #[test]
+    fn category_names_round_trip_through_from_name() {
+        for category in CATEGORIES {
+            assert_eq!(Category::from_name(category.name()), Some(category));
+        }
+    }
+
+    #[test]
+    fn category_from_name_recognizes_categories_and_the_perf_alias() {
+        assert_eq!(Category::from_name("style"), Some(Category::Style));
+        assert_eq!(Category::from_name("perf"), Some(Category::Performance));
+        assert_eq!(Category::from_name("undefined_variable"), None);
+    }
+}

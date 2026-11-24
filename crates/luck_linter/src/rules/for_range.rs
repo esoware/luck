@@ -26,7 +26,7 @@ declare_lint_rule!(
 impl Rule for ForRange {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::NumericFor]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         if let AstKind::NumericFor(numeric_for) = node.kind()
             && let Some((message, help)) = range_problem(numeric_for, context)
         {

@@ -19,7 +19,7 @@ declare_lint_rule!(
 );
 
 impl Rule for BadStringEscape {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         if context.lenient_escapes.is_empty() {
             return;
         }

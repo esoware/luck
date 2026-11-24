@@ -261,13 +261,18 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_diagnostics::Severity;
     use luck_stdlib::library_for;
     use luck_token::LuaTarget;
 
     use super::*;
     use crate::config::{LintConfig, RuleLevel};
-    use crate::fixtures::message;
     use crate::rules::RuleId;
+
+    /// A message with no fix, at `span`.
+    fn message(span: Span) -> Message {
+        Message { diagnostic: Diagnostic::lint("test", Severity::Warning, span, "test"), fix: None }
+    }
 
     fn diag_with_fix(kind: FixKind, replacements: &[(u32, u32, &'static str)]) -> Message {
         let edits: Box<[TextEdit]> = replacements

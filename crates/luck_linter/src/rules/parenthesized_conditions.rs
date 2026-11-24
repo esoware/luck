@@ -25,7 +25,7 @@ impl Rule for ParenthesizedConditions {
         AstType::WhileLoop,
     ]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         let found = if let AstKind::IfStatement(if_stmt) = kind {
             check_condition(
@@ -65,7 +65,7 @@ fn check_condition(
     condition: &Expression<'_>,
     message: &'static str,
     span: Span,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> Option<Finding> {
     let Span { start, end } = if matches!(condition, Expression::Parenthesized(_)) {
         context.extent(condition)

@@ -33,7 +33,7 @@ impl Rule for ManualTableClone {
         Suggestion::for_target(host.semantic).is_some()
     }
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let (AstKind::Block(block), Some(suggestion)) =
             (node.kind(), Suggestion::for_target(context.semantic))
         else {
@@ -84,7 +84,7 @@ fn manual_copy_span(
     stmt: &Statement<'_>,
     next: &Statement<'_>,
     suggestion: Suggestion,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> Option<Span> {
     let semantic = context.semantic;
     let Statement::LocalAssignment(local) = stmt else {
@@ -155,7 +155,7 @@ fn is_generic_clone(
 fn is_numeric_clone(
     loop_node: &NumericFor<'_>,
     destination: &Name<'_>,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> bool {
     let tree = context.scoping();
     let Some(source_table) = length_of_name(&loop_node.limit) else {

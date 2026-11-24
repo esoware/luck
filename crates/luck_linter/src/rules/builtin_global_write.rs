@@ -26,7 +26,7 @@ impl Rule for BuiltinGlobalWrite {
         AstType::FunctionDecl,
     ]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
         if let AstKind::Assignment(assignment) = kind {
             for var in &assignment.targets {
@@ -62,7 +62,7 @@ fn overwrite_finding(name: &str, span: Span) -> Finding {
 }
 
 /// A write of the whole global `name`.
-fn check_name_write(name: &Name<'_>, context: &LintContext<'_>) {
+fn check_name_write(name: &Name<'_>, context: &LintContext<'_, '_>) {
     let tree = context.scoping();
     if let Some(reference) = tree.reference_of(name).map(|id| tree.reference(id))
         && reference.kind.is_write()
@@ -96,7 +96,7 @@ fn writes_namespace_member<'path>(
     leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
 }
 
-fn check_var_target(var: &Var<'_>, context: &LintContext<'_>) {
+fn check_var_target(var: &Var<'_>, context: &LintContext<'_, '_>) {
     let chain = match var {
         Var::Name(name) => return check_name_write(name, context),
         Var::Suffixed(chain) => chain,
@@ -123,7 +123,7 @@ fn check_var_target(var: &Var<'_>, context: &LintContext<'_>) {
     context.diagnostic(overwrite_finding(&display, chain.span));
 }
 
-fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'_>) {
+fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'_, '_>) {
     let (container, leaf, separator) = if let Some(method) = &function_name.method {
         (&*function_name.names, method, ':')
     } else {

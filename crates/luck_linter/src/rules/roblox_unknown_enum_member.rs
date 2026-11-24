@@ -26,7 +26,7 @@ impl Rule for RobloxUnknownEnumMember {
         host.semantic.target().is_roblox()
     }
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };

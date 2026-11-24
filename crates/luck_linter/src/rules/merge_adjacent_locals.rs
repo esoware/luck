@@ -24,7 +24,7 @@ declare_lint_rule!(
 impl Rule for MergeAdjacentLocals {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::Block(block) = node.kind() else {
             return;
         };
@@ -62,7 +62,7 @@ impl Rule for MergeAdjacentLocals {
 fn mergeable<'ast>(
     first_local: &'ast LocalAssignment<'ast>,
     second_local: &'ast LocalAssignment<'ast>,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> Option<(SimpleBinding<'ast>, SimpleBinding<'ast>)> {
     let first = simple_binding(first_local, context)?;
     let second = simple_binding(second_local, context)?;
@@ -98,7 +98,7 @@ struct SimpleBinding<'ast> {
 
 fn simple_binding<'ast>(
     local: &'ast LocalAssignment<'ast>,
-    context: &LintContext<'_>,
+    context: &LintContext<'_, '_>,
 ) -> Option<SimpleBinding<'ast>> {
     // `const` and `export` belong to the statement this rule rebuilds.
     if local.kind != LocalAssignmentKind::Local {

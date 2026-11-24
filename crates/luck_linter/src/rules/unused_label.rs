@@ -17,7 +17,7 @@ declare_lint_rule!(
 );
 
 impl Rule for UnusedLabel {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
         for label in tree.labels().iter().filter(|label| !label.is_used) {
             context.diagnostic(

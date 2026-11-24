@@ -21,7 +21,7 @@ declare_lint_rule!(
 impl Rule for MismatchedArgCount {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
@@ -37,7 +37,7 @@ impl Rule for MismatchedArgCount {
 /// or a function literal its `local` gives it.
 fn declared_function<'ast>(
     symbol: &Symbol,
-    context: &LintContext<'ast>,
+    context: &LintContext<'_, 'ast>,
 ) -> Option<&'ast FunctionBody<'ast>> {
     let nodes = context.nodes;
     let declaration = nodes.kind(symbol.declaration);
@@ -58,7 +58,7 @@ fn declared_function<'ast>(
 
 /// A local that's ever reassigned is left out, since it could hold any
 /// function by the time a call runs.
-fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
+fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
     if call.method.is_some() {
         return None;
     }

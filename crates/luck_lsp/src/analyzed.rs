@@ -76,10 +76,7 @@ impl Analyzed {
 
 impl fmt::Debug for Analyzed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Analyzed")
-            .field("parse", self.parse())
-            .field("analysis", self.analysis())
-            .finish_non_exhaustive()
+        f.debug_struct("Analyzed").field("analysis", self.analysis()).finish_non_exhaustive()
     }
 }
 

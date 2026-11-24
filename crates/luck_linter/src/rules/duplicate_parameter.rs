@@ -19,7 +19,7 @@ declare_lint_rule!(
 impl Rule for DuplicateParameter {
     const NODE_TYPES: AstTypesBitset = FunctionNode::NODE_TYPES;
 
-    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'ast>) {
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         if let Some(function) = FunctionNode::of(node, context.nodes) {
             check_params(function, context);
         }
@@ -32,7 +32,7 @@ impl Rule for DuplicateParameter {
 ///
 /// Parameters are locals, so no Lua compiles a function with more than
 /// [`MAX_ACTIVE_LOCALS`] of them, and one that has more isn't checked.
-fn check_params(function: FunctionNode<'_>, context: &LintContext<'_>) {
+fn check_params(function: FunctionNode<'_>, context: &LintContext<'_, '_>) {
     let params = &function.body.params;
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
     if params.len() + usize::from(vararg_name.is_some()) > MAX_ACTIVE_LOCALS {

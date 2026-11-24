@@ -9,43 +9,6 @@ use crate::context::ContextHost;
 use crate::fix::{Fix, FixKind, RuleFixer};
 use crate::rules::RuleId;
 
-/// A group of lint rules, which `categories` sets the level of together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Category {
-    /// Outright wrong or useless code.
-    Correctness,
-    /// Most likely wrong or useless.
-    Suspicious,
-    /// Idiomatic code style.
-    Style,
-    /// Performance improvements.
-    Performance,
-}
-
-impl Category {
-    /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Correctness => "correctness",
-            Self::Suspicious => "suspicious",
-            Self::Style => "style",
-            Self::Performance => "performance",
-        }
-    }
-
-    /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
-    /// it names no category.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "correctness" => Some(Self::Correctness),
-            "suspicious" => Some(Self::Suspicious),
-            "style" => Some(Self::Style),
-            "performance" | "perf" => Some(Self::Performance),
-            _ => None,
-        }
-    }
-}
-
 /// What the linter reports: a diagnostic, coded with the name of the rule
 /// that found it or E008 for a parse error, and its fix, when the rule
 /// offers one of a kind the host asked for.

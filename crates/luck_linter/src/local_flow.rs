@@ -1,9 +1,7 @@
 use std::{mem, ptr};
 
 use luck_ast::{AstKind, Expression};
-use luck_semantic::{
-    AstNodes, Reference, ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind,
-};
+use luck_semantic::{AstNodes, ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind};
 use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::cfg::{FlowGraph, LocalDeclaration};
@@ -137,21 +135,6 @@ fn is_uninitialized(symbol: &Symbol, nodes: &AstNodes<'_>) -> bool {
             .iter()
             .position(|name| ptr::eq(name, attributed))
             .is_some_and(|position| position >= local.exprs.len())
-}
-
-/// Whether `reference` is the name a field or index write goes through
-/// directly, as the `x` of `x.foo = 1`, which the scope tree records as a
-/// plain read.
-pub(crate) fn is_field_write_prefix(reference: &Reference, host: &ContextHost<'_>) -> bool {
-    let Some(chain_node) = host.nodes.parent_node(reference.node) else {
-        return false;
-    };
-    let AstKind::SuffixedExpression(chain) = chain_node.kind() else {
-        return false;
-    };
-    chain.suffixes.len() == 1
-        && matches!(&chain.prefix, Expression::Name(name) if name.span == reference.span)
-        && host.is_assignment_target(chain_node)
 }
 
 /// Whether more `local` names are active at once somewhere in the function

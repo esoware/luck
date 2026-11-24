@@ -1,6 +1,5 @@
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::local_flow::is_field_write_prefix;
 use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a field or index write on a local declared without a value, before
@@ -20,11 +19,11 @@ declare_lint_rule!(
 );
 
 impl Rule for MutatingUninitialized {
-    fn run_once(&self, context: &LintContext<'_>) {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
         for &(symbol_id, reference_id) in &context.local_flow().first_unassigned_uses {
             let first = tree.reference(reference_id);
-            if !is_field_write_prefix(first, context) {
+            if !context.is_field_write_prefix(first) {
                 continue;
             }
             context.diagnostic(

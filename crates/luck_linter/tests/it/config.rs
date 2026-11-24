@@ -25,7 +25,7 @@ fn a_rule_parses_from_its_name_and_no_other_name_parses() {
 }
 
 #[test]
-fn lint_distinguishes_luau_flavors() {
+fn game_is_a_global_of_roblox_luau_only() {
     let standalone_diags = lint("print(game)", LuaTarget::Luau, &LintConfig::default());
     assert!(
         standalone_diags
@@ -43,7 +43,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let linter = Linter::new(LintConfig::default());
     let without_vim = linter.analyze(&parse, library_for(LuaTarget::Lua54));
     let flagged = linter
-        .run_analyzed(&parse, &without_vim, FixKind::empty(), None, &|| false)
+        .run_analyzed(&without_vim, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(flagged.iter().any(|diag| diag.code == "undefined_variable"), "{flagged:?}");
 
@@ -52,7 +52,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let analysis = with_vim.analyze(&parse, library_for(LuaTarget::Lua54));
     assert!(analysis.semantic().is_known_global("vim"));
     let quiet = with_vim
-        .run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| false)
+        .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(quiet.iter().all(|diag| diag.code != "undefined_variable"), "{quiet:?}");
 }
@@ -64,7 +64,7 @@ fn run_analyzed_reports_parse_errors_without_running_rules() {
     let linter = Linter::new(LintConfig::default());
     let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
     let diags = linter
-        .run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| true)
+        .run_analyzed(&analysis, FixKind::empty(), None, &|| true)
         .expect("a parse error is reported before any rule could be cancelled");
     assert!(!diags.is_empty(), "{diags:?}");
     assert!(diags.iter().all(|diag| diag.code == "E008"), "{diags:?}");
@@ -78,7 +78,7 @@ fn run_reports_parse_errors_without_running_rules() {
 }
 
 #[test]
-fn extra_globals_not_flagged() {
+fn run_defines_the_extra_globals_of_its_config() {
     let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..Default::default() };
     let diags = lint("print(vim.fn)", LuaTarget::Lua54, &config);
     assert!(
@@ -87,14 +87,14 @@ fn extra_globals_not_flagged() {
 }
 
 #[test]
-fn rule_level_off_disables() {
+fn an_off_rule_level_turns_a_default_rule_off() {
     let config = disable(RuleId::UnusedVariable);
     let diags = lint("local unused = 1", LuaTarget::Lua54, &config);
     assert!(diags.iter().all(|diag| diag.code != "unused_variable"));
 }
 
 #[test]
-fn categories_enable_group() {
+fn a_category_level_runs_its_rules() {
     let config = with_category(Category::Suspicious, RuleLevel::Warn);
     let diags = lint("if true then end", LuaTarget::Lua54, &config);
     assert!(diags.iter().any(|diag| diag.code == "empty_block"));
