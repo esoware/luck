@@ -72,7 +72,7 @@ fn parse_cleanly<'ast>(
     parse_result
 }
 
-const BENCHMARK_FILES_SHA: &str = "1922f00013366c3024f1fb95f62a6aa14c63a95a"; // esoware/luck-benchmark-files
+const BENCHMARK_FILES_SHA: &str = "c8c611aef209cad7a33495b2e36135e99e8b84f1"; // esoware/luck-benchmark-files
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const PENLIGHT_SHA: &str = "e0bc8f7fce3b6a4fdef3660066f5006bf8456b32"; // lunarmodules/Penlight 1.15.0
 
