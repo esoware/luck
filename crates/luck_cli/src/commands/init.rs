@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use clap::Args;
+use luck_config::CONFIG_FILE_NAME;
 use luck_token::LuaTarget;
 
 use crate::exit::{Exit, operation_error};
@@ -18,7 +19,7 @@ impl InitArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let target = self.target.unwrap_or(LuaTarget::Lua54);
 
-        let config_path = Path::new("luck.json");
+        let config_path = Path::new(CONFIG_FILE_NAME);
         if config_path.exists() {
             return Err(operation_error("`luck.json` already exists"));
         }

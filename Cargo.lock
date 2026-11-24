@@ -936,7 +936,6 @@ dependencies = [
  "assert_cmd",
  "clap",
  "globset",
- "ignore",
  "luck_allocator",
  "luck_ast",
  "luck_bundler",
@@ -978,6 +977,7 @@ name = "luck_config"
 version = "0.6.0"
 dependencies = [
  "globset",
+ "ignore",
  "json5",
  "luck_bundler",
  "luck_diagnostics",
@@ -1088,7 +1088,6 @@ name = "luck_lsp"
 version = "0.6.0"
 dependencies = [
  "crossbeam-channel",
- "ignore",
  "ls-types",
  "lsp-server",
  "luck_allocator",

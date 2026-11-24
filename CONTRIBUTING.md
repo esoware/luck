@@ -25,9 +25,9 @@ Pull requests are squash merged, and release notes and version bumps come from t
 - `chore`: anything else, such as dependency bumps
 - `revert`: undoing an earlier commit
 
-The scope is a crate's directory name without `luck_`, such as `core` or `lsp`, or `vscode` for `editors/vscode`, `fixtures` for `tests/fixtures`, `deps` for dependency bumps, or `repo` for root files and `.github`. Separate several with commas, as in `fix(parser,formatter): ...`.
+The scope is a crate's directory name without `luck_`, such as `parser` or `lsp`, or `vscode` for `editors/vscode`, `fixtures` for `tests/fixtures`, `deps` for dependency bumps, or `repo` for root files and `.github`. Separate several with commas, as in `fix(parser,formatter): ...`.
 
-Put `!` before the colon when existing users have to change something, such as for a renamed `luck.json` key, CLI flag, or rule, or a breaking change to a published crate's API: `feat(core)!: ...`.
+Put `!` before the colon when existing users have to change something, such as for a renamed `luck.json` key, CLI flag, or rule, or a breaking change to a published crate's API: `feat(linter)!: ...`.
 
 ## License
 

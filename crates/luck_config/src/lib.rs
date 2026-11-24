@@ -13,10 +13,15 @@
 //!
 //! Each tool derives the `luck.json` shape of its own option types behind its
 //! `serde` feature, which this crate turns on, so `transforms`,
-//! `dynamic_require`, and `lint` deserialize straight into them. The `format`
-//! section leaves each formatter option unset unless the config sets it, so
-//! it layers over `.editorconfig`. `overrides` layer `lint` and `format`
+//! `dynamic_require`, `format`, and `lint` deserialize straight into them. The
+//! `format` section leaves each formatter option unset unless the config sets
+//! it, so it layers over `.editorconfig`. `overrides` layer `lint` and `format`
 //! settings over the files their globs match.
+//!
+//! [`walk_lua_files`] finds the Lua files a directory holds, past what
+//! `.gitignore` and `.luckignore` hide, each taken or left out by the
+//! `include` and `exclude` of the project a [`WalkVisitor`] says it's in, so
+//! the path commands and the language server's workspace find the same files.
 //!
 //! The VS Code schema is generated from the config types, with the type
 //! names as its `$defs` keys and the doc comments as its descriptions.
@@ -48,11 +53,11 @@ mod editorconfig;
 mod filter;
 #[cfg(test)]
 mod fixtures;
-mod format_config;
 mod glob;
 mod load;
 mod parse;
 mod project;
+mod walk;
 
 pub use build::{BuildConfig, check_output_paths};
 pub use editorconfig::{EDITORCONFIG_FILE_NAME, Editorconfigs};
@@ -60,3 +65,4 @@ pub use filter::ProjectFilter;
 pub use glob::glob_set;
 pub use load::{CONFIG_FILE_NAME, find_config};
 pub use project::Project;
+pub use walk::{WalkEntry, WalkError, WalkRoot, WalkVisitor, WalkedFile, walk_lua_files};

@@ -6,7 +6,7 @@ Loads a `luck.json` into one validated project, which every luck command and the
 
 `luck.json` is JSON5. Discovery walks up from a directory to the nearest `luck.json`, and only that file applies: a config takes nothing from one above it unless it `extends` it, and `root: true` keeps an `extends` chain inside its directory. `Project::load` reads the file and what it extends, merges them, and checks everything at once: the syntax, every key, the dialects, the globs, the lint rule names and options, and the build keys that can't go together. A problem comes back as one E014 `Diagnostic` placed where it is in the file at fault, or E010 when the file can't be read.
 
-Each tool defines the type of its own section, so `transforms`, `dynamic_require`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, and `LintConfig`, through the `serde` features this crate turns on, and the dialect keys into `LuaTarget`. The linter checks its rule names as its section deserializes.
+Each tool defines the type of its own section, so `transforms`, `dynamic_require`, `format`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, `FormatConfig`, and `LintConfig`, through the `serde` features this crate turns on, and the dialect keys into `LuaTarget`. The linter checks its rule names as its section deserializes.
 
 `std` names std definition files, each relative to the config that names it, as `extends` does, and listed after the ones of the files it extends. `Project::load` reads each as a `luck_stdlib::StdlibDefinition` and layers them, in order, over the library of each dialect, so a std file with a problem is reported in it, and a project's files include its std files, which the language server watches.
 
@@ -19,6 +19,8 @@ A project gives each file its settings:
 - `builds` turns the build keys and a profile into the bundles `luck build` writes.
 
 Every glob matches relative to the `luck.json` directory, whichever file in an `extends` chain sets it, and `*` stops at `/` while `**/` crosses directories. A directory with no `luck.json` above it gets `Project::defaults`, rooted where discovery started.
+
+`walk_lua_files` finds the Lua files under a directory, past what `.gitignore` and `.luckignore` hide, so `lint`, `fmt`, and `check` take the same files the language server's workspace holds. The caller's `WalkVisitor` says which project each directory and file is in, whose `exclude` leaves a whole directory out and whose `include` and `exclude` take each file or leave it, by its canonical path, a symlink's target's for a symlink.
 
 The VS Code extension's schema is generated from the config types, with the doc comments as its descriptions.
 

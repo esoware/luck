@@ -12,7 +12,7 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [features]
-# Derive `Deserialize` for the option enums, the shape `luck.json` gives it.
+# Derive `Deserialize` for `FormatConfig` and the option enums, the shape `luck.json` gives them.
 serde = ["dep:serde"]
 # Derive `JsonSchema` too, for the schema `luck_config` generates.
 schemars = ["dep:schemars", "serde"]

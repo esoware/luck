@@ -5,7 +5,7 @@ use std::sync::Arc;
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
-use luck_formatter::FormatOptions;
+use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs};
@@ -18,7 +18,6 @@ use crate::build::{BuildConfig, BuildKeys};
 use crate::config::{Entries, LuckConfig, OverrideConfig};
 use crate::editorconfig::Editorconfigs;
 use crate::filter::ProjectFilter;
-use crate::format_config::FormatConfig;
 use crate::glob::compiled;
 use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
 

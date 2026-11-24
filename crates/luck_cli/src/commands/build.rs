@@ -7,7 +7,7 @@ use std::time::Instant;
 use clap::Args;
 use luck_allocator::ThreadAllocators;
 use luck_bundler::{bundle, bundle_minified};
-use luck_config::{BuildConfig, Project, check_output_paths, find_config};
+use luck_config::{BuildConfig, CONFIG_FILE_NAME, Project, check_output_paths, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_token::{LuaVersion, chunk_start, has_shebang};
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
@@ -314,7 +314,7 @@ fn wait_for_change(receiver: &Receiver<DebounceEventResult>) -> bool {
 fn is_relevant_change(path: &Path) -> bool {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("lua" | "luau" | "json") => true,
-        _ => path.file_name().is_some_and(|name| name == ".luaurc" || name == "luck.json"),
+        _ => path.file_name().is_some_and(|name| name == ".luaurc" || name == CONFIG_FILE_NAME),
     }
 }
 

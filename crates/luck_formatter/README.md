@@ -13,7 +13,8 @@ It writes the parentheses precedence needs. Of those in the source, it keeps the
 ## Features
 
 - `FormatOptions` sets the line width, indent style and width, quote style, hex digit case, call parentheses, collapsing of simple `if` statements, line endings, blank lines at the edges of blocks, opt-in `require` sorting, a space after function names, and the magic trailing comma.
-- The `serde` feature derives `Deserialize` for the option enums, the shape `luck.json` gives them, and `schemars` derives `JsonSchema` too.
+- `FormatConfig` is `luck.json`'s `format` section, with each option unset unless it's set, so `merge_onto` layers it over another, as over `.editorconfig`, and `FormatOptions::from` fills in the defaults.
+- The `serde` feature derives `Deserialize` for `FormatConfig` and the option enums, the shape `luck.json` gives them, and `schemars` derives `JsonSchema` too.
 
 ## Usage
 

@@ -11,13 +11,15 @@
 //! it changed. A cross-file request reads every open document as it stood
 //! when the request came, and every other file's record.
 
+use std::convert::Infallible;
 use std::mem;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use ignore::{WalkBuilder, WalkState};
 use ls_types::{Position, Uri};
+use luck_config::{ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor, walk_lua_files};
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_semantic::SemanticBuilder;
 use luck_token::LuaVersion;
@@ -149,70 +151,74 @@ impl DiskFile {
 /// Every Lua file under `folders` that its project takes, canonical and
 /// sorted. A directory that can't be read is passed over.
 fn files_under(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
-    // Each folder's canonical path, beside the client's spelling of it.
-    let roots: Vec<(PathBuf, &Path)> = folders
-        .iter()
-        .filter_map(|folder| Some((FileSystemOs.canonicalize(folder).ok()?, folder.as_path())))
-        .collect();
-    let Some(((first, _), others)) = roots.split_first() else {
-        return Vec::new();
+    let visitor = FolderVisitor {
+        session,
+        folders: folders
+            .iter()
+            .filter_map(|folder| Some((FileSystemOs.canonicalize(folder).ok()?, folder.as_path())))
+            .collect(),
     };
-    let mut builder = WalkBuilder::new(first);
-    for (root, _) in others {
-        builder.add(root);
-    }
-    let found = Mutex::new(Vec::new());
-    // Measured in `luck lint`: one thread of the parallel walker reads a tree
-    // in half the time the serial walker takes.
-    builder.add_custom_ignore_filename(".luckignore").threads(1).build_parallel().run(|| {
-        Box::new(|walked| {
-            let Ok(entry) = walked else {
-                return WalkState::Continue;
-            };
-            if session.is_stopping() {
-                return WalkState::Quit;
-            }
-            let path = entry.path();
-            let Some(file_type) = entry.file_type() else {
-                return WalkState::Continue;
-            };
-            // A directory is in the project its parent is in, and a file in
-            // its directory's.
-            let spelled = || {
-                roots
-                    .iter()
-                    .find_map(|(root, folder)| Some(folder.join(path.strip_prefix(root).ok()?)))
-            };
-            let project = || session.project_for(Some(path), spelled().as_deref());
-            if file_type.is_dir() {
-                let is_excluded =
-                    entry.depth() > 0 && project().project().filter().excludes_canonical_tree(path);
-                return if is_excluded { WalkState::Skip } else { WalkState::Continue };
-            }
-            if !path.extension().is_some_and(|extension| extension == "lua" || extension == "luau")
-            {
-                return WalkState::Continue;
-            }
-            // The walk follows no symlink, so only a symlink needs the disk to
-            // tell where it leads.
-            let canonical = if entry.path_is_symlink() {
-                FileSystemOs.canonicalize(path).ok().filter(|target| target.is_file())
-            } else {
-                let is_file = file_type.is_file();
-                is_file.then(|| path.to_path_buf())
-            };
-            if let Some(file) = canonical
-                && project().project().filter().includes_canonical(&file)
-            {
-                found.lock().push(file);
-            }
-            WalkState::Continue
-        })
-    });
-    let mut files = found.into_inner();
+    let roots: Vec<WalkRoot<'_>> = visitor
+        .folders
+        .iter()
+        .map(|(canonical, _)| WalkRoot { path: canonical, canonical })
+        .collect();
+    let Ok(walked) = walk_lua_files(&roots, None, &visitor);
+    let mut files: Vec<PathBuf> = walked.into_iter().map(|file| file.canonical).collect();
     files.sort_unstable();
     files.dedup();
     files
+}
+
+/// The client's folders, walked from their canonical paths, with each
+/// directory below one in the project its parent is in, and each file in its
+/// directory's.
+struct FolderVisitor<'folders> {
+    session: &'folders Session,
+    /// Each folder's canonical path, beside the client's spelling of it.
+    folders: Vec<(PathBuf, &'folders Path)>,
+}
+
+impl FolderVisitor<'_> {
+    fn filter_of(&self, entry: &WalkEntry<'_>) -> ProjectFilterOf {
+        let spelled = self.folders.iter().find_map(|(canonical, folder)| {
+            Some(folder.join(entry.path.strip_prefix(canonical).ok()?))
+        });
+        ProjectFilterOf(self.session.project_for(Some(entry.path), spelled.as_deref()))
+    }
+}
+
+impl WalkVisitor for FolderVisitor<'_> {
+    type Error = Infallible;
+
+    fn directory_filter(
+        &self,
+        directory: &WalkEntry<'_>,
+    ) -> Option<impl Deref<Target = ProjectFilter>> {
+        (directory.depth > 0).then(|| self.filter_of(directory))
+    }
+
+    fn file_filter(&self, file: &WalkEntry<'_>) -> impl Deref<Target = ProjectFilter> {
+        self.filter_of(file)
+    }
+
+    fn is_stopping(&self) -> bool {
+        self.session.is_stopping()
+    }
+
+    fn read_error(&self, _: WalkError) -> Result<(), Infallible> {
+        Ok(())
+    }
+}
+
+struct ProjectFilterOf(Arc<LoadedProject>);
+
+impl Deref for ProjectFilterOf {
+    type Target = ProjectFilter;
+
+    fn deref(&self) -> &ProjectFilter {
+        self.0.project().filter()
+    }
 }
 
 /// The file at `path`, parsed in its project's dialect, or `None` when it

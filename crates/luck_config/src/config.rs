@@ -5,13 +5,13 @@ use std::fmt;
 use std::path::PathBuf;
 
 use luck_bundler::DynamicRequire;
+use luck_formatter::FormatConfig;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
 use luck_token::LuaTarget;
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 
-use crate::format_config::FormatConfig;
 use crate::glob::Glob;
 
 /// One entry of a multi-entry build: the file to bundle and where to write
@@ -222,10 +222,20 @@ impl<'de> Visitor<'de> for EntriesVisitor {
 mod tests {
     use std::fs;
 
+    use luck_formatter::{
+        BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, HexCase, IndentStyle,
+        LineEndings, QuoteStyle, SpaceAfterFunction,
+    };
     use luck_linter::RuleId;
 
     use super::*;
     use crate::fixtures::parsed;
+    use crate::parse::parse;
+
+    /// The message `json` fails to parse with.
+    fn parse_error(json: &str) -> String {
+        parse(json).expect_err("config doesn't parse").message.to_string()
+    }
 
     const COMMITTED_SCHEMA_PATH: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../../editors/vscode/schemas/luckrc.schema.json");
@@ -385,5 +395,94 @@ mod tests {
         let overrides = child.merge_onto(base).overrides.unwrap();
         let files: Vec<&str> = overrides.iter().map(|layer| layer.files[0].pattern()).collect();
         assert_eq!(files, ["b/**", "c/**", "a/**"]);
+    }
+
+    #[test]
+    fn parses_every_format_option() {
+        let json = r#"{
+            "format": {
+                "line_width": 120,
+                "indent_style": "spaces",
+                "indent_width": 4,
+                "quote_style": "double",
+                "hexadecimal_case": "upper",
+                "call_parentheses": "input",
+                "collapse_simple_statement": "conditional_only",
+                "line_endings": "windows",
+                "block_newline_gaps": "preserve",
+                "sort_requires": true,
+                "space_after_function_names": "calls",
+                "magic_trailing_comma": true
+            }
+        }"#;
+        let format = parsed(json).format.expect("format should be present");
+        assert_eq!(format.line_width, Some(120));
+        assert_eq!(format.indent_style, Some(IndentStyle::Spaces));
+        assert_eq!(format.indent_width, Some(4));
+        assert_eq!(format.quote_style, Some(QuoteStyle::Double));
+        assert_eq!(format.hexadecimal_case, Some(HexCase::Upper));
+        assert_eq!(format.call_parentheses, Some(CallParentheses::Input));
+        assert_eq!(
+            format.collapse_simple_statement,
+            Some(CollapseSimpleStatement::ConditionalOnly)
+        );
+        assert_eq!(format.line_endings, Some(LineEndings::Windows));
+        assert_eq!(format.block_newline_gaps, Some(BlockNewlineGaps::Preserve));
+        assert_eq!(format.sort_requires, Some(true));
+        assert_eq!(format.space_after_function_names, Some(SpaceAfterFunction::Calls));
+        assert_eq!(format.magic_trailing_comma, Some(true));
+    }
+
+    #[test]
+    fn leaves_unset_format_options_none() {
+        let config = parsed(r#"{ "format": {} }"#);
+        let FormatConfig {
+            line_width,
+            indent_style,
+            indent_width,
+            quote_style,
+            hexadecimal_case,
+            call_parentheses,
+            collapse_simple_statement,
+            line_endings,
+            block_newline_gaps,
+            sort_requires,
+            space_after_function_names,
+            magic_trailing_comma,
+        } = config.format.expect("format should be present");
+        assert!(line_width.is_none());
+        assert!(indent_style.is_none());
+        assert!(indent_width.is_none());
+        assert!(quote_style.is_none());
+        assert!(hexadecimal_case.is_none());
+        assert!(call_parentheses.is_none());
+        assert!(collapse_simple_statement.is_none());
+        assert!(line_endings.is_none());
+        assert!(block_newline_gaps.is_none());
+        assert!(sort_requires.is_none());
+        assert!(space_after_function_names.is_none());
+        assert!(magic_trailing_comma.is_none());
+    }
+
+    #[test]
+    fn rejects_an_unknown_format_key() {
+        let error =
+            parse_error(r#"{ "format": { "line_width": 100, "not_a_real_option": true } }"#);
+        assert!(error.contains("unknown field `not_a_real_option`"), "{error}");
+    }
+
+    #[test]
+    fn rejects_an_unknown_quote_style() {
+        let error = parse_error(r#"{ "format": { "quote_style": "bogus" } }"#);
+        assert!(error.contains("unknown variant `bogus`"), "{error}");
+    }
+
+    #[test]
+    fn rejects_the_function_collapse_modes() {
+        for mode in ["function_only", "always"] {
+            let json = format!(r#"{{ "format": {{ "collapse_simple_statement": "{mode}" }} }}"#);
+            let error = parse_error(&json);
+            assert!(error.contains(mode), "error should name the offending value: {error}");
+        }
     }
 }

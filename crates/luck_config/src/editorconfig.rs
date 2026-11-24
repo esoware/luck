@@ -4,12 +4,11 @@ use std::fs;
 use std::path::{self, Path, PathBuf};
 use std::sync::Arc;
 
-use luck_formatter::{IndentStyle, LineEndings};
+use luck_formatter::{FormatConfig, IndentStyle, LineEndings};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use self::glob::SectionGlob;
-use crate::format_config::FormatConfig;
 
 pub const EDITORCONFIG_FILE_NAME: &str = ".editorconfig";
 

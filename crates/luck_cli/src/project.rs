@@ -1,11 +1,14 @@
+use std::env;
+use std::ops::Deref;
 use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 use std::sync::{Arc, mpsc};
-use std::{env, mem};
 
 use globset::GlobSet;
-use ignore::{DirEntry, WalkBuilder, WalkState};
 use luck_bundler::{BundleOptions, DynamicRequire};
-use luck_config::{CONFIG_FILE_NAME, Project, ProjectFilter, find_config, glob_set};
+use luck_config::{
+    CONFIG_FILE_NAME, Project, ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor,
+    find_config, glob_set, walk_lua_files,
+};
 use luck_linter::LintConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs, lexically_normalized};
 use luck_token::LuaVersion;
@@ -306,28 +309,35 @@ impl<'overlay> Projects<'overlay> {
         found: &mut Vec<ProjectFile>,
     ) -> Result<(), Exit> {
         let has_nested_projects = self.explicit.is_none();
+        let is_selected = |path: &Path| {
+            selection.is_none_or(|selected| {
+                path.strip_prefix(directory)
+                    .is_ok_and(|relative| selected.patterns.is_match(relative))
+            })
+        };
         let mut tree_files = Vec::new();
         let max_depth = selection.and_then(|selected| selected.max_depth);
         let mut pending_trees = vec![(directory.to_path_buf(), max_depth)];
         while let Some((tree, tree_max_depth)) = pending_trees.pop() {
             let canonical_tree = canonical_directory(&tree)?;
             let project = self.for_canonical_directory(&canonical_tree)?;
-            let walk = TreeWalk {
-                tree: &tree,
-                canonical_tree: &canonical_tree,
-                max_depth: tree_max_depth,
+            let (nested_tree_sender, nested_trees) = mpsc::channel();
+            let visitor = TreeVisitor {
                 filter: project.filter(),
-                selection: selection.map(|selected| (directory, &selected.patterns)),
+                max_depth: tree_max_depth,
                 has_nested_projects,
+                nested_trees: nested_tree_sender,
             };
-            let walked = walk.run()?;
+            let root = WalkRoot { path: &tree, canonical: &canonical_tree };
+            let walked = walk_lua_files(&[root], tree_max_depth, &visitor)
+                .map_err(|error| operation_error(format!("cannot walk directory: {error}")))?;
             tree_files.extend(
                 walked
-                    .files
                     .into_iter()
-                    .map(|path| ProjectFile { path, project: Arc::clone(&project) }),
+                    .filter(|file| is_selected(&file.path))
+                    .map(|file| ProjectFile { path: file.path, project: Arc::clone(&project) }),
             );
-            pending_trees.extend(walked.nested_trees);
+            pending_trees.extend(nested_trees.try_iter());
         }
         tree_files.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         found.extend(tree_files);
@@ -335,120 +345,43 @@ impl<'overlay> Projects<'overlay> {
     }
 }
 
-/// One project's tree, walked for the Lua files its filter takes.
-struct TreeWalk<'walk> {
-    tree: &'walk Path,
-    canonical_tree: &'walk Path,
+/// One project's tree, which a walk reads under that project's filter.
+struct TreeVisitor<'tree> {
+    filter: &'tree ProjectFilter,
     max_depth: Option<usize>,
-    filter: &'walk ProjectFilter,
-    /// The directory a glob argument names, and the patterns a path below it
-    /// has to match.
-    selection: Option<(&'walk Path, &'walk GlobSet)>,
     has_nested_projects: bool,
+    /// Each directory under the tree with a config of its own, with how much
+    /// deeper a glob without `**` can still match in it.
+    nested_trees: mpsc::Sender<(PathBuf, Option<usize>)>,
 }
 
-/// What a walk found, or one of its visitors' share of it.
-#[derive(Default)]
-struct Walked {
-    files: Vec<PathBuf>,
-    /// Each with how much deeper a glob without `**` can still match in it.
-    nested_trees: Vec<(PathBuf, Option<usize>)>,
-    error: Option<ignore::Error>,
-}
+impl WalkVisitor for TreeVisitor<'_> {
+    type Error = WalkError;
 
-/// A visitor's share, sent when the walk drops the visitor.
-struct WalkerShare {
-    walked: Walked,
-    sender: mpsc::Sender<Walked>,
-}
-
-impl Drop for WalkerShare {
-    fn drop(&mut self) {
-        let _ = self.sender.send(mem::take(&mut self.walked));
-    }
-}
-
-impl TreeWalk<'_> {
-    fn run(&self) -> Result<Walked, Exit> {
-        let (sender, receiver) = mpsc::channel();
-        WalkBuilder::new(self.tree)
-            .add_custom_ignore_filename(".luckignore")
-            .max_depth(self.max_depth)
-            // Measured: one thread of the parallel walker reads a tree in half
-            // the time the serial walker takes, and each thread more idles a
-            // millisecond or so before the walk can end, which a small tree
-            // pays in full.
-            .threads(1)
-            .build_parallel()
-            .run(|| {
-                let mut share = WalkerShare { walked: Walked::default(), sender: sender.clone() };
-                Box::new(move |walked| match walked {
-                    Ok(entry) => self.visit(entry, &mut share.walked),
-                    Err(error) => {
-                        share.walked.error.get_or_insert(error);
-                        WalkState::Quit
-                    }
-                })
-            });
-        drop(sender);
-        let mut walked = Walked::default();
-        for share in receiver {
-            if let Some(error) = share.error {
-                return Err(operation_error(format!("cannot walk directory: {error}")));
-            }
-            walked.files.extend(share.files);
-            walked.nested_trees.extend(share.nested_trees);
-        }
-        Ok(walked)
+    fn directory_filter(&self, _: &WalkEntry<'_>) -> Option<impl Deref<Target = ProjectFilter>> {
+        Some(self.filter)
     }
 
-    fn visit(&self, entry: DirEntry, walked: &mut Walked) -> WalkState {
-        let path = entry.path();
-        if entry.file_type().is_some_and(|file_type| file_type.is_dir()) {
-            if self.filter.excludes_canonical_tree(&self.canonical(path)) {
-                return WalkState::Skip;
-            }
-            // A directory with its own config is another project's tree,
-            // walked after this one under that config.
-            if self.has_nested_projects
-                && entry.depth() > 0
-                && path.join(CONFIG_FILE_NAME).is_file()
-            {
-                let max_depth = self.max_depth.map(|depth| depth - entry.depth());
-                walked.nested_trees.push((entry.into_path(), max_depth));
-                return WalkState::Skip;
-            }
-            return WalkState::Continue;
-        }
-        let is_selected =
-            path.extension().is_some_and(|extension| extension == "lua" || extension == "luau")
-                && self.selection.is_none_or(|(directory, patterns)| {
-                    path.strip_prefix(directory).is_ok_and(|relative| patterns.is_match(relative))
-                });
-        if !is_selected {
-            return WalkState::Continue;
-        }
-        // The walk follows no symlink, so only a symlink itself needs the
-        // disk to tell what it is and where it leads.
-        let is_included = if entry.path_is_symlink() {
-            path.is_file() && self.filter.is_included(path)
-        } else {
-            let is_file = entry.file_type().is_some_and(|file_type| file_type.is_file());
-            is_file && self.filter.includes_canonical(&self.canonical(path))
-        };
-        if is_included {
-            walked.files.push(entry.into_path());
-        }
-        WalkState::Continue
+    fn file_filter(&self, _: &WalkEntry<'_>) -> impl Deref<Target = ProjectFilter> {
+        self.filter
     }
 
-    /// `path`, which the walk reached, under the tree's canonical form, so the
-    /// filter sees a canonical path without asking the disk for one.
-    fn canonical(&self, path: &Path) -> PathBuf {
-        match path.strip_prefix(self.tree) {
-            Ok(below) if !below.as_os_str().is_empty() => self.canonical_tree.join(below),
-            Ok(_) | Err(_) => self.canonical_tree.to_path_buf(),
+    /// A directory with its own config is another project's tree, walked
+    /// after this one under that config.
+    fn enters(&self, directory: &WalkEntry<'_>) -> bool {
+        let is_nested_project = self.has_nested_projects
+            && directory.depth > 0
+            && directory.path.join(CONFIG_FILE_NAME).is_file();
+        if is_nested_project {
+            let max_depth = self.max_depth.map(|depth| depth - directory.depth);
+            // The receiver outlives the walk.
+            let _ = self.nested_trees.send((directory.path.to_path_buf(), max_depth));
         }
+        !is_nested_project
+    }
+
+    fn read_error(&self, error: WalkError) -> Result<(), WalkError> {
+        Err(error)
     }
 }
 

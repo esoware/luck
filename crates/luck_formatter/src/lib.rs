@@ -23,6 +23,10 @@
 //! comment or a string that isn't UTF-8 as written and is UTF-8 whenever the
 //! source is.
 //!
+//! [`FormatConfig`] is `luck.json`'s `format` section, each option unset
+//! unless it's set, which layers over another and fills in the defaults of
+//! [`FormatOptions`].
+//!
 //! # Usage
 //!
 //! ```
@@ -43,6 +47,7 @@ mod fixtures;
 mod format;
 mod format_block;
 mod format_comments;
+mod format_config;
 mod format_expr;
 mod format_function;
 mod format_options;
@@ -58,6 +63,7 @@ mod sort_requires;
 
 pub use comments::{Comments, SyntheticComment};
 pub use format::{FormatResult, format, format_chunk, format_parsed, format_range};
+pub use format_config::FormatConfig;
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     IndentStyle, LineEndings, QuoteStyle, SpaceAfterFunction,
