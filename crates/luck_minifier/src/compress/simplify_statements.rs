@@ -14,6 +14,7 @@ use luck_value::ToBoolean as _;
 
 use super::Compressor;
 use super::simplify_parens::Place;
+use crate::expr::fits_at_depth;
 
 /// Whether a statement declares something its block scopes: a local, a
 /// label, a Luau type, or a Lua 5.5 global.
@@ -142,8 +143,9 @@ impl<'ast> Compressor<'_, 'ast> {
             while matches!(
                 &*head.block.stmts,
                 [Statement::IfStatement(inner_if)]
-                    if has_no_else(inner_if) && self.fits(head_depth, 1, &inner_if.condition)
-            ) && (!inner_conditions.is_empty() || self.fits(head_depth, 1, &head.condition))
+                    if has_no_else(inner_if) && fits_at_depth(head_depth, 1, &inner_if.condition)
+            ) && (!inner_conditions.is_empty()
+                || fits_at_depth(head_depth, 1, &head.condition))
                 && let Some(Statement::IfStatement(inner_if)) =
                     head.block.stmts.first_mut().map(Statement::take)
             {
@@ -154,7 +156,7 @@ impl<'ast> Compressor<'_, 'ast> {
             if !inner_conditions.is_empty() {
                 head.condition =
                     logical(self.allocator, BinOp::And, head.condition.take(), inner_conditions);
-                self.leave_expr(&mut head.condition, Place::Free);
+                self.leave_expr(&mut head.condition, Place::OneValue);
                 self.has_changed = true;
             }
             if !holds_nested_if(head) {
@@ -218,13 +220,13 @@ impl<'ast> Compressor<'_, 'ast> {
             .rev()
             .take_while(|stmt| {
                 if_return_guard(stmt).is_some_and(|(condition, return_expr)| {
-                    return_expr.to_boolean(&self.version) == Some(true)
-                        && self.fits(level, 2, condition)
-                        && self.fits(level, 2, return_expr)
+                    return_expr.to_boolean(&self.names()) == Some(true)
+                        && fits_at_depth(level, 2, condition)
+                        && fits_at_depth(level, 2, return_expr)
                 })
             })
             .count();
-        if link_count == 0 || !self.fits(level, 1, fallback) {
+        if link_count == 0 || !fits_at_depth(level, 1, fallback) {
             return;
         }
         let return_index = stmts.len();
@@ -242,7 +244,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 continue;
             };
             let mut guard = logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]);
-            self.leave_expr(&mut guard, Place::Operand);
+            self.leave_expr(&mut guard, Place::OneValue);
             guards.push(guard);
         }
         let mut chain_values = guards.into_iter();
@@ -256,7 +258,7 @@ impl<'ast> Compressor<'_, 'ast> {
             ),
             None => fallback_expr,
         };
-        self.leave_expr(fallback, Place::Free);
+        self.leave_expr(fallback, Place::AllValues);
         // The return takes the place of the first guard, and the guards go.
         block.stmts.swap(chain_start, return_index);
         block.stmts.truncate(chain_start.saturating_add(1));

@@ -1,28 +1,29 @@
 //! # `luck_minifier`
 //!
-//! Lua and Luau minification on the arena tree, in place.
+//! Lua and Luau minification on the arena tree, in place, as `oxc_minifier`
+//! minifies JavaScript.
 //!
 //! [`minify`] parses source into the caller's arena and [`minify_chunk`]
 //! takes a tree. Both rewrite the tree in place and print it once, with
-//! [`luck_codegen::compact`].
+//! [`luck_codegen::compact_into`].
 //!
-//! The work runs in three phases, each once:
+//! The work runs in three phases:
 //!
-//! - **Binding**, one walk that resolves every name to its binding, writes
-//!   the binding into the name, so the later phases tell apart two locals
-//!   that share a name however the tree is rewritten, and counts each
-//!   binding's references.
-//! - **Compression**, one in-place walk that runs every rewrite as it leaves
-//!   each node: constant folding, dead-code and dead-local removal, inlining
-//!   single-use locals, merging neighboring locals, `if` and `return`
-//!   simplification, shorter indexes and parentheses, and lifting nested
-//!   declarations to the top of their function. Each rewrite keeps the
-//!   binding walk's counts true, so the walk reaches the fixpoint, and walks
-//!   again only for a rewrite it exposed too late to make.
-//! - **Renaming**, which gives locals the shortest names their scopes allow.
+//! - **Type stripping**, a Luau tree's annotations, casts, and `type`
+//!   declarations gone before anything else reads it.
+//! - **Compression**, which reads the tree's bindings from `luck_semantic`'s
+//!   scoping and runs passes of an in-place walk until one changes nothing:
+//!   constant folding, dead-code and dead-local removal, inlining single-use
+//!   locals, merging neighboring locals, `if` and `return` simplification,
+//!   and shorter indexes and parentheses. A rewrite that drops code marks
+//!   the references it held, so every decision reads the tree as it
+//!   stands. Then each function's declarations lift to one `local` at its
+//!   top, and the passes run again on what that leaves.
+//! - **Renaming**, which gives locals the shortest names their scopes allow,
+//!   from a fresh analysis of the tree, as `oxc_mangler` names them.
 //!
 //! A rewrite asks `luck_value` what an expression evaluates to, whether it's
-//! truthy, and whether evaluating it can do anything, with the binding walk
+//! truthy, and whether evaluating it can do anything, with the scoping
 //! telling a local's read from a global's.
 //!
 //! [`TransformConfig`] turns each rewrite on or off. `luck_codegen` prints
@@ -50,17 +51,16 @@
     )
 )]
 
-mod bind;
 mod binding;
 mod compress;
 mod expr;
 #[cfg(test)]
 mod fixtures;
 mod limits;
-mod name_table;
 mod pipeline;
 mod rename_globals;
 mod rename_locals;
+mod strip_types;
 mod transform_config;
 
 pub use pipeline::{minify, minify_chunk};

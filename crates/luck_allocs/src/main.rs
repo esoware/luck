@@ -146,7 +146,7 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     });
     let transforms = TransformConfig::default();
     let ((), minifier) = record_stats_in(allocator, || {
-        drop(luck_minifier::minify_chunk(allocator, &mut parse.chunk, &transforms));
+        drop(luck_minifier::minify_chunk(allocator, &mut parse.chunk, &transforms, Vec::new()));
     });
     [lexer, parser, semantic, linter, codegen, formatter, minifier]
 }

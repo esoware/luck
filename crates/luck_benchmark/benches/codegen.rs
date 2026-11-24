@@ -16,11 +16,8 @@ fn bench_codegen(criterion: &mut Criterion) {
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter_with_large_drop(|| {
-                luck_codegen::compact_with_capacity(
-                    &parse_result.chunk,
-                    spelling,
-                    parse_result.source.len(),
-                )
+                let output = Vec::with_capacity(parse_result.source.len());
+                luck_codegen::compact_into(&parse_result.chunk, spelling, output)
             });
         });
     }
@@ -32,10 +29,11 @@ fn bench_codegen(criterion: &mut Criterion) {
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 for parse_result in &parse_results {
-                    black_box(luck_codegen::compact_with_capacity(
+                    let output = Vec::with_capacity(parse_result.source.len());
+                    black_box(luck_codegen::compact_into(
                         black_box(&parse_result.chunk),
                         spelling,
-                        parse_result.source.len(),
+                        output,
                     ));
                 }
             });

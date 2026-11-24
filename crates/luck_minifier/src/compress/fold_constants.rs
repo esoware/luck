@@ -11,14 +11,14 @@ use luck_ast::{Expression, GetSpan as _, OneOrMore};
 use luck_token::{BinOp, LuaVersion, Span, UnOp, spell_number};
 use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _, ToBoolean as _};
 
-use crate::binding::BoundNames;
+use crate::binding::ResolvedNames;
 use crate::expr::truncate_multi_value;
 
 /// Folds a run of binary operators or a unary operator, and says whether it
 /// did. Hands `drop` each operand it drops.
 pub(super) fn fold<'ast>(
     allocator: &'ast Allocator,
-    context: BoundNames,
+    context: ResolvedNames<'_>,
     expr: &mut Expression<'ast>,
     drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
@@ -73,7 +73,7 @@ pub(super) fn fold<'ast>(
 /// folds with either.
 fn fold_left_run<'ast>(
     allocator: &'ast Allocator,
-    context: BoundNames,
+    context: ResolvedNames<'_>,
     expr: &mut Expression<'ast>,
     drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
@@ -81,7 +81,7 @@ fn fold_left_run<'ast>(
         return false;
     };
     let run = &mut **boxed;
-    let version = context.0;
+    let version = context.0.version();
     let Some(mut value) = run.first.evaluate_value(&context) else {
         return false;
     };
@@ -130,7 +130,7 @@ fn fold_left_run<'ast>(
 /// value spells no longer.
 fn fold_power_run<'ast>(
     allocator: &'ast Allocator,
-    context: BoundNames,
+    context: ResolvedNames<'_>,
     expr: &mut Expression<'ast>,
     drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
@@ -138,7 +138,7 @@ fn fold_power_run<'ast>(
         return false;
     };
     let run = &mut **boxed;
-    let version = context.0;
+    let version = context.0.version();
     let last = &run.links.last().operand;
     let Some(mut value) = last.evaluate_value(&context) else {
         return false;
@@ -191,7 +191,7 @@ fn fold_power_run<'ast>(
 /// number, whose `tostring` is the target's.
 fn fold_concat_run<'ast>(
     allocator: &'ast Allocator,
-    context: BoundNames,
+    context: ResolvedNames<'_>,
     expr: &mut Expression<'ast>,
     drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
@@ -250,7 +250,7 @@ fn fold_concat_run<'ast>(
 /// runs either.
 fn fold_logical_run<'ast>(
     allocator: &'ast Allocator,
-    context: BoundNames,
+    context: ResolvedNames<'_>,
     expr: &mut Expression<'ast>,
     drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
@@ -301,7 +301,7 @@ fn fold_logical_run<'ast>(
 
 fn fold_unary<'ast>(
     allocator: &'ast Allocator,
-    context: BoundNames,
+    context: ResolvedNames<'_>,
     expr: &mut Expression<'ast>,
     drop: &mut impl FnMut(&Expression<'ast>),
 ) -> bool {
@@ -313,7 +313,7 @@ fn fold_unary<'ast>(
     if unary.op == UnOp::Neg && matches!(unary.operand, Expression::Number(_)) {
         return false;
     }
-    let version = context.0;
+    let version = context.0.version();
     let span = unary.span;
     let Some(value) = expr
         .evaluate_value(&context)

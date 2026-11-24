@@ -1,54 +1,54 @@
 gen_full_lua54.lua:
   file size: 376750 # 376.75 kB
-  sys allocs: 355
-  sys reallocs: 143
-  sys deallocs: 355
-  sys alloc bytes: 1379692 # 1.38 MB
-  sys peak growth: 1012232 # 1.01 MB
-  arena allocs: 782
-  arena reallocs: 142
-  arena size: 7881923 # 7.88 MB
+  sys allocs: 1397
+  sys reallocs: 358
+  sys deallocs: 1397
+  sys alloc bytes: 4022120 # 4.02 MB
+  sys peak growth: 1946944 # 1.95 MB
+  arena allocs: 814
+  arena reallocs: 152
+  arena size: 7851312 # 7.85 MB
 
 gen_full_luau.luau:
   file size: 441060 # 441.06 kB
-  sys allocs: 380
-  sys reallocs: 146
-  sys deallocs: 380
-  sys alloc bytes: 1670692 # 1.67 MB
-  sys peak growth: 1245328 # 1.25 MB
-  arena allocs: 647
-  arena reallocs: 146
-  arena size: 9321604 # 9.32 MB
+  sys allocs: 336
+  sys reallocs: 344
+  sys deallocs: 336
+  sys alloc bytes: 4255328 # 4.26 MB
+  sys peak growth: 2206468 # 2.21 MB
+  arena allocs: 730
+  arena reallocs: 164
+  arena size: 9285576 # 9.29 MB
 
 idiomatic.lua:
   file size: 2124 # 2.12 kB
-  sys allocs: 47
-  sys reallocs: 44
-  sys deallocs: 47
-  sys alloc bytes: 12934 # 12.93 kB
-  sys peak growth: 9792 # 9.79 kB
-  arena allocs: 6
+  sys allocs: 83
+  sys reallocs: 87
+  sys deallocs: 83
+  sys alloc bytes: 27284 # 27.28 kB
+  sys peak growth: 14800 # 14.80 kB
+  arena allocs: 8
   arena reallocs: 1
-  arena size: 35253 # 35.25 kB
+  arena size: 35256 # 35.26 kB
 
 infinite_yield.luau:
   file size: 482971 # 482.97 kB
-  sys allocs: 977
-  sys reallocs: 172
-  sys deallocs: 977
-  sys alloc bytes: 1881376 # 1.88 MB
-  sys peak growth: 1154356 # 1.15 MB
-  arena allocs: 2357
-  arena reallocs: 176
-  arena size: 10802309 # 10.80 MB
+  sys allocs: 1189
+  sys reallocs: 404
+  sys deallocs: 1189
+  sys alloc bytes: 7593906 # 7.59 MB
+  sys peak growth: 3900476 # 3.90 MB
+  arena allocs: 3282
+  arena reallocs: 251
+  arena size: 10810080 # 10.81 MB
 
 obfuscated_vm.luau:
   file size: 2290215 # 2.29 MB
-  sys allocs: 116
-  sys reallocs: 118
-  sys deallocs: 116
-  sys alloc bytes: 4887236 # 4.89 MB
+  sys allocs: 142
+  sys reallocs: 273
+  sys deallocs: 142
+  sys alloc bytes: 5604392 # 5.60 MB
   sys peak growth: 4543390 # 4.54 MB
-  arena allocs: 240
-  arena reallocs: 0
-  arena size: 1829316 # 1.83 MB
+  arena allocs: 227
+  arena reallocs: 45
+  arena size: 1832786 # 1.83 MB

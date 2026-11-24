@@ -24,24 +24,23 @@ pub enum LiteralSpelling {
 }
 
 /// The output is bytes, as a source is, and starts with no reserved
-/// capacity. Use [`compact_with_capacity`] when there's a useful size
-/// estimate.
+/// capacity. Use [`compact_into`] to write after a header, or into a buffer
+/// with a useful size reserved.
 #[must_use]
 pub fn compact(chunk: &Chunk<'_>, spelling: LiteralSpelling) -> Vec<u8> {
-    compact_with_capacity(chunk, spelling, 0)
+    compact_into(chunk, spelling, Vec::new())
 }
 
-/// `capacity` bytes are reserved up front, and one the allocator can't meet
-/// is dropped, so the output never depends on it. A parsed tree's source
-/// length makes a good hint: compact output is rarely longer.
+/// Writes `chunk` after the bytes `output` holds, in its buffer.
+///
+/// A header a caller writes first, such as a shebang, costs no copy of the
+/// code, and the capacity it reserves is the capacity the printer starts
+/// with. A parsed tree's source length, its comments aside, makes a good
+/// hint, since compact output is rarely longer.
 #[must_use]
-pub fn compact_with_capacity(
-    chunk: &Chunk<'_>,
-    spelling: LiteralSpelling,
-    capacity: usize,
-) -> Vec<u8> {
+pub fn compact_into(chunk: &Chunk<'_>, spelling: LiteralSpelling, output: Vec<u8>) -> Vec<u8> {
     let mut printer = Printer {
-        output: CodeBuffer::with_capacity(capacity),
+        output: CodeBuffer::from(output),
         last: OTHER,
         version: chunk.version,
         is_shortest: spelling == LiteralSpelling::Shortest,

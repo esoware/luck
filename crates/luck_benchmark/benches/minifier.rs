@@ -18,7 +18,12 @@ fn bench_minifier(criterion: &mut Criterion) {
                 allocator.reset();
                 let mut parse_result = file.parse(&allocator);
                 let _minified = runner.run(|| {
-                    luck_minifier::minify_chunk(&allocator, &mut parse_result.chunk, &config)
+                    luck_minifier::minify_chunk(
+                        &allocator,
+                        &mut parse_result.chunk,
+                        &config,
+                        Vec::new(),
+                    )
                 });
             });
         });
@@ -39,6 +44,7 @@ fn bench_minifier(criterion: &mut Criterion) {
                                 &allocator,
                                 &mut parse_result.chunk,
                                 &config,
+                                Vec::new(),
                             )
                         })
                         .collect::<Vec<_>>()

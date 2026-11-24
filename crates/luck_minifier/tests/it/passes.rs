@@ -222,19 +222,15 @@ return x
 }
 
 #[test]
-fn keeps_parens_around_function_call() {
-    // Parens around a call truncate its multiple returns.
-    let result = minify_lua54(
-        "\
-local x = (foo())
-return x
-",
-    );
-    let paren_count = result.matches('(').count();
-    assert!(
-        paren_count >= 2,
-        "Should keep wrapping parens (expected >=2 '(' chars), got {paren_count} in: {result}"
-    );
+fn keeps_parens_around_a_call_only_where_they_truncate_its_values() {
+    // Parens around a call truncate its multiple returns, which a single
+    // name takes only the first of anyway.
+    for (source, expected) in [
+        ("local x = (foo()) return x", "local l=foo()return l"),
+        ("local x, y = (foo()) return x, y", "local l,u=(foo())return l,u"),
+    ] {
+        assert_eq!(minify_lua54(source), expected, "source: {source}");
+    }
 }
 
 #[test]

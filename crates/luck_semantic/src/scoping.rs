@@ -1,7 +1,7 @@
 use core::mem;
 
 use luck_ast::{Name, NameIndex, TreeCounts};
-use luck_token::{LuaVersion, Span, offset_to_index};
+use luck_token::{LuaVersion, Span, index_to_offset, offset_to_index};
 
 use crate::id::{LabelId, NameId, NodeId, ReferenceId, ScopeId, SymbolId};
 use crate::names::Names;
@@ -40,6 +40,9 @@ pub struct Scoping {
     /// What each name of the tree is, by its index.
     roles: Vec<NameRole>,
     names: Names,
+    /// Lua 5.5: each name a `global` statement declares, and the scope of
+    /// the block the statement is in, in source order.
+    declared_globals: Vec<(NameId, ScopeId)>,
     is_env_assigned: bool,
 }
 
@@ -173,6 +176,10 @@ pub struct Reference {
     /// Lua 5.5: a free name in the scope of a `global` statement that covers
     /// it, by name or with `*`.
     pub is_declared_global: bool,
+    /// Luau: made in a type, as a `typeof` makes one, which never runs.
+    pub is_in_type: bool,
+    /// Made in the body of the `local function` it resolves to.
+    pub is_recursive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +242,7 @@ impl Scoping {
             // No chunk has more distinct names than declarations and uses
             // together.
             names: Names::with_capacity(declarations.saturating_add(name_uses)),
+            declared_globals: Vec::new(),
             is_env_assigned: false,
         }
     }
@@ -335,8 +343,9 @@ impl Scoping {
         self.names.mark_assigned_global(name);
     }
 
-    pub(crate) fn mark_declared_global(&mut self, name: NameId) {
+    pub(crate) fn add_declared_global(&mut self, name: NameId, scope: ScopeId) {
         self.names.mark_declared_global(name);
+        self.declared_globals.push((name, scope));
     }
 
     /// Records what the name of index `name_index` is, growing the table for
@@ -351,6 +360,34 @@ impl Scoping {
         if let Some(slot) = self.roles.get_mut(index) {
             *slot = role;
         }
+    }
+
+    /// Keeps the references `keep` takes in each symbol's list, in order, for
+    /// a pass that rewrites the tree and drops some of the names that made
+    /// them.
+    pub fn retain_resolved_references<Keep>(&mut self, mut keep: Keep)
+    where
+        Keep: FnMut(ReferenceId) -> bool,
+    {
+        let Self { resolved, resolved_offsets, .. } = self;
+        let mut kept = 0usize;
+        let mut start = 0usize;
+        for offset in resolved_offsets.iter_mut().skip(1) {
+            let end = offset_to_index(*offset);
+            for i in start..end {
+                if let Some(&id) = resolved.get(i)
+                    && keep(id)
+                {
+                    if let Some(slot) = resolved.get_mut(kept) {
+                        *slot = id;
+                    }
+                    kept = kept.saturating_add(1);
+                }
+            }
+            *offset = index_to_offset(kept);
+            start = end;
+        }
+        resolved.truncate(kept);
     }
 
     /// Lays out each symbol's references once the walk has added them all.
@@ -589,6 +626,14 @@ impl Scoping {
     #[must_use]
     pub fn is_declared_global(&self, name: NameId) -> bool {
         self.names.is_declared_global(name)
+    }
+
+    /// Lua 5.5: each name a `global` statement declares, and the scope of the
+    /// block the statement is in, where from then on the name reads the
+    /// global, in source order.
+    #[must_use]
+    pub fn declared_globals(&self) -> &[(NameId, ScopeId)] {
+        &self.declared_globals
     }
 
     /// Lua 5.2+: the chunk assigns its own `_ENV`, which redirects every

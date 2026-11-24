@@ -1,30 +1,26 @@
 //! Renames every local to the shortest name its scopes allow.
 //!
-//! One walk records where each binding is declared and read, reading each
-//! name's binding from the name itself. Bindings that are never live in the
-//! same scope share a slot, the most-read slots get the shortest names, and
-//! a slot never wears the name of a global read where it's live. A second
-//! walk writes each binding's name into its declaration and its references.
+//! It reads a fresh analysis of the tree, as `oxc_mangler` does. Bindings
+//! that are never live in the same scope share a slot, the most-read slots
+//! get the shortest names, and a slot never wears the name of a global read
+//! where it's live. One walk then writes each binding's name into the names
+//! that declare it and refer to it.
 
 mod candidate_pool;
 mod choose_names;
 mod explicit_self;
 mod scope_claims;
 
-use core::ptr;
-
 use luck_allocator::Allocator;
-use luck_ast::{
-    Block, DoBlock, Expression, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration,
-    GlobalFunction, IfStatement, LocalAssignment, LocalFunction, Name, NumericFor, RepeatLoop, Var,
-    VisitMut, WhileLoop,
-};
-use luck_token::LuaVersion;
+use luck_ast::{Chunk, FunctionDecl, Name, TreeCounts, VisitMut};
+use luck_data_structures::BitSet;
+use luck_semantic::{ScopeId, Scoping, SymbolId, SymbolKind};
+use luck_token::{index_to_offset, offset_to_index};
 
 use self::candidate_pool::CandidatePool;
 use self::choose_names::Choice;
-use crate::binding::{Bindings, NONE, global_of, local_of};
-use crate::name_table::NameTable;
+use crate::binding::{METHOD_RECEIVER_NAME, NameIndexes};
+use crate::compress::analyze;
 use crate::rename_globals::renamable_globals;
 
 struct Binding {
@@ -48,19 +44,22 @@ struct Scope {
 /// No binding.
 const UNRESOLVED: usize = usize::MAX;
 
-/// The renamer, which a minify runs once.
+/// A global's place in [`Renamer::of_global`] when it keeps its name.
+const NOT_RENAMED: u32 = u32::MAX;
+
+/// What renaming learns of a tree from its scoping.
 struct Renamer<'walk, 'ast> {
-    allocator: &'ast Allocator,
-    is_applying: bool,
-    bindings: &'walk mut Bindings,
-    names: &'walk NameTable<'ast>,
-    /// Each local binding's renamed binding, and each global name's, by
-    /// binding id and by name id.
-    of_local: Vec<u32>,
-    of_global: Vec<u32>,
+    scoping: &'walk Scoping,
     scopes: Vec<Scope>,
-    current_scope: usize,
+    /// The renamed globals, then each symbol, in symbol order from
+    /// `symbol_base`.
     renamed: Vec<Binding>,
+    symbol_base: usize,
+    /// Each global's renamed binding, by name, or [`NOT_RENAMED`].
+    of_global: Vec<u32>,
+    /// The implicit `self`s read often enough that their methods take them
+    /// as a first parameter, which renaming them pays for.
+    receivers: BitSet,
     /// Each name's latest scope read as a global, so a run of reads in one
     /// scope records it once.
     last_global_read_scopes: Vec<usize>,
@@ -74,352 +73,228 @@ struct Renamer<'walk, 'ast> {
     new_names: Vec<&'ast str>,
 }
 
-/// Renames the locals of `block`, whose bindings and names `bindings` and
-/// `names` hold, and with `should_rename_globals`, the globals it assigns
-/// before anything reads them.
+/// Renames the locals of `chunk`, and with `should_rename_globals`, the
+/// globals it assigns before anything reads them.
 ///
-/// A method that reads `self` often enough first takes it as a parameter,
-/// so it's renamed too.
+/// A method that reads `self` often enough takes it as a parameter, so it's
+/// renamed too, under an index from `names`.
 pub(crate) fn rename<'ast>(
     allocator: &'ast Allocator,
-    version: LuaVersion,
-    block: &mut Block<'ast>,
-    bindings: &mut Bindings,
-    names: &NameTable<'ast>,
+    chunk: &mut Chunk<'ast>,
+    counts: TreeCounts,
     should_rename_globals: bool,
+    names: &mut NameIndexes,
 ) {
-    let binding_count = bindings.entries.len();
-    let mut renamer = Renamer {
-        allocator,
-        is_applying: false,
-        bindings,
-        names,
-        of_local: vec![NONE; binding_count],
-        of_global: vec![NONE; names.len()],
-        scopes: vec![Scope { parent: None, end: 1 }],
-        current_scope: 0,
-        renamed: Vec::new(),
-        last_global_read_scopes: vec![UNRESOLVED; names.len()],
-        reference_scopes: Vec::new(),
-        global_reads: Vec::new(),
-        choice: Choice::default(),
-        pool: CandidatePool::new(allocator, version),
-        new_names: Vec::new(),
-    };
+    let scoping = analyze(chunk, counts);
+    let mut renamer = Renamer::new(allocator, &scoping);
     // Opt-in, since renamed globals end up under new `_G` keys.
     if should_rename_globals {
-        for name in renamable_globals(block, version, renamer.bindings, names) {
-            let id = renamer.declare_renamed(false);
-            if let Some(slot) = renamer.of_global.get_mut(name) {
-                *slot = u32::try_from(id).unwrap_or(NONE);
+        for name in renamable_globals(&chunk.block, chunk.version, &scoping) {
+            let id = renamer.declare(0, false);
+            if let Some(slot) = renamer.of_global.get_mut(name.index()) {
+                *slot = index_to_offset(id);
             }
         }
     }
-    renamer.visit_block(block);
+    renamer.read_scoping();
     renamer.choose_names();
-    renamer.is_applying = true;
-    renamer.visit_block(block);
+    Applier { renamer: &renamer, allocator, names, methods: Vec::new() }
+        .visit_block(&mut chunk.block);
 }
 
-impl<'ast> Renamer<'_, 'ast> {
-    fn enter_scope(&mut self) {
-        if self.is_applying {
-            return;
+impl<'walk, 'ast> Renamer<'walk, 'ast> {
+    fn new(allocator: &'ast Allocator, scoping: &'walk Scoping) -> Self {
+        let mut scopes: Vec<Scope> = scoping
+            .scopes()
+            .iter()
+            .enumerate()
+            .map(|(id, scope)| Scope {
+                parent: scope.parent.map(ScopeId::index),
+                end: id.saturating_add(1),
+            })
+            .collect();
+        // A child's id is past its parent's, so the ends move up in one
+        // pass from the last.
+        for id in (0..scopes.len()).rev() {
+            let (end, parent) = scopes.get(id).map_or((0, None), |scope| (scope.end, scope.parent));
+            if let Some(enclosing) = parent.and_then(|parent_id| scopes.get_mut(parent_id)) {
+                enclosing.end = enclosing.end.max(end);
+            }
         }
-        let id = self.scopes.len();
-        self.scopes.push(Scope { parent: Some(self.current_scope), end: id.saturating_add(1) });
-        self.current_scope = id;
+        let name_count = scoping.names().len();
+        Self {
+            scoping,
+            scopes,
+            renamed: Vec::new(),
+            symbol_base: 0,
+            of_global: vec![NOT_RENAMED; name_count],
+            receivers: BitSet::new(scoping.symbols().len()),
+            last_global_read_scopes: vec![UNRESOLVED; name_count],
+            reference_scopes: Vec::new(),
+            global_reads: Vec::new(),
+            choice: Choice::default(),
+            pool: CandidatePool::new(allocator, scoping.version()),
+            new_names: Vec::new(),
+        }
     }
 
-    fn exit_scope(&mut self) {
-        if self.is_applying {
-            return;
-        }
-        let end = self.scopes.len();
-        let Some(scope) = self.scopes.get_mut(self.current_scope) else {
-            return;
-        };
-        scope.end = end;
-        self.current_scope = scope.parent.unwrap_or(0);
-    }
-
-    fn declare_renamed(&mut self, is_fixed: bool) -> usize {
+    fn declare(&mut self, scope: usize, is_fixed: bool) -> usize {
         let id = self.renamed.len();
-        let scope = self.current_scope;
         self.renamed.push(Binding { scope, is_fixed, references: 0, last_reference_scope: scope });
         id
     }
 
-    /// The renamed binding a name declares or refers to, if it's a local or
-    /// a renamed global.
-    fn renamed_of(&self, name: &Name<'_>) -> usize {
-        let slot = match (local_of(name), global_of(name)) {
-            (Some(id), _) => self.of_local.get(self.bindings.resolve(id)),
-            (None, Some(global)) => self.of_global.get(global),
-            (None, None) => None,
-        };
-        slot.and_then(|&renamed| usize::try_from(renamed).ok()).unwrap_or(UNRESOLVED)
-    }
-
-    /// Declares the binding `name` holds. One that keeps its name counts as
-    /// read in its own scope, even if nothing reads it, since a local
-    /// renamed to that name would otherwise capture every use of it.
-    fn declare(&mut self, name: &mut Name<'ast>) {
-        if self.is_applying {
-            self.apply(name);
-            return;
-        }
-        let Some(id) = local_of(name).map(|id| self.bindings.resolve(id)) else {
-            if let Some(global) = global_of(name) {
-                self.read_globally(global);
-            }
-            return;
-        };
-        let Some(binding) = self.bindings.entries.get(id) else {
-            return;
-        };
-        let (is_fixed, name_id) = (binding.is_fixed, binding.name);
-        let renamed = self.declare_renamed(is_fixed);
-        if self.of_local.len() <= id {
-            self.of_local.resize(id.saturating_add(1), NONE);
-        }
-        if let Some(slot) = self.of_local.get_mut(id) {
-            *slot = u32::try_from(renamed).unwrap_or(NONE);
-        }
-        if is_fixed {
-            self.read_globally(usize::try_from(name_id).unwrap_or(usize::MAX));
-        }
-    }
-
-    fn reference(&mut self, name: &mut Name<'ast>) {
-        if self.is_applying {
-            self.apply(name);
-            return;
-        }
-        let renamed = self.renamed_of(name);
-        let current_scope = self.current_scope;
-        if let Some(binding) = self.renamed.get_mut(renamed) {
+    /// Records a reference to the renamed binding `id` from `scope`.
+    fn reference(&mut self, id: usize, scope: usize) {
+        if let Some(binding) = self.renamed.get_mut(id) {
             binding.references = binding.references.saturating_add(1);
-            if binding.last_reference_scope != current_scope {
-                binding.last_reference_scope = current_scope;
-                self.reference_scopes.push((renamed, current_scope));
+            if binding.last_reference_scope != scope {
+                binding.last_reference_scope = scope;
+                self.reference_scopes.push((id, scope));
             }
-            if !binding.is_fixed {
-                return;
-            }
-        }
-        // A binding that keeps its name holds that name wherever it's read,
-        // as a global does.
-        let held_name = match local_of(name) {
-            Some(id) => {
-                self.bindings.get(id).and_then(|binding| usize::try_from(binding.name).ok())
-            }
-            None => global_of(name),
-        };
-        if let Some(read_name) = held_name {
-            self.read_globally(read_name);
         }
     }
 
-    fn apply(&self, name: &mut Name<'ast>) {
-        let renamed = self.renamed_of(name);
-        if let Some(&new_name) = self.new_names.get(renamed)
+    fn read_globally(&mut self, name: usize, scope: usize) {
+        if let Some(last_scope) = self.last_global_read_scopes.get_mut(name)
+            && *last_scope != scope
+        {
+            *last_scope = scope;
+            self.global_reads.push((name, scope));
+        }
+    }
+
+    /// Declares each symbol and records its references, and where each
+    /// global and each name a binding keeps is read.
+    ///
+    /// A binding that keeps its name holds that name wherever it's read, as
+    /// a global does, and counts as read in its own scope, even if nothing
+    /// reads it, since a local renamed to that name would otherwise capture
+    /// every use of it. So does a Lua 5.5 `global` declaration, after which
+    /// the name reads the global.
+    fn read_scoping(&mut self) {
+        let scoping = self.scoping;
+        self.symbol_base = self.renamed.len();
+        for symbol in scoping.symbols() {
+            // The new `X,` parameter costs 2 bytes, and each `self` saves 3
+            // once renamed to a single character.
+            let is_receiver =
+                symbol.kind == SymbolKind::ImplicitSelf && self.runtime_references(symbol.id) >= 2;
+            if is_receiver {
+                self.receivers.insert(symbol.id.index());
+            }
+            let is_fixed = (symbol.kind.is_implicit() && !is_receiver)
+                || symbol.is_exported
+                || scoping.is_env_binding(symbol.id);
+            let (name, scope) = (symbol.name.index(), symbol.scope.index());
+            let id = self.declare(scope, is_fixed);
+            if is_fixed {
+                self.read_globally(name, scope);
+            }
+            for &reference in scoping.resolved_references(symbol.id) {
+                let reference_scope = scoping.reference(reference).scope.index();
+                self.reference(id, reference_scope);
+                if is_fixed {
+                    self.read_globally(name, reference_scope);
+                }
+            }
+        }
+        for reference in scoping.references() {
+            if reference.resolved.is_some() {
+                continue;
+            }
+            let (name, scope) = (reference.name.index(), reference.scope.index());
+            match self.of_global.get(name).copied().filter(|&id| id != NOT_RENAMED) {
+                Some(id) => self.reference(offset_to_index(id), scope),
+                None => self.read_globally(name, scope),
+            }
+        }
+        for &(name, scope) in scoping.declared_globals() {
+            self.read_globally(name.index(), scope.index());
+        }
+    }
+
+    /// How many references to `symbol` aren't in a type.
+    fn runtime_references(&self, symbol: SymbolId) -> usize {
+        let references = self.scoping.resolved_references(symbol).iter();
+        references.filter(|&&reference| !self.scoping.reference(reference).is_in_type).count()
+    }
+
+    /// The renamed binding `name` declares or refers to, if it's a local or
+    /// a renamed global.
+    fn renamed_of(&self, name: &Name<'_>) -> Option<usize> {
+        if let Some(symbol) = self.scoping.symbol_of(name) {
+            return Some(self.symbol_base.saturating_add(symbol.index()));
+        }
+        let reference = self.scoping.reference(self.scoping.reference_of(name)?);
+        reference.resolved.map_or_else(
+            || {
+                let global = self.of_global.get(reference.name.index()).copied();
+                global.filter(|&id| id != NOT_RENAMED).map(offset_to_index)
+            },
+            |symbol| Some(self.symbol_base.saturating_add(symbol.index())),
+        )
+    }
+
+    /// The name renaming gives `id`, which is empty for one that keeps its
+    /// own.
+    fn new_name(&self, id: usize) -> &'ast str {
+        self.new_names.get(id).copied().unwrap_or_default()
+    }
+}
+
+/// Writes each binding's new name into its names, and makes a method that
+/// takes its `self` as a parameter declare it so.
+struct Applier<'apply, 'walk, 'ast> {
+    renamer: &'apply Renamer<'walk, 'ast>,
+    allocator: &'ast Allocator,
+    names: &'apply mut NameIndexes,
+    /// For each method the walk is in, innermost last, the implicit `self`
+    /// its body reads, once a read outside a type shows which.
+    methods: Vec<Option<SymbolId>>,
+}
+
+impl<'ast> VisitMut<'ast> for Applier<'_, '_, 'ast> {
+    fn visit_name(&mut self, name: &mut Name<'ast>) {
+        let scoping = self.renamer.scoping;
+        // A method's body is the only place its `self` is read, and the
+        // nearest method around a read binds the `self` it reads.
+        if let Some(reference) = scoping.reference_of(name).map(|id| scoping.reference(id))
+            && let Some(symbol) = reference.resolved
+            && !reference.is_in_type
+            && self.renamer.receivers.contains(symbol.index())
+            && let Some(receiver) = self.methods.last_mut()
+        {
+            *receiver = Some(symbol);
+        }
+        if let Some(new_name) = self.renamer.renamed_of(name).map(|id| self.renamer.new_name(id))
             && !new_name.is_empty()
-            && !ptr::eq(name.text.as_str(), new_name)
-            && name.text != new_name
         {
             name.text = new_name.into();
         }
     }
 
-    fn read_globally(&mut self, name: usize) {
-        let current_scope = self.current_scope;
-        if let Some(scope) = self.last_global_read_scopes.get_mut(name)
-            && *scope != current_scope
-        {
-            *scope = current_scope;
-            self.global_reads.push((name, current_scope));
-        }
-    }
-
-    /// Luau: a function's signature annotations, before anything the
-    /// function binds. Parameters and a `local function`'s own name bind
-    /// after the whole signature parses, so a `typeof` here reads the
-    /// enclosing scope.
-    fn visit_signature(&mut self, body: &mut FunctionBody<'ast>) {
-        if let Some(generics) = &mut body.generics {
-            self.visit_generic_type_list(generics);
-        }
-        for param in &mut body.params {
-            if let Some(ty) = &mut param.type_annotation {
-                self.visit_type(ty);
-            }
-        }
-        if let Some(vararg) = &mut body.vararg
-            && let Some(ty) = &mut vararg.type_annotation
-        {
-            self.visit_type(ty);
-        }
-        if let Some(ty) = &mut body.return_type {
-            self.visit_type(ty);
-        }
-    }
-
-    /// A function's parameters, and then its block.
-    fn visit_function_scope(&mut self, body: &mut FunctionBody<'ast>) {
-        self.enter_scope();
-        for param in &mut body.params {
-            self.declare(&mut param.name);
-        }
-        // Lua 5.5
-        if let Some(name) = body.vararg.as_mut().and_then(|vararg| vararg.name.as_mut()) {
-            self.declare(name);
-        }
-        self.visit_block(&mut body.block);
-        self.exit_scope();
-    }
-
-    fn visit_scoped_block(&mut self, block: &mut Block<'ast>) {
-        self.enter_scope();
-        self.visit_block(block);
-        self.exit_scope();
-    }
-}
-
-impl<'ast> VisitMut<'ast> for Renamer<'_, 'ast> {
-    fn visit_local_assignment(&mut self, local_assignment: &mut LocalAssignment<'ast>) {
-        for expr in &mut local_assignment.exprs {
-            self.visit_expr(expr);
-        }
-        for attributed in &mut local_assignment.names {
-            self.visit_attributed_name(attributed);
-        }
-        for attributed in &mut local_assignment.names {
-            self.declare(&mut attributed.name);
-        }
-    }
-
-    fn visit_local_function(&mut self, local_function: &mut LocalFunction<'ast>) {
-        self.visit_signature(&mut local_function.body);
-        self.declare(&mut local_function.name);
-        self.visit_function_scope(&mut local_function.body);
-    }
-
     fn visit_function_decl(&mut self, function_decl: &mut FunctionDecl<'ast>) {
-        if !self.is_applying {
-            explicit_self::rewrite(self.allocator, self.bindings, function_decl);
+        let is_method = function_decl.name.method.is_some();
+        if is_method {
+            self.methods.push(None);
         }
-        self.visit_signature(&mut function_decl.body);
-        self.visit_function_scope(&mut function_decl.body);
-        if let Some(root) = function_decl.name.names.first_mut() {
-            self.reference(root);
+        self.walk_function_decl(function_decl);
+        if is_method && let Some(Some(receiver)) = self.methods.pop() {
+            let renamed = self.renamer.symbol_base.saturating_add(receiver.index());
+            let new_name = self.renamer.new_name(renamed);
+            let text = if new_name.is_empty() { METHOD_RECEIVER_NAME } else { new_name };
+            let span = function_decl.name.method.map_or(function_decl.span, |method| method.span);
+            let name = Name::new(text.into(), Some(self.names.next()), span);
+            explicit_self::take_receiver(self.allocator, function_decl, name);
         }
-    }
-
-    fn visit_do_block(&mut self, do_block: &mut DoBlock<'ast>) {
-        self.visit_scoped_block(&mut do_block.block);
-    }
-
-    fn visit_while_loop(&mut self, while_loop: &mut WhileLoop<'ast>) {
-        self.visit_expr(&mut while_loop.condition);
-        self.visit_scoped_block(&mut while_loop.block);
-    }
-
-    fn visit_repeat_loop(&mut self, repeat_loop: &mut RepeatLoop<'ast>) {
-        // The condition sees the block's locals.
-        self.enter_scope();
-        self.visit_block(&mut repeat_loop.block);
-        self.visit_expr(&mut repeat_loop.condition);
-        self.exit_scope();
-    }
-
-    fn visit_if_stmt(&mut self, if_stmt: &mut IfStatement<'ast>) {
-        self.visit_expr(&mut if_stmt.condition);
-        self.visit_scoped_block(&mut if_stmt.block);
-        for clause in &mut if_stmt.elseif_clauses {
-            self.visit_expr(&mut clause.condition);
-            self.visit_scoped_block(&mut clause.block);
-        }
-        if let Some(else_clause) = &mut if_stmt.else_clause {
-            self.visit_scoped_block(&mut else_clause.block);
-        }
-    }
-
-    fn visit_numeric_for(&mut self, numeric_for: &mut NumericFor<'ast>) {
-        self.visit_expr(&mut numeric_for.start);
-        self.visit_expr(&mut numeric_for.limit);
-        if let Some(step) = &mut numeric_for.step {
-            self.visit_expr(step);
-        }
-        // Luau
-        if let Some(ty) = &mut numeric_for.type_annotation {
-            self.visit_type(ty);
-        }
-        self.enter_scope();
-        self.declare(&mut numeric_for.name);
-        self.visit_block(&mut numeric_for.block);
-        self.exit_scope();
-    }
-
-    fn visit_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
-        for expr in &mut generic_for.exprs {
-            self.visit_expr(expr);
-        }
-        // Luau: every name binds after the whole list parses.
-        for param in &mut generic_for.names {
-            if let Some(ty) = &mut param.type_annotation {
-                self.visit_type(ty);
-            }
-        }
-        self.enter_scope();
-        for param in &mut generic_for.names {
-            self.declare(&mut param.name);
-        }
-        self.visit_block(&mut generic_for.block);
-        self.exit_scope();
-    }
-
-    // Lua 5.5: as with `local function`, the body sees the name.
-    fn visit_global_function(&mut self, global_function: &mut GlobalFunction<'ast>) {
-        self.declare(&mut global_function.name);
-        self.visit_function_body(&mut global_function.body);
-    }
-
-    // Lua 5.5: as with `local`, the initializers see the outer scope.
-    fn visit_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
-        for expr in &mut global_declaration.exprs {
-            self.visit_expr(expr);
-        }
-        for attributed in &mut global_declaration.names {
-            self.declare(&mut attributed.name);
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-        if let Expression::Name(name) = expr {
-            self.reference(name);
-            return;
-        }
-        self.walk_expr(expr);
-    }
-
-    fn visit_var(&mut self, var: &mut Var<'ast>) {
-        if let Var::Name(name) = var {
-            self.reference(name);
-            return;
-        }
-        self.walk_var(var);
-    }
-
-    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
-        self.visit_signature(function_body);
-        self.visit_function_scope(function_body);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use luck_token::LuaVersion;
+
     use crate::fixtures::{RENAMING, assert_lua55_renames, assert_luau_renames, minify_with};
 
     fn apply(source: &str) -> String {

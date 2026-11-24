@@ -117,6 +117,14 @@ impl CodeBuffer {
     }
 }
 
+/// Writes after the bytes the vector holds, into its capacity.
+impl From<Vec<u8>> for CodeBuffer {
+    #[inline]
+    fn from(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+}
+
 /// Copies the first and the last `N` bytes of `source` into `window`, which
 /// covers all of it when it's `N` to `2 * N` bytes long, as `window` is too.
 #[inline]

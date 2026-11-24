@@ -9,7 +9,7 @@ use crate::common::{assert_compacts_to, assert_reprints, assert_spells};
 const AS_WRITTEN: LiteralSpelling = LiteralSpelling::AsWritten;
 
 #[test]
-fn a_capacity_hint_never_changes_the_output() {
+fn a_header_or_a_capacity_never_changes_the_output() {
     for version in LuaVersion::ALL {
         let source = format!(
             "\
@@ -23,9 +23,16 @@ local value = - -1; return value .. '\u{e9}'",
         for spelling in [AS_WRITTEN, LiteralSpelling::Shortest] {
             let expected = luck_codegen::compact(&parsed.chunk, spelling);
             for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
-                let output = luck_codegen::compact_with_capacity(&parsed.chunk, spelling, capacity);
+                let output = luck_codegen::compact_into(
+                    &parsed.chunk,
+                    spelling,
+                    Vec::with_capacity(capacity),
+                );
                 assert_eq!(output, expected);
             }
+            let header = b"#!/bin/lua\n".to_vec();
+            let output = luck_codegen::compact_into(&parsed.chunk, spelling, header.clone());
+            assert_eq!(output, [header, expected].concat());
         }
         assert_reprints(&parsed.chunk);
     }
@@ -45,18 +52,6 @@ fn a_string_that_is_not_utf8_prints_as_written_or_escaped_from_its_value() {
     let built = synth.block([synth.return_([synth.string_bytes(b"caf\xE9")])]);
     let chunk = Chunk::new(LuaVersion::Lua51, built);
     assert_eq!(luck_codegen::compact(&chunk, AS_WRITTEN), br#"return"caf\233""#);
-}
-
-#[test]
-fn a_capacity_hint_the_allocator_cannot_meet_is_dropped() {
-    let allocator = Allocator::new();
-    let spans = SpanCounter::new();
-    let synth = Synth::new(&allocator, &spans);
-    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([synth.number_i64(1)])]));
-    for capacity in [usize::MAX, isize::MAX.unsigned_abs()] {
-        let output = luck_codegen::compact_with_capacity(&chunk, AS_WRITTEN, capacity);
-        assert_eq!(output, b"return 1", "capacity {capacity}");
-    }
 }
 
 /// Nests its operand exactly one level deeper.

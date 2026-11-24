@@ -30,6 +30,7 @@ fn generated_programs_minify_to_a_fixpoint() {
 #[test]
 fn generated_programs_minify_to_a_fixpoint_with_each_pass_alone() {
     let none = TransformConfig {
+        strip_types: false,
         remove_dead_code: false,
         simplify_statements: false,
         fold_constants: false,
@@ -42,6 +43,7 @@ fn generated_programs_minify_to_a_fixpoint_with_each_pass_alone() {
         rename_globals: false,
     };
     let configs = [
+        TransformConfig { strip_types: true, ..none },
         TransformConfig { remove_dead_code: true, ..none },
         TransformConfig { simplify_statements: true, ..none },
         TransformConfig { fold_constants: true, ..none },

@@ -3,14 +3,13 @@ use luck_ast::Chunk;
 use luck_codegen::LiteralSpelling;
 use luck_token::LuaVersion;
 
-use crate::bind::bind;
-use crate::binding::Bindings;
-use crate::compress::{Compressor, compress};
-use crate::name_table::NameTable;
+use crate::binding::NameIndexes;
+use crate::compress::{Compressor, analyze, compress};
 use crate::transform_config::TransformConfig;
 
 /// Every pass off, for a test to turn on the ones it covers.
 pub(crate) const NO_PASSES: TransformConfig = TransformConfig {
+    strip_types: false,
     remove_dead_code: false,
     simplify_statements: false,
     fold_constants: false,
@@ -69,27 +68,25 @@ pub(crate) fn assert_lua55_renames(cases: &[(&str, &str)]) {
     }
 }
 
-/// One compression walk of `source`, after the bind walk, printed.
+/// One compression pass of `source`, printed.
 pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let allocator = Allocator::new();
-    let mut chunk = parse(&allocator, source, LuaVersion::Lua54);
-    let mut bindings = Bindings::default();
-    let names = &mut NameTable::default();
-    bind(&mut chunk.block, chunk.version, &mut bindings, names);
-    Compressor::new(&allocator, chunk.version, config, &mut bindings).walk(&mut chunk.block);
+    let result = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+    let mut chunk = result.chunk;
+    let mut scoping = analyze(&chunk, result.counts);
+    Compressor::new(&allocator, chunk.version, config, &mut scoping).pass(&mut chunk.block);
     String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::Shortest)).unwrap()
 }
 
-/// Binds and compresses `source` as a minify does, without renaming.
+/// Compresses `source` as a minify does, without renaming.
 pub(crate) fn compressed<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     config: TransformConfig,
 ) -> Chunk<'ast> {
-    let mut chunk = parse(allocator, source, LuaVersion::Lua54);
-    let mut bindings = Bindings::default();
-    let names = &mut NameTable::default();
-    bind(&mut chunk.block, chunk.version, &mut bindings, names);
-    compress(allocator, chunk.version, config, &mut bindings, &mut chunk.block);
+    let result = luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua54);
+    let mut chunk = result.chunk;
+    let mut names = NameIndexes::new(result.counts.names);
+    compress(allocator, &mut chunk, result.counts, config, &mut names);
     chunk
 }

@@ -5,6 +5,7 @@
 //!
 //! - [`CodeBuffer`]: the output buffer the printers write into, which holds
 //!   bytes, as a source is.
+//! - [`BitSet`]: a fixed number of bits, one apiece.
 //!
 //! This crate has zero internal dependencies.
 //!
@@ -20,6 +21,8 @@
 //! assert_eq!(output.into_bytes(), b"local x");
 //! ```
 
+mod bit_set;
 mod code_buffer;
 
+pub use bit_set::BitSet;
 pub use code_buffer::CodeBuffer;

@@ -832,6 +832,11 @@
         "simplify_statements": {
           "type": "boolean",
           "default": true
+        },
+        "strip_types": {
+          "description": "Luau: drop every type annotation, cast, instantiation, and `type`\ndeclaration before the other passes run. Types never run, so this\nchanges no behavior, but a typed library's users lose its types.",
+          "type": "boolean",
+          "default": true
         }
       },
       "additionalProperties": false

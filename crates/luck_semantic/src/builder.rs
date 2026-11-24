@@ -129,6 +129,7 @@ impl SemanticBuilder {
             until: None,
             type_function_floor: None,
             type_depth: 0,
+            local_functions: Vec::new(),
             type_names: FxHashSet::default(),
             scratch_nodes: Vec::new(),
             deferred_writes: Vec::new(),
@@ -242,6 +243,8 @@ struct Builder<'ast> {
     /// Luau: how many types the walk is in. Types never run, so a reference
     /// in one captures nothing.
     type_depth: u32,
+    /// The `local function`s whose bodies the walk is in, innermost last.
+    local_functions: Vec<SymbolId>,
     /// Luau: every type declared by a block entered so far.
     type_names: FxHashSet<&'ast str>,
     /// The nodes of names a statement binds once its values are read,
@@ -483,7 +486,7 @@ impl<'ast> Builder<'ast> {
             return;
         }
         let id = self.intern(name.text.as_str());
-        self.scoping.mark_declared_global(id);
+        self.scoping.add_declared_global(id, self.current_scope);
         if is_assigned {
             self.scoping.mark_assigned_global(id);
         }
@@ -551,6 +554,8 @@ impl<'ast> Builder<'ast> {
             env,
             kind,
             is_declared_global,
+            is_in_type: self.type_depth > 0,
+            is_recursive: resolved.is_some_and(|symbol| self.local_functions.contains(&symbol)),
         };
         let id = self.scoping.add_reference(reference, position);
         self.scoping.set_role(name.index, NameRole::Reference(id));
@@ -783,13 +788,13 @@ impl<'ast> Builder<'ast> {
         if let Some(annotation) = &body.return_type {
             self.visit_type(annotation);
         }
-        if let Some(own) = own_name
-            && let Some(symbol) =
-                self.declare_name(own.name, SymbolKind::FunctionName, own.declaration)
-        {
+        let own_symbol = own_name.and_then(|own| {
+            let symbol = self.declare_name(own.name, SymbolKind::FunctionName, own.declaration)?;
             symbol.is_exported = own.kind.is_exported(); // Luau
             symbol.is_read_only = own.kind.is_const(); // Luau
-        }
+            Some(symbol.id)
+        });
+        self.local_functions.extend(own_symbol);
 
         let enclosing_gotos = if self.version.has_goto() {
             self.gotos.enter_function()
@@ -823,6 +828,9 @@ impl<'ast> Builder<'ast> {
         }
         self.block(&body.block, false);
         self.pop_scope();
+        if own_symbol.is_some() {
+            self.local_functions.pop();
+        }
         self.loop_base = enclosing_loop_base;
         if self.version.has_goto() {
             let mut gotos = mem::take(&mut self.gotos);
@@ -1536,6 +1544,22 @@ global function d() end
         for name in ["a", "b", "c", "d"] {
             assert!(is_declared_global(&tree, name), "{name}");
         }
+    }
+
+    #[test]
+    fn declared_globals_record_the_scope_each_declaration_is_in() {
+        let allocator = Allocator::new();
+        let tree = scoping_in(
+            &allocator,
+            "global a do global b, c end local function f() global function d() end end",
+            LuaVersion::Lua55,
+        );
+        let declared: Vec<(&str, usize)> = tree
+            .declared_globals()
+            .iter()
+            .map(|&(name, scope)| (tree.name(name), scope.index()))
+            .collect();
+        assert_eq!(declared, [("a", 0), ("b", 1), ("c", 1), ("d", 2)]);
     }
 
     #[test]
@@ -2346,5 +2370,57 @@ local function f(y: typeof(x)) local z: typeof(x) = y end",
         );
         assert_eq!(references(&tree, "x").len(), 2);
         assert!(!symbol(&tree, "x").is_upvalue, "types never run");
+    }
+
+    #[test]
+    fn a_reference_in_a_type_is_in_a_type() {
+        let allocator = Allocator::new();
+        let tree = scoping_in(
+            &allocator,
+            "local x = 1 local y: typeof(x) = x return function(): typeof(x) end",
+            LuaVersion::Luau,
+        );
+        let in_type: Vec<bool> =
+            references(&tree, "x").iter().map(|reference| reference.is_in_type).collect();
+        assert_eq!(in_type, [true, false, true]);
+    }
+
+    #[test]
+    fn a_local_function_s_reads_of_itself_in_its_body_are_recursive() {
+        let allocator = Allocator::new();
+        let tree = scoping_of(
+            &allocator,
+            "\
+local function f() return f, function() return f end end
+local g = function() return g end
+return f",
+        );
+        let recursive = |name: &str| -> Vec<bool> {
+            references(&tree, name).iter().map(|reference| reference.is_recursive).collect()
+        };
+        assert_eq!(recursive("f"), [true, true, false]);
+        assert_eq!(recursive("g"), [false], "the `g` in its value is a global");
+    }
+
+    #[test]
+    fn retaining_resolved_references_keeps_the_rest_in_order() {
+        let allocator = Allocator::new();
+        let mut tree = scoping_of(
+            &allocator,
+            "\
+local a, b = 1, 2
+print(a, b, a, b, a)",
+        );
+        let (a, b) = (symbol(&tree, "a").id, symbol(&tree, "b").id);
+        let starts = |scoping: &Scoping, symbol: SymbolId| -> Vec<u32> {
+            let ids = scoping.resolved_references(symbol);
+            ids.iter().map(|&id| scoping.reference(id).span.start).collect()
+        };
+        let second_a = tree.resolved_references(a).get(1).copied();
+        tree.retain_resolved_references(|id| Some(id) != second_a);
+        assert_eq!(starts(&tree, a), [24, 36]);
+        assert_eq!(starts(&tree, b), [27, 33]);
+        tree.retain_resolved_references(|_| false);
+        assert_eq!((starts(&tree, a), starts(&tree, b)), (Vec::new(), Vec::new()));
     }
 }

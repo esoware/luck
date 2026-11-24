@@ -48,4 +48,4 @@
 mod compact;
 mod separator;
 
-pub use compact::{LiteralSpelling, compact, compact_with_capacity};
+pub use compact::{LiteralSpelling, compact, compact_into};

@@ -11,7 +11,7 @@ It recurses once per level of nesting, so it takes a tree within `luck_ast::MAX_
 ## Usage
 
 - `compact(&chunk, spelling)` returns the source of a tree, as bytes, read in the version its `Chunk` records, with its literals as written or, for `LiteralSpelling::Shortest`, as short as they go.
-- `compact_with_capacity(&chunk, spelling, capacity)` reserves the output up front. A parsed tree's source length is a good hint.
+- `compact_into(&chunk, spelling, output)` writes after the bytes `output` holds, in its buffer, so a header such as a shebang costs no copy of the code, and starts with the capacity `output` reserves. A parsed tree's source length, its comments aside, is a good hint.
 
 ```rust
 use luck_allocator::Allocator;

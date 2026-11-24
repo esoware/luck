@@ -5,6 +5,10 @@
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::struct_excessive_bools, reason = "each bool turns one independent pass on or off")]
 pub struct TransformConfig {
+    /// Luau: drop every type annotation, cast, instantiation, and `type`
+    /// declaration before the other passes run. Types never run, so this
+    /// changes no behavior, but a typed library's users lose its types.
+    pub strip_types: bool,
     pub remove_dead_code: bool,
     pub simplify_statements: bool,
     pub fold_constants: bool,
@@ -22,9 +26,24 @@ pub struct TransformConfig {
     pub rename_globals: bool,
 }
 
+impl TransformConfig {
+    /// Whether any pass the compressor runs is on.
+    pub(crate) const fn compresses(&self) -> bool {
+        self.remove_dead_code
+            || self.simplify_statements
+            || self.fold_constants
+            || self.inline_locals
+            || self.merge_locals
+            || self.simplify_indexes
+            || self.simplify_parens
+            || self.lift_locals
+    }
+}
+
 impl Default for TransformConfig {
     fn default() -> Self {
         Self {
+            strip_types: true,
             remove_dead_code: true,
             simplify_statements: true,
             fold_constants: true,
@@ -46,6 +65,7 @@ mod tests {
     #[test]
     fn default_enables_passes_but_not_rename_globals() {
         let config = TransformConfig::default();
+        assert!(config.strip_types);
         assert!(config.fold_constants);
         assert!(config.rename_locals);
         assert!(!config.rename_globals);

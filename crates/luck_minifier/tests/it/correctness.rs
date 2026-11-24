@@ -361,7 +361,7 @@ fn a_tree_at_the_nesting_cap_minifies() {
             "the tree sits at the cap"
         );
         let config = TransformConfig::default();
-        let output = luck_minifier::minify_chunk(&allocator, &mut chunk, &config);
+        let output = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new());
         assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps)).into_bytes()));
     });
 }
@@ -372,7 +372,7 @@ fn a_tree_past_the_nesting_cap_is_an_error() {
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
         let mut chunk = nested_negations(&allocator, &spans, MAX_NESTING_DEPTH);
         let config = TransformConfig::default();
-        let error = luck_minifier::minify_chunk(&allocator, &mut chunk, &config)
+        let error = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new())
             .expect_err("the tree nests one level too deep");
         assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
     });
@@ -409,7 +409,7 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
             ..TransformConfig::default()
         };
         for config in [TransformConfig::default(), without_bindings] {
-            let result = luck_minifier::minify_chunk(&allocator, &mut chunk, &config);
+            let result = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new());
             assert!(result.is_err(), "the tree nests one level too deep");
             assert_eq!(chunk, expected, "the refused tree is as it was");
         }

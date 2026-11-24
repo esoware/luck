@@ -1,11 +1,12 @@
-//! Choosing each binding's name from what the renamer's walk recorded.
+//! Choosing each binding's name from what the renamer read of the scoping.
 
 use core::cmp::Reverse;
+
+use luck_semantic::NameId;
 
 use super::candidate_pool::CandidatePool;
 use super::scope_claims::ScopeClaims;
 use super::{Renamer, Scope, UNRESOLVED};
-use crate::name_table::NameTable;
 
 /// What choosing names computes, kept for its allocations.
 #[derive(Default)]
@@ -61,10 +62,10 @@ impl Renamer<'_, '_> {
     /// Groups the global reads by name, each name's scopes ascending and
     /// once each.
     fn group_global_reads(&mut self) {
-        let Self { global_reads, choice, names, .. } = self;
+        let Self { global_reads, choice, scoping, .. } = self;
         let ranges = &mut choice.read_ranges;
         ranges.clear();
-        ranges.resize(names.len(), (0, 0));
+        ranges.resize(scoping.names().len(), (0, 0));
         for &(name_id, _) in &*global_reads {
             if let Some(range) = ranges.get_mut(name_id) {
                 range.1 = range.1.saturating_add(1);
@@ -228,7 +229,7 @@ impl Renamer<'_, '_> {
     }
 
     fn name_slots(&mut self, slot_count: usize) {
-        let Self { renamed: bindings, scopes, choice, pool, names, .. } = self;
+        let Self { renamed: bindings, scopes, choice, pool, scoping, .. } = self;
         // Each slot's live scopes, its bindings' in turn.
         choice.slot_starts.clear();
         choice.slot_starts.resize(slot_count.saturating_add(1), 0);
@@ -302,7 +303,9 @@ impl Renamer<'_, '_> {
         candidate_reads.clear();
         slot_names.clear();
         slot_names.resize(slot_count, "");
-        let reads = Reads { names, ranges: read_ranges, scopes: read_scopes, tree: scopes };
+        let name_id = |name: &str| scoping.name_id(name).map(NameId::index);
+        let reads =
+            Reads { name_id: &name_id, ranges: read_ranges, scopes: read_scopes, tree: scopes };
         for &slot in &*by_frequency {
             let start = slot_starts.get(slot).copied().unwrap_or(0);
             let end = slot_starts.get(slot.saturating_add(1)).copied().unwrap_or(start);
@@ -314,17 +317,17 @@ impl Renamer<'_, '_> {
     }
 }
 
-/// Where each name is read as a global.
-struct Reads<'reads, 'ast> {
-    names: &'reads NameTable<'ast>,
+/// Where each name is read as a global, by the index `name_id` gives it.
+struct Reads<'reads> {
+    name_id: &'reads dyn Fn(&str) -> Option<usize>,
     ranges: &'reads [(usize, usize)],
     scopes: &'reads [usize],
     tree: &'reads [Scope],
 }
 
-impl Reads<'_, '_> {
+impl Reads<'_> {
     fn range_of(&self, name: &str) -> (usize, usize) {
-        self.names.find(name).and_then(|id| self.ranges.get(id)).copied().unwrap_or((0, 0))
+        (self.name_id)(name).and_then(|id| self.ranges.get(id)).copied().unwrap_or((0, 0))
     }
 
     /// Whether one of the reads in `range` is in or below `scope`.
@@ -345,7 +348,7 @@ fn pick<'ast>(
     pool: &mut CandidatePool<'ast>,
     claims: &mut ScopeClaims,
     candidate_reads: &mut Vec<Option<(usize, usize)>>,
-    reads: &Reads<'_, 'ast>,
+    reads: &Reads<'_>,
 ) -> &'ast str {
     // Every candidate below a scope's first free one is unavailable there.
     let mut index = live_scopes.iter().map(|&scope| claims.first_free(scope)).max().unwrap_or(0);
@@ -409,15 +412,14 @@ mod tests {
                 end: if id == 0 { 10 } else { id.saturating_add(1) },
             })
             .collect();
-        let mut names = NameTable::default();
         let mut ranges = Vec::new();
         let mut scopes = Vec::new();
-        for &(name, scope) in global_reads {
-            assert_eq!(names.intern(name), ranges.len());
+        for &(_, scope) in global_reads {
             ranges.push((scopes.len(), scopes.len().saturating_add(1)));
             scopes.push(scope);
         }
-        let reads = Reads { names: &names, ranges: &ranges, scopes: &scopes, tree: &tree };
+        let name_id = |name: &str| global_reads.iter().position(|&(read, _)| read == name);
+        let reads = Reads { name_id: &name_id, ranges: &ranges, scopes: &scopes, tree: &tree };
         let mut candidate_reads = Vec::new();
         slots
             .iter()

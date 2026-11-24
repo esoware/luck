@@ -3,7 +3,7 @@
 //! The tree keeps only those that truncate a call or `...` to one value or
 //! stop a `-` before a Luau integer literal from reading as a negative one,
 //! and the printer writes whatever grouping needs. So what's left to drop
-//! is a truncation where only the first value counts anyway, the
+//! is a truncation wherever only the first value counts anyway, the
 //! parentheses around a lone string or table argument, and the ones a run
 //! held in a run at its level prints with where it groups the same without.
 
@@ -14,12 +14,13 @@ use luck_ast::{Expression, FunctionArgs, Slot, Suffix, SuffixedExpression, is_mu
 /// go.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Place {
-    /// Where every value it yields may count, as the last of a list, or a
-    /// place that doesn't say.
-    Free,
-    /// An operand of a binary or unary operator or a cast, which takes one
-    /// value.
-    Operand,
+    /// Where every value it yields may count: the last of a list that takes
+    /// more values than it has items, as a `return` or a call's arguments
+    /// does, or a type, which the walk doesn't read.
+    AllValues,
+    /// Where only its first value counts: an operand, a condition, a key, a
+    /// field, an index, or any but the last of a list.
+    OneValue,
     /// The operand of a `-`, under which a Luau integer literal reads as a
     /// negative one.
     Negated,
@@ -32,8 +33,8 @@ pub(super) fn strip(expr: &mut Expression<'_>, place: Place) -> bool {
         return false;
     };
     let is_kept = match place {
-        Place::Free => is_multi_value(&paren.expr),
-        Place::Operand => false,
+        Place::AllValues => is_multi_value(&paren.expr),
+        Place::OneValue => false,
         Place::Negated => matches!(paren.expr, Expression::Integer(_)),
     };
     if is_kept || matches!(paren.expr, Expression::Error(_)) {
@@ -126,6 +127,36 @@ mod tests {
     }
 
     #[test]
+    fn strips_a_truncation_wherever_one_value_counts() {
+        assert_outputs(
+            LuaVersion::Lua54,
+            &[
+                ("if (f()) then g() end", "if f()then g()end"),
+                ("while (f()) do end repeat until (...)", "while f()do end repeat until..."),
+                (
+                    "return {(f()), x}, {x, (f())}, {(f()), k = 1}",
+                    "return{f(),x},{x,(f())},{f(),k=1}",
+                ),
+                ("return t[(f())], {k = (f()), [(f())] = 1}", "return t[f()],{k=f(),[f()]=1}"),
+                ("local a = (f()) local b, c = (f())", "local a=f()local b,c=(f())"),
+                ("a, b = (f()), (g()) c, d = (h())", "a,b=f(),g()c,d=(h())"),
+                ("g((f()), (...)) return (f()), (...)", "g(f(),(...))return f(),(...)"),
+                (
+                    "for i = (f()), (g()) do end for k in (f()) do end",
+                    "for i=f(),g()do end for k in(f())do end",
+                ),
+            ],
+        );
+        assert_outputs(
+            LuaVersion::Luau,
+            &[
+                ("x += (f()) return `{(f())}`", "x+=f()return`{f()}`"),
+                ("return if (f()) then (g()) else (...)", "return if f()then g()else..."),
+            ],
+        );
+    }
+
+    #[test]
     fn strips_parens_where_nothing_groups_with_them() {
         assert_outputs(
             LuaVersion::Lua54,
@@ -139,8 +170,9 @@ mod tests {
                 ("return {(a + b), k = (c), [(d)] = (e)}", "return{a+b,k=c,[d]=e}"),
                 ("return t[(a + b)]", "return t[a+b]"),
                 ("return ((a + b))", "return a+b"),
-                // A call or `...` keeps the parens that truncate its values.
-                ("return (f()), (...)", "return(f()),(...)"),
+                // A call or `...` keeps the parens that truncate its values
+                // where every value would count.
+                ("return (f()), (...)", "return f(),(...)"),
             ],
         );
         assert_outputs(
@@ -174,7 +206,7 @@ mod tests {
             LuaVersion::Lua54,
             &[
                 // Parens around a call truncate its values.
-                ("local x = (foo())", "local x=(foo())"),
+                ("local x, y = (foo())", "local x,y=(foo())"),
                 ("return (f())", "return(f())"),
                 ("return a * (b + c)", "return a*(b+c)"),
                 ("return (1 + 2) * 3", "return(1+2)*3"),

@@ -30,6 +30,12 @@ pub(crate) fn minify_luau(source: &str) -> String {
     minify_with(source, LuaVersion::Luau, &TransformConfig::default())
 }
 
+/// [`minify_luau`] keeping the types, as a typed library minifies.
+pub(crate) fn minify_typed_luau(source: &str) -> String {
+    let config = TransformConfig { strip_types: false, ..TransformConfig::default() };
+    minify_with(source, LuaVersion::Luau, &config)
+}
+
 pub(crate) fn minify_renaming_globals(source: &str, version: LuaVersion) -> String {
     let config = TransformConfig { rename_globals: true, ..TransformConfig::default() };
     minify_with(source, version, &config)

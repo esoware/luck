@@ -14,18 +14,18 @@ use core::mem;
 use luck_allocator::{Allocator, List};
 use luck_ast::{
     BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
-    IfStatement, LocalAssignment, Name, NumericFor, OneOrMore, Statement, VisitMut as _,
+    IfStatement, LocalAssignment, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
 use luck_token::{BinOp, LuaNumber, UnOp};
 use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _};
 
-use super::Compressor;
 use super::simplify_parens::Place;
 use super::simplify_statements::{has_no_else, holds_nested_if};
+use super::{Compressor, remove_stmts};
 use crate::binding::{
-    BoundNames, has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
+    ResolvedNames, has_attributed_or_env_name, has_fixed_binding, is_droppable_function,
 };
-use crate::expr::truncate_multi_value;
+use crate::expr::{fits_at_depth, truncate_multi_value};
 
 pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
     block.stmts.is_empty()
@@ -33,9 +33,12 @@ pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
 
 /// A step of integer 1 is the default. On Lua 5.3+ a float step makes the
 /// loop a float one, so `1.0` isn't, but where every number is a float, it is.
-pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, names: BoundNames) -> bool {
-    let default =
-        if names.0.has_integer_subtype() { LuaNumber::Int(1) } else { LuaNumber::Float(1.0) };
+pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, names: ResolvedNames<'_>) -> bool {
+    let default = if names.0.version().has_integer_subtype() {
+        LuaNumber::Int(1)
+    } else {
+        LuaNumber::Float(1.0)
+    };
     numeric_for.step.as_ref().and_then(|step| step.evaluate_value(&names))
         == Some(ConstantValue::Number(default))
 }
@@ -100,7 +103,7 @@ fn negate<'ast>(allocator: &'ast Allocator, expr: Expression<'ast>) -> Expressio
 
 /// `cond and X or X`, which a run of `or`s starts with when its first two
 /// operands are that.
-fn is_redundant_ternary(outer: &BinaryOp<'_>, names: BoundNames) -> bool {
+fn is_redundant_ternary(outer: &BinaryOp<'_>, names: ResolvedNames<'_>) -> bool {
     let Expression::BinaryOp(inner) = &outer.first else {
         return false;
     };
@@ -129,10 +132,10 @@ pub(super) enum UnusedLocalAction {
 /// droppable before a walk is droppable after it.
 pub(super) fn unused_local_action(
     local: &LocalAssignment<'_>,
-    names: BoundNames,
+    names: ResolvedNames<'_>,
 ) -> UnusedLocalAction {
     // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0) {
+    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0.version()) {
         return UnusedLocalAction::Keep;
     }
     let is_pure = |expr: &Expression<'_>| !expr.may_have_side_effects(&names);
@@ -165,35 +168,43 @@ pub(super) fn is_nil_initialized(local: &LocalAssignment<'_>) -> bool {
 }
 
 impl<'ast> Compressor<'_, 'ast> {
-    pub(super) fn is_used(&self, name: &Name<'_>) -> bool {
-        local_of(name).is_some_and(|id| self.bindings.is_used(id))
-    }
-
     /// Drops what of `stmts`, a block the walk is leaving, nothing
     /// references.
     pub(super) fn drop_unused(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut has_dropped = false;
         // The statements that go whole, last first.
-        let mut dropped = Vec::new();
+        let mut removed = mem::take(&mut self.removed_stmts);
+        removed.clear();
         for (index, stmt) in stmts.iter_mut().enumerate().rev() {
             match self.drop_unused_from(stmt, index) {
                 Dropped::Nothing => {}
                 Dropped::Part => has_dropped = true,
                 Dropped::Whole => {
-                    dropped.push(index);
+                    removed.push(index);
                     has_dropped = true;
                 }
             }
         }
-        if !has_dropped {
-            return;
+        if has_dropped {
+            self.has_changed = true;
+            removed.reverse();
+            if self.late_calls.is_empty() {
+                remove_stmts(stmts, &removed);
+            } else {
+                self.insert_late_calls(stmts, &removed);
+            }
         }
-        self.has_changed = true;
+        self.removed_stmts = removed;
+    }
+
+    /// Drops the statements at `removed`, ascending, and puts the calls an
+    /// unused `local` leaves after the one that stands in its place.
+    fn insert_late_calls(&mut self, stmts: &mut List<'ast, Statement<'ast>>, removed: &[usize]) {
         let mut calls = self.late_calls.drain(..).rev().peekable();
-        let mut to_drop = dropped.into_iter().rev().peekable();
-        let mut kept = Vec::with_capacity(stmts.len());
+        let mut to_drop = removed.iter().peekable();
+        let mut kept = Vec::with_capacity(stmts.len().saturating_add(calls.len()));
         for (index, stmt) in mem::take(stmts).into_iter().enumerate() {
-            if to_drop.next_if_eq(&index).is_none() {
+            if to_drop.next_if_eq(&&index).is_none() {
                 kept.push(stmt);
             }
             while let Some((_, call)) = calls.next_if(|&(call_index, _)| call_index == index) {
@@ -211,7 +222,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 if is_droppable_function(local_function, self.version)
                     && !self.is_used(&local_function.name)
                 {
-                    self.retract_stmt(stmt);
+                    self.drop_stmt(stmt);
                     return Dropped::Whole;
                 }
                 Dropped::Nothing
@@ -221,7 +232,7 @@ impl<'ast> Compressor<'_, 'ast> {
                     match unused_local_action(local, self.names()) {
                         UnusedLocalAction::Keep => {}
                         UnusedLocalAction::Remove => {
-                            self.retract_stmt(stmt);
+                            self.drop_stmt(stmt);
                             return Dropped::Whole;
                         }
                         UnusedLocalAction::ExtractCalls => {
@@ -245,8 +256,8 @@ impl<'ast> Compressor<'_, 'ast> {
                     if !self.is_used(&attributed.name)
                         && !value.may_have_side_effects(&self.names())
                     {
-                        self.retract_annotation(attributed);
-                        self.retract_expr(value);
+                        self.drop_annotation(attributed);
+                        self.drop_expr(value);
                     } else {
                         local.names.swap(kept, i);
                         local.exprs.swap(kept, i);
@@ -292,13 +303,13 @@ impl<'ast> Compressor<'_, 'ast> {
             return;
         };
         for attributed in &local.names {
-            self.retract_annotation(attributed);
+            self.drop_annotation(attributed);
         }
         let mut first_call = None;
         let calls_start = self.late_calls.len();
         for expr in &mut local.exprs {
             if !is_call(expr) {
-                self.retract_expr(expr);
+                self.drop_expr(expr);
                 continue;
             }
             if let Expression::Suffixed(chain) = expr.take() {
@@ -328,7 +339,7 @@ impl<'ast> Compressor<'_, 'ast> {
         if !is_redundant_ternary(outer, self.names()) {
             return false;
         }
-        self.retract_expr(&outer.first);
+        self.drop_expr(&outer.first);
         let allocator = self.allocator;
         let Some(alternative) = (*outer.links).first_mut() else {
             return false;
@@ -345,29 +356,29 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     /// Walks the condition of an `if`'s arm, and says whether it's truthy
-    /// when that's known and it can go, which it then does, uncounted: the
-    /// arm runs whenever the `if` reaches it, or never.
+    /// when that's known and it can go, which it then does, dropped: the arm
+    /// runs whenever the `if` reaches it, or never.
     fn visit_arm_condition(&mut self, condition: &mut Expression<'ast>) -> Option<bool> {
         self.visit_expr(condition);
         let truthiness = condition.get_side_free_boolean_value(&self.names());
         if truthiness.is_some() {
-            self.retract_expr(condition);
+            self.drop_expr(condition);
         }
         truthiness
     }
 
-    /// Uncounts the arms of an `if` the walk drops unwalked.
-    fn retract_arms(
+    /// Drops the arms of an `if` the walk leaves unwalked.
+    fn drop_arms(
         &mut self,
         clauses: &[ElseIfClause<'ast>],
         else_clause: Option<&ElseClause<'ast>>,
     ) {
         for clause in clauses {
-            self.retract_expr(&clause.condition);
-            self.retract_block(&clause.block);
+            self.drop_expr(&clause.condition);
+            self.drop_block(&clause.block);
         }
         if let Some(clause) = else_clause {
-            self.retract_block(&clause.block);
+            self.drop_block(&clause.block);
         }
     }
 
@@ -399,13 +410,13 @@ impl<'ast> Compressor<'_, 'ast> {
                 if holds_run && let [Statement::IfStatement(inner)] = &mut *block.stmts {
                     self.merge_nested_ifs(inner, self.depth.saturating_add(1));
                 }
-                self.retract_arms(elseif_clauses, else_clause.as_deref());
+                self.drop_arms(elseif_clauses, else_clause.as_deref());
                 *stmt = do_block(self.allocator, block.take());
                 self.has_changed = true;
                 return !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block));
             }
             Some(false) => {
-                self.retract_block(block);
+                self.drop_block(block);
                 false
             }
             None => {
@@ -424,7 +435,7 @@ impl<'ast> Compressor<'_, 'ast> {
             let truthiness = self.visit_arm_condition(&mut clause.condition);
             has_dropped_arm |= truthiness.is_some();
             match truthiness {
-                Some(false) => self.retract_block(&clause.block),
+                Some(false) => self.drop_block(&clause.block),
                 Some(true) => {
                     taken_block = Some(clause.block.take());
                     taken_index = Some(index);
@@ -446,7 +457,7 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         if let Some(index) = taken_index {
             let rest = elseif_clauses.get(index.saturating_add(1)..).unwrap_or_default();
-            self.retract_arms(rest, else_clause.as_deref());
+            self.drop_arms(rest, else_clause.as_deref());
         }
         elseif_clauses.truncate(kept);
         if let Some(taken) = taken_block {
@@ -478,7 +489,7 @@ impl<'ast> Compressor<'_, 'ast> {
             && is_empty_block(&if_stmt.block)
             && !if_stmt.condition.may_have_side_effects(&self.names());
         if is_dead {
-            self.retract_stmt(stmt);
+            self.drop_stmt(stmt);
         }
         !is_dead
     }
@@ -519,11 +530,11 @@ impl<'ast> Compressor<'_, 'ast> {
             return;
         }
         // The `not` nests the condition a level deeper.
-        if is_empty_block(&if_stmt.block) && self.fits(self.depth, 1, &if_stmt.condition) {
+        if is_empty_block(&if_stmt.block) && fits_at_depth(self.depth, 1, &if_stmt.condition) {
             if_stmt.condition = negate(self.allocator, if_stmt.condition.take());
             if_stmt.block = else_clause.block.take();
             if_stmt.else_clause = None;
-            self.leave_expr(&mut if_stmt.condition, Place::Free);
+            self.leave_expr(&mut if_stmt.condition, Place::OneValue);
             self.has_changed = true;
             return;
         }
@@ -549,12 +560,12 @@ impl<'ast> Compressor<'_, 'ast> {
             return true;
         };
         self.descend();
-        let outer_registers = self.live_registers;
+        let (outer_registers, held_start) = (self.live_registers, self.held.len());
         self.visit_stmts(&mut repeat_loop.block.stmts);
         self.ascend();
         self.visit_expr(&mut repeat_loop.condition);
         self.descend();
-        self.finish_block(&mut repeat_loop.block, outer_registers);
+        self.finish_block(&mut repeat_loop.block, outer_registers, held_start);
         self.ascend();
         if !self.config.remove_dead_code
             || repeat_loop.condition.get_side_free_boolean_value(&self.names()) != Some(true)
@@ -562,7 +573,7 @@ impl<'ast> Compressor<'_, 'ast> {
         {
             return true;
         }
-        self.retract_expr(&repeat_loop.condition);
+        self.drop_expr(&repeat_loop.condition);
         let block = repeat_loop.block.take();
         self.has_changed = true;
         let is_empty = is_empty_block(&block);

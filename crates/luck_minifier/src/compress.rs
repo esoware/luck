@@ -1,19 +1,25 @@
-//! The compressor: an in-place walk that runs every rewrite the tree allows
-//! as it leaves each node.
+//! The compressor: passes of an in-place walk that runs every rewrite the
+//! tree allows as it leaves each node, until a pass changes nothing, as
+//! `oxc_minifier`'s peephole loop runs.
 //!
-//! The walk reads each name's binding from the name itself and decides by
-//! what the bind walk counted of the binding, which every rewrite keeps true
-//! by uncounting what it drops. A block's locals are only ever referenced in
-//! the block, so the walk drops the ones nothing references as it leaves it,
-//! and one walk reaches the fixpoint. It walks again only when it leaves a
-//! rewrite behind that it could see but not make, after a fresh count.
+//! A rewrite reads each name's symbol and references from `luck_semantic`'s
+//! [`Scoping`], by the name's index. One that drops part of the tree marks
+//! the references in it as dropped, which every query of a symbol's
+//! references skips, so each decision reads the tree as it stands. At the
+//! end of a pass the symbols' lists lose the dropped references. Debug
+//! builds check that the lists match a fresh analysis once the passes
+//! settle.
+//!
+//! Once they settle, `lift_locals` hoists each function's declarations,
+//! which reshapes its bindings, so the scoping is built again and the passes
+//! run again on what lifting left.
 //!
 //! Each rewrite lives in the module named after the flag that turns it on.
 //! Rewrites build their nodes in the shape the parser gives the text they
-//! print, which is what makes the fixpoint's own output a fixpoint. The
-//! printer writes whatever parentheses grouping needs, so a rewrite adds only
-//! those that change what they hold. A literal is a value, which
-//! `luck_codegen` spells the shortest way, so no rewrite respells one.
+//! print, so the fixpoint's own output is a fixpoint. The printer writes
+//! whatever parentheses grouping needs, so a rewrite adds only those that
+//! change what they hold. A literal is a value, which `luck_codegen` spells
+//! the shortest way, so no rewrite respells one.
 
 mod fold_constants;
 mod inline_locals;
@@ -24,72 +30,112 @@ mod simplify_indexes;
 mod simplify_parens;
 mod simplify_statements;
 
-use core::cell::Cell;
 use core::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    AttributedName, BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix,
-    SuffixedExpression, TableConstructor, Type, Visit as _, VisitMut,
+    Assignment, AttributedName, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,
+    FunctionBody, GenericFor, GlobalDeclaration, Name, ReturnStatement, Statement, Suffix,
+    SuffixedExpression, TableConstructor, TreeCounts, Type, Visit, VisitMut,
 };
+use luck_data_structures::BitSet;
+use luck_semantic::{Reference, ReferenceId, Scoping, SemanticBuilder, SymbolId};
 use luck_token::{LuaVersion, UnOp};
 use luck_value::ConstantEvaluation as _;
 
-use self::inline_locals::Value;
-use self::lift_locals::Lifter;
+use self::inline_locals::Held;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
 use self::simplify_parens::Place;
-use crate::binding::{Bindings, BoundNames, Counter, NONE, is_droppable_function, local_of};
-use crate::expr::fits_at_depth;
+use crate::binding::{NameIndexes, ResolvedNames, is_droppable_function};
 use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
 use crate::transform_config::TransformConfig;
 
-/// A walk leaves another behind only for a rewrite it exposed late, so a
-/// handful settle any input, and the cap only bounds one that never stops,
-/// which the fixpoint tests catch.
-const MAX_WALKS: usize = 8;
+/// A pass leaves another only for what its own rewrites exposed, so a
+/// handful settle any input, and the caps bound only a rewrite that never
+/// stops, which debug builds report.
+const MAX_PASSES: usize = 10;
+const MAX_ROUNDS: usize = 4;
 
-/// Compresses `block`, whose bindings `bindings` holds, until a walk leaves
-/// nothing for another.
+/// `chunk`'s scoping, which a rewrite reads its bindings from.
+pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts) -> Scoping {
+    SemanticBuilder::new().with_counts(counts).build(chunk).semantic.into_scoping()
+}
+
+/// Compresses `chunk` until a pass changes nothing, then lifts its
+/// functions' declarations and compresses what that leaves, until lifting
+/// finds nothing more. A lift names what it hoists from `names`.
 pub(crate) fn compress<'ast>(
     allocator: &'ast Allocator,
-    version: LuaVersion,
+    chunk: &mut Chunk<'ast>,
+    counts: TreeCounts,
     config: TransformConfig,
-    bindings: &mut Bindings,
-    block: &mut Block<'ast>,
+    names: &mut NameIndexes,
 ) {
-    let mut compressor = Compressor::new(allocator, version, config, bindings);
-    for walk in 1..=MAX_WALKS {
-        compressor.walk(block);
-        if !compressor.needs_revisit || walk == MAX_WALKS {
-            break;
+    let mut scoping = analyze(chunk, counts);
+    for round in 1..=MAX_ROUNDS {
+        let mut compressor = Compressor::new(allocator, chunk.version, config, &mut scoping);
+        compressor.run(&mut chunk.block);
+        #[cfg(debug_assertions)]
+        compressor.assert_references_match(chunk, counts);
+        if !(config.lift_locals && compressor.lift(&mut chunk.block, names)) {
+            return;
         }
-        compressor.recount(block);
+        debug_assert!(round < MAX_ROUNDS, "lifting a lifted tree lifted more");
+        scoping = analyze(chunk, counts);
     }
 }
 
-#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the walk")]
+/// Drops the statements at `indexes`, which ascend, and keeps the others in
+/// order, in place.
+fn remove_stmts(stmts: &mut List<'_, Statement<'_>>, indexes: &[usize]) {
+    if indexes.is_empty() {
+        return;
+    }
+    let mut removed = indexes.iter().peekable();
+    let mut kept = 0usize;
+    for index in 0..stmts.len() {
+        if removed.next_if_eq(&&index).is_none() {
+            stmts.swap(kept, index);
+            kept = kept.saturating_add(1);
+        }
+    }
+    stmts.truncate(kept);
+}
+
+/// Marks the references in a part of the tree a rewrite drops.
+struct Dropper<'walk> {
+    scoping: &'walk Scoping,
+    dropped: &'walk mut BitSet,
+}
+
+impl<'tree> Visit<'tree> for Dropper<'_> {
+    fn visit_name(&mut self, name: &'tree Name<'tree>) {
+        if let Some(reference) = self.scoping.reference_of(name) {
+            self.dropped.insert(reference.index());
+        }
+    }
+}
+
 pub(crate) struct Compressor<'walk, 'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
     config: TransformConfig,
-    bindings: &'walk mut Bindings,
+    scoping: &'walk mut Scoping,
+    /// The references whose names a rewrite dropped since the scoping was
+    /// built.
+    dropped: BitSet,
     has_changed: bool,
-    /// Whether the walk left a rewrite it exposed but couldn't make.
-    needs_revisit: bool,
     /// Levels of nesting open where the walk is.
     depth: usize,
-    /// Functions open where the walk is, and one past that count at the
-    /// innermost type the walk is in, or 0, as the bind walk counts them.
-    function_depth: u32,
-    type_floor: u32,
-    /// The inlined locals' values waiting for their one read, each indexed
-    /// by its binding's `held_value`.
-    values: Vec<Option<Value<'ast>>>,
-    held_count: usize,
-    /// Whether a rewrite stayed undone for want of depth, which it may have
-    /// once the tree around it flattens.
-    has_depth_refusal: Cell<bool>,
+    /// Types the walk is in, where it keeps every truncation.
+    type_depth: usize,
+    /// The initializers of the locals being inlined, each until the block
+    /// that declares it ends, innermost block's last.
+    held: Vec<Held<'ast>>,
+    /// Each symbol's place in `held`, or [`inline_locals::NOT_HELD`].
+    held_index: Vec<u32>,
+    /// How many of `held` wait for their read.
+    waiting: usize,
     /// Whether a value has landed as a run among the operands of the run
     /// being walked, which then joins it where it groups the same, so a
     /// chain of inlined values nests no deeper than one.
@@ -102,19 +148,17 @@ pub(crate) struct Compressor<'walk, 'ast> {
     landed_counts: Vec<usize>,
     live_registers: usize,
     /// The bindings of the group being merged.
-    group: Vec<usize>,
+    group: Vec<SymbolId>,
     /// The calls the unused `local`s of the block the walk is leaving
     /// leave, each after its index.
     late_calls: Vec<(usize, Statement<'ast>)>,
+    /// The indexes of the statements a block loses.
+    removed_stmts: Vec<usize>,
     /// A block's statements while `do` blocks in it give up theirs.
     unwrapped_stmts: Vec<Statement<'ast>>,
     /// Whether the `if` the walk enters next is the one statement of an `if`
     /// that merges the run of nested `if`s it starts.
     is_in_if_run: bool,
-    /// Whether the `local` the walk enters next holds a late inlined read,
-    /// so the names it declares are read only where the walk has been.
-    is_late_read: bool,
-    lifter: Lifter<'ast>,
 }
 
 impl<'walk, 'ast> Compressor<'walk, 'ast> {
@@ -122,116 +166,139 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         allocator: &'ast Allocator,
         version: LuaVersion,
         config: TransformConfig,
-        bindings: &'walk mut Bindings,
+        scoping: &'walk mut Scoping,
     ) -> Self {
+        let dropped = BitSet::new(scoping.references().len());
+        let held_index = vec![inline_locals::NOT_HELD; scoping.symbols().len()];
         Self {
             allocator,
             version,
             config,
-            bindings,
+            scoping,
+            dropped,
             has_changed: false,
-            needs_revisit: false,
             depth: 0,
-            function_depth: 0,
-            type_floor: 0,
-            values: Vec::new(),
-            held_count: 0,
-            has_depth_refusal: Cell::new(false),
+            type_depth: 0,
+            held: Vec::new(),
+            held_index,
+            waiting: 0,
             has_landed_run: false,
             landed_locals: 0,
             landed_counts: Vec::new(),
             live_registers: 0,
             group: Vec::new(),
             late_calls: Vec::new(),
+            removed_stmts: Vec::new(),
             unwrapped_stmts: Vec::new(),
             is_in_if_run: false,
-            is_late_read: false,
-            lifter: Lifter::default(),
         }
     }
 
-    /// One walk over `block`, which says whether it changed anything.
-    pub(crate) fn walk(&mut self, block: &mut Block<'ast>) -> bool {
+    /// Walks `block` until a pass changes nothing.
+    fn run(&mut self, block: &mut Block<'ast>) {
+        for pass in 1..=MAX_PASSES {
+            if !self.pass(block) {
+                return;
+            }
+            debug_assert!(pass < MAX_PASSES, "a pass still changed the tree after {pass} passes");
+        }
+    }
+
+    /// One walk over `block`, after which the symbols' lists lose the
+    /// references it dropped, which says whether it changed anything.
+    pub(crate) fn pass(&mut self, block: &mut Block<'ast>) -> bool {
         self.has_changed = false;
-        self.needs_revisit = false;
-        self.has_depth_refusal.set(false);
-        self.depth = 0;
-        self.function_depth = 0;
-        self.type_floor = 0;
-        self.values.clear();
-        self.held_count = 0;
-        self.live_registers = 0;
         self.visit_block(block);
         // The chunk is a function too, and returns nothing either way.
         if self.config.remove_dead_code {
             self.has_changed |= remove_dead_code::drop_bare_return(block);
         }
-        self.needs_revisit |= self.has_depth_refusal.get() && self.has_changed;
-        self.needs_revisit |= self.take_freed_names();
+        if self.has_changed {
+            let dropped = &self.dropped;
+            self.scoping
+                .retain_resolved_references(|reference| !dropped.contains(reference.index()));
+        }
         self.has_changed
     }
 
-    /// Whether `expr` still nests within the parser's cap once it sits
-    /// `added_levels` below `depth`, noting when it doesn't.
-    fn fits(&self, depth: usize, added_levels: usize, expr: &Expression<'_>) -> bool {
-        let fits = fits_at_depth(depth, added_levels, expr);
-        if !fits {
-            self.has_depth_refusal.set(true);
-        }
-        fits
-    }
-
-    /// Counts every binding's references afresh, for a walk after one that
-    /// changed where they sit.
-    fn recount(&mut self, block: &Block<'ast>) {
-        for binding in &mut self.bindings.entries {
-            binding.reads = 0;
-            binding.writes = 0;
-            binding.captures = 0;
-            binding.held_value = NONE;
-        }
-        self.bindings.global_uses.fill(0);
-        self.bindings.name_captures.fill(0);
-        self.bindings.global_declarations.fill(0);
-        let mut counter = Counter {
-            bindings: self.bindings,
-            is_retracting: false,
-            function_depth: 0,
-            type_floor: 0,
-            depth: 0,
+    /// Checks the symbols' lists against a fresh analysis of the tree: each
+    /// name that refers to a symbol is live and in its list, and no list
+    /// holds a reference whose name left the tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a rewrite dropped a name without marking its reference,
+    /// marked one it kept, or changed what a name resolves to.
+    #[cfg(debug_assertions)]
+    fn assert_references_match(&self, chunk: &Chunk<'_>, counts: TreeCounts) {
+        let fresh = analyze(chunk, counts);
+        let mut check = FreshCheck {
+            scoping: self.scoping,
+            dropped: &self.dropped,
+            fresh: &fresh,
+            pairs: vec![None; self.scoping.symbols().len()],
         };
-        counter.visit_block(block);
-    }
-
-    const fn counter(&mut self) -> Counter<'_> {
-        Counter {
-            bindings: self.bindings,
-            is_retracting: true,
-            function_depth: self.function_depth,
-            type_floor: self.type_floor,
-            depth: 0,
+        check.visit_block(&chunk.block);
+        for (symbol, pair) in self.scoping.symbols().iter().zip(&check.pairs) {
+            let kept = self.scoping.resolved_references(symbol.id).len();
+            let found =
+                pair.map_or(0, |fresh_symbol| fresh.resolved_references(fresh_symbol).len());
+            assert_eq!(kept, found, "a rewrite dropped a name without marking its reference");
         }
     }
 
-    /// Uncounts the references in `expr`, which the walk drops.
-    fn retract_expr(&mut self, expr: &Expression<'ast>) {
-        self.counter().visit_expr(expr);
+    const fn dropper(&mut self) -> Dropper<'_> {
+        Dropper { scoping: self.scoping, dropped: &mut self.dropped }
     }
 
-    fn retract_stmt(&mut self, stmt: &Statement<'ast>) {
-        self.counter().visit_stmt(stmt);
+    /// Marks the references in `expr`, which the walk drops.
+    fn drop_expr(&mut self, expr: &Expression<'ast>) {
+        self.dropper().visit_expr(expr);
     }
 
-    fn retract_block(&mut self, block: &Block<'ast>) {
-        self.counter().visit_block(block);
+    fn drop_stmt(&mut self, stmt: &Statement<'ast>) {
+        self.dropper().visit_stmt(stmt);
     }
 
-    /// Uncounts the references in the annotation of a name the walk drops
-    /// from its `local`.
-    fn retract_annotation(&mut self, attributed: &AttributedName<'ast>) {
+    fn drop_block(&mut self, block: &Block<'ast>) {
+        self.dropper().visit_block(block);
+    }
+
+    /// Marks the references in the annotation of a name the walk drops from
+    /// its `local`.
+    fn drop_annotation(&mut self, attributed: &AttributedName<'ast>) {
         if let Some(ty) = &attributed.type_annotation {
-            self.counter().visit_type(ty);
+            self.dropper().visit_type(ty);
         }
+    }
+
+    /// The live references of `symbol`, a recursive `local function`'s to
+    /// itself in its body aside, which keep nothing alive.
+    fn live_references(&self, symbol: SymbolId) -> impl Iterator<Item = &Reference> {
+        self.scoping
+            .resolved_references(symbol)
+            .iter()
+            .filter(|reference| !self.dropped.contains(reference.index()))
+            .map(|&reference| self.scoping.reference(reference))
+            .filter(|reference| !reference.is_recursive)
+    }
+
+    /// Whether code the tree keeps reads or writes the symbol `name`
+    /// declares. A name that declares none is taken to be used.
+    fn is_used(&self, name: &Name<'_>) -> bool {
+        self.scoping
+            .symbol_of(name)
+            .is_none_or(|symbol| self.live_references(symbol).next().is_some())
+    }
+
+    /// The symbol `name` refers to, if it's a local's.
+    fn resolved(&self, name: &Name<'_>) -> Option<SymbolId> {
+        let reference = self.scoping.reference_of(name)?;
+        self.scoping.reference(reference).resolved
+    }
+
+    fn mark_dropped(&mut self, reference: ReferenceId) {
+        self.dropped.insert(reference.index());
     }
 
     /// Walks each statement, and drops the ones the walk leaves nothing of.
@@ -265,7 +332,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     && local.names.iter().all(|attributed| !self.is_used(&attributed.name))
                     && unused_local_action(local, self.names()) == UnusedLocalAction::Remove
                 {
-                    self.retract_stmt(stmt);
+                    self.drop_stmt(stmt);
                     return false;
                 }
                 return self.visit_local(stmt);
@@ -275,14 +342,9 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     && is_droppable_function(local_function, self.version)
                     && !self.is_used(&local_function.name)
                 {
-                    self.retract_stmt(stmt);
+                    self.drop_stmt(stmt);
                     return false;
                 }
-                let id = local_of(&local_function.name);
-                self.set_open(id, true);
-                self.walk_stmt(stmt);
-                self.set_open(id, false);
-                return true;
             }
             Statement::IfStatement(_) => return self.visit_if(stmt),
             Statement::WhileLoop(while_loop) => {
@@ -291,8 +353,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     && while_loop.condition.get_side_free_boolean_value(&self.names())
                         == Some(false)
                 {
-                    self.retract_expr(&while_loop.condition);
-                    self.retract_block(&while_loop.block);
+                    self.drop_stmt(stmt);
                     return false;
                 }
                 self.visit_block(&mut while_loop.block);
@@ -309,7 +370,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     && remove_dead_code::has_default_step(numeric_for, self.names())
                     && let Some(step) = numeric_for.step.take()
                 {
-                    self.retract_expr(&step);
+                    self.drop_expr(&step);
                     self.has_changed = true;
                 }
                 let outer_registers = self.live_registers;
@@ -347,23 +408,13 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         true
     }
 
-    /// A `local function`'s references to itself in its own body keep
-    /// nothing alive.
-    fn set_open(&mut self, id: Option<usize>, is_open: bool) {
-        if let Some(binding) = id.and_then(|own| self.bindings.get_mut(own)) {
-            binding.is_open = is_open;
-        }
-    }
-
-    /// What a block takes once its statements have theirs: its unused
-    /// locals go, then `do` blocks give up their statements, neighbors
-    /// merge, and a run of `if ... return` folds.
-    fn finish_block(&mut self, block: &mut Block<'ast>, outer_registers: usize) {
+    /// What a block takes once its statements have theirs: the locals it
+    /// inlined go, then its unused locals, then `do` blocks give up their
+    /// statements, neighbors merge, and a run of `if ... return` folds.
+    fn finish_block(&mut self, block: &mut Block<'ast>, outer_registers: usize, held_start: usize) {
+        self.settle_held(&mut block.stmts, held_start);
         if self.config.remove_dead_code {
             self.drop_unused(&mut block.stmts);
-        }
-        if self.config.inline_locals {
-            self.inline_late(block, outer_registers);
         }
         if self.config.simplify_statements {
             self.unwrap_do_blocks(block);
@@ -378,12 +429,37 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         self.live_registers = outer_registers;
     }
 
+    /// Where an expression stands that takes only its first value, or in a
+    /// type, where the walk keeps every truncation.
+    const fn one_value(&self) -> Place {
+        if self.type_depth > 0 { Place::AllValues } else { Place::OneValue }
+    }
+
+    /// Where the item at `index` of a list of `count` stands: the last may
+    /// spread its values when `can_spread`.
+    const fn list_item(&self, index: usize, count: usize, can_spread: bool) -> Place {
+        if can_spread && index.saturating_add(1) == count {
+            Place::AllValues
+        } else {
+            self.one_value()
+        }
+    }
+
+    /// Walks the values of a list that fills `targets` slots.
+    fn visit_values(&mut self, values: &mut [Expression<'ast>], targets: usize) {
+        let count = values.len();
+        for (index, value) in values.iter_mut().enumerate() {
+            let place = self.list_item(index, count, targets > count);
+            self.visit_expr_in(value, place);
+        }
+    }
+
     /// Walks an expression and rewrites it at `place`.
     fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, place: Place) {
         match expr {
             Expression::Name(name) => {
-                if self.held_count > 0
-                    && let Some(value) = local_of(name).and_then(|id| self.take_value(id))
+                if self.waiting > 0
+                    && let Some(value) = self.take_held(name)
                 {
                     *expr = value;
                 }
@@ -393,7 +469,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::UnaryOp(unary_op) => {
                 if self.descend() {
                     let operand_place =
-                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::Operand };
+                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::OneValue };
                     self.visit_operand(&mut unary_op.operand, operand_place);
                 }
                 self.ascend();
@@ -401,7 +477,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             // Luau
             Expression::TypeCast(cast) => {
                 if self.descend() {
-                    self.visit_operand(&mut cast.expr, Place::Operand);
+                    self.visit_operand(&mut cast.expr, Place::OneValue);
                     self.visit_type(&mut cast.ty);
                 }
                 self.ascend();
@@ -429,9 +505,9 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     fn walk_run(&mut self, run: &mut BinaryOp<'ast>) {
         if self.descend() {
             let outer_has_landed_run = mem::replace(&mut self.has_landed_run, false);
-            self.visit_operand(&mut run.first, Place::Operand);
+            self.visit_operand(&mut run.first, Place::OneValue);
             for link in &mut *run.links {
-                self.visit_operand(&mut link.operand, Place::Operand);
+                self.visit_operand(&mut link.operand, Place::OneValue);
             }
             if mem::replace(&mut self.has_landed_run, outer_has_landed_run) {
                 run.splice_operands(self.allocator);
@@ -459,9 +535,9 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                 if self.config.simplify_parens
                     && let Expression::BinaryOp(run) = expr
                 {
-                    let mut has_stripped = simplify_parens::strip(&mut run.first, Place::Operand);
+                    let mut has_stripped = simplify_parens::strip(&mut run.first, Place::OneValue);
                     for link in &mut *run.links {
-                        has_stripped |= simplify_parens::strip(&mut link.operand, Place::Operand);
+                        has_stripped |= simplify_parens::strip(&mut link.operand, Place::OneValue);
                     }
                     if has_stripped | run.splice_operands(allocator) {
                         self.has_changed = true;
@@ -478,7 +554,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     && let Expression::UnaryOp(unary_op) = expr
                 {
                     let operand_place =
-                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::Operand };
+                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::OneValue };
                     if simplify_parens::strip(&mut unary_op.operand, operand_place) {
                         self.has_changed = true;
                     }
@@ -507,19 +583,20 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         }
     }
 
-    /// Folds `expr` and uncounts the operands the fold drops.
+    /// Folds `expr` and marks the operands the fold drops.
     fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
-        let (allocator, names) = (self.allocator, self.names());
-        let mut counter = self.counter();
-        fold_constants::fold(allocator, names, expr, &mut |dropped| {
-            counter.visit_expr(dropped);
+        let allocator = self.allocator;
+        let scoping = &*self.scoping;
+        let dropped = &mut self.dropped;
+        fold_constants::fold(allocator, ResolvedNames(scoping), expr, &mut |operand| {
+            Dropper { scoping, dropped: &mut *dropped }.visit_expr(operand);
         })
     }
 
-    /// The dialect and the names as the bind walk bound them, for what
+    /// The dialect and the names as the scoping resolves them, for what
     /// `luck_value` tells of an expression.
-    const fn names(&self) -> BoundNames {
-        BoundNames(self.version)
+    const fn names(&self) -> ResolvedNames<'_> {
+        ResolvedNames(self.scoping)
     }
 }
 
@@ -536,22 +613,30 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     fn visit_block(&mut self, block: &mut Block<'ast>) {
         self.descend();
         let outer_registers = self.live_registers;
+        let held_start = self.held.len();
         self.visit_stmts(&mut block.stmts);
-        self.finish_block(block, outer_registers);
+        self.finish_block(block, outer_registers, held_start);
         self.ascend();
     }
 
-    /// The default walks don't say how many of an expression's values count
-    /// where they reach it, so it keeps every truncation. Operands have walks
-    /// of their own, and a chain's prefix strips its parentheses with the
-    /// chain.
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-        self.visit_expr_in(expr, Place::Free);
+        let place = self.one_value();
+        self.visit_expr_in(expr, place);
     }
 
+    /// A name the walk reaches outside an expression, as `function t.f()`
+    /// reads `t`, can't take a value, so the local it reads keeps its own.
+    fn visit_name(&mut self, name: &mut Name<'ast>) {
+        if self.waiting > 0 {
+            self.refuse_held(name);
+        }
+    }
+
+    /// A prefix's parentheses go with the chain's, since a Luau
+    /// instantiation passes every value of what it follows.
     fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
         if self.descend() {
-            self.visit_expr(&mut suffixed_expr.prefix);
+            self.visit_expr_in(&mut suffixed_expr.prefix, Place::AllValues);
             for suffix in &mut *suffixed_expr.suffixes {
                 match suffix {
                     Suffix::Field(_) => {}
@@ -566,18 +651,12 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
                     Suffix::Call(args) => self.visit_function_args(args),
                     Suffix::MethodCall(call) => {
                         if let Some(type_args) = &mut call.type_args {
-                            for ty in &mut type_args.args {
-                                self.visit_type(ty);
-                            }
+                            self.visit_type_args(type_args);
                         }
                         self.visit_function_args(&mut call.args);
                     }
                     // Luau
-                    Suffix::TypeInstantiation { type_args, .. } => {
-                        for ty in &mut type_args.args {
-                            self.visit_type(ty);
-                        }
-                    }
+                    Suffix::TypeInstantiation { type_args, .. } => self.visit_type_args(type_args),
                 }
             }
             if self.config.simplify_parens
@@ -590,14 +669,30 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     }
 
     fn visit_function_args(&mut self, function_args: &mut FunctionArgs<'ast>) {
-        self.walk_function_args(function_args);
+        if let FunctionArgs::Parenthesized { args, .. } = function_args {
+            self.visit_values(args, usize::MAX);
+        } else {
+            self.walk_function_args(function_args);
+        }
         if self.config.simplify_parens && simplify_parens::strip_call_args(function_args) {
             self.has_changed = true;
         }
     }
 
+    /// The last field spreads its values when it's positional.
     fn visit_table_constructor(&mut self, table_constructor: &mut TableConstructor<'ast>) {
-        self.walk_table_constructor(table_constructor);
+        if self.descend() {
+            let count = table_constructor.fields.len();
+            for (index, field) in table_constructor.fields.iter_mut().enumerate() {
+                if let Field::Positional(value) = field {
+                    let place = self.list_item(index, count, true);
+                    self.visit_expr_in(value, place);
+                } else {
+                    self.visit_field(field);
+                }
+            }
+        }
+        self.ascend();
         if self.config.simplify_indexes
             && simplify_indexes::simplify_table(table_constructor, self.version)
         {
@@ -605,47 +700,90 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
         }
     }
 
-    /// The signature belongs to the scope around the function, as the bind
-    /// walk counts it.
+    fn visit_return_stmt(&mut self, return_stmt: &mut ReturnStatement<'ast>) {
+        self.visit_values(&mut return_stmt.exprs, usize::MAX);
+    }
+
+    fn visit_assignment(&mut self, assignment: &mut Assignment<'ast>) {
+        for target in &mut assignment.targets {
+            self.visit_var(target);
+        }
+        let targets = assignment.targets.len();
+        self.visit_values(&mut assignment.values, targets);
+    }
+
+    // Lua 5.5
+    fn visit_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
+        for attributed in &mut global_declaration.names {
+            self.visit_attributed_name(attributed);
+        }
+        let names = global_declaration.names.len();
+        self.visit_values(&mut global_declaration.exprs, names);
+    }
+
+    /// The values a generic `for` takes are its iterator, state, and control
+    /// value, and on Lua 5.4+ a closing value, so the last may spread.
+    fn visit_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
+        for param in &mut generic_for.names {
+            self.visit_param(param);
+        }
+        self.visit_values(&mut generic_for.exprs, usize::MAX);
+        self.visit_block(&mut generic_for.block);
+    }
+
     fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
         let outer_registers =
             mem::replace(&mut self.live_registers, parameter_locals(function_body));
-        if self.descend() {
-            if let Some(generics) = &mut function_body.generics {
-                self.visit_generic_type_list(generics);
-            }
-            for param in &mut function_body.params {
-                if let Some(ty) = &mut param.type_annotation {
-                    self.visit_type(ty);
-                }
-            }
-            if let Some(ty) =
-                function_body.vararg.as_mut().and_then(|vararg| vararg.type_annotation.as_mut())
-            {
-                self.visit_type(ty);
-            }
-            if let Some(ty) = &mut function_body.return_type {
-                self.visit_type(ty);
-            }
-            self.function_depth = self.function_depth.saturating_add(1);
-            let outer_has_changed = mem::take(&mut self.has_changed);
-            self.visit_block(&mut function_body.block);
-            if self.config.remove_dead_code {
-                self.has_changed |= remove_dead_code::drop_bare_return(&mut function_body.block);
-            }
-            if self.config.lift_locals {
-                self.lift(function_body);
-            }
-            self.has_changed |= outer_has_changed;
-            self.function_depth = self.function_depth.saturating_sub(1);
+        self.walk_function_body(function_body);
+        if self.config.remove_dead_code {
+            self.has_changed |= remove_dead_code::drop_bare_return(&mut function_body.block);
         }
-        self.ascend();
         self.live_registers = outer_registers;
     }
 
     fn visit_type(&mut self, ty: &mut Type<'ast>) {
-        let outer_floor = mem::replace(&mut self.type_floor, self.function_depth.saturating_add(1));
+        self.type_depth = self.type_depth.saturating_add(1);
         self.walk_type(ty);
-        self.type_floor = outer_floor;
+        self.type_depth = self.type_depth.saturating_sub(1);
+    }
+}
+
+/// Pairs each symbol the scoping has with the one a fresh analysis finds
+/// for the same name, and checks that every name that refers to one refers
+/// to its pair, by a live reference.
+#[cfg(debug_assertions)]
+struct FreshCheck<'check> {
+    scoping: &'check Scoping,
+    dropped: &'check BitSet,
+    fresh: &'check Scoping,
+    pairs: Vec<Option<SymbolId>>,
+}
+
+#[cfg(debug_assertions)]
+impl<'tree> Visit<'tree> for FreshCheck<'_> {
+    fn visit_name(&mut self, name: &'tree Name<'tree>) {
+        if let (Some(symbol), Some(fresh)) =
+            (self.scoping.symbol_of(name), self.fresh.symbol_of(name))
+            && let Some(pair) = self.pairs.get_mut(symbol.index())
+        {
+            *pair = Some(fresh);
+        }
+        let kept = self.scoping.reference_of(name);
+        let found = self.fresh.reference_of(name);
+        assert_eq!(kept.is_some(), found.is_some(), "{name:?} refers in one analysis only");
+        if let (Some(reference), Some(fresh)) = (kept, found) {
+            assert!(!self.dropped.contains(reference.index()), "{name:?} is marked dropped");
+            let fresh_resolved = self.fresh.reference(fresh).resolved;
+            let paired = self.scoping.reference(reference).resolved.and_then(|symbol| {
+                let pair = self.pairs.get_mut(symbol.index())?;
+                // An implicit `self` or `arg` has no name, so its first
+                // reference pairs it.
+                if pair.is_none() {
+                    *pair = fresh_resolved;
+                }
+                *pair
+            });
+            assert_eq!(paired, fresh_resolved, "{name:?} resolves elsewhere");
+        }
     }
 }
