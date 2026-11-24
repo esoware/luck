@@ -447,6 +447,7 @@ impl<'ast> Compressor<'_, 'ast> {
         });
         let declaration = Statement::new_local_assignment(
             body.span,
+            None,
             List::from_iter_in(names, allocator),
             List::new(),
             LocalAssignmentKind::Local,

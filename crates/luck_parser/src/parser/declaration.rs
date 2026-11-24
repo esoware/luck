@@ -125,12 +125,19 @@ impl<'ast> Parser<'ast> {
         local_span: Span,
         kind: LocalAssignmentKind,
     ) -> Statement<'ast> {
-        let names = self.parse_attname_list();
+        // Lua 5.5: optional leading attribute before the first name.
+        let leading_attribute = (self.version.has_leading_attributes()
+            && self.is_at(TokenKind::Less))
+        .then(|| self.parse_attribute());
+        let names = self.parse_attributed_names();
 
         // 5.4 manual section 3.3.7: "A list of variables can contain at most
         // one to-be-closed variable."
         let mut has_close = false;
-        for attribute in names.iter().filter_map(|attributed| attributed.attribute.as_deref()) {
+        for attribute in names
+            .iter()
+            .filter_map(|attributed| attributed.attribute_or(leading_attribute.as_ref()))
+        {
             if attribute.name.text == "close" {
                 if has_close {
                     self.error(attribute.span, "multiple to-be-closed variables in local list");
@@ -153,29 +160,18 @@ impl<'ast> Parser<'ast> {
             self.error(span, "missing initializer in `const` declaration");
         }
 
-        Statement::new_local_assignment(span, names, exprs, kind, self.allocator)
+        let attribute = leading_attribute.map(|attribute| self.alloc(attribute));
+        Statement::new_local_assignment(span, attribute, names, exprs, kind, self.allocator)
     }
 
-    /// The leading attribute is new in 5.5; in 5.4, attributes only follow
-    /// names.
-    fn parse_attname_list(&mut self) -> List<'ast, AttributedName<'ast>> {
-        // Lua 5.5: optional leading attribute before the first name.
-        let leading_attribute = (self.version.has_leading_attributes()
-            && self.is_at(TokenKind::Less))
-        .then(|| self.parse_attribute());
-        self.parse_attributed_names(leading_attribute)
-    }
-
-    /// `global <attrib> name...` also enters here directly.
-    fn parse_attributed_names(
-        &mut self,
-        leading_attribute: Option<Attribute<'ast>>,
-    ) -> List<'ast, AttributedName<'ast>> {
+    /// The names after a leading attribute, if any, which `local` and
+    /// `global` share.
+    fn parse_attributed_names(&mut self) -> List<'ast, AttributedName<'ast>> {
         let start = self.scratch.attributed_names.len();
-        if let Some(first) = self.parse_attributed_name(leading_attribute) {
+        if let Some(first) = self.parse_attributed_name() {
             self.scratch.attributed_names.push(first);
             while self.eat(TokenKind::Comma) {
-                let Some(name) = self.parse_attributed_name(leading_attribute) else {
+                let Some(name) = self.parse_attributed_name() else {
                     break;
                 };
                 self.scratch.attributed_names.push(name);
@@ -186,20 +182,12 @@ impl<'ast> Parser<'ast> {
 
     /// Parse `Name [: T] [attrib]`, or `None` after recording the error when
     /// the name is missing.
-    ///
-    /// 5.5 manual section 3.3.7: a prefixed attribute applies to every name in
-    /// the list, so each name gets a copy (emitting it after every name means
-    /// the same thing). A name's own postfixed attribute replaces the copy.
-    fn parse_attributed_name(
-        &mut self,
-        leading_attribute: Option<Attribute<'ast>>,
-    ) -> Option<AttributedName<'ast>> {
+    fn parse_attributed_name(&mut self) -> Option<AttributedName<'ast>> {
         let name = self.expect_identifier()?;
         self.counts.declarations = self.counts.declarations.wrapping_add(1);
         // Luau: type annotation after the name.
         let type_annotation = self.try_parse_type_annotation();
-        let attribute =
-            self.try_parse_attribute().or(leading_attribute).map(|attribute| self.alloc(attribute));
+        let attribute = self.try_parse_attribute().map(|attribute| self.alloc(attribute));
         Some(AttributedName::new(name, type_annotation, attribute))
     }
 
@@ -224,45 +212,27 @@ impl<'ast> Parser<'ast> {
             return Statement::new_global_star(span, None, self.allocator);
         }
 
-        // `global <attrib> *` puts the attribute before the star. Otherwise
-        // the attribute leads an attnamelist and the shared parser takes it.
-        if self.is_at(TokenKind::Less) {
-            let attribute = self.parse_attribute();
+        // `global <attrib> *` puts the attribute before the star, and
+        // `global <attrib> name...` before the first name.
+        let leading_attribute = self.is_at(TokenKind::Less).then(|| self.parse_attribute());
+        if let Some(attribute) = leading_attribute {
             self.reject_global_close(attribute);
             if self.is_at(TokenKind::Star) {
                 let star = self.advance();
                 let span = global_span.merge(star);
                 return Statement::new_global_star(span, Some(attribute), self.allocator);
             }
-            let names = self.parse_attributed_names(Some(attribute));
-            return self.finish_global_declaration(global_span, names, Some(attribute));
         }
 
-        // `global name [attrib] {, name [attrib]} ['=' explist]`
-        let names = self.parse_attname_list();
-        self.finish_global_declaration(global_span, names, None)
-    }
-
-    /// Parse the optional `= explist` tail of a `global` declaration
-    /// (5.5 manual section 3.3.7: `stat ::= global attnamelist ['=' explist]`).
-    /// `leading_attribute` has already been checked, so its copies are not.
-    fn finish_global_declaration(
-        &mut self,
-        global_span: Span,
-        names: List<'ast, AttributedName<'ast>>,
-        leading_attribute: Option<Attribute<'ast>>,
-    ) -> Statement<'ast> {
-        for attribute in
-            names.iter().filter_map(|attributed| attributed.attribute.as_deref()).filter(
-                |attribute| leading_attribute.is_none_or(|leading| leading.span != attribute.span),
-            )
-        {
+        // 5.5 manual section 3.3.7: `stat ::= global attnamelist ['=' explist]`.
+        let names = self.parse_attributed_names();
+        for attribute in names.iter().filter_map(|attributed| attributed.attribute.as_deref()) {
             self.reject_global_close(*attribute);
         }
-
         let exprs = if self.eat(TokenKind::Equal) { self.parse_expr_list() } else { List::new() };
         let span = Span::new(global_span.start, self.previous_span.end);
-        Statement::new_global_declaration(span, names, exprs, self.allocator)
+        let attribute = leading_attribute.map(|attribute| self.alloc(attribute));
+        Statement::new_global_declaration(span, attribute, names, exprs, self.allocator)
     }
 
     /// 5.5 manual section 3.3.7: only local variables can have the close

@@ -17,8 +17,8 @@ Nothing here knows a target's standard library. `luck_stdlib` reads a chunk's se
 ## Usage
 
 - `SemanticBuilder::new()`, then `with_counts`, the parse's `TreeCounts`, which sizes every table, and the parts wanted, then `build(chunk)`, which returns a `SemanticBuilderReturn` of the `Semantic` and the checker's diagnostics in source order.
-- `Scoping`: `scopes()`, `symbols()`, `references()`, and `labels()`, with `Scope`, `Symbol`, `Reference`, and `Label` and their ids. A function's or the chunk's `Scope` says whether its own code reads `...`. `symbol_of`, `reference_of`, and `label_of` take a tree's `Name` to what it is, `Reference::resolved` holds the symbol a reference reaches, and `resolved_references` lists a symbol's references. `reference_at` and `references_within` find references by position.
-- `AstNodes`: `iter()`, `kind(id)`, `parent_id(id)`, and `ancestor_ids(id)`.
+- `Scoping`: `scopes()`, `symbols()`, `references()`, and `labels()`, with `Scope`, `Symbol`, `Reference`, and `Label` and their ids. A function's or the chunk's `Scope` says whether its own code reads `...`. `symbol_of`, `reference_of`, and `label_of` take a tree's `Name` to what it is, `Reference::resolved` holds the symbol a reference reaches, and `resolved_references` lists a symbol's references. `references_within` lists the references in a span by position.
+- `AstNodes`: `iter()`, `kind(id)`, `parent_id(id)`, `ancestor_ids(id)`, and `node_at(offset)`, the innermost node at an offset, from which a tool such as an editor walks up through the parents.
 
 ```rust
 use luck_allocator::Allocator;

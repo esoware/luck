@@ -422,15 +422,15 @@ fn global_declaration_with_initializer() {
 }
 
 #[test]
-fn leading_attribute_formats_as_distributed_trailing() {
-    // 5.5 manual section 3.3.7: a leading attribute applies to every name,
-    // and the formatter rewrites it into the per-name trailing form.
-    assert_format_with(
-        "local <const> x, y = 1, 2\n",
-        "local x <const>, y <const> = 1, 2\n",
-        LuaVersion::Lua55,
-        &FormatOptions::default(),
-    );
+fn leading_attribute_stays_before_the_names() {
+    // 5.5 manual section 3.3.7: a leading attribute applies to every name
+    // without one of its own.
+    for (source, expected) in [
+        ("local<const>x,y<close> =1,2\n", "local <const> x, y <close> = 1, 2\n"),
+        ("global<const>x,y=1,2\n", "global <const> x, y = 1, 2\n"),
+    ] {
+        assert_format_with(source, expected, LuaVersion::Lua55, &FormatOptions::default());
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
-//! Matching is by span, so shadowed names never bleed into each other, and
-//! a local can't be referenced from another file, so one document is the
-//! whole answer.
+//! A name finds the local it declares or refers to by its symbol, so
+//! shadowed names never bleed into each other, and a local can't be
+//! referenced from another file, so one document is the whole answer.
 
 use ls_types::{Location, ReferenceParams};
 use luck_token::Span;
@@ -12,7 +12,7 @@ pub(crate) fn references(document: &DocumentState, params: &ReferenceParams) -> 
     let uri = &params.text_document_position.text_document.uri;
     let offset = document.offset(params.text_document_position.position);
     let tree = document.tree();
-    let Some((symbol_id, _)) = local_at(tree, offset) else {
+    let Some((symbol_id, _)) = local_at(document, offset) else {
         return Vec::new();
     };
     let symbol = tree.symbol(symbol_id);

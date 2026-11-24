@@ -2,19 +2,19 @@
 //! after the colon) gets no member completion. The dangling colon doesn't
 //! parse, so there's no AST to resolve the receiver from.
 
+use core::ptr;
+
 use ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
 };
-use luck_ast::{Call, FunctionArgs, StringLiteral};
+use luck_ast::{AstKind, Block, Call, Expression, FunctionArgs, StringLiteral};
 use luck_stdlib::{StdlibEntry, StdlibFunction};
-use luck_token::{Span, TokenKind, index_to_offset};
+use luck_token::{Span, Token, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
 
 use crate::document::{DocumentState, span_text};
-use crate::providers::cursor::{
-    TextKind, dotted_chain_ending_tokens, find_string_arg_at, is_unterminated, text_kind_at,
-};
+use crate::providers::cursor::{TextKind, is_inside, is_unterminated, name_at, text_kind_at};
 use crate::providers::stdlib_render::param_label;
 
 pub(crate) fn completion(document: &DocumentState, position: Position) -> CompletionResponse {
@@ -36,14 +36,56 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
     let semantic = document.semantic();
     let mut items: Vec<CompletionItem> =
         semantic.stdlib().globals.iter().map(|(name, entry)| item_for_entry(name, entry)).collect();
-    // Every local or parameter declared before the cursor, whether or not it's
-    // still in scope there, because completion is best-effort. The implicit
-    // `self` has an empty span, so it fails the text check.
+    // Every local declared before the cursor in a scope open there, each name
+    // once. The implicit `self` and `arg` aren't spelled anywhere, and a name
+    // recovery made up is empty.
     let tree = semantic.scoping();
+    let tokens = document.tokens();
+    // Code typed at the cursor is in a block from the token that opens it to
+    // the one that closes it, so a blank line that ends a block, or a body
+    // still missing its `end`, is in it.
+    let is_in_block = |block: &Block<'_>| {
+        let first = tokens.partition_point(|token| token.span.start < block.span.start);
+        let opener = first.checked_sub(1).and_then(|before| tokens.get(before));
+        let closer = if block.stmts.is_empty() {
+            first
+        } else {
+            tokens.partition_point(|token| token.span.start < block.span.end)
+        };
+        opener.is_none_or(|token| token.span.end <= offset)
+            && tokens.get(closer).is_none_or(|token| offset <= token.span.start)
+    };
+    let nodes = document.nodes();
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a scope's node is one of the few kinds that open one"
+    )]
+    let is_open: Vec<bool> = tree
+        .scopes()
+        .iter()
+        .map(|scope| match nodes.kind(scope.node) {
+            AstKind::Chunk(_) => true,
+            AstKind::Block(block) => is_in_block(block),
+            AstKind::FunctionBody(body) => is_in_block(&body.block),
+            AstKind::NumericFor(numeric_for) => is_in_block(&numeric_for.block),
+            AstKind::GenericFor(generic_for) => is_in_block(&generic_for.block),
+            // The `until` condition is in the body's scope.
+            AstKind::RepeatLoop(repeat_loop) => {
+                is_in_block(&repeat_loop.block)
+                    || (repeat_loop.block.span.end <= offset && offset <= repeat_loop.span.end)
+            }
+            _ => false,
+        })
+        .collect();
+    let mut offered: FxHashSet<&str> = FxHashSet::default();
     for symbol in tree.symbols() {
-        let span = symbol.definition_span;
         let name = tree.name(symbol.name);
-        if span.end <= offset && span_text(document.text(), span) == name {
+        if !symbol.kind.is_implicit()
+            && !name.is_empty()
+            && symbol.definition_span.end <= offset
+            && is_open.get(symbol.scope.index()).copied().unwrap_or_default()
+            && offered.insert(name)
+        {
             items.push(CompletionItem {
                 label: name.to_owned(),
                 kind: Some(CompletionItemKind::VARIABLE),
@@ -80,9 +122,9 @@ fn member_completions(
     let tree = semantic.scoping();
     // A reference at the root is exact. Text mid-typing often has none, so
     // that case falls back to the nearest declaration before the cursor.
-    let (root_local, reaches_host_global) = tree
-        .reference_at(root_span.start)
-        .filter(|&id| tree.reference(id).span == *root_span)
+    let (root_local, reaches_host_global) = name_at(document, root_span.start)
+        .filter(|(_, name)| name.span == *root_span)
+        .and_then(|(_, name)| tree.reference_of(name))
         .map_or_else(
             || {
                 let local = tree.nearest_local(root, offset).map(|symbol| symbol.id);
@@ -132,16 +174,42 @@ fn constant_value_completions(
     document: &DocumentState,
     offset: u32,
 ) -> Option<Vec<CompletionItem>> {
-    let site = find_string_arg_at(document, offset)?;
-    let callee = document.semantic().resolve_callee(site.call)?;
+    // The string at the cursor, which only counts inside its quotes, so a
+    // cursor next to it doesn't trigger value completion, and the call it's
+    // an argument of, whose chain holds it or the method call that does.
+    let nodes = document.nodes();
+    let id = nodes.node_at(offset)?;
+    let literal = nodes.kind(id).as_string_literal()?;
+    let is_unterminated = is_unterminated(document, literal);
+    if !is_inside(literal.span, offset, is_unterminated) {
+        return None;
+    }
+    let parent = nodes.parent_id(id)?;
+    let chain = if matches!(nodes.kind(parent), AstKind::MethodCall(_)) {
+        nodes.parent_kind(parent)?.as_suffixed_expr()?
+    } else {
+        nodes.kind(parent).as_suffixed_expr()?
+    };
+    let (call, arg_index) = chain.calls().find_map(|call| {
+        let index = match call.args {
+            FunctionArgs::Parenthesized { args, .. } => args.iter().position(|arg| {
+                matches!(arg, Expression::StringLiteral(string) if ptr::eq(string.as_ref(), literal))
+            })?,
+            FunctionArgs::StringLiteral(arg) if ptr::eq(arg.as_ref(), literal) => 0,
+            FunctionArgs::StringLiteral(_)
+            | FunctionArgs::TableConstructor(_)
+            | FunctionArgs::Error(_) => return None,
+        };
+        Some((call, index))
+    })?;
+    let callee = document.semantic().resolve_callee(call)?;
     let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
-    let allowed_sets = function.allowed_constants(site.arg_index, call_arg_count(site.call))?;
+    let allowed_sets = function.allowed_constants(arg_index, call_arg_count(call))?;
     // Replace the literal's interior, so the client filters on whatever is
     // typed inside the delimiters.
-    let interior =
-        document.range(string_interior(site.literal, is_unterminated(document, site.literal)));
+    let interior = document.range(string_interior(literal, is_unterminated));
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
     for constant in allowed_sets.into_iter().flatten() {
@@ -230,6 +298,29 @@ fn member_access_before(document: &DocumentState, offset: u32) -> Option<MemberA
         return None;
     }
     Some(MemberAccess { receiver: dotted_chain_ending_tokens(before_separator, source), is_colon })
+}
+
+/// The `Name(.Name)*` chain `tokens` ends with, root first, and the root's
+/// span. `None` when anything else, such as a call, breaks the chain.
+fn dotted_chain_ending_tokens<'source>(
+    tokens: &[Token],
+    source: &'source str,
+) -> Option<(Vec<&'source str>, Span)> {
+    let mut segments: Vec<&str> = Vec::new();
+    let mut remaining_tokens = tokens;
+    loop {
+        let (base, before_base) = remaining_tokens.split_last()?;
+        if !base.kind.is_name() {
+            return None;
+        }
+        segments.push(span_text(source, base.span));
+        if let Some((Token { kind: TokenKind::Dot, .. }, before_dot)) = before_base.split_last() {
+            remaining_tokens = before_dot;
+        } else {
+            segments.reverse();
+            return Some((segments, base.span));
+        }
+    }
 }
 
 fn item_for_entry(name: &str, entry: &StdlibEntry) -> CompletionItem {
@@ -366,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn locals_before_the_cursor_are_offered_without_implicit_self() {
+    fn only_the_locals_in_scope_at_the_cursor_are_offered() {
         let text = "\
 local a = 1
 local function f(p) end
@@ -374,19 +465,38 @@ for i = 1, 2 do end
 for k, v in pairs({}) do end
 local t = {}
 function t:m(q)
+  do local inner = 1 end
+  local a = 2
 
 end
 local later
 ";
         let document = lua54_document(text);
         // The blank line inside `t:m`.
-        let items = items_at(&document, 6, 0);
-        let variables = variables_of(&items);
-        for name in ["a", "f", "p", "i", "k", "v", "t", "q"] {
-            assert!(variables.contains(&name), "{name}: {variables:?}");
-        }
-        assert!(!variables.contains(&"self"), "{variables:?}");
-        assert!(!variables.contains(&"later"), "{variables:?}");
+        let items = items_at(&document, 8, 0);
+        assert_eq!(variables_of(&items), ["a", "f", "t", "q"], "once each, without `self`");
+    }
+
+    #[test]
+    fn a_block_s_locals_are_offered_up_to_what_ends_it() {
+        let block = lua54_document(
+            "\
+do
+  local before = 1
+
+end
+",
+        );
+        assert!(variables_of(&items_at(&block, 2, 0)).contains(&"before"), "before its `end`");
+        assert!(!variables_of(&items_at(&block, 4, 0)).contains(&"before"), "after its `end`");
+        let repeat = lua54_document("repeat local body = 1 until b");
+        assert!(variables_of(&items_at(&repeat, 0, 29)).contains(&"body"), "in its condition");
+        let unclosed = lua54_document(
+            "\
+function g(x)
+  ",
+        );
+        assert!(variables_of(&items_at(&unclosed, 1, 2)).contains(&"x"), "with no `end` yet");
     }
 
     #[test]

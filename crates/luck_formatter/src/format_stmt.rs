@@ -7,10 +7,10 @@
 use core::{iter, slice};
 
 use luck_ast::{
-    Assignment, AttributedName, Block, CompoundAssignment, Expression, FunctionAttribute,
-    FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind,
-    NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
-    unwrap_parentheses,
+    Assignment, Attribute, AttributedName, Block, CompoundAssignment, Expression,
+    FunctionAttribute, FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment,
+    LocalFunctionKind, NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration,
+    TypeDeclarationValue, unwrap_parentheses,
 };
 
 use crate::CollapseSimpleStatement;
@@ -113,6 +113,10 @@ impl<'ast> Formatter<'ast> {
             Statement::GlobalDeclaration(global) => {
                 self.token("global");
                 self.space();
+                if let Some(attribute) = &global.attribute {
+                    self.write_attribute(attribute);
+                    self.space();
+                }
                 self.write_attributed_names_inline(&global.names);
                 if !global.exprs.is_empty() {
                     self.space();
@@ -126,14 +130,7 @@ impl<'ast> Formatter<'ast> {
                 self.token("global");
                 self.space();
                 if let Some(attribute) = &global_star.attribute {
-                    self.node(
-                        || attribute.span,
-                        |f| {
-                            f.token("<");
-                            f.name(attribute.name);
-                            f.token(">");
-                        },
-                    );
+                    self.write_attribute(attribute);
                     self.space();
                 }
                 self.token("*");
@@ -309,15 +306,19 @@ impl<'ast> Formatter<'ast> {
                 }
                 if let Some(attribute) = &name.attribute {
                     f.space();
-                    f.node(
-                        || attribute.span,
-                        |attribute_f| {
-                            attribute_f.token("<");
-                            attribute_f.name(attribute.name);
-                            attribute_f.token(">");
-                        },
-                    );
+                    f.write_attribute(attribute);
                 }
+            },
+        );
+    }
+
+    fn write_attribute(&mut self, attribute: &Attribute<'ast>) {
+        self.node(
+            || attribute.span,
+            |f| {
+                f.token("<");
+                f.name(attribute.name);
+                f.token(">");
             },
         );
     }
@@ -329,6 +330,10 @@ impl<'ast> Formatter<'ast> {
         }
         self.token(if local.kind.is_const() { "const" } else { "local" });
         self.space();
+        if let Some(attribute) = &local.attribute {
+            self.write_attribute(attribute);
+            self.space();
+        }
         // Names get their own group so a long binding list breaks
         // independently of the value list.
         self.group(|f| {

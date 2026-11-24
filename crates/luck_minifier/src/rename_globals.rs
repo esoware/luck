@@ -909,7 +909,7 @@ a = 2
 ",
                 "global a,g g=1 a=2",
             ),
-            ("global <const> g = 1\n", "global g<const> =1"),
+            ("global <const> g = 1\n", "global<const>g=1"),
             (
                 "\
 function g() end

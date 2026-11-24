@@ -960,6 +960,9 @@ pub trait Visit<'ast> {
     fn walk_local_assignment(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
         let kind = AstKind::LocalAssignment(local_assignment);
         self.enter_node(kind);
+        if let Some(attribute) = &local_assignment.attribute {
+            self.visit_attribute(attribute);
+        }
         for attributed_name in &local_assignment.names {
             self.visit_attributed_name(attributed_name);
         }
@@ -1032,6 +1035,9 @@ pub trait Visit<'ast> {
     fn walk_global_declaration(&mut self, global_declaration: &'ast GlobalDeclaration<'ast>) {
         let kind = AstKind::GlobalDeclaration(global_declaration);
         self.enter_node(kind);
+        if let Some(attribute) = &global_declaration.attribute {
+            self.visit_attribute(attribute);
+        }
         for attributed_name in &global_declaration.names {
             self.visit_attributed_name(attributed_name);
         }

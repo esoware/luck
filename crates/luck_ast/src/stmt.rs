@@ -242,13 +242,29 @@ pub struct AttributedName<'ast> {
     /// Luau: `: T` annotation. The parser never sets both this and
     /// `attribute`, since attributes are Lua 5.4+ only.
     pub type_annotation: Option<Box<'ast, Type<'ast>>>,
+    /// The attribute after the name, which replaces the list's leading one.
     pub attribute: Option<Box<'ast, Attribute<'ast>>>,
+}
+
+impl<'ast> AttributedName<'ast> {
+    /// The attribute that applies to the name: its own, or else `leading`,
+    /// the one before the first name of its list.
+    #[must_use]
+    pub fn attribute_or(
+        &'ast self,
+        leading: Option<&'ast Attribute<'ast>>,
+    ) -> Option<&'ast Attribute<'ast>> {
+        self.attribute.as_deref().or(leading)
+    }
 }
 
 /// `exprs` is empty for a declaration with no `=`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct LocalAssignment<'ast> {
     pub span: Span,
+    /// Lua 5.5: `local <const> a, b`, an attribute before the first name,
+    /// which applies to every name without one of its own.
+    pub attribute: Option<Box<'ast, Attribute<'ast>>>,
     pub names: List<'ast, AttributedName<'ast>>,
     pub exprs: List<'ast, Expression<'ast>>,
     pub kind: LocalAssignmentKind,
@@ -336,6 +352,9 @@ pub enum TypeDeclarationValue<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct GlobalDeclaration<'ast> {
     pub span: Span,
+    /// `global <const> a, b`, which applies to every name without one of its
+    /// own.
+    pub attribute: Option<Box<'ast, Attribute<'ast>>>,
     pub names: List<'ast, AttributedName<'ast>>,
     pub exprs: List<'ast, Expression<'ast>>,
 }

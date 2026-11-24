@@ -35,7 +35,7 @@ fn rename_target(
     offset: u32,
 ) -> Result<Option<(SymbolId, Span)>, String> {
     let tree = document.tree();
-    let Some((symbol_id, span)) = local_at(tree, offset) else {
+    let Some((symbol_id, span)) = local_at(document, offset) else {
         return Ok(None);
     };
     let symbol = tree.symbol(symbol_id);

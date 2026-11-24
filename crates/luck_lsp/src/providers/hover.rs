@@ -1,9 +1,12 @@
+use core::ptr;
+
 use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
+use luck_ast::{AstKind, GetSpan as _, Suffix};
 use luck_stdlib::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
 use luck_token::LuaVersion;
 
 use crate::document::DocumentState;
-use crate::providers::cursor::{CursorNode, TextKind, find_node_at, text_kind_at};
+use crate::providers::cursor::{TextKind, name_at, text_kind_at};
 use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hover> {
@@ -11,31 +14,47 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
     if text_kind_at(document, offset) != TextKind::Code {
         return None;
     }
-    let node = find_node_at(&document.parse().chunk.block, offset)?;
-    let path = node.path();
+    let (id, name) = name_at(document, offset)?;
     let semantic = document.semantic();
     let tree = semantic.scoping();
+    let nodes = document.nodes();
+    // The path the name ends, root first: the name alone where it's read or
+    // written, the fields up to it where it's a field, and its receiver's
+    // path where it names a method.
+    let (path, root, span): (Vec<&str>, _, _) = if tree.reference_of(name).is_some() {
+        (vec![name.text.as_str()], name, name.span)
+    } else {
+        let parent = nodes.parent_kind(id)?;
+        let (head, method) = if let AstKind::SuffixedExpression(chain) = parent {
+            let field = chain.suffixes.iter().position(
+                |suffix| matches!(suffix, Suffix::Field(field) if ptr::eq(field, name)),
+            )?;
+            (chain.head(field.saturating_add(1)), None)
+        } else if let AstKind::MethodCall(method_call) = parent {
+            let chain = nodes.parent_kind(nodes.parent_id(id)?)?.as_suffixed_expr()?;
+            let call = chain.suffixes.iter().position(|suffix| {
+                matches!(suffix, Suffix::MethodCall(call) if ptr::eq(call.as_ref(), method_call))
+            })?;
+            (chain.head(call), Some(name))
+        } else {
+            return None;
+        };
+        let dotted = head.dotted_path()?;
+        let segments = dotted.segments().chain(method.map(|called| called.text.as_str()));
+        let span = method.map_or_else(|| head.span(), |called| head.span().merge(called.span));
+        (segments.collect(), dotted.root(), span)
+    };
     // Resolving from the root's reference lets shaped locals (`f:read` after
     // `local f = io.open(...)`) resolve through their shape, and gives a
     // shadowed base (`local string = 1; string.format`) no stdlib hover
     // instead of the wrong docs.
-    let entry = match &node {
-        CursorNode::Identifier(name, _) => {
-            if tree.resolves_to_local(name) {
-                return None;
-            }
-            semantic.stdlib().lookup(path)?
-        }
-        CursorNode::DottedPath { root, .. } | CursorNode::Call { root, .. } => {
-            semantic.resolve_stdlib_path(path, tree.reference(tree.reference_of((*root)?)?))?
-        }
-    };
+    let entry = semantic.resolve_stdlib_path(&path, tree.reference(tree.reference_of(root)?))?;
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: render_entry(path, entry, document.version()),
+            value: render_entry(&path, entry, document.version()),
         }),
-        range: Some(document.range(node.span())),
+        range: Some(document.range(span)),
     })
 }
 
@@ -164,9 +183,8 @@ mod tests {
 local f = io.open('x')
 local n = f:seek('set')";
         let document = document(text, LuaTarget::Lua54);
-        let utf16_column = index_to_offset(text.find(":seek").expect("method") + 2);
-        let markdown =
-            markdown_at(&document, 1, utf16_column).expect("hover on shaped local method");
+        // Cursor on `seek`.
+        let markdown = markdown_at(&document, 1, 14).expect("hover on shaped local method");
         assert!(markdown.contains("f:seek("), "colon rendering expected: {markdown}");
     }
 
@@ -176,11 +194,27 @@ local n = f:seek('set')";
 local string = 1
 local x = string.format";
         let document = document(text, LuaTarget::Lua54);
-        let utf16_column = index_to_offset(text.find(".format").expect("member") + 3);
+        // Cursor on `format`.
         assert!(
-            markdown_at(&document, 1, utf16_column).is_none(),
+            markdown_at(&document, 1, 19).is_none(),
             "shadowed base must not hover stdlib docs"
         );
+    }
+
+    #[test]
+    fn hover_covers_the_path_a_member_ends() {
+        let document = document("local s = string.format", LuaTarget::Lua54);
+        let hovered = hover(&document, Position::new(0, 19)).expect("hover on `format`");
+        let range = hovered.range.expect("a range");
+        assert_eq!((range.start.character, range.end.character), (10, 23), "{range:?}");
+    }
+
+    #[test]
+    fn hover_reads_only_a_name_that_reaches_the_global() {
+        let document = document("local tostring = tostring", LuaTarget::Lua54);
+        assert!(markdown_at(&document, 0, 8).is_none(), "the declaration names a local");
+        let read = markdown_at(&document, 0, 20).expect("the initializer reads the global");
+        assert!(read.contains("function tostring("), "{read}");
     }
 
     #[test]

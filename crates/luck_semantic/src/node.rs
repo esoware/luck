@@ -103,6 +103,22 @@ impl<'ast> AstNodes<'ast> {
     pub fn ancestor_kinds(&self, id: NodeId) -> impl Iterator<Item = AstKind<'ast>> + '_ {
         self.ancestor_ids(id).map(|ancestor| self.kind(ancestor))
     }
+
+    /// The innermost node whose span holds `offset`, either end included, so
+    /// an editor's cursor just past a name is on it, and of two that meet
+    /// there, the later. `None` outside every node.
+    ///
+    /// The last node to start by `offset` is that node or inside it, since
+    /// nodes are sorted by where they start and the nodes inside one follow
+    /// it, so the search is one binary search and a walk up from there.
+    #[must_use]
+    pub fn node_at(&self, offset: u32) -> Option<NodeId> {
+        let after = self.nodes.partition_point(|node| node.span().start <= offset);
+        let last = NodeId::from_index(after.checked_sub(1)?);
+        iter::once(last)
+            .chain(self.ancestor_ids(last))
+            .find(|&id| offset <= self.get(id).span().end)
+    }
 }
 
 #[cfg(test)]

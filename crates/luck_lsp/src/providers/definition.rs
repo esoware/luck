@@ -23,7 +23,7 @@ pub(crate) fn goto(
     }
 
     let tree = document.tree();
-    let (symbol_id, _) = local_at(tree, document.offset(position))?;
+    let (symbol_id, _) = local_at(document, document.offset(position))?;
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: uri.clone(),
         range: document.range(tree.symbol(symbol_id).definition_span),

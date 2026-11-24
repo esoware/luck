@@ -962,6 +962,9 @@ pub trait VisitMut<'ast> {
     fn walk_local_assignment(&mut self, local_assignment: &mut LocalAssignment<'ast>) {
         let kind = AstType::LocalAssignment;
         self.enter_node(kind);
+        if let Some(attribute) = &mut local_assignment.attribute {
+            self.visit_attribute(attribute);
+        }
         for attributed_name in &mut local_assignment.names {
             self.visit_attributed_name(attributed_name);
         }
@@ -1034,6 +1037,9 @@ pub trait VisitMut<'ast> {
     fn walk_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
         let kind = AstType::GlobalDeclaration;
         self.enter_node(kind);
+        if let Some(attribute) = &mut global_declaration.attribute {
+            self.visit_attribute(attribute);
+        }
         for attributed_name in &mut global_declaration.names {
             self.visit_attributed_name(attributed_name);
         }

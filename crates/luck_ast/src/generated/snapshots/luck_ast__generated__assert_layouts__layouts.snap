@@ -46,7 +46,7 @@ LocalFunction: size 128, align 8
 LocalFunctionKind: size 1, align 1
 Attribute: size 32, align 4
 AttributedName: size 40, align 8
-LocalAssignment: size 48, align 8
+LocalAssignment: size 56, align 8
 LocalAssignmentKind: size 1, align 1
 GotoStatement: size 32, align 4
 LabelStatement: size 32, align 4
@@ -54,7 +54,7 @@ ReturnStatement: size 24, align 8
 CompoundAssignment: size 48, align 8
 TypeDeclaration: size 64, align 8
 TypeDeclarationValue: size 16, align 8
-GlobalDeclaration: size 40, align 8
+GlobalDeclaration: size 48, align 8
 GlobalFunction: size 104, align 8
 GlobalStar: size 40, align 4
 Type: size 16, align 8

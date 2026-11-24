@@ -512,16 +512,6 @@ impl Scoping {
         Some(id)
     }
 
-    /// The reference whose name holds `offset`, either end included, so an
-    /// editor's cursor just past a name is on it. Names don't overlap, so
-    /// it's the last one to start by then.
-    #[must_use]
-    pub fn reference_at(&self, offset: u32) -> Option<ReferenceId> {
-        let after = self.positions.partition_point(|&id| self.reference(id).span.start <= offset);
-        let last = *self.positions.get(after.checked_sub(1)?)?;
-        (offset <= self.reference(last).span.end).then_some(last)
-    }
-
     /// The references whose names lie within `span`, by where they start.
     pub fn references_within(&self, span: Span) -> impl Iterator<Item = ReferenceId> + '_ {
         let first =

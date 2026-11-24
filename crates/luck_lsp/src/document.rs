@@ -10,7 +10,7 @@ use luck_allocator::Allocator;
 use luck_formatter::FormatResult;
 use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
-use luck_semantic::Scoping;
+use luck_semantic::{AstNodes, Scoping};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{LuaVersion, Span, Token};
 
@@ -218,12 +218,19 @@ impl DocumentState {
         self.semantic().scoping()
     }
 
+    /// Every node of the parse, in source preorder with its parent, which
+    /// each provider finds the node at the cursor in.
+    pub(crate) fn nodes(&self) -> &AstNodes<'_> {
+        self.semantic().semantic().nodes()
+    }
+
     pub(crate) fn version(&self) -> LuaVersion {
         self.parse().chunk.version
     }
 
-    /// What the parse read, which highlighting and the cursor's surroundings
-    /// look at where the tree may have none, and the formatter reads too.
+    /// What the parse read, which the cursor's surroundings are read from
+    /// where the tree has nothing, as in a comment, a string, or a member
+    /// still being typed, and which the formatter reads too.
     pub(crate) fn tokens(&self) -> &[Token] {
         &self.parse().tokens
     }

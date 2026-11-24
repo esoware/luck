@@ -963,6 +963,10 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     /// Annotations and values can't see the names being declared.
     fn visit_local_assignment(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
         self.enter(AstKind::LocalAssignment(local_assignment));
+        let leading = local_assignment.attribute.as_deref();
+        if let Some(attribute) = leading {
+            self.visit_attribute(attribute);
+        }
         let first_name = self.scratch_nodes.len();
         for attributed in &local_assignment.names {
             let node = self.enter(AstKind::AttributedName(attributed));
@@ -987,7 +991,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             let Some(symbol) = self.declare_name(&attributed.name, SymbolKind::Local, node) else {
                 continue;
             };
-            let attribute = attributed.attribute.as_deref();
+            let attribute = attributed.attribute_or(leading);
             symbol.is_exported = kind.is_exported(); // Luau
             symbol.is_close = attribute.is_some_and(|given| given.name.text == "close");
             symbol.is_read_only = kind.is_const() || attribute.is_some_and(is_read_only_attribute);
@@ -1151,6 +1155,10 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     // name with an initializer is assigned.
     fn visit_global_declaration(&mut self, global_declaration: &'ast GlobalDeclaration<'ast>) {
         self.enter(AstKind::GlobalDeclaration(global_declaration));
+        let leading = global_declaration.attribute.as_deref();
+        if let Some(attribute) = leading {
+            self.visit_attribute(attribute);
+        }
         for attributed in &global_declaration.names {
             self.visit_attributed_name(attributed);
         }
@@ -1159,7 +1167,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         }
         let is_assigned = !global_declaration.exprs.is_empty();
         for attributed in &global_declaration.names {
-            let is_read_only = attributed.attribute.as_deref().is_some_and(is_read_only_attribute);
+            let is_read_only = attributed.attribute_or(leading).is_some_and(is_read_only_attribute);
             self.declare_global(&attributed.name, is_assigned, is_read_only);
         }
         self.leave();
@@ -1996,19 +2004,29 @@ local function g(z: typeof(g)) return z end",
     }
 
     #[test]
-    fn reference_at_finds_the_name_an_offset_touches() {
+    fn node_at_finds_the_innermost_node_an_offset_touches() {
         let allocator = Allocator::new();
-        let tree = scoping_of(&allocator, "local ab = 1 print(ab)");
-        let name_at = |offset| tree.reference_at(offset).map(|id| tree.reference(id).span);
-        // `print` is 13..18 and `ab` 19..21.
-        assert_eq!(name_at(13), Some(Span::new(13, 18)));
-        assert_eq!(name_at(18), Some(Span::new(13, 18)));
-        assert_eq!(name_at(19), Some(Span::new(19, 21)));
-        assert_eq!(name_at(21), Some(Span::new(19, 21)));
-        assert_eq!(name_at(22), None);
-        // The declaration makes no reference.
-        assert_eq!(name_at(6), None);
-        assert_eq!(name_at(0), None);
+        let source = "local <const> ab = f( ab )g()";
+        let semantic = semantic_for(&allocator, source, LuaVersion::Lua55);
+        let nodes = semantic.nodes();
+        let node_at = |offset| {
+            nodes.node_at(offset).map(|id| {
+                let node = nodes.get(id);
+                (node.kind().ty(), node.span().start, node.span().end)
+            })
+        };
+        // `<const>` is 6..13, `ab` 14..16, the call `f( ab )` 19..26, and
+        // `g()` 26..29.
+        assert_eq!(node_at(5), Some((AstType::LocalAssignment, 0, 26)));
+        assert_eq!(node_at(6), Some((AstType::Attribute, 6, 13)));
+        assert_eq!(node_at(8), Some((AstType::Name, 7, 12)));
+        assert_eq!(node_at(14), Some((AstType::Name, 14, 16)));
+        assert_eq!(node_at(16), Some((AstType::Name, 14, 16)), "a cursor just past a name");
+        assert_eq!(node_at(21), Some((AstType::SuffixedExpression, 19, 26)));
+        assert_eq!(node_at(22), Some((AstType::Name, 22, 24)));
+        assert_eq!(node_at(26), Some((AstType::Name, 26, 27)), "the later of two that meet");
+        assert_eq!(node_at(28), Some((AstType::SuffixedExpression, 26, 29)));
+        assert_eq!(node_at(30), None);
     }
 
     const NAMES_OF_EVERY_KIND: &str = "\

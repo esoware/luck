@@ -29,10 +29,10 @@ struct HostGlobal {
 /// `chunk`'s semantic, read against the stdlib of `target`, the dialect
 /// `chunk` was parsed as, and beside it the checker's errors.
 ///
-/// The semantic holds the node table, which the shapes read, and its tables
-/// are sized from `counts`, the parse's or the default. For Luau, it's the
-/// same whether or not the target is Roblox, which only adds the Roblox
-/// runtime's stdlib.
+/// The semantic holds the node table, which the shapes read, and the
+/// `require` sites, and its tables are sized from `counts`, the parse's or
+/// the default. For Luau, it's the same whether or not the target is Roblox,
+/// which only adds the Roblox runtime's stdlib.
 #[must_use]
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,
@@ -40,8 +40,12 @@ pub fn analyze<'ast>(
     target: LuaTarget,
 ) -> (SemanticAnalysis<'ast>, Vec<Diagnostic>) {
     debug_assert_eq!(chunk.version, target.version(), "the target is the chunk's dialect");
-    let built =
-        SemanticBuilder::new().with_counts(counts).with_check(true).with_nodes(true).build(chunk);
+    let built = SemanticBuilder::new()
+        .with_counts(counts)
+        .with_check(true)
+        .with_nodes(true)
+        .with_requires(true)
+        .build(chunk);
     let semantic = built.semantic;
     let stdlib = library_for(target);
     let symbol_shapes = symbol_shapes(&semantic, stdlib);

@@ -23,6 +23,10 @@
 //! client cancels before it starts never runs. Each project keeps one
 //! resolver per scheme, which the client's file watcher clears.
 //!
+//! A request at a position finds the innermost node there in the analysis's
+//! [`luck_semantic::AstNodes`] and walks up through its parents, and a name
+//! finds the local it declares or refers to by its symbol and reference.
+//!
 //! [`serve_stdio`] serves over stdio, as `luck lsp` does, [`serve_socket`]
 //! over TCP for debugging, and [`serve`] over any `lsp_server` connection.
 //!

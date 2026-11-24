@@ -137,6 +137,7 @@ impl Printer {
             }
             Statement::LocalAssignment(assignment) => {
                 self.open(&format!("LocalAssignment {:?}", assignment.kind));
+                self.attribute(assignment.attribute.as_deref());
                 self.attributed_names(&assignment.names);
                 self.exprs("values", &assignment.exprs);
                 self.close();
@@ -152,6 +153,7 @@ impl Printer {
             // Lua 5.5
             Statement::GlobalDeclaration(declaration) => {
                 self.open("GlobalDeclaration");
+                self.attribute(declaration.attribute.as_deref());
                 self.attributed_names(&declaration.names);
                 self.exprs("values", &declaration.exprs);
                 self.close();

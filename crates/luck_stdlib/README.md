@@ -6,7 +6,7 @@ The standard library of each target luck reads, Lua 5.1 to 5.5, Luau, and Roblox
 
 Each target has a static catalog built into the crate, with signatures, overloads, value shapes, and deprecations. `just stdlib` generates the catalogs from `stdlib_data/`, checking the data as it goes, so nothing is parsed or validated at runtime, and `just roblox-api` refreshes the Roblox services, classes, and enums from the live API dump first.
 
-`analyze` builds a chunk's `luck_semantic::Semantic` and reads it against its target's catalog, so a caller can ask whether a name is a known global or which stdlib function a call reaches. A local initialized from a value of known shape, such as `local f = io.open(...)`, has that shape, so `f:read()` resolves too. It lives apart from `luck_semantic`, so a pass that needs only scoping, such as the minifier's, builds no catalog.
+`analyze` builds a chunk's `luck_semantic::Semantic`, with its node table and `require` sites, and reads it against its target's catalog, so a caller can ask whether a name is a known global or which stdlib function a call reaches. A local initialized from a value of known shape, such as `local f = io.open(...)`, has that shape, so `f:read()` resolves too. It lives apart from `luck_semantic`, so a pass that needs only scoping, such as the minifier's, builds no catalog.
 
 ## Usage
 

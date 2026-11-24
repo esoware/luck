@@ -83,9 +83,10 @@ pub(crate) fn is_env_binding(name: &str, version: LuaVersion) -> bool {
 /// runs `__close` at scope exit and `<const>` affects validity) or a 5.2+
 /// `_ENV`, which redirects global lookup for everything after it.
 pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
-    local.names.iter().any(|attributed| {
-        attributed.attribute.is_some() || is_env_binding(attributed.name.text.as_str(), version)
-    })
+    local.attribute.is_some()
+        || local.names.iter().any(|attributed| {
+            attributed.attribute.is_some() || is_env_binding(attributed.name.text.as_str(), version)
+        })
 }
 
 /// Whether no transform may reshape, merge away, or move a `local`

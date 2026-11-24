@@ -272,6 +272,7 @@ impl<'ast> Synth<'ast> {
     {
         Statement::new_local_assignment(
             self.next_span(),
+            None,
             self.list(names),
             self.list(exprs),
             kind,
@@ -315,6 +316,7 @@ impl<'ast> Synth<'ast> {
     {
         Statement::new_global_declaration(
             self.next_span(),
+            None,
             self.list(names),
             self.list(exprs),
             self.allocator,

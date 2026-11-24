@@ -1,12 +1,15 @@
+use core::iter;
+
 use ls_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
     SignatureHelp, SignatureInformation,
 };
+use luck_ast::{FunctionArgs, GetSpan as _};
 use luck_stdlib::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
-use luck_token::index_to_offset;
+use luck_token::{TokenKind, index_to_offset, offset_to_index};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::{TextKind, find_call_site_at, text_kind_at};
+use crate::providers::cursor::{TextKind, text_kind_at};
 use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn signature_help(
@@ -17,12 +20,46 @@ pub(crate) fn signature_help(
     if text_kind_at(document, offset) == TextKind::Comment {
         return None;
     }
-    let site = find_call_site_at(document, offset)?;
+    // The innermost call whose parentheses hold the cursor, found on the way
+    // up from the node there. An unclosed list ends where the parser
+    // stopped, so its end still counts as inside it, but past a real `)` the
+    // cursor has left the call. `f"..."` and `f{...}` have no parentheses to
+    // be inside.
+    let source = document.text().as_bytes();
+    let nodes = document.nodes();
+    let innermost = nodes.node_at(offset)?;
+    let (call, args) =
+        iter::once(innermost).chain(nodes.ancestor_ids(innermost)).find_map(|id| {
+            nodes.kind(id).as_suffixed_expr()?.calls().find_map(|call| {
+                let FunctionArgs::Parenthesized { span: parens, args } = call.args else {
+                    return None;
+                };
+                let is_closed =
+                    source.get(offset_to_index(parens.end.saturating_sub(1))) == Some(&b')');
+                let is_inside = parens.start < offset
+                    && offset <= parens.end
+                    && !(is_closed && offset == parens.end);
+                is_inside.then_some((call, args))
+            })
+        })?;
+    // Reading the token after each argument, rather than counting commas,
+    // can't mistake one inside a nested argument for a separator of this
+    // list.
+    let tokens = document.tokens();
+    let active_param = args
+        .iter()
+        .filter(|arg| {
+            let next = tokens.partition_point(|token| token.span.start < arg.span().end);
+            tokens
+                .get(next)
+                .is_some_and(|token| token.kind == TokenKind::Comma && token.span.end <= offset)
+        })
+        .count();
     // Semantic resolution handles shaped locals (`f:read(` after
     // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
     // gives a shadowed base no help. Method params exclude `self`, matching
     // the argument count inside the parens.
-    let callee = document.semantic().resolve_callee(site.call)?;
+    let callee = document.semantic().resolve_callee(call)?;
     let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
@@ -36,14 +73,15 @@ pub(crate) fn signature_help(
         })
         .collect();
 
-    let active_signature = function.signature_index_for_active_param(site.active_param);
+    let active_signature = function.signature_index_for_active_param(active_param);
     let active_param_count = function.signatures.get(active_signature)?.params.len();
-    let active_param = site.active_param.min(active_param_count.saturating_sub(1));
 
     Some(SignatureHelp {
         signatures,
         active_signature: Some(index_to_offset(active_signature)),
-        active_parameter: Some(index_to_offset(active_param)),
+        active_parameter: Some(index_to_offset(
+            active_param.min(active_param_count.saturating_sub(1)),
+        )),
     })
 }
 
@@ -113,7 +151,7 @@ fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaTarget, offset_to_index};
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;
@@ -165,8 +203,6 @@ string.format('x')";
 
     #[test]
     fn signature_help_finds_a_call_at_stmt_position() {
-        // Statement-position calls never pass through visit_expr;
-        // the call hook must find them.
         let text = "collectgarbage('collect')";
         let document = document(text, LuaTarget::Lua54);
         let help =
@@ -194,6 +230,21 @@ string.format('x')";
         let before_paren =
             signature_help(&document, Position::new(0, 19)).expect("inside the call");
         assert_eq!(before_paren.active_parameter, Some(1), "one comma before the cursor");
+    }
+
+    #[test]
+    fn signature_help_reads_the_innermost_call_around_the_cursor() {
+        let document = document("print(string.rep(\"a\", 2), 3)", LuaTarget::Lua54);
+        let label_at = |utf16_column| {
+            let help = signature_help(&document, Position::new(0, utf16_column))?;
+            Some((active_signature(&help).label.clone(), help.active_parameter))
+        };
+        let (inner, inner_param) = label_at(23).expect("inside `string.rep`");
+        assert!(inner.starts_with("string.rep("), "{inner}");
+        assert_eq!(inner_param, Some(1));
+        let (outer, outer_param) = label_at(27).expect("after `string.rep(...)`");
+        assert!(outer.starts_with("print("), "{outer}");
+        assert_eq!(outer_param, Some(0), "`print` takes its arguments as one vararg");
     }
 
     #[test]

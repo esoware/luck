@@ -170,6 +170,9 @@ impl Printer {
         } else {
             self.piece("local");
         }
+        if let Some(attribute) = &local.attribute {
+            self.print_attribute(attribute);
+        }
         self.list(&local.names, ",", Self::print_attributed_name);
         self.print_values(&local.exprs);
     }
@@ -192,6 +195,9 @@ impl Printer {
 
     fn print_global_declaration(&mut self, declaration: &GlobalDeclaration<'_>) {
         self.piece("global");
+        if let Some(attribute) = &declaration.attribute {
+            self.print_attribute(attribute);
+        }
         self.list(&declaration.names, ",", Self::print_attributed_name);
         self.print_values(&declaration.exprs);
     }

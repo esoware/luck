@@ -117,7 +117,7 @@ fn simple_binding<'ast>(
     Some(SimpleBinding {
         name: attributed.name.span,
         declaration: Span::new(attributed.name.span.start, declaration_end),
-        attribute: attributed.attribute.as_deref(),
+        attribute: attributed.attribute_or(local.attribute.as_deref()),
         initializer: context.extent(initializer),
     })
 }

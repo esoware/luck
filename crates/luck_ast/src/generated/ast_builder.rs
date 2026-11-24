@@ -802,12 +802,15 @@ impl<'ast> Statement<'ast> {
     #[inline]
     pub fn new_local_assignment(
         span: Span,
+        attribute: Option<Box<'ast, Attribute<'ast>>>,
         names: List<'ast, AttributedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::LocalAssignment(LocalAssignment::boxed(span, names, exprs, kind, allocator))
+        Self::LocalAssignment(LocalAssignment::boxed(
+            span, attribute, names, exprs, kind, allocator,
+        ))
     }
 
     #[must_use]
@@ -836,11 +839,12 @@ impl<'ast> Statement<'ast> {
     #[inline]
     pub fn new_global_declaration(
         span: Span,
+        attribute: Option<Box<'ast, Attribute<'ast>>>,
         names: List<'ast, AttributedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::GlobalDeclaration(GlobalDeclaration::boxed(span, names, exprs, allocator))
+        Self::GlobalDeclaration(GlobalDeclaration::boxed(span, attribute, names, exprs, allocator))
     }
 
     #[must_use]
@@ -1175,23 +1179,25 @@ impl<'ast> LocalAssignment<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
+        attribute: Option<Box<'ast, Attribute<'ast>>>,
         names: List<'ast, AttributedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
     ) -> Self {
-        Self { span, names, exprs, kind }
+        Self { span, attribute, names, exprs, kind }
     }
 
     #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
+        attribute: Option<Box<'ast, Attribute<'ast>>>,
         names: List<'ast, AttributedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, names, exprs, kind), allocator)
+        Box::new_in(Self::new(span, attribute, names, exprs, kind), allocator)
     }
 }
 
@@ -1317,21 +1323,23 @@ impl<'ast> GlobalDeclaration<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
+        attribute: Option<Box<'ast, Attribute<'ast>>>,
         names: List<'ast, AttributedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
     ) -> Self {
-        Self { span, names, exprs }
+        Self { span, attribute, names, exprs }
     }
 
     #[must_use]
     #[inline]
     pub fn boxed(
         span: Span,
+        attribute: Option<Box<'ast, Attribute<'ast>>>,
         names: List<'ast, AttributedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, names, exprs), allocator)
+        Box::new_in(Self::new(span, attribute, names, exprs), allocator)
     }
 }
 

@@ -21,7 +21,8 @@
 //!   local or a `goto` no label takes.
 //! - [`SemanticBuilder::with_nodes`] builds [`AstNodes`], every node of the
 //!   tree in source preorder with its parent and scope, which symbols,
-//!   references, labels, and scopes point into by [`NodeId`].
+//!   references, labels, and scopes point into by [`NodeId`], and in which
+//!   [`AstNodes::node_at`] finds the innermost node at an offset.
 //! - [`SemanticBuilder::with_requires`] finds every [`RequireSite`], a call
 //!   of the host's `require`.
 //!

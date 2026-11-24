@@ -135,14 +135,9 @@ fn local_attribute_before_first_name() {
     assert_no_errors(&result);
     if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
         assert_eq!(local.names.len(), 1);
-        let attribute = local
-            .names
-            .first()
-            .expect("declared name")
-            .attribute
-            .as_ref()
-            .expect("expected attribute on f");
+        let attribute = local.attribute.as_ref().expect("expected the leading attribute");
         assert_eq!(attribute.name.text, "close");
+        assert!(local.names[0].attribute.is_none(), "f has no attribute of its own");
     } else {
         panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     }
@@ -213,25 +208,27 @@ fn global_attributed_with_initializer() {
 }
 
 #[test]
-fn leading_attribute_distributes_to_all_names() {
+fn leading_attribute_applies_to_all_names() {
     let allocator = Allocator::new();
     // 5.5 manual section 3.3.7: "A prefixed attribute applies to all names in
     // the list."
-    let result = parse_lua55(&allocator, "local <const> x, y = 1, 2");
-    assert_no_errors(&result);
-    if let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] {
-        let attribute_names: Vec<_> = local
-            .names
+    for source in ["local <const> x, y = 1, 2", "global <const> x, y = 1, 2"] {
+        let result = parse_lua55(&allocator, source);
+        assert_no_errors(&result);
+        let stmt = &result.chunk.block.stmts[0];
+        let (leading, names) = if let Statement::LocalAssignment(local) = stmt {
+            (local.attribute.as_deref(), &local.names)
+        } else if let Statement::GlobalDeclaration(global) = stmt {
+            (global.attribute.as_deref(), &global.names)
+        } else {
+            panic!("expected a declaration, got {stmt:?}");
+        };
+        let attribute_names: Vec<_> = names
             .iter()
-            .map(|attributed| attributed.attribute.as_ref().map(|attribute| attribute.name.text))
+            .map(|attributed| Some(attributed.attribute_or(leading)?.name.text.as_str()))
             .collect();
-        assert_eq!(attribute_names.len(), 2);
-        assert!(
-            attribute_names.iter().all(Option::is_some),
-            "leading attrib must apply to every name: {attribute_names:?}"
-        );
-    } else {
-        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
+        assert_eq!(attribute_names, [Some("const"), Some("const")], "{source}");
+        assert!(names.iter().all(|attributed| attributed.attribute.is_none()), "{source}");
     }
 }
 
@@ -244,10 +241,11 @@ fn trailing_attribute_replaces_the_leading_one_on_its_name() {
     let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts[0]);
     };
+    let leading = local.attribute.as_deref();
     let attribute_names: Vec<_> = local
         .names
         .iter()
-        .map(|attributed| Some(attributed.attribute.as_ref()?.name.text.as_str()))
+        .map(|attributed| Some(attributed.attribute_or(leading)?.name.text.as_str()))
         .collect();
     assert_eq!(attribute_names, [Some("const"), Some("close")]);
 }

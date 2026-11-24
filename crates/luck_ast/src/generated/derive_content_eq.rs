@@ -484,7 +484,8 @@ impl ContentEq for AttributedName<'_> {
 
 impl ContentEq for LocalAssignment<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.names, &other.names)
+        ContentEq::content_eq(&self.attribute, &other.attribute)
+            && ContentEq::content_eq(&self.names, &other.names)
             && ContentEq::content_eq(&self.exprs, &other.exprs)
             && ContentEq::content_eq(&self.kind, &other.kind)
     }
@@ -543,7 +544,8 @@ impl ContentEq for TypeDeclarationValue<'_> {
 
 impl ContentEq for GlobalDeclaration<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.names, &other.names)
+        ContentEq::content_eq(&self.attribute, &other.attribute)
+            && ContentEq::content_eq(&self.names, &other.names)
             && ContentEq::content_eq(&self.exprs, &other.exprs)
     }
 }

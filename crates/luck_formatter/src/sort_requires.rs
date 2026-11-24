@@ -41,7 +41,8 @@ pub(crate) fn sortable_require<'ast>(stmt: &Statement<'ast>) -> Option<Require<'
     let [binding] = &*local.names else {
         return None;
     };
-    if binding.attribute.as_ref().is_some_and(|attribute| attribute.name.text == "close") {
+    let attribute = binding.attribute_or(local.attribute.as_deref());
+    if attribute.is_some_and(|given| given.name.text == "close") {
         return None;
     }
     let [value] = &*local.exprs else {

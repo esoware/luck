@@ -1,6 +1,8 @@
-//! What the tables of every valid source hold: a node table in preorder, in
-//! which each reference's and declaration's name finds its row, and scopes,
-//! symbols, and references that point into it.
+//! What the tables of every valid source hold.
+//!
+//! The node table is in source preorder, so it's sorted by where nodes
+//! start, and each reference's and declaration's name finds its row there,
+//! and scopes, symbols, and references point into it.
 
 use luck_allocator::Allocator;
 use luck_ast::{AstKind, Expression, GetSpan as _};
@@ -20,19 +22,19 @@ fn assert_tables_agree(source: &str, version: LuaVersion) {
         .build(chunk);
     let semantic = built.semantic;
     let (tree, nodes) = (semantic.scoping(), semantic.nodes());
+    let mut previous_start = 0;
     for (id, node) in nodes.iter() {
+        let span = node.span();
+        assert!(previous_start <= span.start, "{id:?} starts before the node before it\n{source}");
+        previous_start = span.start;
         let Some(parent) = nodes.parent_id(id) else {
             assert_eq!(id.index(), 0, "only the chunk has no parent");
             continue;
         };
         assert!(parent < id, "{id:?} comes after its parent\n{source}");
-        // Lua 5.5 copies a leading attribute, which comes before every name,
-        // into each name's attribute.
-        if !matches!(node.kind(), AstKind::Attribute(_) | AstKind::AttributedName(_)) {
-            let (span, around) = (node.span(), nodes.get(parent).span());
-            assert!(around.start <= span.start, "{id:?} starts inside {parent:?}\n{source}");
-            assert!(span.end <= around.end, "{id:?} ends inside {parent:?}\n{source}");
-        }
+        let around = nodes.get(parent).span();
+        assert!(around.start <= span.start, "{id:?} starts inside {parent:?}\n{source}");
+        assert!(span.end <= around.end, "{id:?} ends inside {parent:?}\n{source}");
         if let AstKind::Name(name) = node.kind()
             && let Some(reference) = tree.reference_of(name)
         {

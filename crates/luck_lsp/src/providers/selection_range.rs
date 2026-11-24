@@ -1,10 +1,10 @@
-use ls_types::{Position, SelectionRange};
-use luck_ast::{Block, Expression, GetSpan as _, Statement, SuffixedExpression, Visit};
-use luck_parser::Groupings;
-use luck_token::{Associativity, Span};
+use core::iter;
 
-use crate::document::DocumentState;
-use crate::providers::cursor::{statements_touching, touches};
+use ls_types::{Position, SelectionRange};
+use luck_ast::{AstKind, GetSpan as _};
+use luck_token::{Associativity, Span, TokenKind};
+
+use crate::document::{DocumentState, span_text};
 
 /// How many of the innermost enclosing spans reach the editor. The `parent`
 /// chain's drop and serialization recurse, so a long run of operators or
@@ -18,114 +18,79 @@ pub(crate) fn selection_ranges(
     positions.iter().map(|&position| selection_for(document, position)).collect()
 }
 
+/// The word at the cursor, then each node it's in, innermost first.
+///
+/// The word may be a keyword or a literal no node spells. Each span is
+/// followed by the parentheses the source wrapped it in, and a run of
+/// operators or suffixes steps out through each step as if it nested.
 fn selection_for(document: &DocumentState, position: Position) -> SelectionRange {
     let offset = document.offset(position);
-    let parse = document.parse();
-    let mut collector = SpanStack { offset, groupings: &parse.groupings, stack: Vec::new() };
-    collector.visit_block(&parse.chunk.block);
-    let first_kept = collector.stack.len().saturating_sub(MAX_SELECTION_DEPTH);
-    collector.stack.drain(..first_kept);
-
+    let groupings = &document.parse().groupings;
+    let extent = |span: Span| groupings.around(span).unwrap_or(span);
+    // Innermost first, each holding the one before it.
+    let mut spans: Vec<Span> = Vec::new();
+    let mut push = |span: Span| {
+        for selected in iter::once(span).chain(groupings.around(span)) {
+            let holds_last = spans.last().is_none_or(|&last| {
+                selected != last && selected.start <= last.start && last.end <= selected.end
+            });
+            if holds_last && selected.start <= offset && offset <= selected.end {
+                spans.push(selected);
+            }
+        }
+    };
+    // Of the two tokens that can meet at the cursor, the later.
+    let tokens = document.tokens();
+    let touching = tokens.get(tokens.partition_point(|token| token.span.end < offset)..);
+    if let Some(word) = touching.unwrap_or_default().iter().take(2).rfind(|token| {
+        token.span.start <= offset
+            && token.kind != TokenKind::Eof
+            && TokenKind::is_identifier_shaped(span_text(document.text(), token.span))
+    }) {
+        push(word.span);
+    }
+    let nodes = document.nodes();
+    let innermost = nodes.node_at(offset);
+    let ids = innermost.into_iter().flat_map(|id| iter::once(id).chain(nodes.ancestor_ids(id)));
+    for kind in ids.map(|id| nodes.kind(id)) {
+        if let AstKind::BinaryOp(run) = kind {
+            let operands = || run.links.iter().map(|link| &link.operand);
+            let inner_count = run.links.len().saturating_sub(1);
+            if run.precedence().1 == Associativity::Left {
+                let start = extent(run.first.span()).start;
+                for operand in operands().take(inner_count) {
+                    push(Span::new(start, extent(operand.span()).end));
+                }
+            } else {
+                let end = extent(run.links.last().operand.span()).end;
+                for operand in operands().take(inner_count).rev() {
+                    push(Span::new(extent(operand.span()).start, end));
+                }
+            }
+        }
+        if let AstKind::SuffixedExpression(chain) = kind {
+            // Each head is the chain it was before the next suffix joined it,
+            // in the parentheses it was in.
+            let mut start = extent(chain.prefix.span()).start;
+            let inner_count = chain.suffixes.len().saturating_sub(1);
+            for suffix in chain.suffixes.iter().take(inner_count) {
+                let head = Span::new(start, suffix.span().end);
+                push(head);
+                start = extent(head).start;
+            }
+        }
+        push(kind.span());
+    }
     // The returned link is the narrowest span and each `parent` the next one
     // out, so the chain folds from the outside in.
     let mut chain: Option<SelectionRange> = None;
-    for &span in &collector.stack {
+    for &span in spans.iter().take(MAX_SELECTION_DEPTH).rev() {
         chain = Some(SelectionRange { range: document.range(span), parent: chain.map(Box::new) });
     }
     chain.unwrap_or_else(|| SelectionRange {
         range: document.range(Span::new(offset, offset)),
         parent: None,
     })
-}
-
-struct SpanStack<'ast> {
-    offset: u32,
-    groupings: &'ast Groupings,
-    stack: Vec<Span>,
-}
-
-impl SpanStack<'_> {
-    /// `span` with the parentheses the expression it's the span of is in.
-    fn extent(&self, span: Span) -> Span {
-        self.groupings.around(span).unwrap_or(span)
-    }
-
-    /// Records an expression's span, inside the parentheses it's in, if any.
-    fn record_grouped(&mut self, span: Span) {
-        if let Some(parens) = self.groupings.around(span) {
-            self.record(parens);
-        }
-        self.record(span);
-    }
-
-    fn record(&mut self, span: Span) {
-        if !touches(span, self.offset) {
-            return;
-        }
-        // At a boundary between siblings the offset touches both, so the
-        // later one replaces the earlier one's whole chain.
-        while self.stack.last().is_some_and(|top| span.start < top.start || top.end < span.end) {
-            self.stack.pop();
-        }
-        self.stack.push(span);
-    }
-}
-
-impl<'ast> Visit<'ast> for SpanStack<'_> {
-    fn visit_block(&mut self, block: &'ast Block<'ast>) {
-        for stmt in statements_touching(block, self.offset) {
-            self.visit_stmt(stmt);
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        self.record(stmt.span());
-        self.walk_stmt(stmt);
-    }
-
-    /// A run steps out through each pair it groups into, as if it nested.
-    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        if !touches(self.extent(expr.span()), self.offset) {
-            return;
-        }
-        self.record_grouped(expr.span());
-        if let Expression::BinaryOp(run) = expr {
-            let operands = || run.links.iter().map(|link| &link.operand);
-            let inner_count = run.links.len().saturating_sub(1);
-            if run.precedence().1 == Associativity::Left {
-                let start = self.extent(run.first.span()).start;
-                for operand in operands().take(inner_count).rev() {
-                    self.record(Span::new(start, self.extent(operand.span()).end));
-                }
-            } else {
-                let end = self.extent(run.links.last().operand.span()).end;
-                for operand in operands().take(inner_count) {
-                    self.record(Span::new(self.extent(operand.span()).start, end));
-                }
-            }
-        }
-        self.walk_expr(expr);
-    }
-
-    /// Each head is the chain it was before the next suffix joined it, in the
-    /// parentheses it was in.
-    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
-        let mut heads = Vec::new();
-        let mut start = self.extent(suffixed_expr.prefix.span()).start;
-        let inner_count = suffixed_expr.suffixes.len().saturating_sub(1);
-        for suffix in suffixed_expr.suffixes.iter().take(inner_count) {
-            let head = Span::new(start, suffix.span().end);
-            heads.push(head);
-            if let Some(parens) = self.groupings.around(head) {
-                heads.push(parens);
-                start = parens.start;
-            }
-        }
-        for &head in heads.iter().rev() {
-            self.record(head);
-        }
-        self.walk_suffixed_expr(suffixed_expr);
-    }
 }
 
 #[cfg(test)]
@@ -202,6 +167,18 @@ mod tests {
         assert_eq!(
             columns(&ranges_at("x = ((a).b).c\n", 6)),
             [(6, 7), (5, 8), (5, 10), (4, 11), (4, 13), (0, 13)]
+        );
+    }
+
+    #[test]
+    fn a_word_no_node_spells_is_selected_first() {
+        // `nil` and `break` are no nodes, but the word is what's selected
+        // first, and then what holds it.
+        assert_eq!(columns(&ranges_at("f(nil)\n", 3)), [(2, 5), (0, 6)]);
+        assert_eq!(
+            columns(&ranges_at("while x do break end\n", 12)),
+            [(11, 16), (0, 20)],
+            "a lone statement is its block"
         );
     }
 
