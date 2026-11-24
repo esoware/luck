@@ -18,12 +18,14 @@
 //! share, until [`ResolverGeneric::clear_cache`]. A require that names no
 //! file, or more than one, gets a [`ResolveError`] saying why, which
 //! [`ResolveError::to_diagnostic`] turns into the diagnostic luck reports it
-//! with.
+//! with, and [`Resolution::to_diagnostic`] gives the warning of a `@self`
+//! that shadows a `.luaurc` alias.
 //!
 //! This is the lowest crate that touches the file system, so the crates above
 //! it read Lua sources and canonicalize paths through its [`FileSystemOs`].
-//! Paths stay paths inside luck, and [`to_slash_lossy`] gives the form luck
-//! writes one out in.
+//! Paths stay paths inside luck, [`lexically_normalized`] resolves a path's
+//! `.` and `..` without reading the disk, and [`to_slash_lossy`] gives the
+//! form luck writes one out in.
 //!
 //! # Usage
 //!
@@ -42,6 +44,7 @@
 //! assert!(resolution.path.ends_with("foo.lua"));
 //! ```
 
+mod aliases;
 mod cache;
 mod error;
 mod file_system;
@@ -56,5 +59,5 @@ mod shared_cache;
 
 pub use error::ResolveError;
 pub use file_system::{DirEntry, FileMetadata, FileSystem, FileSystemOs};
-pub use path::to_slash_lossy;
+pub use path::{lexically_normalized, to_slash_lossy};
 pub use resolver::{Resolution, ResolveOptions, Resolver, ResolverGeneric};

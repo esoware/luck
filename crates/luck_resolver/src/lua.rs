@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
+use crate::ResolveError;
 use crate::cache::Cache;
 use crate::file_system::FileSystem;
 use crate::shared_cache::SharedCache;
-use crate::{Resolution, ResolveError};
 
 const DEFAULT_SEARCH_PATHS: [&str; 2] = ["?.lua", "?/init.lua"];
 
@@ -38,13 +38,13 @@ impl Lua {
         &self,
         cache: &Cache<impl FileSystem>,
         module: &str,
-    ) -> Result<Resolution, ResolveError> {
+    ) -> Result<PathBuf, ResolveError> {
         if let Some(path) = self.resolved.get(module) {
-            return Ok(Resolution { path, is_self_alias_shadowed: false });
+            return Ok(path);
         }
-        let dotted_path = module.replace('.', "/");
+        let slashed_module = module.replace('.', "/");
         // A leading dot must not turn a relative template into a rooted path.
-        let module_path = dotted_path.trim_start_matches('/');
+        let module_path = slashed_module.trim_start_matches('/');
         let found = self.search_paths.iter().find_map(|template| {
             let candidate = self.root.join(template.replace('?', module_path));
             cache.is_file(&candidate).then(|| cache.canonical_file(&candidate))
@@ -57,9 +57,6 @@ impl Lua {
                     .collect(),
             ));
         };
-        Ok(Resolution {
-            path: self.resolved.insert(module.to_owned(), path),
-            is_self_alias_shadowed: false,
-        })
+        Ok(self.resolved.insert(module.to_owned(), path))
     }
 }

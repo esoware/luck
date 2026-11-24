@@ -1,7 +1,5 @@
 use std::borrow::Cow;
-use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 /// `path` with forward slashes on every platform, the form luck writes a path
 /// out in, with any name that isn't Unicode lossily converted.
@@ -14,12 +12,37 @@ pub fn to_slash_lossy(path: &Path) -> Cow<'_, str> {
     lossy
 }
 
+/// `path` with each `.` dropped and each `..` taking off the name before it,
+/// without reading the disk.
+pub fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    push_lexically(&mut normalized, path.components());
+    normalized
+}
+
+pub(crate) fn push_lexically<'path>(
+    path: &mut PathBuf,
+    components: impl IntoIterator<Item = Component<'path>>,
+) {
+    for component in components {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            named @ (Component::Normal(_) | Component::Prefix(_) | Component::RootDir) => {
+                path.push(named);
+            }
+        }
+    }
+}
+
 /// `path` without the `\\?\` that Windows' `canonicalize` puts before it,
 /// when the path it marks is one a shorter form names too.
 #[cfg(windows)]
 pub(crate) fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
     use std::ffi::OsString;
-    use std::path::{Component, Prefix};
+    use std::path::Prefix;
 
     let mut components = path.components();
     let Some(Component::Prefix(prefix)) = components.next() else {

@@ -9,19 +9,19 @@ use rustc_hash::FxHashMap;
 use crate::file_system::{FileMetadata, FileSystem};
 use crate::shared_cache::SharedCache;
 
-/// What a resolver has read through `fs`, which every thread resolving
-/// through it shares.
+/// What a resolver has read through `file_system`, which every thread
+/// resolving through it shares.
 ///
 /// It lists each directory a require looks in once, and answers from that
 /// listing which files exist and their canonical paths, without a system call
 /// per file, since `canonicalize` takes a lock in the OS on Windows. A name
-/// the listing can't settle goes to `fs`, such as a symlink or a name that
-/// matches an entry only ignoring case.
+/// the listing can't settle goes to `file_system`, such as a symlink or a name
+/// that matches an entry only ignoring case.
 #[derive(Debug)]
 pub(crate) struct Cache<Fs> {
-    fs: Fs,
+    file_system: Fs,
     directories: SharedCache<OsString, Arc<Directory>>,
-    /// The canonical paths only `fs` could give.
+    /// The canonical paths only `file_system` could give.
     canonical_files: SharedCache<OsString, PathBuf>,
 }
 
@@ -61,12 +61,16 @@ enum Listed {
 }
 
 impl<Fs: FileSystem> Cache<Fs> {
-    pub(crate) fn new(fs: Fs) -> Self {
-        Self { fs, directories: SharedCache::default(), canonical_files: SharedCache::default() }
+    pub(crate) fn new(file_system: Fs) -> Self {
+        Self {
+            file_system,
+            directories: SharedCache::default(),
+            canonical_files: SharedCache::default(),
+        }
     }
 
     pub(crate) const fn file_system(&self) -> &Fs {
-        &self.fs
+        &self.file_system
     }
 
     pub(crate) fn clear(&self) {
@@ -87,16 +91,16 @@ impl<Fs: FileSystem> Cache<Fs> {
         if let Some((parent, name)) = split(file) {
             let directory = self.directories.get_or_insert_with(parent.as_os_str(), Arc::default);
             if matches!(
-                directory.listed(&self.fs, parent, name),
+                directory.listed(&self.file_system, parent, name),
                 Some(Listed::Entry(FileMetadata { is_file: true, .. }))
             ) && let Some(canonical_parent) =
-                directory.canonical_path.get_or_init(|| self.fs.canonicalize(parent).ok())
+                directory.canonical_path.get_or_init(|| self.file_system.canonicalize(parent).ok())
             {
                 return canonical_parent.join(name);
             }
         }
         self.canonical_files.get_or_insert_with(file.as_os_str(), || {
-            self.fs.canonicalize(file).unwrap_or_else(|_| file.to_path_buf())
+            self.file_system.canonicalize(file).unwrap_or_else(|_| file.to_path_buf())
         })
     }
 
@@ -104,12 +108,12 @@ impl<Fs: FileSystem> Cache<Fs> {
     fn metadata(&self, path: &Path) -> Option<FileMetadata> {
         let listed = split(path).and_then(|(parent, name)| {
             let directory = self.directories.get_or_insert_with(parent.as_os_str(), Arc::default);
-            directory.listed(&self.fs, parent, name)
+            directory.listed(&self.file_system, parent, name)
         });
         match listed {
             Some(Listed::Entry(metadata)) => Some(metadata),
             Some(Listed::Missing) => None,
-            None => self.fs.metadata(path).ok(),
+            None => self.file_system.metadata(path).ok(),
         }
     }
 }
@@ -117,8 +121,8 @@ impl<Fs: FileSystem> Cache<Fs> {
 impl Directory {
     /// What the listing of this directory, at `path`, says `name` is, or
     /// `None` when only the file system can say.
-    fn listed(&self, fs: &impl FileSystem, path: &Path, name: &str) -> Option<Listed> {
-        let listing = self.listing.get_or_init(|| read_listing(fs, path).ok()).as_ref()?;
+    fn listed(&self, file_system: &impl FileSystem, path: &Path, name: &str) -> Option<Listed> {
+        let listing = self.listing.get_or_init(|| read_listing(file_system, path).ok()).as_ref()?;
         match listing.entries.get(name.to_ascii_lowercase().as_str()) {
             Some(Entry { name: listed_name, metadata }) if **listed_name == *name => {
                 metadata.map(Listed::Entry)
@@ -147,10 +151,10 @@ fn split(path: &Path) -> Option<(&Path, &str)> {
 
 /// A name that isn't ASCII is left out, since only the file system can match
 /// it.
-fn read_listing(fs: &impl FileSystem, path: &Path) -> io::Result<Listing> {
+fn read_listing(file_system: &impl FileSystem, path: &Path) -> io::Result<Listing> {
     let mut entries = FxHashMap::default();
     let mut is_ascii = true;
-    for entry in fs.read_dir(path)? {
+    for entry in file_system.read_dir(path)? {
         let Some(name) = entry.name.to_str().filter(|name| name.is_ascii()) else {
             is_ascii = false;
             continue;

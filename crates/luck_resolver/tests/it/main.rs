@@ -4,6 +4,7 @@
 
 mod common;
 
+mod file_system;
 mod lua;
 mod luau;
 mod path;

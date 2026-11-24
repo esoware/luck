@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-
-use crate::common::project_with;
+use luck_resolver::{lexically_normalized, to_slash_lossy};
 
 #[test]
 fn to_slash_lossy_writes_separators_as_forward_slashes() {
@@ -15,16 +13,11 @@ fn to_slash_lossy_writes_separators_as_forward_slashes() {
 }
 
 #[test]
-fn canonicalize_gives_an_absolute_path_without_a_verbatim_prefix() {
-    let project = project_with(&[("src/main.lua", "return {}")]);
-    let canonical = FileSystemOs
-        .canonicalize(&project.path().join("src/../src/main.lua"))
-        .expect("canonicalize");
-    assert!(canonical.is_absolute(), "{}", canonical.display());
-    assert!(
-        !canonical.as_os_str().to_string_lossy().starts_with(r"\\?\"),
-        "{}",
-        canonical.display()
+fn lexically_normalized_resolves_dots_without_reading_the_disk() {
+    let working_directory = Path::new("/work/project");
+    assert_eq!(
+        lexically_normalized(&working_directory.join("./a/../b/x.lua")),
+        Path::new("/work/project/b/x.lua")
     );
-    assert!(canonical.ends_with("src/main.lua"), "{}", canonical.display());
+    assert_eq!(lexically_normalized(&working_directory.join("../other")), Path::new("/work/other"));
 }

@@ -40,9 +40,7 @@ fn unresolved(document: &DocumentState) -> Vec<Diagnostic> {
     let requires = document.record().requires().iter();
     requires
         .filter_map(|require| match document.resolve(require)? {
-            Ok(resolution) => {
-                resolution.is_self_alias_shadowed.then(|| Diagnostic::w004(require.span))
-            }
+            Ok(resolution) => resolution.to_diagnostic(require.span),
             Err(error) => Some(error.to_diagnostic(require.span, &require.module)),
         })
         .collect()

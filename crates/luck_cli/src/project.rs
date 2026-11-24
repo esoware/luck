@@ -1,7 +1,7 @@
 use std::num::NonZero;
 use std::panic;
 use std::panic::AssertUnwindSafe;
-use std::path::{Component, MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::{env, thread};
@@ -14,7 +14,7 @@ use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_config::{CONFIG_FILE_NAME, Project, ProjectFilter, find_config, glob_set};
 use luck_linter::LintConfig;
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_resolver::{FileSystem as _, FileSystemOs, lexically_normalized};
 use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -175,11 +175,11 @@ pub(crate) fn project_files(
             } else {
                 vec![format!("{pattern}/**"), pattern]
             };
-            let absolute_base = lexical_absolute(&working_directory, &base);
+            let absolute_base = lexically_normalized(&working_directory.join(&base));
             dropped.push((absolute_base, glob_set(&patterns).map_err(usage_error)?));
         }
         found.retain(|file| {
-            let absolute = lexical_absolute(&working_directory, &file.path);
+            let absolute = lexically_normalized(&working_directory.join(&file.path));
             !dropped.iter().any(|(base, patterns)| {
                 absolute.strip_prefix(base).is_ok_and(|relative| {
                     relative.as_os_str().is_empty() || patterns.is_match(relative)
@@ -227,24 +227,6 @@ fn split_glob(arg: &str) -> (PathBuf, String) {
         format!("{}{MAIN_SEPARATOR}", literal.join(MAIN_SEPARATOR_STR))
     };
     (PathBuf::from(base), pattern.join("/"))
-}
-
-/// `path` from `working_directory` with `.` and `..` resolved without touching
-/// the disk.
-fn lexical_absolute(working_directory: &Path, path: &Path) -> PathBuf {
-    let mut absolute = PathBuf::new();
-    for component in working_directory.join(path).components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                absolute.pop();
-            }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                absolute.push(component);
-            }
-        }
-    }
-    absolute
 }
 
 /// What a glob argument selects below its base directory.
@@ -786,19 +768,6 @@ mod tests {
         assert_eq!(split("*.lua"), pair(".", "*.lua"));
         assert_eq!(split("{a,b}/x.lua"), pair(".", "{a,b}/x.lua"));
         assert_eq!(split("vendor"), pair("vendor/", ""));
-    }
-
-    #[test]
-    fn lexical_absolute_resolves_dots_against_the_working_directory() {
-        let working_directory = Path::new("/work/project");
-        assert_eq!(
-            lexical_absolute(working_directory, Path::new("./a/../b/x.lua")),
-            Path::new("/work/project/b/x.lua")
-        );
-        assert_eq!(
-            lexical_absolute(working_directory, Path::new("../other")),
-            Path::new("/work/other")
-        );
     }
 
     /// `luck lint ../pkg` from a project with its own config must not take

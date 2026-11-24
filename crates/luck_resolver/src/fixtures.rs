@@ -29,6 +29,6 @@ pub(crate) fn luau_project() -> TempDir {
     ])
 }
 
-pub(crate) fn canonical(path: &Path) -> PathBuf {
-    FileSystemOs.canonicalize(path).expect("canonicalize")
+pub(crate) fn canonical(project: &TempDir, relative_path: &str) -> PathBuf {
+    FileSystemOs.canonicalize(&project.path().join(relative_path)).expect("canonicalize")
 }

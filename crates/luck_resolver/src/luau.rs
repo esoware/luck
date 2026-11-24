@@ -1,9 +1,9 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
+use crate::aliases::{AliasCache, AliasTarget};
 use crate::cache::Cache;
 use crate::file_system::FileSystem;
-use crate::luaurc::{AliasCache, AliasTarget};
 use crate::shared_cache::SharedCache;
 use crate::{Resolution, ResolveError};
 
@@ -108,7 +108,7 @@ impl Luau {
             alias.split_once('/').map_or((alias, None), |(name, rest)| (name, Some(rest)));
 
         if alias_name.eq_ignore_ascii_case("self") {
-            return self.resolve_self(cache, sub_path, requiring_module, lookup_directory);
+            return self.resolve_self(cache, sub_path, lookup_directory, requiring_module);
         }
 
         let (directory, full_sub_path) =
@@ -139,7 +139,8 @@ impl Luau {
                 followed.push(lowercase_name);
                 return Err(ResolveError::AliasCycle(followed));
             }
-            match self.aliases.in_effect(cache.file_system(), &directory).get(&lowercase_name) {
+            let aliases = self.aliases.in_effect(cache.file_system(), &directory);
+            match aliases.targets.get(&lowercase_name) {
                 Some(AliasTarget::Directory(target_directory)) => {
                     return Ok((target_directory.clone(), full_sub_path));
                 }
@@ -157,9 +158,9 @@ impl Luau {
                     directory.clone_from(declared_in);
                 }
                 None => {
-                    return Err(self
-                        .aliases
-                        .malformed_luaurc(&directory)
+                    return Err(aliases
+                        .malformed_luaurc
+                        .clone()
                         .map_or(ResolveError::UnknownAlias(name), ResolveError::MalformedLuaurc));
                 }
             }
@@ -173,12 +174,15 @@ impl Luau {
         &self,
         cache: &Cache<impl FileSystem>,
         sub_path: Option<&str>,
-        requiring_module: &Path,
         lookup_directory: &Path,
+        requiring_module: &Path,
     ) -> Result<Resolution, ResolveError> {
         let relative_path = sub_path.ok_or(ResolveError::BareSelfAlias)?;
-        let is_self_alias_shadowed =
-            self.aliases.in_effect(cache.file_system(), lookup_directory).contains_key("self");
+        let is_self_alias_shadowed = self
+            .aliases
+            .in_effect(cache.file_system(), lookup_directory)
+            .targets
+            .contains_key("self");
         let path = self.navigate(cache, requiring_module, relative_path)?;
         Ok(Resolution { path, is_self_alias_shadowed })
     }
@@ -266,15 +270,15 @@ impl Luau {
     }
 }
 
-/// The module `from_path` is: `dir` for `dir/init.luau`, and the path without
+/// The module `from_file` is: `dir` for `dir/init.luau`, and the path without
 /// its extension for any other Luau file.
-fn requiring_module_path(from_path: &Path) -> PathBuf {
-    if matches!(from_path.file_name().and_then(OsStr::to_str), Some("init.luau" | "init.lua")) {
-        from_path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf)
-    } else if matches!(from_path.extension().and_then(OsStr::to_str), Some("luau" | "lua")) {
-        from_path.with_extension("")
+fn requiring_module_path(from_file: &Path) -> PathBuf {
+    if matches!(from_file.file_name().and_then(OsStr::to_str), Some("init.luau" | "init.lua")) {
+        from_file.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+    } else if matches!(from_file.extension().and_then(OsStr::to_str), Some("luau" | "lua")) {
+        from_file.with_extension("")
     } else {
-        from_path.to_path_buf()
+        from_file.to_path_buf()
     }
 }
 

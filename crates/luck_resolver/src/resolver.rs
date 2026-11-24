@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use luck_token::LuaVersion;
+use luck_diagnostics::Diagnostic;
+use luck_token::{LuaVersion, Span};
 
 use crate::cache::Cache;
 use crate::error::ResolveError;
@@ -27,6 +28,14 @@ pub struct Resolution {
     /// Luau: `@self` named the requiring module although a `.luaurc` in
     /// effect declares an alias named `self`, which can't override it.
     pub is_self_alias_shadowed: bool,
+}
+
+impl Resolution {
+    /// The W004 that warns at `span`, the require string, that `@self`
+    /// shadowed a `.luaurc` alias named `self`, or `None` when it didn't.
+    pub fn to_diagnostic(&self, span: Span) -> Option<Diagnostic> {
+        self.is_self_alias_shadowed.then(|| Diagnostic::w004(span))
+    }
 }
 
 /// A [`ResolverGeneric`] on the OS's own file system.
@@ -89,7 +98,10 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
     /// Returns why `module` names no module, or more than one.
     pub fn resolve(&self, from_file: &Path, module: &str) -> Result<Resolution, ResolveError> {
         match &self.scheme {
-            Scheme::Lua(lua) => lua.resolve(&self.cache, module),
+            Scheme::Lua(lua) => {
+                let path = lua.resolve(&self.cache, module)?;
+                Ok(Resolution { path, is_self_alias_shadowed: false })
+            }
             Scheme::Luau(luau) => luau.resolve(&self.cache, from_file, module),
         }
     }

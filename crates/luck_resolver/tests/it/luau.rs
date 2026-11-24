@@ -278,6 +278,38 @@ fn a_resolver_sees_the_files_it_first_probed_until_its_cache_clears() {
     assert!(matches!(cleared, Err(ResolveError::NotFound(_))), "{cleared:?}");
 }
 
+#[test]
+fn a_resolver_sees_luaurc_edits_once_its_cache_clears() {
+    for initial in [None, Some("{"), Some("{}"), Some(r#"{"aliases":{"cache_test":"."}}"#)] {
+        let project = luau_project();
+        // `nested/main.luau` never exists, so its path can't canonicalize
+        // on its own and must start from the canonical `source_directory`.
+        let source_directory = canonical(&project, "src");
+        let nested = source_directory.join("nested");
+        fs::create_dir_all(&nested).expect("create nested directory");
+        let current = source_directory.join("main.luau");
+        let nested_file = nested.join("main.luau");
+        if let Some(contents) = initial {
+            fs::write(source_directory.join(".luaurc"), contents).expect("write initial aliases");
+        }
+        let resolver = Resolver::new(luau_options(project.path()));
+        let original = resolver.resolve(&current, "@cache_test/utils");
+        fs::write(source_directory.join(".luaurc"), r#"{"aliases":{"cache_test":"../updated"}}"#)
+            .expect("update aliases");
+        write_files(project.path(), &[("updated/utils.luau", "return {}")]);
+        for from_file in [&current, &nested_file] {
+            assert_eq!(resolver.resolve(from_file, "@cache_test/utils"), original);
+        }
+        resolver.clear_cache();
+        for from_file in [&current, &nested_file] {
+            let updated = resolver
+                .resolve(from_file, "@cache_test/utils")
+                .expect("a cleared resolver observes the edit");
+            assert_eq!(updated.path, canonical(&project, "updated/utils.luau"));
+        }
+    }
+}
+
 // Luau chains an alias whose value starts with `@`, per the require-by-string
 // aliases RFC and the `chained_aliases` fixtures.
 #[test]

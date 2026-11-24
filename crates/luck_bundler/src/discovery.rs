@@ -7,7 +7,7 @@ use std::thread;
 
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_diagnostics::Diagnostic;
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolution, Resolver, to_slash_lossy};
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
 use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
 use memchr::memmem;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -167,11 +167,9 @@ impl<'input> Reader<'input> {
         let resolved = requires
             .into_iter()
             .map(|require| match self.resolver.resolve(path, require.require_string) {
-                Ok(Resolution { path: target, is_self_alias_shadowed }) => {
-                    if is_self_alias_shadowed {
-                        warnings.push(Diagnostic::w004(require.path_span));
-                    }
-                    (require, Some(target))
+                Ok(resolution) => {
+                    warnings.extend(resolution.to_diagnostic(require.path_span));
+                    (require, Some(resolution.path))
                 }
                 Err(error) => {
                     errors.push(error.to_diagnostic(require.path_span, require.require_string));

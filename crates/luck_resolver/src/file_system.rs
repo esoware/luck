@@ -1,8 +1,9 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::{self, Component, Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 
+use crate::path::push_lexically;
 #[cfg(windows)]
 use crate::path::strip_verbatim_prefix;
 
@@ -46,19 +47,7 @@ pub trait FileSystem: Send + Sync {
         let mut missing = Vec::new();
         for ancestor in absolute.ancestors() {
             if let Ok(mut canonical) = self.canonicalize(ancestor) {
-                for component in missing.into_iter().rev() {
-                    match component {
-                        Component::CurDir => {}
-                        Component::ParentDir => {
-                            canonical.pop();
-                        }
-                        named @ (Component::Normal(_)
-                        | Component::Prefix(_)
-                        | Component::RootDir) => {
-                            canonical.push(named);
-                        }
-                    }
-                }
+                push_lexically(&mut canonical, missing.into_iter().rev());
                 return canonical;
             }
             missing.extend(ancestor.components().next_back());
@@ -71,6 +60,12 @@ pub trait FileSystem: Send + Sync {
 pub struct FileMetadata {
     pub is_file: bool,
     pub is_dir: bool,
+}
+
+impl From<fs::FileType> for FileMetadata {
+    fn from(file_type: fs::FileType) -> Self {
+        Self { is_file: file_type.is_file(), is_dir: file_type.is_dir() }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,8 +87,7 @@ impl FileSystem for FileSystemOs {
     }
 
     fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
-        let metadata = fs::metadata(path)?;
-        Ok(FileMetadata { is_file: metadata.is_file(), is_dir: metadata.is_dir() })
+        Ok(fs::metadata(path)?.file_type().into())
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
@@ -121,8 +115,7 @@ fn entry_metadata(entry: &fs::DirEntry) -> Option<FileMetadata> {
     if file_type.is_symlink() || is_reparse_point(entry) {
         return None;
     }
-    let is_file = file_type.is_file();
-    Some(FileMetadata { is_file, is_dir: file_type.is_dir() })
+    Some(file_type.into())
 }
 
 /// Any reparse point, not just the symlinks `FileType` reports, since the OS
@@ -141,35 +134,4 @@ fn is_reparse_point(entry: &fs::DirEntry) -> bool {
 #[cfg(not(windows))]
 const fn is_reparse_point(_: &fs::DirEntry) -> bool {
     false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn read_reads_bytes_that_are_not_utf8() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("latin1.lua");
-        fs::write(&path, b"local x = 1 -- caf\xE9\n").unwrap();
-        assert_eq!(FileSystemOs.read(&path).unwrap(), b"local x = 1 -- caf\xE9\n");
-    }
-
-    #[test]
-    fn read_of_a_missing_file_is_not_found() {
-        let directory = tempfile::tempdir().unwrap();
-        let missing = FileSystemOs.read(&directory.path().join("does_not_exist.lua")).unwrap_err();
-        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
-    }
-
-    #[test]
-    fn canonicalize_existing_resolves_only_the_part_that_is_missing() {
-        let directory = tempfile::tempdir().unwrap();
-        let canonical_root = FileSystemOs.canonicalize(directory.path()).unwrap();
-        assert_eq!(
-            FileSystemOs.canonicalize_existing(&directory.path().join("gone/../out/bundle.lua")),
-            canonical_root.join("out").join("bundle.lua")
-        );
-        assert_eq!(FileSystemOs.canonicalize_existing(directory.path()), canonical_root);
-    }
 }
