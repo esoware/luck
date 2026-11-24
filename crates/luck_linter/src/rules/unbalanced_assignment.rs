@@ -33,9 +33,7 @@ impl Rule for UnbalancedAssignment {
                     local.span,
                 ));
             }
-            return;
-        }
-        if let AstKind::Assignment(assignment) = kind {
+        } else if let AstKind::Assignment(assignment) = kind {
             let target_count = assignment.targets.len();
             let value_count = assignment.values.len();
             if !assignment.values.last().is_some_and(Expression::is_multi_value)

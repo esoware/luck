@@ -22,6 +22,7 @@ impl Rule for Shadowing {
             let Some(shadowed_id) = symbol.shadows else {
                 continue;
             };
+            let shadowed = tree.symbol(shadowed_id);
             // A leading `_` marks a name as deliberately unused, and an
             // implicit `self` has no name the author could change. Lua 5.1's
             // `local arg = {...}` is how a vararg function replaces its
@@ -29,7 +30,7 @@ impl Rule for Shadowing {
             let name = tree.name(symbol.name);
             if name.starts_with('_')
                 || symbol.kind.is_implicit()
-                || tree.symbol(shadowed_id).kind == SymbolKind::ImplicitArg
+                || shadowed.kind == SymbolKind::ImplicitArg
             {
                 continue;
             }
@@ -38,10 +39,7 @@ impl Rule for Shadowing {
                     format!("variable `{name}` shadows outer variable"),
                     symbol.definition_span,
                 )
-                .with_label(
-                    tree.symbol(shadowed_id).definition_span,
-                    "outer variable defined here",
-                ),
+                .with_label(shadowed.definition_span, "outer variable defined here"),
             );
         }
     }

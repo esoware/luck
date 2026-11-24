@@ -1,4 +1,4 @@
-use luck_ast::{AstKind, AstType, Call, GetSpan as _};
+use luck_ast::{AstType, Call, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::call::global_new_call;
@@ -28,14 +28,8 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
 
     /// A call statement's value goes unused, so it isn't checked.
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
-        let AstKind::SuffixedExpression(chain) = node.kind() else {
-            return;
-        };
-        let statement_call = context.statement_call(node);
-        for (index, call) in chain.calls() {
-            if statement_call != Some(index) {
-                check_call(call, context);
-            }
+        for call in context.used_calls(node) {
+            check_call(call, context);
         }
     }
 }

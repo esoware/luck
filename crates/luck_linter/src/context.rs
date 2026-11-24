@@ -3,7 +3,8 @@ use std::ops::Deref;
 use std::{iter, ptr};
 
 use luck_ast::{
-    AstKind, Block, Chunk, Expression, GetSpan as _, LocalAssignment, Name, Suffix, Var,
+    AstKind, Block, Call, Chunk, Expression, GetSpan as _, LocalAssignment, Name, Suffix,
+    SuffixedExpression, Var,
 };
 use luck_parser::Groupings;
 use luck_semantic::{AstNode, AstNodes, NodeId, Reference, ScopeId, Scoping, Symbol};
@@ -158,6 +159,21 @@ impl<'ast> ContextHost<'ast> {
         };
         matches!(self.nodes.parent_kind(node.id()), Some(AstKind::Block(_)))
             .then(|| chain.suffixes.len() - 1)
+    }
+
+    /// The calls of `node`, a chain, whose results the code uses: every one
+    /// but a call statement's last.
+    pub(crate) fn used_calls<'node>(
+        &self,
+        node: &AstNode<'node>,
+    ) -> impl Iterator<Item = Call<'node>> {
+        let dropped = self.statement_call(node);
+        node.kind()
+            .as_suffixed_expr()
+            .into_iter()
+            .flat_map(SuffixedExpression::calls)
+            .filter(move |&(index, _)| Some(index) != dropped)
+            .map(|(_, call)| call)
     }
 
     /// The suffixes `node`, a chain, reads through: all of them, but for the
@@ -336,6 +352,22 @@ local x = h(3)";
                 .map(|node| host.statement_call(node))
                 .collect();
             assert_eq!(calls, [Some(2), None]);
+        });
+    }
+
+    #[test]
+    fn every_call_but_a_call_statement_s_last_is_used() {
+        let source = "\
+f(1).g(2)
+local x = h(3)(4)";
+        with_host(source, LuaTarget::Lua54, |host| {
+            let used: Vec<&[u8]> = host
+                .nodes
+                .iter()
+                .flat_map(|node| host.used_calls(node))
+                .map(|call| call.span().text(host.source))
+                .collect();
+            assert_eq!(used, [&b"f(1)"[..], b"h(3)", b"h(3)(4)"]);
         });
     }
 

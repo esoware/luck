@@ -62,13 +62,13 @@ impl Rule for UnnecessaryNegation {
                 unary.span,
             )
             .with_fix(context, FixKind::Fix, |fixer| {
-                let inverted = [lhs, b" ", op_text.as_bytes(), b" ", rhs].concat();
-                let replacement = if needs_parentheses(node, unary, context) {
-                    [&b"("[..], &inverted, b")"].concat()
-                } else {
-                    inverted
-                };
                 is_equality.then(|| {
+                    let inverted = [lhs, b" ", op_text.as_bytes(), b" ", rhs].concat();
+                    let replacement = if needs_parentheses(node, unary, context) {
+                        [&b"("[..], &inverted, b")"].concat()
+                    } else {
+                        inverted
+                    };
                     fixer.replace("invert the comparison operator", unary.span, replacement)
                 })
             }),

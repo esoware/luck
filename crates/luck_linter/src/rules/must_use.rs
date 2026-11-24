@@ -40,13 +40,10 @@ impl Rule for MustUse {
 }
 
 fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
-    if let StdlibEntry::Function(function) = callee.entry()
-        && function.is_must_use
-    {
-        Some(callee.name())
-    } else {
-        None
-    }
+    let StdlibEntry::Function(function) = callee.entry() else {
+        return None;
+    };
+    function.is_must_use.then(|| callee.name())
 }
 
 #[cfg(test)]

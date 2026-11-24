@@ -1,6 +1,6 @@
 use luck_ast::{AstKind, AstType, Call, FunctionArgs, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
-use luck_token::{LuaVersion, Span, has_line_break};
+use luck_token::{Span, has_line_break};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
@@ -24,24 +24,24 @@ impl Rule for AmbiguousNewlineCall {
             return;
         };
         for (_, call) in chain.calls() {
-            if let Some(finding) = check_call(call, context.source, context.semantic.version()) {
+            if let Some(finding) = check_call(call, context) {
                 context.diagnostic(finding);
             }
         }
     }
 }
 
-fn check_call(call: Call<'_>, source: &[u8], version: LuaVersion) -> Option<Finding> {
+fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
     let FunctionArgs::Parenthesized { span: args_span, .. } = call.args else {
         return None;
     };
-    let prefix_end = call
-        .method
-        .as_ref()
-        .map_or_else(|| call.callee.span().end, |method_token| method_token.span.end);
+    let prefix_end = call.method.map_or_else(|| call.callee.span().end, |method| method.span.end);
     let open_start = args_span.start;
     if open_start <= prefix_end
-        || !has_line_break(Span::new(prefix_end, open_start).text(source), version)
+        || !has_line_break(
+            Span::new(prefix_end, open_start).text(context.source),
+            context.semantic.version(),
+        )
     {
         return None;
     }

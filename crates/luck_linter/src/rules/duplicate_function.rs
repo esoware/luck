@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use luck_ast::{AstKind, AstType, FunctionName, Statement};
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
@@ -38,13 +40,17 @@ impl Rule for DuplicateFunction {
             let Some(name) = declared_name else {
                 continue;
             };
-            if let Some(&first_span) = definitions.get(&name) {
-                context.diagnostic(
-                    Finding::new(format!("duplicate function definition `{name}`"), name_span)
-                        .with_label(first_span, "first defined here"),
-                );
-            } else {
-                definitions.insert(name, name_span);
+            match definitions.entry(name) {
+                Entry::Occupied(first) => context.diagnostic(
+                    Finding::new(
+                        format!("duplicate function definition `{}`", first.key()),
+                        name_span,
+                    )
+                    .with_label(*first.get(), "first defined here"),
+                ),
+                Entry::Vacant(slot) => {
+                    slot.insert(name_span);
+                }
             }
         }
     }

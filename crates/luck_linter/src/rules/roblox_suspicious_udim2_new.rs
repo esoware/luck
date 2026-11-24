@@ -1,4 +1,4 @@
-use luck_ast::{AstKind, AstType, Call, GetSpan as _};
+use luck_ast::{AstType, Call, GetSpan as _};
 use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::call::global_new_call;
@@ -26,14 +26,8 @@ impl Rule for RobloxSuspiciousUdim2New {
 
     /// A call statement's value goes unused, so it isn't checked.
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
-        let AstKind::SuffixedExpression(chain) = node.kind() else {
-            return;
-        };
-        let statement_call = context.statement_call(node);
-        for (index, call) in chain.calls() {
-            if statement_call != Some(index) {
-                check_call(call, context);
-            }
+        for call in context.used_calls(node) {
+            check_call(call, context);
         }
     }
 }
@@ -45,11 +39,13 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
     if args.is_empty() || args.len() >= 4 {
         return;
     }
-    let values: Vec<f64> = args.iter().filter_map(|arg| number_value(arg, context)).collect();
-    if values.len() != args.len() {
-        return;
+    let mut is_scale_sized = true;
+    for arg in args {
+        let Some(value) = number_value(arg, context) else {
+            return;
+        };
+        is_scale_sized &= (-1.0..=1.0).contains(&value);
     }
-    let is_scale_sized = values.iter().all(|v| (-1.0..=1.0).contains(v));
     let suggestion = if is_scale_sized { "UDim2.fromScale" } else { "UDim2.fromOffset" };
     context.diagnostic(
         Finding::new(

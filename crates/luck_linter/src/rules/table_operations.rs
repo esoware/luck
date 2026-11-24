@@ -48,16 +48,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
                     finding("`table.insert` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
-                return;
-            }
-            if length_operand(index).is_some_and(|target| same_target(target, table)) {
+            } else if length_operand(index).is_some_and(|target| same_target(target, table)) {
                 context.diagnostic(
                     finding("`table.insert(t, #t, v)` inserts the value before the last element")
                         .with_help("to append, use `table.insert(t, v)`"),
                 );
-                return;
-            }
-            if length_offset_operand(index, BinOp::Add, context)
+            } else if length_offset_operand(index, BinOp::Add, context)
                 .is_some_and(|target| same_target(target, table))
             {
                 context.diagnostic(
@@ -74,9 +70,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
                     finding("`table.remove` with index 0, but Lua arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
-                return;
-            }
-            if length_offset_operand(index, BinOp::Sub, context)
+            } else if length_offset_operand(index, BinOp::Sub, context)
                 .is_some_and(|target| same_target(target, table))
             {
                 context.diagnostic(
@@ -114,7 +108,7 @@ fn table_stdlib_function<'call>(
     context: &LintContext<'_, '_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
-    if root.text != "table" || context.semantic.scoping().resolves_to_local(root) {
+    if root.text != "table" || context.scoping().resolves_to_local(root) {
         return None;
     }
     context.semantic.stdlib().lookup(&["table", field])?;

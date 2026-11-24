@@ -19,19 +19,16 @@ declare_lint_rule!(
 
 impl Rule for NoImplicitGlobals {
     fn run_once(&self, context: &LintContext<'_, '_>) {
-        let semantic = context.semantic;
-        let tree = semantic.scoping();
-
+        let tree = context.scoping();
+        // `_` is a conventional discard name, not a real global.
+        let placeholder = tree.name_id("_");
         for reference in tree.global_references() {
+            if Some(reference.name) == placeholder
+                || context.semantic.is_extra_global(reference.name)
+            {
+                continue;
+            }
             let name = tree.name(reference.name);
-            // `_` is a conventional discard name, not a real global.
-            if name == "_" {
-                continue;
-            }
-            if semantic.is_extra_global(reference.name) {
-                continue;
-            }
-
             context.diagnostic(
                 Finding::new(format!("global variable `{name}` used"), reference.span)
                     .with_help("pass it in explicitly, or add it to `extra_globals`"),

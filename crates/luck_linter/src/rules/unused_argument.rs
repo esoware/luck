@@ -34,13 +34,10 @@ impl Rule for UnusedArgument {
             }
             let name = tree.name(symbol.name);
             // A parameter spelled `self` is a receiver the interface requires.
-            if name == "self" {
-                continue;
-            }
-            if name.starts_with('_') {
-                continue;
-            }
-            if !tree.resolved_references(symbol.id).is_empty() {
+            if name == "self"
+                || name.starts_with('_')
+                || !tree.resolved_references(symbol.id).is_empty()
+            {
                 continue;
             }
 

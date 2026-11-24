@@ -55,8 +55,7 @@ impl Rule for RedefiningLocal {
         for stmt in &block.stmts {
             if let Statement::LocalFunction(local_function) = stmt {
                 declare(&local_function.name);
-            }
-            if let Statement::LocalAssignment(local) = stmt {
+            } else if let Statement::LocalAssignment(local) = stmt {
                 for attributed in &local.names {
                     declare(&attributed.name);
                 }

@@ -1,6 +1,6 @@
 use luck_ast::{
     AstKind, AstType, Attribute, ContentEq as _, GetSpan as _, LocalAssignment,
-    LocalAssignmentKind, Statement,
+    LocalAssignmentKind, Name, Statement,
 };
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
@@ -80,17 +80,16 @@ fn mergeable<'ast>(
     // Both values in `local a, b = x, y` are evaluated before either name is
     // bound, so merging `local a = 1 local b = a` would make `b` read an outer
     // or global `a`.
-    let tree = context.semantic.scoping();
-    let reads_first = tree.references_within(second.initializer).any(|id| {
-        tree.reference(id)
-            .resolved
-            .is_some_and(|symbol| tree.symbol(symbol).definition_span == first.name)
+    let tree = context.scoping();
+    let reads_first = tree.symbol_of(first.name).is_some_and(|symbol| {
+        tree.references_within(second.initializer)
+            .any(|id| tree.reference(id).resolved == Some(symbol))
     });
     (!reads_first).then_some((first, second))
 }
 
 struct SimpleBinding<'ast> {
-    name: Span,
+    name: &'ast Name<'ast>,
     declaration: Span,
     attribute: Option<&'ast Attribute<'ast>>,
     initializer: Span,
@@ -115,7 +114,7 @@ fn simple_binding<'ast>(
         .as_ref()
         .map_or(attributed.name.span.end, |annotation| annotation.span().end);
     Some(SimpleBinding {
-        name: attributed.name.span,
+        name: &attributed.name,
         declaration: Span::new(attributed.name.span.start, declaration_end),
         attribute: attributed.attribute_or(local.attribute.as_deref()),
         initializer: context.extent(initializer),

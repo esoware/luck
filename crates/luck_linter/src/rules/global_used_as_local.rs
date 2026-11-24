@@ -17,6 +17,7 @@ declare_lint_rule!(
 impl Rule for GlobalUsedAsLocal {
     fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
+        let placeholder = tree.name_id("_");
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
         global_references.sort_by_key(|reference| reference.name);
 
@@ -26,7 +27,8 @@ impl Rule for GlobalUsedAsLocal {
             else {
                 continue;
             };
-            if tree.name(first.name) == "_" || context.semantic.is_known_global_name(first.name) {
+            if Some(first.name) == placeholder || context.semantic.is_known_global_name(first.name)
+            {
                 continue;
             }
             let is_assigned = references.iter().any(|reference| reference.kind.is_write());

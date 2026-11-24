@@ -2,7 +2,7 @@ use luck_ast::{
     AstKind, AstType, Block, Expression, GenericFor, GetSpan as _, LocalAssignment, Name,
     NumericFor, Statement, Suffix, Var,
 };
-use luck_semantic::{AstNode, AstTypesBitset, Scoping};
+use luck_semantic::{AstNode, AstTypesBitset, Scoping, SymbolId};
 use luck_stdlib::SemanticAnalysis;
 use luck_token::{Span, UnOp};
 
@@ -30,20 +30,18 @@ impl Rule for ManualTableClone {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        Suggestion::for_target(host.semantic).is_some()
+        CopyCall::for_target(host.semantic).is_some()
     }
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
-        let (AstKind::Block(block), Some(suggestion)) =
-            (node.kind(), Suggestion::for_target(context.semantic))
-        else {
+        let AstKind::Block(block) = node.kind() else {
             return;
         };
         for (first, second) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
-            if let Some(span) = manual_copy_span(first, second, suggestion, context) {
+            if let Some((span, copy_call)) = manual_copy(first, second, context) {
                 context.diagnostic(
                     Finding::new("manual table copy can be replaced with a stdlib call", span)
-                        .with_help(suggestion.help()),
+                        .with_help(copy_call.help()),
                 );
             }
         }
@@ -51,12 +49,12 @@ impl Rule for ManualTableClone {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Suggestion {
+enum CopyCall {
     TableClone,
     TableMove,
 }
 
-impl Suggestion {
+impl CopyCall {
     /// `None` when the target's stdlib has neither.
     fn for_target(semantic: &SemanticAnalysis<'_>) -> Option<Self> {
         let stdlib = semantic.stdlib();
@@ -78,27 +76,27 @@ impl Suggestion {
     }
 }
 
-/// The span from the `local` through the loop, when `stmt` is
-/// `local out = {}` and `next` a copy loop that `suggestion` can replace.
-fn manual_copy_span(
+/// The span from the `local` through the loop, and the call that can replace
+/// them, when `stmt` is `local out = {}` and `next` a loop that copies a table
+/// into it.
+fn manual_copy(
     stmt: &Statement<'_>,
     next: &Statement<'_>,
-    suggestion: Suggestion,
     context: &LintContext<'_, '_>,
-) -> Option<Span> {
-    let semantic = context.semantic;
+) -> Option<(Span, CopyCall)> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
-    let destination = single_empty_table_local(local)?;
+    let destination = empty_table_local(local, context.scoping())?;
+    let copy_call = CopyCall::for_target(context.semantic)?;
     let is_copy = match next {
         // `table.move` copies only the array part, so it can't stand in for
         // a `pairs` loop.
-        Statement::GenericFor(loop_node) => {
-            is_generic_clone(loop_node, destination, semantic)
-                && !matches!(suggestion, Suggestion::TableMove)
+        Statement::GenericFor(generic_for) => {
+            !matches!(copy_call, CopyCall::TableMove)
+                && is_generic_copy(generic_for, destination, context)
         }
-        Statement::NumericFor(loop_node) => is_numeric_clone(loop_node, destination, context),
+        Statement::NumericFor(numeric_for) => is_numeric_copy(numeric_for, destination, context),
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::DoBlock(_)
@@ -120,66 +118,66 @@ fn manual_copy_span(
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
     };
-    is_copy.then(|| Span::new(local.span.start, next.span().end))
+    is_copy.then(|| (Span::new(local.span.start, next.span().end), copy_call))
 }
 
-fn single_empty_table_local<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<&'ast Name<'ast>> {
-    let [attributed] = &*local.names else {
+/// The local `local` declares, when it's exactly `local out = {}`.
+fn empty_table_local(local: &LocalAssignment<'_>, tree: &Scoping) -> Option<SymbolId> {
+    let ([attributed], [Expression::TableConstructor(table)]) = (&*local.names, &*local.exprs)
+    else {
         return None;
     };
-    let [Expression::TableConstructor(table)] = &*local.exprs else {
+    if !table.fields.is_empty() {
         return None;
-    };
-    table.fields.is_empty().then_some(&attributed.name)
+    }
+    tree.symbol_of(&attributed.name)
 }
 
-/// Is this `for k, v in pairs(src) do out[k] = v end`?
-fn is_generic_clone(
-    loop_node: &GenericFor<'_>,
-    destination: &Name<'_>,
-    semantic: &SemanticAnalysis<'_>,
+/// Whether `generic_for` is `for k, v in pairs(src) do out[k] = v end`.
+fn is_generic_copy(
+    generic_for: &GenericFor<'_>,
+    destination: SymbolId,
+    context: &LintContext<'_, '_>,
 ) -> bool {
-    let [key, value] = &*loop_node.names else {
+    let ([key, value], [iterator]) = (&*generic_for.names, &*generic_for.exprs) else {
         return false;
     };
-    let [iterator] = &*loop_node.exprs else {
+    let tree = context.scoping();
+    let (Some(key), Some(value)) = (tree.symbol_of(&key.name), tree.symbol_of(&value.name)) else {
         return false;
     };
-    let tree = semantic.scoping();
-    is_pairs_call(iterator, semantic)
-        && copied_value(&loop_node.block, destination, &key.name, tree)
-            .is_some_and(|copied| is_read_of_local(copied, &value.name, tree))
+    is_pairs_call(iterator, context.semantic)
+        && copied_value(&generic_for.block, destination, key, tree)
+            .is_some_and(|copied| is_name_of(copied, value, tree))
 }
 
-/// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(
-    loop_node: &NumericFor<'_>,
-    destination: &Name<'_>,
+/// Whether `numeric_for` is `for i = 1, #src do out[i] = src[i] end`.
+fn is_numeric_copy(
+    numeric_for: &NumericFor<'_>,
+    destination: SymbolId,
     context: &LintContext<'_, '_>,
 ) -> bool {
     let tree = context.scoping();
-    let Some(source_table) = length_of_name(&loop_node.limit) else {
+    let (Some(source_table), Some(index)) =
+        (length_of_name(&numeric_for.limit), tree.symbol_of(&numeric_for.name))
+    else {
         return false;
     };
     let is_one = |expr: &Expression<'_>| has_number_value(expr, context, 1.0);
-    let has_unit_step = loop_node.step.as_ref().is_none_or(is_one);
-    is_one(&loop_node.start)
-        && has_unit_step
-        && copied_value(&loop_node.block, destination, &loop_node.name, tree).is_some_and(
-            |copied| {
-                index_read(copied).is_some_and(|(prefix, index)| {
-                    is_same_binding(prefix, source_table, tree)
-                        && is_read_of_local(index, &loop_node.name, tree)
-                })
-            },
-        )
+    is_one(&numeric_for.start)
+        && numeric_for.step.as_ref().is_none_or(is_one)
+        && copied_value(&numeric_for.block, destination, index, tree).is_some_and(|copied| {
+            index_read(copied).is_some_and(|(table, key)| {
+                is_same_binding(table, source_table, tree) && is_name_of(key, index, tree)
+            })
+        })
 }
 
 /// The value assigned when `body` is exactly `destination[key] = value`.
 fn copied_value<'ast>(
     body: &'ast Block<'ast>,
-    destination: &Name<'_>,
-    key: &Name<'_>,
+    destination: SymbolId,
+    key: SymbolId,
     tree: &Scoping,
 ) -> Option<&'ast Expression<'ast>> {
     let [Statement::Assignment(assignment)] = &*body.stmts else {
@@ -191,8 +189,7 @@ fn copied_value<'ast>(
     let [Suffix::Index { index, .. }] = &*target.suffixes else {
         return None;
     };
-    (is_read_of_local(&target.prefix, destination, tree) && is_read_of_local(index, key, tree))
-        .then_some(value)
+    (is_name_of(&target.prefix, destination, tree) && is_name_of(index, key, tree)).then_some(value)
 }
 
 /// The table and the key of `table[key]`.
@@ -231,14 +228,8 @@ fn length_of_name<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Name<'ast>
     Some(name)
 }
 
-fn declaration_of(name: &Name<'_>, tree: &Scoping) -> Option<Span> {
-    let reference = tree.reference(tree.reference_of(name)?);
-    Some(tree.symbol(reference.resolved?).definition_span)
-}
-
-fn is_read_of_local(expr: &Expression<'_>, declaration: &Name<'_>, tree: &Scoping) -> bool {
-    matches!(expr, Expression::Name(name)
-        if declaration_of(name, tree) == Some(declaration.span))
+fn is_name_of(expr: &Expression<'_>, symbol: SymbolId, tree: &Scoping) -> bool {
+    matches!(expr, Expression::Name(name) if tree.resolved_symbol_of(name) == Some(symbol))
 }
 
 /// Whether `expr` is the same name as `source`, resolving the same way, so a
@@ -246,7 +237,7 @@ fn is_read_of_local(expr: &Expression<'_>, declaration: &Name<'_>, tree: &Scopin
 fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &Scoping) -> bool {
     matches!(expr, Expression::Name(name)
         if name.text == source.text
-            && declaration_of(name, tree) == declaration_of(source, tree))
+            && tree.resolved_symbol_of(name) == tree.resolved_symbol_of(source))
 }
 
 #[cfg(test)]

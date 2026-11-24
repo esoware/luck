@@ -15,17 +15,12 @@ declare_lint_rule!(
 
 impl Rule for GlobalUsage {
     fn run_once(&self, context: &LintContext<'_, '_>) {
-        let is_roblox = context.semantic.target().is_roblox();
         let tree = context.scoping();
+        let is_roblox = context.semantic.target().is_roblox();
+        let environments = [tree.name_id("_G"), tree.name_id("shared").filter(|_| is_roblox)];
         for reference in tree.global_references() {
-            let name = tree.name(reference.name);
-            let is_environment = match name {
-                "_G" => true,
-                // Roblox.
-                "shared" => is_roblox,
-                _ => false,
-            };
-            if is_environment {
+            if environments.contains(&Some(reference.name)) {
+                let name = tree.name(reference.name);
                 context.diagnostic(
                     Finding::new(format!("global environment `{name}` used"), reference.span)
                         .with_help("prefer a module or an explicitly passed dependency"),
