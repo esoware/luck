@@ -7,7 +7,7 @@ use luck_allocator::Allocator;
 use luck_config::Project;
 use luck_diagnostics::{Diagnostic, Severity};
 use luck_linter::{
-    Category, FixError, FixKind, Fixed, LintConfig, Linter, Message, RuleId, RuleLevel,
+    Category, FixError, FixKind, Fixed, LintConfig, Linter, Message, RuleId, RuleLevel, RuleTimings,
 };
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_stdlib::StdlibLibrary;
@@ -189,6 +189,10 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     rules: bool,
 
+    /// Print how long each rule took over the run, slowest first.
+    #[arg(long)]
+    timings: bool,
+
     /// Print the lint configuration of the one path or --stdin-filepath given,
     /// or else of the current directory, as JSON, then exit.
     #[arg(long)]
@@ -243,12 +247,17 @@ impl LintArgs {
         }
 
         let is_quiet = verbosity == Verbosity::Quiet;
+        let timings = self.timings.then(RuleTimings::new);
 
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
             let mut project = one_shot_project(self.config.as_deref(), Path::new(stdin_path))?;
             project.overlay_lint(&overlay);
-            return self.run_stdin(stdin_path, &project, is_quiet);
+            let status = self.run_stdin(stdin_path, &project, timings.as_ref(), is_quiet);
+            if let Some(rule_timings) = &timings {
+                print_rule_timings(rule_timings);
+            }
+            return status;
         }
 
         let files = project_files(
@@ -267,7 +276,7 @@ impl LintArgs {
             let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
             for_each_outcome_in_order(
                 &files,
-                |file, allocator| self.lint_file(allocator, file, is_quiet),
+                |file, allocator| self.lint_file(allocator, file, timings.as_ref(), is_quiet),
                 |outcome| {
                     if let Some(note) = &outcome.note {
                         let _unused = writeln!(stderr, "{note}");
@@ -295,6 +304,9 @@ impl LintArgs {
                 files.len()
             );
         }
+        if let Some(rule_timings) = &timings {
+            print_rule_timings(rule_timings);
+        }
 
         self.exit_status(total_errors, total_warnings, is_quiet)
     }
@@ -307,7 +319,13 @@ impl LintArgs {
     ///
     /// Returns [`Exit::Failure`] when stdin can't be read, the fixes don't
     /// converge, or the findings fail the run under the exit-code policy.
-    fn run_stdin(&self, stdin_path: &str, project: &Project, is_quiet: bool) -> Result<(), Exit> {
+    fn run_stdin(
+        &self,
+        stdin_path: &str,
+        project: &Project,
+        timings: Option<&RuleTimings>,
+        is_quiet: bool,
+    ) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
         let path = Some(Path::new(stdin_path));
@@ -315,7 +333,7 @@ impl LintArgs {
         let allocator = Allocator::new();
         let fixes = self.fixes();
         let (current_source, messages, fix_error) =
-            fixed_or_linted(&linter, &allocator, &source, stdlib, fixes);
+            fixed_or_linted(&linter, &allocator, &source, stdlib, fixes, timings);
 
         if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
@@ -378,7 +396,13 @@ impl LintArgs {
         Ok(())
     }
 
-    fn lint_file(&self, allocator: &Allocator, file: &ProjectFile, is_quiet: bool) -> LintOutcome {
+    fn lint_file(
+        &self,
+        allocator: &Allocator,
+        file: &ProjectFile,
+        timings: Option<&RuleTimings>,
+        is_quiet: bool,
+    ) -> LintOutcome {
         let file_path = file.path.as_path();
         let source = match FileSystemOs.read(file_path) {
             Ok(bytes) => bytes,
@@ -398,7 +422,7 @@ impl LintArgs {
         let stdlib = file.project.stdlib_for(Some(file_path)).library();
         let linter = file.project.linter_for(Some(file_path));
         let (fixed, fixed_messages, fix_error) =
-            fixed_or_linted(&linter, allocator, &source, stdlib, self.fixes());
+            fixed_or_linted(&linter, allocator, &source, stdlib, self.fixes(), timings);
         let mut note =
             fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
@@ -406,7 +430,7 @@ impl LintArgs {
             (fixed, fixed_messages)
         } else if let Err(error) = fs::write(file_path, fixed) {
             note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-            (source.as_slice(), linted(&linter, allocator, &source, stdlib))
+            (source.as_slice(), linted(&linter, allocator, &source, stdlib, timings))
         } else {
             is_fixed = true;
             (fixed, fixed_messages)
@@ -455,24 +479,27 @@ impl LintArgs {
 }
 
 /// `source` with its fixes of the kinds `fixes` holds applied, the fixed
-/// text's messages, and why fixing failed, if it did. A failure leaves
-/// `source` as it was, with its own messages.
+/// text's messages, and why fixing failed, if it did.
+///
+/// A failure leaves `source` as it was, with its own messages. Each lint's
+/// rules are timed into `timings` when given.
 fn fixed_or_linted<'ast>(
     linter: &Linter,
     allocator: &'ast Allocator,
     source: &'ast [u8],
     stdlib: &StdlibLibrary<'_>,
     fixes: FixKind,
+    timings: Option<&RuleTimings>,
 ) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
     let fix_error = if fixes.is_empty() {
         None
     } else {
-        match linter.fix(allocator, source, stdlib, fixes) {
+        match linter.fix(allocator, source, stdlib, fixes, timings) {
             Ok(Fixed { parse, messages }) => return (parse.source, messages, None),
             Err(error) => Some(error),
         }
     };
-    (source, linted(linter, allocator, source, stdlib), fix_error)
+    (source, linted(linter, allocator, source, stdlib, timings), fix_error)
 }
 
 /// `source`'s messages, parsed into `allocator` as `stdlib`'s target.
@@ -481,9 +508,10 @@ fn linted(
     allocator: &Allocator,
     source: &[u8],
     stdlib: &StdlibLibrary<'_>,
+    timings: Option<&RuleTimings>,
 ) -> Vec<Message> {
     let parse = luck_parser::parse(allocator, source, stdlib.target.version());
-    linter.run(&parse, stdlib, FixKind::empty())
+    linter.run(&parse, stdlib, FixKind::empty(), timings)
 }
 
 /// Count `messages` by severity, as `(errors, warnings)`.
@@ -506,6 +534,35 @@ fn print_lint_rules() {
             .collect();
         println!("{}\t{}\t{}", rule.name(), rule.category().name(), kinds.join(","));
     }
+}
+
+/// Writes `timings` to stderr as oxlint's `--debug timings` does.
+///
+/// Each rule the run called gets a row, slowest first, with its time, its
+/// share of every rule's, and how many times the linter called it.
+#[expect(clippy::float_arithmetic, reason = "display math")]
+fn print_rule_timings(timings: &RuleTimings) {
+    let rows = timings.sorted();
+    let rule_width = rows.iter().map(|row| row.rule.name().len()).fold("Rule".len(), usize::max);
+    let calls_width =
+        rows.iter().map(|row| row.calls.to_string().len()).fold("Calls".len(), usize::max);
+    let total_seconds: f64 = rows.iter().map(|row| row.duration.as_secs_f64()).sum();
+    let mut lines = vec![
+        "Rule timings:".to_owned(),
+        format!(
+            "{:<rule_width$}  {:>10}  {:>8}  {:>calls_width$}",
+            "Rule", "Time (ms)", "Relative", "Calls"
+        ),
+        format!("{:-<rule_width$}  {:-<10}  {:-<8}  {:-<calls_width$}", "", "", "", ""),
+    ];
+    lines.extend(rows.iter().map(|row| {
+        let (name, seconds, calls) = (row.rule.name(), row.duration.as_secs_f64(), row.calls);
+        let millis = seconds * 1000.0f64;
+        let percent: f64 =
+            if total_seconds > 0.0f64 { seconds / total_seconds * 100.0f64 } else { 0.0f64 };
+        format!("{name:<rule_width$}  {millis:>10.3}  {percent:>7.1}%  {calls:>calls_width$}")
+    }));
+    eprintln!("{}", lines.join("\n"));
 }
 
 /// Prints `lint_config` as a `luck.json` `lint` section.
@@ -551,7 +608,7 @@ mod tests {
     }
 
     fn lint_source(source: &str, target: LuaTarget, linter: &Linter) -> Vec<Message> {
-        linted(linter, &Allocator::new(), source.as_bytes(), library_for(target))
+        linted(linter, &Allocator::new(), source.as_bytes(), library_for(target), None)
     }
 
     #[test]
@@ -587,6 +644,7 @@ mod tests {
             no_error_on_unmatched_pattern,
             rules,
             print_config,
+            timings,
             format,
             ..
         } = lint_args(&[
@@ -605,6 +663,7 @@ mod tests {
             "--no-error-on-unmatched-pattern",
             "--rules",
             "--print-config",
+            "--timings",
             "--format",
             "json",
         ]);
@@ -617,6 +676,7 @@ mod tests {
         assert!(no_error_on_unmatched_pattern);
         assert!(rules);
         assert!(print_config);
+        assert!(timings);
         assert!(matches!(format, LintFormat::Json));
         assert!(matches!(lint_args(&["-f", "github"]).format, LintFormat::Github));
     }

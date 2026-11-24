@@ -1,0 +1,221 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: `unpack` is deprecated
+ --> Lua54:1:1
+1 | unpack(t)
+  | ^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.2+; use 'table.unpack' instead
+fix: replace deprecated `unpack` with `table.unpack(t)`
+  | table.unpack(t)
+
+warning: `table.getn` is deprecated
+ --> Lua54:1:11
+1 | local n = table.getn(t)
+  |           ^^^^^^^^^^^^^
+tag: deprecated
+help: use the '#' length operator instead
+suggestion: replace deprecated `table.getn` with `#t`
+  | local n = #t
+
+warning: `wait` is deprecated
+ --> Roblox:1:1
+1 | wait(1)
+  | ^^^^^^^
+tag: deprecated
+help: use task.wait
+suggestion: replace deprecated `wait` with `task.wait(1)`
+  | task.wait(1)
+
+warning: `unpack` is deprecated
+ --> Lua54:1:1
+1 | unpack(f(--[[why]] t))
+  | ^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.2+; use 'table.unpack' instead
+fix: replace deprecated `unpack` with `table.unpack(f(--[[why]] t))`
+  | table.unpack(f(--[[why]] t))
+
+warning: `loadstring` is deprecated
+ --> Lua54:1:1
+1 | loadstring('x')
+  | ^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated since Lua 5.2; use 'load' instead
+fix: replace deprecated `loadstring` with `load('x')`
+  | load('x')
+
+warning: `string.gfind` is deprecated
+ --> Lua54:1:1
+1 | string.gfind(s, p)
+  | ^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use 'string.gmatch' instead
+fix: replace deprecated `string.gfind` with `string.gmatch(s, p)`
+  | string.gmatch(s, p)
+
+warning: `math.pow` is deprecated
+ --> Lua54:1:11
+1 | local r = math.pow(a, b)
+  |           ^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated since Lua 5.3; use '^' operator instead
+fix: replace deprecated `math.pow` with `(a ^ b)`
+  | local r = (a ^ b)
+
+warning: `math.pow` is deprecated
+ --> Lua54:1:1
+1 | math.pow(a, b)
+  | ^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated since Lua 5.3; use '^' operator instead
+
+warning: `math.log10` is deprecated
+ --> Lua54:1:1
+1 | math.log10(x)
+  | ^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.2; pass 10 as second arg to math.log
+fix: replace deprecated `math.log10` with `math.log(x, 10)`
+  | math.log(x, 10)
+
+warning: `string:gfind` is deprecated
+ --> Lua51:1:12
+1 | local it = ('x'):gfind('a')
+  |            ^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use 'string.gmatch' instead
+
+warning: `PointsService` is a deprecated argument of `game:GetService`
+ --> Roblox:1:27
+1 | local p = game:GetService('PointsService')
+  |                           ^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated Roblox service
+
+warning: `PointsService` is a deprecated argument of `game:GetService`
+ --> Roblox:1:26
+1 | local p = game:GetService'PointsService'
+  |                          ^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated Roblox service
+
+warning: argument 2 of `Instance.new` is deprecated
+ --> Roblox:1:32
+1 | local p = Instance.new('Part', workspace)
+  |                                ^^^^^^^^^
+tag: deprecated
+help: performance: set Parent after configuring the instance instead of passing it here
+
+warning: `Enum.AlignType.Parallel` is deprecated
+ --> Roblox:1:26
+1 | local a = Enum.AlignType.Parallel
+  |                          ^^^^^^^^
+tag: deprecated
+help: deprecated Roblox enum item
+
+warning: `setpause` is a deprecated argument of `collectgarbage`
+ --> Lua54:1:16
+1 | collectgarbage('setpause', 100)
+  |                ^^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.4; use collectgarbage('incremental', pause, 0, 0) instead
+
+warning: `setpause` is a deprecated argument of `collectgarbage`
+ --> Lua54:1:15
+1 | collectgarbage'setpause'
+  |               ^^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.4; use collectgarbage('incremental', pause, 0, 0) instead
+
+warning: `math.pow` is deprecated
+ --> Lua54:1:11
+1 | local r = math.pow(a + 1, b)
+  |           ^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated since Lua 5.3; use '^' operator instead
+fix: replace deprecated `math.pow` with `((a + 1) ^ b)`
+  | local r = ((a + 1) ^ b)
+
+warning: `table.getn` is deprecated
+ --> Lua54:1:11
+1 | local r = table.getn(a or b)
+  |           ^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use the '#' length operator instead
+suggestion: replace deprecated `table.getn` with `#(a or b)`
+  | local r = #(a or b)
+
+warning: `table.getn` is deprecated
+ --> Lua54:1:11
+1 | local r = table.getn(t) ^ 2
+  |           ^^^^^^^^^^^^^
+tag: deprecated
+help: use the '#' length operator instead
+suggestion: replace deprecated `table.getn` with `(#t)`
+  | local r = (#t) ^ 2
+
+warning: `unpack` is deprecated
+ --> Lua54:1:14
+1 | local a, b = unpack(t, 2, 3)
+  |              ^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.2+; use 'table.unpack' instead
+fix: replace deprecated `unpack` with `table.unpack(t, 2, 3)`
+  | local a, b = table.unpack(t, 2, 3)
+
+warning: `math.pow` is deprecated
+ --> Lua54:1:11
+1 | local r = math.pow(f())
+  |           ^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated since Lua 5.3; use '^' operator instead
+
+warning: `bit32.bnot` is deprecated
+ --> Lua53:1:11
+1 | local x = bit32.bnot(0)
+  |           ^^^^^^^^^^^^^
+tag: deprecated
+help: use the '~' operator instead
+
+warning: `table.getn` is deprecated
+ --> Lua54:2:1
+1 | local a = 1
+2 | table.getn(t)
+  | ^^^^^^^^^^^^^
+tag: deprecated
+help: use the '#' length operator instead
+
+warning: `table.getn` is deprecated
+ --> Lua54:1:11
+1 | local r = table.getn(t).x
+  |           ^^^^^^^^^^^^^
+tag: deprecated
+help: use the '#' length operator instead
+suggestion: replace deprecated `table.getn` with `(#t)`
+  | local r = (#t).x
+
+warning: `table.getn` is deprecated
+ --> Lua54:1:11
+1 | local r = table.getn(t) .. 'x'
+  |           ^^^^^^^^^^^^^
+tag: deprecated
+help: use the '#' length operator instead
+suggestion: replace deprecated `table.getn` with `#t`
+  | local r = #t .. 'x'
+
+warning: `math.pow` is deprecated
+ --> Lua54:1:11
+1 | local r = math.pow(a --[[why]], b)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: deprecated since Lua 5.3; use '^' operator instead
+
+warning: `unpack` is deprecated
+ --> Lua54:2:11
+1 | local table = {}
+2 | local a = unpack(t)
+  |           ^^^^^^^^^
+tag: deprecated
+help: deprecated in Lua 5.2+; use 'table.unpack' instead

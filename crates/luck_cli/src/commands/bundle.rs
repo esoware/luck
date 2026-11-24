@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use luck_allocator::ThreadAllocators;
 use luck_bundler::{DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
 use luck_resolver::to_slash_lossy;
@@ -10,7 +11,7 @@ use luck_token::LuaTarget;
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
-use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
+use crate::project::{bundle_options, existing_file, one_shot_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -66,7 +67,7 @@ impl BundleArgs {
         let transforms = self.minify_flags.apply_to(project.transforms());
         let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
-        let arenas = bundle_arenas();
+        let arenas = ThreadAllocators::new();
         if self.minify {
             let minified = bundle_minified(&arenas, entry_path, &options, &transforms)
                 .map_err(|errors| fail_with_diags(&errors, version))?;

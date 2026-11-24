@@ -1,0 +1,132 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: `["foo"]` is equivalent to `.foo`
+ --> Lua54:1:12
+1 | local x = t["foo"]
+  |            ^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["foo"]` as `.foo`
+  | local x = t.foo
+
+warning: `['foo']` is equivalent to `.foo`
+ --> Lua54:1:12
+1 | local x = t['foo']
+  |            ^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `['foo']` as `.foo`
+  | local x = t.foo
+
+warning: `["foo"]` is equivalent to `.foo`
+ --> Lua54:1:12
+1 | local x = t[--[[why]] "foo"]
+  |            ^^^^^^^^^^^^^^^^^
+help: prefer dot access for identifier-safe keys
+
+warning: `["continue"]` is equivalent to `.continue`
+ --> Luau:1:12
+1 | local x = t["continue"]
+  |            ^^^^^^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["continue"]` as `.continue`
+  | local x = t.continue
+
+warning: `['a']` is equivalent to `.a`
+ --> Lua54:1:14
+1 | local x = (t)['a'] .. (t.u)['b']
+  |              ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `['a']` as `.a`
+  | local x = (t).a .. (t.u)['b']
+
+warning: `['b']` is equivalent to `.b`
+ --> Lua54:1:28
+1 | local x = (t)['a'] .. (t.u)['b']
+  |                            ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `['b']` as `.b`
+  | local x = (t)['a'] .. (t.u).b
+
+all fixes:
+  | local x = (t).a .. (t.u).b
+
+warning: `["a"]` is equivalent to `.a`
+ --> Lua54:1:12
+1 | local x = t["a"]["b"]
+  |            ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["a"]` as `.a`
+  | local x = t.a["b"]
+
+warning: `["b"]` is equivalent to `.b`
+ --> Lua54:1:17
+1 | local x = t["a"]["b"]
+  |                 ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["b"]` as `.b`
+  | local x = t["a"].b
+
+all fixes:
+  | local x = t.a.b
+
+warning: `["a"]` is equivalent to `.a`
+ --> Lua54:1:2
+1 | t["a"]["b"], u["c"] = 1, 2
+  |  ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["a"]` as `.a`
+  | t.a["b"], u["c"] = 1, 2
+
+warning: `["b"]` is equivalent to `.b`
+ --> Lua54:1:7
+1 | t["a"]["b"], u["c"] = 1, 2
+  |       ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["b"]` as `.b`
+  | t["a"].b, u["c"] = 1, 2
+
+warning: `["c"]` is equivalent to `.c`
+ --> Lua54:1:15
+1 | t["a"]["b"], u["c"] = 1, 2
+  |               ^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["c"]` as `.c`
+  | t["a"]["b"], u.c = 1, 2
+
+all fixes:
+  | t.a.b, u.c = 1, 2
+
+warning: `["count"]` is equivalent to `.count`
+ --> Luau:1:2
+1 | t["count"] += 1
+  |  ^^^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["count"]` as `.count`
+  | t.count += 1
+
+warning: `["\102oo"]` is equivalent to `.foo`
+ --> Lua54:1:12
+1 | local x = t["\102oo"] + t[ [[bar]] ]
+  |            ^^^^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["\102oo"]` as `.foo`
+  | local x = t.foo + t[ [[bar]] ]
+
+warning: `[[[bar]]]` is equivalent to `.bar`
+ --> Lua54:1:26
+1 | local x = t["\102oo"] + t[ [[bar]] ]
+  |                          ^^^^^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `[[[bar]]]` as `.bar`
+  | local x = t["\102oo"] + t.bar
+
+all fixes:
+  | local x = t.foo + t.bar
+
+warning: `["_priv"]` is equivalent to `._priv`
+ --> Lua54:1:12
+1 | local x = t["_priv"]
+  |            ^^^^^^^^^
+help: prefer dot access for identifier-safe keys
+fix: rewrite `["_priv"]` as `._priv`
+  | local x = t._priv

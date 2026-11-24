@@ -115,118 +115,48 @@ const fn primitive_type_names(version: LuaVersion) -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(RuleId::UnknownType, source, version)
-    }
-
-    #[test]
-    fn flags_misspelled_type_name() {
-        let diags = run("local ok = type(x) == \"strng\"", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].help.as_deref() == Some("did you mean `string`?"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_typo_with_the_nearest_primitive() {
-        // Within 2 of `number`, which comes first, and within 1 of `buffer`.
-        let diags = run("local ok = type(x) == \"nuffer\"", LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].help.as_deref() == Some("did you mean `buffer`?"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_reversed_operands() {
-        let diags = run("local ok = \"nll\" == type(x)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_not_equal_comparison() {
-        let diags = run("local ok = type(x) ~= \"Number\"", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].help.as_deref() == Some("did you mean `number`?"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_buffer_outside_luau() {
-        // `buffer` is a Luau-only primitive; PUC type() never returns it.
-        let diags = run("local ok = type(x) == \"buffer\"", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_type_of_a_string_or_table_without_parentheses() {
-        for source in ["local ok = type\"x\" == \"strng\"", "local ok = type{} == \"strng\""] {
-            let diags = run(source, LuaVersion::Lua54);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_typeof_typo_in_luau() {
-        let diags = run("local ok = typeof(x) == \"tabel\"", LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_valid_primitives() {
-        for name in ["nil", "boolean", "number", "string", "table", "function"] {
-            let diags = run(&format!("local ok = type(x) == \"{name}\""), LuaVersion::Lua54);
-            assert!(diags.is_empty(), "{name}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_buffer_in_luau() {
-        let diags = run("local ok = type(x) == \"buffer\"", LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_typeof_outside_luau() {
-        // `typeof` is not a Lua 5.4 builtin; nothing to validate.
-        let diags = run("local ok = typeof(x) == \"strng\"", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_type() {
-        let diags = run(
+    const PASS: &[(&str, LuaTarget)] = &[
+        (r#"local ok = type(x) == "nil""#, LuaTarget::Lua54),
+        (r#"local ok = type(x) == "boolean""#, LuaTarget::Lua54),
+        (r#"local ok = type(x) == "number""#, LuaTarget::Lua54),
+        (r#"local ok = type(x) == "string""#, LuaTarget::Lua54),
+        (r#"local ok = type(x) == "table""#, LuaTarget::Lua54),
+        (r#"local ok = type(x) == "function""#, LuaTarget::Lua54),
+        (r#"local ok = type(x) == "buffer""#, LuaTarget::Luau),
+        // `typeof` isn't a Lua 5.4 builtin, so there's nothing to check.
+        (r#"local ok = typeof(x) == "strng""#, LuaTarget::Lua54),
+        (
             "\
 local type = function() end
 local ok = type(x) == \"strng\"",
-            LuaVersion::Lua54,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+        (r#"local ok = typeof(x) == "Instance""#, LuaTarget::LuauRoblox),
+        (r#"local ok = name == "strng""#, LuaTarget::Lua54),
+        ("local ok = type(x) == expected", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (r#"local ok = type(x) == "strng""#, LuaTarget::Lua54),
+        // Within 2 of `number`, which comes first, and within 1 of `buffer`.
+        (r#"local ok = type(x) == "nuffer""#, LuaTarget::Luau),
+        (r#"local ok = "nll" == type(x)"#, LuaTarget::Lua54),
+        (r#"local ok = type(x) ~= "Number""#, LuaTarget::Lua54),
+        // `buffer` is a Luau-only primitive, which PUC Lua's `type` never returns.
+        (r#"local ok = type(x) == "buffer""#, LuaTarget::Lua54),
+        (r#"local ok = type"x" == "strng""#, LuaTarget::Lua54),
+        (r#"local ok = type{} == "strng""#, LuaTarget::Lua54),
+        (r#"local ok = typeof(x) == "tabel""#, LuaTarget::Luau),
+        (r#"local ok = typeof(x) == "Number""#, LuaTarget::LuauRoblox),
+    ];
 
     #[test]
-    fn ignores_roblox_class_names_in_typeof() {
-        let diags = run_rule_roblox(RuleId::UnknownType, "local ok = typeof(x) == \"Instance\"");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_roblox_typeof_case_typo() {
-        let diags = run_rule_roblox(RuleId::UnknownType, "local ok = typeof(x) == \"Number\"");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_type_comparison() {
-        let diags = run("local ok = name == \"strng\"", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_dynamic_comparison() {
-        let diags = run("local ok = type(x) == expected", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::UnknownType, PASS, FAIL).test_and_snapshot();
     }
 }

@@ -67,122 +67,94 @@ fn full_name(function_name: &FunctionName<'_>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use luck_token::LuaTarget;
 
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{labeled, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::DuplicateFunction, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_duplicate_plain_function() {
-        let source = "\
-function f() end
-function f() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(diags[0].message, "duplicate function definition `f`");
-        assert_eq!(diags[0].span().start, 26);
-        assert_eq!(labeled(&diags[0], source), ["f"]);
-        assert_eq!(diags[0].labels[0].span.start, 9);
-    }
-
-    #[test]
-    fn flags_duplicate_dotted_function() {
-        let source = "\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local t = {}
 function t.m() end
-function t.m() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`t.m`"));
-        assert_eq!(labeled(&diags[0], source), ["t.m"]);
-    }
+function t:m() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+function f() end
+function g() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local function f() end
+local function f() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+do function f() end end
+do function f() end end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
-    #[test]
-    fn flags_duplicate_method() {
-        let diags = run("\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
+function f() end
+function f() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local t = {}
+function t.m() end
+function t.m() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local t = {}
 function t:m() end
-function t:m() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`t:m`"));
-    }
-
-    #[test]
-    fn flags_duplicates_in_nested_block() {
-        let diags = run("\
+function t:m() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 do
 function f() end
 function f() end
-end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(12));
-    }
-
-    #[test]
-    fn flags_each_later_duplicate() {
-        let diags = run("\
+end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 function f() end
 function f() end
-function f() end");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_same_name_with_dot_and_colon() {
-        let diags = run("\
-local t = {}
-function t.m() end
-function t:m() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_different_names() {
-        let diags = run("\
-function f() end
-function g() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_functions() {
-        let diags = run("\
-local function f() end
-local function f() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_sibling_blocks() {
-        let diags = run("\
-do function f() end end
-do function f() end end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_duplicate_global_function() {
-        let source = "\
+function f() end",
+            LuaTarget::Lua54,
+        ),
+        // Both statements define `f` in one block.
+        (
+            "\
 global function f() end
-global function f() end";
-        let diags = run_rule(RuleId::DuplicateFunction, source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");
-    }
+global function f() end",
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
+function m.f0() end
+function m.f1() end
+function m.f0() end
+function m.f1() end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn flags_each_repeat_in_a_long_block() {
-        let mut functions = String::new();
-        for i in 0..2_000u32 {
-            let _unused = writeln!(functions, "function m.f{i}() end");
-        }
-        let diags = run(&format!("{functions}{functions}"));
-        assert_eq!(diags.len(), 2_000, "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::DuplicateFunction, PASS, FAIL).test_and_snapshot();
     }
 }

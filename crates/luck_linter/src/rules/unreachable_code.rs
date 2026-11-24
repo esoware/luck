@@ -114,156 +114,100 @@ fn report(run: Option<Span>, context: &LintContext<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnreachableCode, source, LuaVersion::Lua54)
-    }
-
-    /// The text of each finding's span.
-    fn flagged(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(RuleId::UnreachableCode, source, version)
-            .iter()
-            .map(|diag| String::from_utf8_lossy(diag.span().text(source.as_bytes())).into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn flags_code_after_break() {
-        // On Lua 5.2+ break can sit mid-block, so a statement can follow it.
-        let diags = run("while true do break print(1) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_a_run_of_unreachable_statements_once() {
-        let source = "for i = 1, 3 do break print(1) print(2) end";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["print(1) print(2)"]);
-    }
-
-    #[test]
-    fn flags_code_after_a_return_in_a_do_block() {
-        let source = "\
-local function f()
-  do return end
-  print(1)
-end";
-        assert_eq!(flagged(source, LuaVersion::Lua51), ["print(1)"]);
-    }
-
-    #[test]
-    fn flags_code_after_an_error_call() {
-        let source = "\
-error('stop')
-print(1)";
-        assert_eq!(flagged(source, LuaVersion::Luau), ["print(1)"]);
-    }
-
-    #[test]
-    fn ignores_code_after_a_call_of_a_shadowed_error() {
-        let source = "\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local function error() end
 error('go on')
-print(1)";
-        let diags = flagged(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_code_after_a_loop_that_never_ends() {
-        let source = "\
-while true do print(1) end
-print(2)";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["print(2)"]);
-    }
-
-    #[test]
-    fn flags_code_after_an_if_whose_every_branch_returns() {
-        let source = "\
-local function f(x)
-  if x then return 1 else return 2 end
-  print(x)
-end";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["print(x)"]);
-    }
-
-    #[test]
-    fn flags_the_code_a_goto_jumps_over() {
-        let source = "\
-goto skip
-print(1)
-::skip::
-print(2)";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["print(1)"]);
-    }
-
-    #[test]
-    fn flags_the_body_of_a_while_whose_condition_is_always_false() {
-        assert_eq!(flagged("while false do print(1) end", LuaVersion::Lua54), ["print(1)"]);
-    }
-
-    #[test]
-    fn flags_an_unreachable_block_as_the_statement_that_holds_it() {
-        let source = "\
-local function f(x)
-  do return end
-  if x then print(x) end
-end";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["if x then print(x) end"]);
-    }
-
-    #[test]
-    fn flags_a_function_defined_in_unreachable_code_once() {
-        let source = "\
-do return end
-local function g() print(1) end";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["local function g() print(1) end"]);
-    }
-
-    #[test]
-    fn ignores_break_as_last_stmt() {
-        let diags = run("while true do print(1) break end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_straight_line_code() {
-        let diags = run("\
+print(1)",
+            LuaTarget::Lua54,
+        ),
+        ("while true do print(1) break end", LuaTarget::Lua54),
+        (
+            "\
 local x = 1
-print(x)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_semicolon_after_break() {
-        let diags = run("while true do break; end");
-        assert!(diags.is_empty(), "a `;` separator isn't code: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_label_after_break() {
-        let diags = run("while c do if x then goto a end break ::a:: print(1) end");
-        assert!(diags.is_empty(), "the `goto` reaches the label after `break`: {diags:?}");
-    }
-
-    #[test]
-    fn flags_code_after_a_label_no_goto_reaches() {
-        let source = "while c do break ::a:: print(1) end";
-        assert_eq!(flagged(source, LuaVersion::Lua54), ["::a:: print(1)"]);
-    }
-
-    #[test]
-    fn ignores_a_luau_type_after_the_end_of_flow() {
-        let source = "\
+print(x)",
+            LuaTarget::Lua54,
+        ),
+        // A `;` separator isn't code.
+        ("while true do break; end", LuaTarget::Lua54),
+        // The `goto` reaches the label after `break`.
+        ("while c do if x then goto a end break ::a:: print(1) end", LuaTarget::Lua54),
+        (
+            "\
 local function f(x: T)
   do return end
   type T = number
-end";
-        let diags = flagged(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
+end",
+            LuaTarget::Luau,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        // From Lua 5.2 a `break` can sit mid-block, so a statement can follow it.
+        ("while true do break print(1) end", LuaTarget::Lua54),
+        ("for i = 1, 3 do break print(1) print(2) end", LuaTarget::Lua54),
+        (
+            "\
+local function f()
+  do return end
+  print(1)
+end",
+            LuaTarget::Lua51,
+        ),
+        (
+            "\
+error('stop')
+print(1)",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+while true do print(1) end
+print(2)",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local function f(x)
+  if x then return 1 else return 2 end
+  print(x)
+end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+goto skip
+print(1)
+::skip::
+print(2)",
+            LuaTarget::Lua54,
+        ),
+        ("while false do print(1) end", LuaTarget::Lua54),
+        (
+            "\
+local function f(x)
+  do return end
+  if x then print(x) end
+end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+do return end
+local function g() print(1) end",
+            LuaTarget::Lua54,
+        ),
+        ("while c do break ::a:: print(1) end", LuaTarget::Lua54),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::UnreachableCode, PASS, FAIL).test_and_snapshot();
     }
 }

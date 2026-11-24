@@ -51,78 +51,36 @@ impl Rule for EmptyBlock {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::EmptyBlock, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_each_empty_if_branch() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "do return end",
+        "\
 local c = 1
-if c then elseif c then else end");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            ["empty `if` block", "empty `elseif` block", "empty `else` block"],
-            "{diags:?}"
-        );
-    }
+if c then print(1) else print(2) end
+while c do break end",
+    ];
 
-    #[test]
-    fn flags_empty_loop_and_do_bodies() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "\
+local c = 1
+if c then elseif c then else end",
+        "\
 local c = 1
 while c do end
 do end
 for i = 1, 2 do end
 for k in pairs({}) do end
-repeat until c");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            [
-                "empty `while` loop body",
-                "empty `do` block",
-                "empty numeric `for` loop body",
-                "empty generic `for` loop body",
-                "empty `repeat` loop body",
-            ],
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_body_of_only_semicolons() {
-        let diags = run("\
+repeat until c",
+        "\
 local c = 1
 if c then ; else ;; end
-do ; end");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            ["empty `if` block", "empty `else` block", "empty `do` block"],
-            "{diags:?}"
-        );
-    }
+do ; end",
+    ];
 
     #[test]
-    fn ignores_block_with_only_a_return() {
-        let diags = run("do return end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_empty_blocks() {
-        let diags = run("\
-local c = 1
-if c then print(1) else print(2) end
-while c do break end");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::EmptyBlock, PASS, FAIL).test_and_snapshot();
     }
 }

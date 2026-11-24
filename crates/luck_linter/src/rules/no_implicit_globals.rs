@@ -42,77 +42,45 @@ impl Rule for NoImplicitGlobals {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::config::LintConfig;
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule_with_config;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, extra_globals: &[&str]) -> Vec<Message> {
-        let config = LintConfig {
-            extra_globals: extra_globals.iter().map(ToString::to_string).collect(),
-            ..LintConfig::default()
-        };
-        run_rule_with_config(RuleId::NoImplicitGlobals, source, LuaVersion::Lua54, &config)
-    }
-
-    #[test]
-    fn flags_stdlib_global() {
-        let diags = run("print(\"x\")", &[]);
-        assert!(diags.iter().any(|diag| diag.message.contains("`print`")), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_shadowing_global() {
-        let diags = run(
+    const PASS: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
+        (
             "\
 local print = function() end
 print(\"x\")",
-            &[],
-        );
-        assert!(diags.iter().all(|diag| !diag.message.contains("`print`")), "got: {diags:?}");
-    }
+            LuaTarget::Lua54,
+            None,
+            None,
+        ),
+        (
+            "myCustomGlobal()",
+            LuaTarget::Lua54,
+            None,
+            Some(r#"{"extra_globals": ["myCustomGlobal"]}"#),
+        ),
+        ("_ = 1", LuaTarget::Lua54, None, None),
+    ];
 
-    #[test]
-    fn flags_custom_global() {
-        let diags = run("myCustomGlobal()", &[]);
-        assert!(
-            diags.iter().any(|diag| diag.message.contains("`myCustomGlobal`")),
-            "got: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_configured_extra_global() {
-        let diags = run("myCustomGlobal()", &["myCustomGlobal"]);
-        assert!(
-            diags.iter().all(|diag| !diag.message.contains("`myCustomGlobal`")),
-            "got: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_stdlib_despite_configured_extra_global() {
-        let diags = run(
+    const FAIL: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
+        (r#"print("x")"#, LuaTarget::Lua54, None, None),
+        ("myCustomGlobal()", LuaTarget::Lua54, None, None),
+        (
             "\
 print(\"x\")
 myCustomGlobal()",
-            &["myCustomGlobal"],
-        );
-        assert!(diags.iter().any(|diag| diag.message.contains("`print`")), "{diags:?}");
-        assert!(diags.iter().all(|diag| !diag.message.contains("`myCustomGlobal`")));
-    }
+            LuaTarget::Lua54,
+            None,
+            Some(r#"{"extra_globals": ["myCustomGlobal"]}"#),
+        ),
+        ("g = 1", LuaTarget::Lua54, None, None),
+    ];
 
     #[test]
-    fn flags_write_to_global() {
-        let diags = run("g = 1", &[]);
-        assert!(diags.iter().any(|diag| diag.message.contains("`g`")), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_discard_name() {
-        let diags = run("_ = 1", &[]);
-        assert!(diags.iter().all(|diag| !diag.message.contains("`_`")), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::NoImplicitGlobals, PASS, FAIL).test_and_snapshot();
     }
 }

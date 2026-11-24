@@ -313,305 +313,79 @@ fn check_field_accesses(
 
 #[cfg(test)]
 mod tests {
-    use core::slice;
+    use luck_token::LuaTarget;
 
-    use luck_token::LuaVersion;
-
-    use super::Tag;
-    use crate::diagnostic::Message;
-    use crate::fix::FixKind;
-    use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run_fix(source: &str, version: LuaVersion) -> Option<(String, String)> {
-        let diags = run_rule(RuleId::Deprecated, source, version);
-        let diag = diags.into_iter().find(|diag| diag.fix.is_some())?;
-        let applied = fix_and_reparse(source, slice::from_ref(&diag), version);
-        Some((diag.fix?.message.into_owned(), applied))
-    }
-
-    fn fix_kind(diags: &[Message]) -> Option<FixKind> {
-        diags.first()?.fix.as_ref().map(|fix| fix.kind)
-    }
-
-    #[test]
-    fn flags_and_fixes_an_exact_replacement() {
-        let diags = run_rule(RuleId::Deprecated, "unpack(t)", LuaVersion::Lua54);
-        assert_eq!(fix_kind(&diags), Some(FixKind::Fix), "{diags:?}");
-        assert_eq!(diags[0].tag, Some(Tag::Deprecated), "an editor strikes it through");
-    }
-
-    #[test]
-    fn flags_and_suggests_a_replacement_that_changes_behavior() {
-        let getn = run_rule(RuleId::Deprecated, "local n = table.getn(t)", LuaVersion::Lua54);
-        assert_eq!(fix_kind(&getn), Some(FixKind::Suggestion), "`#` calls `__len`: {getn:?}");
-        let wait = run_rule_roblox(RuleId::Deprecated, "wait(1)");
-        assert_eq!(fix_kind(&wait), Some(FixKind::Suggestion), "{wait:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_a_comment_inside_an_argument() {
-        let (_, after) = run_fix("unpack(f(--[[why]] t))", LuaVersion::Lua54).unwrap();
-        assert_eq!(after, "table.unpack(f(--[[why]] t))");
-    }
-
-    #[test]
-    fn flags_and_fixes_loadstring_to_load() {
-        let (description, after) = run_fix("loadstring('x')", LuaVersion::Lua54).unwrap();
-        assert_eq!(description, "replace deprecated `loadstring` with `load('x')`");
-        assert_eq!(after, "load('x')");
-    }
-
-    #[test]
-    fn flags_and_fixes_string_gfind_to_gmatch() {
-        let (description, after) = run_fix("string.gfind(s, p)", LuaVersion::Lua54).unwrap();
-        assert_eq!(description, "replace deprecated `string.gfind` with `string.gmatch(s, p)`");
-        assert_eq!(after, "string.gmatch(s, p)");
-    }
-
-    #[test]
-    fn flags_and_fixes_table_getn_to_length() {
-        let (description, after) = run_fix("local n = table.getn(t)", LuaVersion::Lua54).unwrap();
-        assert_eq!(description, "replace deprecated `table.getn` with `#t`");
-        assert_eq!(after, "local n = #t");
-    }
-
-    #[test]
-    fn flags_and_fixes_unpack_to_table_unpack() {
-        let (description, after) = run_fix("unpack(t)", LuaVersion::Lua54).unwrap();
-        assert_eq!(description, "replace deprecated `unpack` with `table.unpack(t)`");
-        assert_eq!(after, "table.unpack(t)");
-    }
-
-    #[test]
-    fn flags_and_fixes_math_pow_to_caret() {
-        let (description, after) = run_fix("local r = math.pow(a, b)", LuaVersion::Lua54).unwrap();
-        assert_eq!(description, "replace deprecated `math.pow` with `(a ^ b)`");
-        assert_eq!(after, "local r = (a ^ b)");
-    }
-
-    #[test]
-    fn flags_expr_template_in_stmt_position_without_fix() {
-        // `(a ^ b)` can't stand alone as a statement, so there's no fix.
-        let diags = run_rule(RuleId::Deprecated, "math.pow(a, b)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "expected no fix: {diags:?}");
-        assert!(run_fix("math.pow(a, b)", LuaVersion::Lua54).is_none());
-    }
-
-    #[test]
-    fn flags_and_fixes_math_log10_to_log_base_10() {
-        let (description, after) = run_fix("math.log10(x)", LuaVersion::Lua54).unwrap();
-        assert_eq!(description, "replace deprecated `math.log10` with `math.log(x, 10)`");
-        assert_eq!(after, "math.log(x, 10)");
-    }
-
-    #[test]
-    fn ignores_method_call() {
-        // The type of `obj` is unknown, so `getn` doesn't resolve to a
-        // stdlib entry.
-        let diags = run_rule(RuleId::Deprecated, "obj:getn()", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_deprecated_string_method_on_literal() {
-        // A string literal has the `string` shape, so `:gfind` warns like
-        // `string.gfind`.
-        let diags = run_rule(RuleId::Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
-        assert!(diags.iter().any(|diag| diag.message.contains("gfind")), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_dead_service_name() {
-        let diags =
-            run_rule_roblox(RuleId::Deprecated, "local p = game:GetService('PointsService')");
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.message.contains("`PointsService` is a deprecated argument")),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_dead_service_name_without_parentheses() {
-        let diags = run_rule_roblox(RuleId::Deprecated, "local p = game:GetService'PointsService'");
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.message.contains("`PointsService` is a deprecated argument")),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_live_service_name() {
-        let diags = run_rule_roblox(RuleId::Deprecated, "local p = game:GetService('Players')");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_deprecated_instance_new_parent_arg() {
-        let diags =
-            run_rule_roblox(RuleId::Deprecated, "local p = Instance.new('Part', workspace)");
-        assert!(
-            diags.iter().any(|diag| diag.message.contains("argument 2 of `Instance.new`")),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_instance_new_without_parent_arg() {
-        let diags = run_rule_roblox(RuleId::Deprecated, "local p = Instance.new('Part')");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_deprecated_enum_item() {
-        let diags = run_rule_roblox(RuleId::Deprecated, "local a = Enum.AlignType.Parallel");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`Enum.AlignType.Parallel` is deprecated"), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_deprecated_enum_item_on_shadowed_root() {
-        let diags = run_rule_roblox(
-            RuleId::Deprecated,
+    const PASS: &[(&str, LuaTarget)] = &[
+        // The type of `obj` is unknown, so `getn` doesn't resolve to a stdlib
+        // entry.
+        ("obj:getn()", LuaTarget::Lua54),
+        ("local p = game:GetService('Players')", LuaTarget::LuauRoblox),
+        ("local p = Instance.new('Part')", LuaTarget::LuauRoblox),
+        (
             "\
 local Enum = {}
 local a = Enum.AlignType.Parallel",
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+            LuaTarget::LuauRoblox,
+        ),
+    ];
 
-    #[test]
-    fn flags_deprecated_collectgarbage_option() {
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("unpack(t)", LuaTarget::Lua54),
+        // Only a suggestion, since `#` calls `__len`.
+        ("local n = table.getn(t)", LuaTarget::Lua54),
+        ("wait(1)", LuaTarget::LuauRoblox),
+        ("unpack(f(--[[why]] t))", LuaTarget::Lua54),
+        ("loadstring('x')", LuaTarget::Lua54),
+        ("string.gfind(s, p)", LuaTarget::Lua54),
+        ("local r = math.pow(a, b)", LuaTarget::Lua54),
+        // `(a ^ b)` can't stand alone as a statement, so there's no fix.
+        ("math.pow(a, b)", LuaTarget::Lua54),
+        ("math.log10(x)", LuaTarget::Lua54),
+        // A string literal has the `string` shape, so `:gfind` warns like
+        // `string.gfind`.
+        ("local it = ('x'):gfind('a')", LuaTarget::Lua51),
+        ("local p = game:GetService('PointsService')", LuaTarget::LuauRoblox),
+        ("local p = game:GetService'PointsService'", LuaTarget::LuauRoblox),
+        ("local p = Instance.new('Part', workspace)", LuaTarget::LuauRoblox),
+        ("local a = Enum.AlignType.Parallel", LuaTarget::LuauRoblox),
         // Per-constant deprecation from the 5.4 GC rework.
-        let diags =
-            run_rule(RuleId::Deprecated, "collectgarbage('setpause', 100)", LuaVersion::Lua54);
-        assert!(
-            diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_deprecated_collectgarbage_option_without_parentheses() {
-        let diags = run_rule(RuleId::Deprecated, "collectgarbage'setpause'", LuaVersion::Lua54);
-        assert!(
-            diags.iter().any(|diag| diag.message.contains("`setpause` is a deprecated argument")),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_math_pow_argument_grouping() {
-        let after = run_fix("local r = math.pow(a + 1, b)", LuaVersion::Lua54).map(|fix| fix.1);
-        assert_ne!(
-            after.as_deref(),
-            Some("local r = (a + 1 ^ b)"),
-            "the fix shouldn't regroup the base as `1 ^ b`"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_getn_argument_grouping() {
-        let after = run_fix("local r = table.getn(a or b)", LuaVersion::Lua54).map(|fix| fix.1);
-        assert_ne!(
-            after.as_deref(),
-            Some("local r = #a or b"),
-            "the fix should take the length of the whole argument"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_getn_grouping_in_power() {
-        let after = run_fix("local r = table.getn(t) ^ 2", LuaVersion::Lua54).map(|fix| fix.1);
-        assert_ne!(
-            after.as_deref(),
-            Some("local r = #t ^ 2"),
-            "`#t ^ 2` takes the length of `t ^ 2`, not the square of the length"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_extra_unpack_arguments() {
-        let after = run_fix("local a, b = unpack(t, 2, 3)", LuaVersion::Lua54).map(|fix| fix.1);
-        assert_ne!(
-            after.as_deref(),
-            Some("local a, b = table.unpack(t)"),
-            "the fix shouldn't drop the range arguments"
-        );
-    }
-
-    #[test]
-    fn flags_without_fix_when_template_arguments_are_missing() {
-        let diags = run_rule(RuleId::Deprecated, "local r = math.pow(f())", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "`(f() ^ )` doesn't parse, so no fix applies: {diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_for_bit32_bnot_on_lua53() {
-        let after = run_fix("local x = bit32.bnot(0)", LuaVersion::Lua53).map(|fix| fix.1);
-        assert_ne!(
-            after.as_deref(),
-            Some("local x = (~0)"),
-            "`bit32.bnot(0)` is 4294967295 and `~0` is -1"
-        );
-    }
-
-    #[test]
-    fn flags_without_fix_for_length_template_as_statement() {
-        let diags = run_rule(
-            RuleId::Deprecated,
+        ("collectgarbage('setpause', 100)", LuaTarget::Lua54),
+        ("collectgarbage'setpause'", LuaTarget::Lua54),
+        // The fix shouldn't regroup the base as `1 ^ b`.
+        ("local r = math.pow(a + 1, b)", LuaTarget::Lua54),
+        // The fix should take the length of the whole argument.
+        ("local r = table.getn(a or b)", LuaTarget::Lua54),
+        // `#t ^ 2` takes the length of `t ^ 2`, not the square of the length.
+        ("local r = table.getn(t) ^ 2", LuaTarget::Lua54),
+        // The fix shouldn't drop the range arguments.
+        ("local a, b = unpack(t, 2, 3)", LuaTarget::Lua54),
+        // `(f() ^ )` doesn't parse, so no fix applies.
+        ("local r = math.pow(f())", LuaTarget::Lua54),
+        // `bit32.bnot(0)` is 4294967295 and `~0` is -1.
+        ("local x = bit32.bnot(0)", LuaTarget::Lua53),
+        // `#t` can't stand as a statement.
+        (
             "\
 local a = 1
 table.getn(t)",
-            LuaVersion::Lua54,
-        );
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "`#t` can't stand as a statement: {diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_grouping_length_before_a_suffix() {
-        let after = run_fix("local r = table.getn(t).x", LuaVersion::Lua54).map(|fix| fix.1);
-        assert_eq!(after.as_deref(), Some("local r = (#t).x"));
-    }
-
-    #[test]
-    fn flags_and_fixes_length_before_concatenation_without_grouping() {
-        let after = run_fix("local r = table.getn(t) .. 'x'", LuaVersion::Lua54).map(|fix| fix.1);
-        assert_eq!(after.as_deref(), Some("local r = #t .. 'x'"));
-    }
-
-    #[test]
-    fn flags_without_fix_when_a_comment_sits_inside_the_call() {
-        let diags =
-            run_rule(RuleId::Deprecated, "local r = math.pow(a --[[why]], b)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_when_the_replacement_name_is_shadowed() {
-        let diags = run_rule(
-            RuleId::Deprecated,
+            LuaTarget::Lua54,
+        ),
+        ("local r = table.getn(t).x", LuaTarget::Lua54),
+        ("local r = table.getn(t) .. 'x'", LuaTarget::Lua54),
+        ("local r = math.pow(a --[[why]], b)", LuaTarget::Lua54),
+        (
             "\
 local table = {}
 local a = unpack(t)",
-            LuaVersion::Lua54,
-        );
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "{diags:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn flags_without_fix_for_a_method_call() {
-        let diags = run_rule(RuleId::Deprecated, "local it = ('x'):gfind('a')", LuaVersion::Lua51);
-        assert!(diags.iter().any(|diag| diag.message.contains("gfind")), "{diags:?}");
-        assert!(diags.iter().all(|diag| diag.fix.is_none()), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::Deprecated, PASS, FAIL).test_and_snapshot();
     }
 }

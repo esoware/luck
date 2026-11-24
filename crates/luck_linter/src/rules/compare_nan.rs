@@ -47,59 +47,29 @@ impl Rule for CompareNan {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::CompareNan, source, LuaVersion::Lua54)
-    }
+    const PASS: &[&str] = &["local same = x == 0/1", "local is_nan = x ~= x"];
+
+    const FAIL: &[&str] = &[
+        "local same = x == 0/0",
+        "local differs = 0/0 ~= x",
+        "local same = x == 0.0/0",
+        "local same = x == 0/0.0",
+        "local same = x == 0x0/0",
+        "local same = x == 0e0/0",
+        "local same = x == -(0/0)",
+        "local same = x == 1e999 - 1e999",
+        "local same = x == 0/0 + 1",
+        "local same = x == (0/0)",
+        "\
+local x = 1
+if x == 0/0 then end",
+    ];
 
     #[test]
-    fn flags_equality_with_nan() {
-        let diags = run("local same = x == 0/0");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_inequality_with_nan_on_left() {
-        let diags = run("local differs = 0/0 ~= x");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_every_spelling_of_zero() {
-        for nan in ["0.0/0", "0/0.0", "0x0/0", "0e0/0"] {
-            let diags = run(&format!("local same = x == {nan}"));
-            assert_eq!(diags.len(), 1, "{nan}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_any_constant_that_evaluates_to_nan() {
-        for nan in ["-(0/0)", "1e999 - 1e999", "0/0 + 1"] {
-            let diags = run(&format!("local same = x == {nan}"));
-            assert_eq!(diags.len(), 1, "{nan}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_division_that_isnt_nan() {
-        let diags = run("local same = x == 0/1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_self_comparison_nan_check() {
-        let diags = run("local is_nan = x ~= x");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_parenthesized_nan() {
-        let diags = run("local same = x == (0/0)");
-        assert_eq!(diags.len(), 1, "parentheses don't change the NaN: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::CompareNan, PASS, FAIL).test_and_snapshot();
     }
 }

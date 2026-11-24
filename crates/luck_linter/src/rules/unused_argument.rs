@@ -58,92 +58,35 @@ impl Rule for UnusedArgument {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{applied, fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnusedArgument, source, LuaVersion::Lua54)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local function f(...args) return args end", LuaTarget::Lua55),
+        ("local function f(_x) end", LuaTarget::Lua54),
+        ("local function f(x) return x end", LuaTarget::Lua54),
+    ];
 
-    #[test]
-    fn flags_unused_named_vararg() {
+    const FAIL: &[(&str, LuaTarget)] = &[
         // Lua 5.5 named vararg binds like a parameter.
-        let source = "local function f(...args) end";
-        let diags = run_rule(RuleId::UnusedArgument, source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua55);
-        assert_eq!(fixed, "local function f(..._args) end");
-    }
-
-    #[test]
-    fn ignores_used_named_vararg() {
-        let diags = run_rule(
-            RuleId::UnusedArgument,
-            "local function f(...args) return args end",
-            LuaVersion::Lua55,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_with_underscore_prefix() {
-        let source = "local function f(x) end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local function f(_x) end");
-    }
-
-    #[test]
-    fn flags_unused_parameter() {
-        let diags = run("local function f(x) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn ignores_underscore_prefixed() {
-        let diags = run("local function f(_x) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_used_parameter() {
-        let diags = run("local function f(x) return x end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_method_arg_not_self() {
-        let source = "\
-local obj = {}
-function obj:method(x) end";
-        let diags = run(source);
+        ("local function f(...args) end", LuaTarget::Lua55),
+        ("local function f(x) end", LuaTarget::Lua54),
         // Only `x` is flagged. `self` is the implicit method receiver.
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-        assert!(!diags[0].message.contains("self"));
-    }
+        (
+            "\
+local obj = {}
+function obj:method(x) end",
+            LuaTarget::Lua54,
+        ),
+        ("local function f(a, b, c) return a + c end", LuaTarget::Lua54),
+        // The rename shouldn't make `return _a` read the second parameter.
+        ("local function f(_a, a) return _a end", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn flags_multiple_parameters_some_used() {
-        let diags = run("local function f(a, b, c) return a + c end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`b`"));
-    }
-
-    #[test]
-    fn flags_without_fix_that_duplicates_existing_underscore_parameter() {
-        let source = "local function f(_a, a) return _a end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            applied(source, &diags),
-            source,
-            "the rename shouldn't make `return _a` read the second parameter"
-        );
+    fn test() {
+        Tester::new(RuleId::UnusedArgument, PASS, FAIL).test_and_snapshot();
     }
 }

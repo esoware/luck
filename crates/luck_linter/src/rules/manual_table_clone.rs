@@ -251,192 +251,133 @@ fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &Scoping) -> 
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(RuleId::ManualTableClone, source, version)
-    }
-
-    #[test]
-    fn flags_generic_for_pairs_on_luau() {
-        let source = "\
-local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap_or("").contains("table.clone"),
-            "help: {:?}",
-            diags[0].help
-        );
-    }
-
-    #[test]
-    fn flags_numeric_for_on_lua54() {
-        let source = "\
-local out = {}
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap_or("").contains("table.move"),
-            "help: {:?}",
-            diags[0].help
-        );
-    }
-
-    #[test]
-    fn ignores_pairs_copy_on_lua54() {
+    const PASS: &[(&str, LuaTarget)] = &[
         // `table.move` copies only the array part.
-        let source = "\
+        (
+            "\
 local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_extra_body_stmt() {
-        let source = "\
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local out = {}
 for k, v in pairs(src) do out[k] = v
-print(k) end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_numeric_for_on_lua55_with_table_move() {
-        let source = "\
-local out = {}
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap_or("").contains("table.move"),
-            "help: {:?}",
-            diags[0].help
-        );
-    }
-
-    #[test]
-    fn ignores_pairs_copy_on_lua55() {
+print(k) end",
+            LuaTarget::Luau,
+        ),
         // The 5.5 stdlib has no `table.clone`, and `table.move` can't copy a
         // `pairs` loop.
-        let source = "\
+        (
+            "\
 local src = {1}
 local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Lua55);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_hex_start_and_step() {
-        let source = "\
-local out = {}
-for i = 0x1, #src, 0x1 do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_generic_key_shadowing_destination() {
-        let source = "\
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
 local src = {1}
 local out = {}
 for out, v in pairs(src) do out[out] = v end
-return out";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_generic_value_shadowing_destination() {
-        let source = "\
+return out",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local out = {}
-for k, out in pairs(src) do out[k] = out end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_variable_shadowing_destination() {
-        let source = "\
+for k, out in pairs(src) do out[k] = out end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local out = {}
-for out = 1, #src do out[out] = src[out] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_variable_shadowing_source_table() {
-        let source = "\
+for out = 1, #src do out[out] = src[out] end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local out = {}
-for src = 1, #src do out[src] = src[src] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_lua51() {
+for src = 1, #src do out[src] = src[src] end",
+            LuaTarget::Lua54,
+        ),
         // Lua 5.1 has neither helper, so the rule stays silent.
-        let source = "\
+        (
+            "\
 local out = {}
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua51);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_not_empty_table() {
-        let source = "\
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua51,
+        ),
+        (
+            "\
 local out = {1, 2}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_destination_differs() {
-        // The assignment writes to a different table than the one
-        // declared above the loop.
-        let source = "\
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+        // The assignment writes to a different table than the one declared above
+        // the loop.
+        (
+            "\
 local out = {}
-for k, v in pairs(src) do other[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_pairs() {
-        let source = "\
+for k, v in pairs(src) do other[k] = v end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local pairs = next
 local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+    ];
 
-    #[test]
-    fn flags_ipairs_form() {
-        let source = "\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local out = {}
-for k, v in ipairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
+local out = {}
+for i = 0x1, #src, 0x1 do out[i] = src[i] end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local out = {}
+for k, v in ipairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+        // A `;` doesn't change the copy.
+        (
+            "\
+local out = {};
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn flags_copy_after_semicolon() {
-        let source = "\
-local out = {};
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "a `;` doesn't change the copy: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::ManualTableClone, PASS, FAIL).test_and_snapshot();
     }
 }

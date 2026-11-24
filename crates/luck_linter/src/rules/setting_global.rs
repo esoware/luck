@@ -44,72 +44,58 @@ impl Rule for SettingGlobal {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::SettingGlobal, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_assignment_to_undeclared_name() {
-        let diags = run("counter = 1");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`counter`"), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_declared_global_and_its_writes() {
-        for source in [
-            "global x = 1",
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("global x = 1", LuaTarget::Lua55),
+        (
             "\
 global x
 x = 1",
+            LuaTarget::Lua55,
+        ),
+        (
             "\
 global function f() end
 f = nil",
-        ] {
-            let diags = run_rule(RuleId::SettingGlobal, source, LuaVersion::Lua55);
-            assert!(diags.is_empty(), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_known_global_and_discard() {
-        let diags = run("\
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
 print = print
-_ = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_assignment() {
-        let diags = run("\
+_ = 1",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local counter
-counter = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_write_through_local_env() {
-        let diags = run("\
+counter = 1",
+            LuaTarget::Lua54,
+        ),
+        // `x` is a field of the local `_ENV`.
+        (
+            "\
 local _ENV = {}
-x = 1");
-        assert!(diags.is_empty(), "`x` is a field of the local `_ENV`: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_write_after_global_star() {
-        let diags = run_rule(
-            RuleId::SettingGlobal,
+x = 1",
+            LuaTarget::Lua54,
+        ),
+        // `global *` declares every free name.
+        (
             "\
 global *
 x = 1",
-            LuaVersion::Lua55,
-        );
-        assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
+            LuaTarget::Lua55,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] =
+        &[("counter = 1", LuaTarget::Lua54), ("my_global = 1", LuaTarget::Lua54)];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::SettingGlobal, PASS, FAIL).test_and_snapshot();
     }
 }

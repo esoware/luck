@@ -118,163 +118,103 @@ fn has_native_directive(host: &ContextHost<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::RedundantNativeAttribute, source, LuaVersion::Luau)
-    }
-
-    #[test]
-    fn flags_function_decl_attribute() {
-        let source = "\
---!native
-@native function f() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(
-            fixed,
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("@native function f() end", LuaTarget::Luau),
+        (
             "\
---!native
-function f() end"
-        );
-    }
-
-    #[test]
-    fn flags_local_function_attribute() {
-        let source = "\
---!native
-@native
-local function f() end
-f()";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(
-            fixed,
-            "\
---!native
-local function f() end
-f()"
-        );
-    }
-
-    #[test]
-    fn flags_nested_function_attribute() {
-        let source = "\
---!native
-do
-@native function f() end
-end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        fix_and_reparse(source, &diags, LuaVersion::Luau);
-    }
-
-    #[test]
-    fn flags_function_expr_attribute() {
-        let source = "\
---!native
-@native
-local function a() end
-local f = @native function() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(
-            fixed,
-            "\
---!native
-local function a() end
-local f = function() end"
-        );
-    }
-
-    #[test]
-    fn ignores_without_native_directive() {
-        let diags = run("@native function f() end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_misplaced_native_directive() {
-        let diags = run("\
 local _x = 1
 --!native
-@native function f() end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_other_attributes() {
-        let diags = run("\
+@native function f() end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 --!native
-@checked function f() end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_luau() {
-        let diags = run_rule(
-            RuleId::RedundantNativeAttribute,
+@checked function f() end",
+            LuaTarget::Luau,
+        ),
+        (
             "\
 --!native
 local _x = 1",
-            LuaVersion::Lua54,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+        // The compiler ignores `--!native on`.
+        (
+            "\
+--!native on
+@native function f() end",
+            LuaTarget::Luau,
+        ),
+    ];
 
-    #[test]
-    fn flags_and_fixes_bracketed_attribute() {
-        let source = "\
---!native
-@[native] function f() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(
-            fixed,
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
             "\
 --!native
-function f() end",
-            "the fix should remove the whole attribute"
-        );
-    }
-
-    #[test]
-    fn ignores_native_directive_with_trailing_text() {
-        let diags = run("\
---!native on
-@native function f() end");
-        assert!(diags.is_empty(), "the compiler ignores `--!native on`: {diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_when_attribute_shares_a_list() {
-        let diags = run("\
+@native function f() end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 --!native
-@[native, deprecated] function f() end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "{diags:?}");
-    }
+@native
+local function f() end
+f()",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+--!native
+do
+@native function f() end
+end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+--!native
+@native
+local function a() end
+local f = @native function() end",
+            LuaTarget::Luau,
+        ),
+        // The fix should remove the whole attribute.
+        (
+            "\
+--!native
+@[native] function f() end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+--!native
+@[native, deprecated] function f() end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+--!native 
+@native function f() end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+--!native\r
+@native\r
+local function f() end\r
+f()",
+            LuaTarget::Luau,
+        ),
+    ];
 
     #[test]
-    fn flags_with_directive_followed_by_trailing_space() {
-        let diags = run("--!native \n@native function f() end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_removing_a_whole_crlf_line_break() {
-        let source = "--!native\r\n@native\r\nlocal function f() end\r\nf()";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "--!native\r\nlocal function f() end\r\nf()");
+    fn test() {
+        Tester::new(RuleId::RedundantNativeAttribute, PASS, FAIL).test_and_snapshot();
     }
 }

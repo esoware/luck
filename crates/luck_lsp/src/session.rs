@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use core::num::NonZero;
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
 use std::path::Path;
@@ -31,13 +32,17 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(encoding: PositionEncoding, tasks: Sender<Task>, threads: usize) -> Self {
+    pub(crate) fn new(
+        encoding: PositionEncoding,
+        tasks: Sender<Task>,
+        threads: NonZero<usize>,
+    ) -> Self {
         Self {
             encoding,
             settings: SettingsCache::default(),
             workspace: Workspace::default(),
             spare_arena: Arc::default(),
-            allocators: AllocatorPool::new(threads),
+            allocators: AllocatorPool::new(threads.get()),
             tasks,
             is_stopping: AtomicBool::new(false),
         }

@@ -79,150 +79,68 @@ impl Rule for CyclomaticComplexity {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::config::LintConfig;
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule_with_config;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn config(threshold: Option<u32>) -> LintConfig {
-        let setting = threshold.map_or_else(
-            || r#""warn""#.to_owned(),
-            |max| format!(r#"["warn", {{ "max": {max} }}]"#),
-        );
-        serde_json::from_str(&format!(r#"{{ "rules": {{ "cyclomatic_complexity": {setting} }} }}"#))
-            .expect("a valid `lint` section")
-    }
+    const PASS: &[(&str, LuaTarget, Option<&str>)] = &[
+        (
+            "function f() if a then end if b then end if c then end if d then end end",
+            LuaTarget::Lua54,
+            None,
+        ),
+        (
+            "function f() if a then end if b then end if c then end if d then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 100}"#),
+        ),
+    ];
 
-    fn run(source: &str, threshold: Option<u32>) -> Vec<Message> {
-        run_rule_with_config(
-            RuleId::CyclomaticComplexity,
-            source,
-            LuaVersion::Lua54,
-            &config(threshold),
-        )
-    }
-
-    #[test]
-    fn flags_when_complexity_exceeds_threshold() {
+    const FAIL: &[(&str, LuaTarget, Option<&str>)] = &[
         // Four `if` statements = 4 decision points + 1 baseline = 5.
-        let source = "function f() if a then end if b then end if c then end if d then end end";
-        let diags = run(source, Some(3));
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("complexity 5"), "msg: {}", diags[0].message);
-    }
-
-    #[test]
-    fn ignores_when_threshold_is_none() {
-        let source = "function f() if a then end if b then end if c then end if d then end end";
-        let diags = run(source, None);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_when_threshold_is_high() {
-        let source = "function f() if a then end if b then end if c then end if d then end end";
-        let diags = run(source, Some(100));
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_named_function_by_name() {
-        let source = "function my_func() if a then end if b then end end";
-        let diags = run(source, Some(1));
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            diags[0].message,
-            "function `my_func` has cyclomatic complexity 3 (threshold: 1)"
-        );
-    }
-
-    #[test]
-    fn flags_method_by_its_full_name() {
-        let source = "\
+        (
+            "function f() if a then end if b then end if c then end if d then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 3}"#),
+        ),
+        (
+            "function my_func() if a then end if b then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 1}"#),
+        ),
+        (
+            "\
 local m = {}
-function m.sub:run() if a then end end";
-        let diags = run(source, Some(1));
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`m.sub:run`"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_anonymous_function_as_anonymous() {
-        let source = "local f = function() if a then end if b then end end";
-        let diags = run(source, Some(1));
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("(anonymous)"), "msg: {}", diags[0].message);
-    }
-
-    #[test]
-    fn flags_decision_points_in_table_call_arguments() {
-        for source in [
-            "function paren_table_arg() f({a and b}) end",
-            "function bare_table_arg() f{a and b} end",
-        ] {
-            let diags = run(source, Some(0));
-            assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_decision_points_in_assignment_targets() {
-        for source in
-            ["function value_and() x = a and b end", "function target_or() t[a or b] = 1 end"]
-        {
-            let diags = run(source, Some(0));
-            assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_decision_points_in_return_exprs() {
-        let diags = run("function return_and() return a and b end", Some(0));
-        assert!(diags[0].message.contains("complexity 2"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_decision_points_in_compound_assignment_targets() {
-        let config = config(Some(0));
-        for source in [
-            "function comp_value() t[1] += a or b end",
-            "function comp_target() t[a or b] += 1 end",
-        ] {
-            let diags = run_rule_with_config(
-                RuleId::CyclomaticComplexity,
-                source,
-                LuaVersion::Luau,
-                &config,
-            );
-            assert!(diags[0].message.contains("complexity 2"), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_type_function_bodies() {
-        let config = config(Some(1));
-        let source = "type function t1(a) if a then return a end end";
-        let diags =
-            run_rule_with_config(RuleId::CyclomaticComplexity, source, LuaVersion::Luau, &config);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "function `t1` has cyclomatic complexity 2 (threshold: 1)");
-    }
-
-    #[test]
-    fn flags_empty_function_over_zero_threshold() {
-        let source = "function f() end";
-        let diags = run(source, Some(0));
+function m.sub:run() if a then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 1}"#),
+        ),
+        (
+            "local f = function() if a then end if b then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 1}"#),
+        ),
+        ("function paren_table_arg() f({a and b}) end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function bare_table_arg() f{a and b} end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function value_and() x = a and b end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function target_or() t[a or b] = 1 end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function return_and() return a and b end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function comp_value() t[1] += a or b end", LuaTarget::Luau, Some(r#"{"max": 0}"#)),
+        ("function comp_target() t[a or b] += 1 end", LuaTarget::Luau, Some(r#"{"max": 0}"#)),
+        ("type function t1(a) if a then return a end end", LuaTarget::Luau, Some(r#"{"max": 1}"#)),
         // Baseline 1 > 0, so the threshold trips.
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
+        ("function f() end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        // `f` has complexity 3 and `g` 2, so both exceed 1.
+        (
+            "function f() if a then end if b then end end function g() if c then end end",
+            LuaTarget::Lua54,
+            Some(r#"{"max": 1}"#),
+        ),
+    ];
 
     #[test]
-    fn flags_each_function_independently() {
-        let source = "function f() if a then end if b then end end function g() if c then end end";
-        let diags = run(source, Some(1));
-        // `f` has complexity 3 (>1); `g` has complexity 2 (>1). Both fire.
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::CyclomaticComplexity, PASS, FAIL).test_and_snapshot();
     }
 }

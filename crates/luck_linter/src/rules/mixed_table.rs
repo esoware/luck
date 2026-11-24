@@ -52,56 +52,26 @@ impl Rule for MixedTable {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::MixedTable, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_positional_with_named() {
-        let diags = run("local t = {1, 2, foo = 3}");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_pure_positional() {
-        let diags = run("local t = {1, 2, 3}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_pure_record() {
-        let diags = run("local t = {a = 1, b = 2}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_positional_with_bracketed_key() {
+    const PASS: &[&str] = &[
+        "local t = {1, 2, 3}",
+        "local t = {a = 1, b = 2}",
         // `[3] = "x"` is explicit numeric placement the author opted into.
-        let diags = run(r#"local t = {1, 2, [3] = "x"}"#);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+        r#"local t = {1, 2, [3] = "x"}"#,
+        "local t = {}",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local t = {1, 2, foo = 3}",
+        "local t = {foo = 1, 2, 3}",
+        // A `f{}` table is a table constructor.
+        "foo{ 1, x = 2 }",
+    ];
 
     #[test]
-    fn ignores_empty_table() {
-        let diags = run("local t = {}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_named_then_positional() {
-        let diags = run("local t = {foo = 1, 2, 3}");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_mixed_table_in_table_call_argument() {
-        let diags = run("foo{ 1, x = 2 }");
-        assert_eq!(diags.len(), 1, "a `f{{...}}` table is a table constructor: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::MixedTable, PASS, FAIL).test_and_snapshot();
     }
 }

@@ -1,4 +1,5 @@
 use core::iter;
+use core::num::NonZero;
 use std::io;
 use std::thread::{self, JoinHandle};
 
@@ -48,7 +49,7 @@ impl Pool {
     /// # Errors
     ///
     /// Returns the error from starting a thread.
-    pub(crate) fn new(threads: usize) -> io::Result<Self> {
+    pub(crate) fn new(threads: NonZero<usize>) -> io::Result<Self> {
         let (requests, request_jobs) = unbounded::<Job>();
         let (background, background_jobs) = unbounded::<Job>();
         let (idle, idle_jobs) = unbounded::<Job>();
@@ -63,7 +64,7 @@ impl Pool {
                 .stack_size(MIN_STACK_BYTES)
                 .spawn(move || queues.work())
         })
-        .take(threads.max(1))
+        .take(threads.get())
         .collect::<io::Result<_>>()?;
         Ok(Self { requests, background, idle, workers })
     }
@@ -130,7 +131,7 @@ mod tests {
 
     #[test]
     fn a_request_goes_before_queued_background_jobs_and_both_before_idle_ones() {
-        let pool = Pool::new(1).expect("a worker starts");
+        let pool = Pool::new(NonZero::<usize>::MIN).expect("a worker starts");
         let (started, is_started) = bounded(0);
         let (release, is_released) = bounded::<()>(0);
         pool.spawn(Priority::Background, move || {

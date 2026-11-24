@@ -14,6 +14,7 @@ use luck_token::Span;
 
 use crate::diagnostic::Message;
 use crate::linter::Linter;
+use crate::timing::RuleTimings;
 
 /// `ESLint` stops at the same count. Needing more almost always means two
 /// rules are undoing each other.
@@ -134,7 +135,8 @@ impl Error for FixError {}
 impl Linter {
     /// Lints `source` against `stdlib` and applies its fixes of the kinds
     /// `fixes` holds, round after round, until none is left. Each round's
-    /// text is parsed into `allocator` once, both to check it and to lint it.
+    /// text is parsed into `allocator` once, both to check it and to lint it,
+    /// and each round's rules are timed into `timings` when given.
     ///
     /// Of two overlapping fixes a round applies one, and the next round lints
     /// again and applies the other if it still holds.
@@ -155,8 +157,9 @@ impl Linter {
         source: &'ast [u8],
         stdlib: &StdlibLibrary<'_>,
         fixes: FixKind,
+        timings: Option<&RuleTimings>,
     ) -> Result<Fixed<'ast>, FixError> {
-        self.fix_within(allocator, source, stdlib, fixes, ROUND_BUDGET)
+        self.fix_within(allocator, source, stdlib, fixes, timings, ROUND_BUDGET)
     }
 
     /// # Errors
@@ -168,12 +171,13 @@ impl Linter {
         source: &'ast [u8],
         stdlib: &StdlibLibrary<'_>,
         fixes: FixKind,
+        timings: Option<&RuleTimings>,
         budget: usize,
     ) -> Result<Fixed<'ast>, FixError> {
         let version = stdlib.target.version();
         let mut parse = luck_parser::parse(allocator, source, version);
         for round in 1..=budget {
-            let messages = self.run(&parse, stdlib, fixes);
+            let messages = self.run(&parse, stdlib, fixes, timings);
             let Some(text) = apply(parse.source, &messages, fixes) else {
                 return Ok(Fixed { parse, messages });
             };
@@ -302,7 +306,7 @@ mod tests {
         let allocator = Allocator::new();
         let stdlib = library_for(LuaTarget::Lua54);
         linter
-            .fix_within(&allocator, source.as_bytes(), stdlib, FixKind::Fix, budget)
+            .fix_within(&allocator, source.as_bytes(), stdlib, FixKind::Fix, None, budget)
             .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())
     }
 

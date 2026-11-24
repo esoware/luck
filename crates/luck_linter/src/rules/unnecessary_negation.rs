@@ -143,116 +143,38 @@ const fn opposite_comparison(op: BinOp) -> Option<BinOp> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnnecessaryNegation, source, LuaVersion::Lua54)
-    }
+    const PASS: &[&str] = &[
+        "local r = not (a and b)",
+        "local r = not (a + b)",
+        // `not a == b` parses as `(not a) == b`; `comparison_precedence` owns that
+        // shape.
+        "local r = not a == b",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local r = not (a == b)",
+        "local r = not (a ~= b)",
+        "local r = not (a < b)",
+        "local r = not (a >= b)",
+        "local r = not (x.y ~= f(1))",
+        "local r = (not (a == b))",
+        "local r = not (not (a == b))",
+        "local r = not (a == (b == c))",
+        "local r = not ((a == b) == c)",
+        "local r = x and not (a == b)",
+        "local r = not (a == b) == c",
+        "local r = c == not (a == b)",
+        "local r = x .. not (a == b)",
+        // No fix, since it would delete the comment.
+        "local r = not (a --[[why]] == b)",
+        "local r = not (f(--[[why]] a) == b)",
+    ];
 
     #[test]
-    fn flags_negated_equality() {
-        let diags = run("local r = not (a == b)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("a ~= b"), "{diags:?}");
-        assert!(diags[0].fix.is_some(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_negated_inequality() {
-        let diags = run("local r = not (a ~= b)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_some(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_negated_relational_without_fix() {
-        let diags = run("local r = not (a < b)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("a >= b"), "{diags:?}");
-        assert!(diags[0].fix.is_none(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_negated_greater_equal_without_fix() {
-        let diags = run("local r = not (a >= b)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("a < b"), "{diags:?}");
-        assert!(diags[0].fix.is_none(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_negated_and() {
-        let diags = run("local r = not (a and b)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_negated_arithmetic() {
-        let diags = run("local r = not (a + b)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_unparenthesized_negation() {
-        // `not a == b` parses as `(not a) == b`; `comparison_precedence`
-        // owns that shape.
-        let diags = run("local r = not a == b");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_negated_equality() {
-        let source = "local r = not (a == b)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local r = a ~= b");
-    }
-
-    #[test]
-    fn flags_and_fixes_negated_inequality() {
-        let source = "local r = not (x.y ~= f(1))";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local r = x.y == f(1)");
-    }
-
-    #[test]
-    fn flags_and_fixes_with_parentheses_only_where_the_comparison_would_regroup() {
-        for (source, expected) in [
-            ("local r = (not (a == b))", "local r = (a ~= b)"),
-            ("local r = not (not (a == b))", "local r = not (a ~= b)"),
-            ("local r = not (a == (b == c))", "local r = a ~= (b == c)"),
-            ("local r = not ((a == b) == c)", "local r = (a == b) ~= c"),
-            ("local r = x and not (a == b)", "local r = x and a ~= b"),
-            ("local r = not (a == b) == c", "local r = (a ~= b) == c"),
-            ("local r = c == not (a == b)", "local r = c == (a ~= b)"),
-            ("local r = x .. not (a == b)", "local r = x .. (a ~= b)"),
-        ] {
-            let diags = run(source);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-            assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Lua54), expected, "{source}");
-        }
-    }
-
-    #[test]
-    fn flags_without_fix_for_comment_beside_the_operator() {
-        let diags = run("local r = not (a --[[why]] == b)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_comment_inside_an_operand() {
-        let source = "local r = not (f(--[[why]] a) == b)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local r = f(--[[why]] a) ~= b");
+    fn test() {
+        Tester::new(RuleId::UnnecessaryNegation, PASS, FAIL).test_and_snapshot();
     }
 }

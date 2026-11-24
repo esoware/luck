@@ -1,0 +1,27 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: global variable `print` used
+ --> Lua54:1:1
+1 | print("x")
+  | ^^^^^
+help: pass it in explicitly, or add it to `extra_globals`
+
+warning: global variable `myCustomGlobal` used
+ --> Lua54:1:1
+1 | myCustomGlobal()
+  | ^^^^^^^^^^^^^^
+help: pass it in explicitly, or add it to `extra_globals`
+
+warning: global variable `print` used
+ --> Lua54:1:1
+1 | print("x")
+  | ^^^^^
+2 | myCustomGlobal()
+help: pass it in explicitly, or add it to `extra_globals`
+
+warning: global variable `g` used
+ --> Lua54:1:1
+1 | g = 1
+  | ^
+help: pass it in explicitly, or add it to `extra_globals`

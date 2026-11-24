@@ -51,51 +51,28 @@ impl Rule for UnbalancedAssignment {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnbalancedAssignment, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_local_with_fewer_values() {
-        let diags = run("local a, b, c = 1, 2");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "3 name(s) but 2 value(s) in assignment", "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assignment_with_extra_values() {
-        let diags = run("\
-local a, b
-a, b = 1, 2, 3");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "2 target(s) but 3 value(s) in assignment", "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_multi_value_tail() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local a, b, c = 1, f()
-local function g(...) a, b, c = ... end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_without_values() {
-        let diags = run("local a, b");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_balanced_assignments() {
-        let diags = run("\
+local function g(...) a, b, c = ... end",
+        "local a, b",
+        "\
 local a, b = 1, 2
-a, b = b, a");
-        assert!(diags.is_empty(), "{diags:?}");
+a, b = b, a",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local a, b, c = 1, 2",
+        "\
+local a, b
+a, b = 1, 2, 3",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::UnbalancedAssignment, PASS, FAIL).test_and_snapshot();
     }
 }

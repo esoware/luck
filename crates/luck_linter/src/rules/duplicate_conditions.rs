@@ -55,61 +55,30 @@ impl Rule for DuplicateConditions {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
-
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::DuplicateConditions, source, LuaVersion::Lua54)
-    }
+    const PASS: &[&str] = &[
+        "if a then x() elseif b then y() end",
+        "if a then x() end",
+        "if a == 1 then x() elseif a == 2 then y() elseif a.b == 1 then z() end",
+    ];
+
+    const FAIL: &[&str] = &[
+        "if a then print(1) elseif a then print(2) end",
+        "if a then x() elseif b then y() elseif a then z() end",
+        "if a==1 then x() elseif a == 1 then y() elseif ( a ) then z() end",
+        "\
+if c then x()
+elseif c0 then x()
+elseif c1 then x()
+elseif c0 then x()
+elseif c1 then x()
+end",
+    ];
 
     #[test]
-    fn flags_duplicate_elseif() {
-        let diags = run("if a then print(1) elseif a then print(2) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_duplicate_in_longer_chain() {
-        let diags = run("if a then x() elseif b then y() elseif a then z() end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_distinct_conditions() {
-        let diags = run("if a then x() elseif b then y() end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_if_without_elseif() {
-        let diags = run("if a then x() end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_a_repeat_spelled_with_other_spacing() {
-        let diags = run("if a==1 then x() elseif a == 1 then y() elseif ( a ) then z() end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_conditions_that_differ_only_inside() {
-        let diags = run("if a == 1 then x() elseif a == 2 then y() elseif a.b == 1 then z() end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_each_repeat_in_a_long_chain() {
-        let mut arms = String::new();
-        for i in 0..2_000u32 {
-            let _unused = write!(arms, " elseif c{i} then x()");
-        }
-        let diags = run(&format!("if c then x(){arms}{arms} end"));
-        assert_eq!(diags.len(), 2_000, "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::DuplicateConditions, PASS, FAIL).test_and_snapshot();
     }
 }

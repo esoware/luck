@@ -52,97 +52,49 @@ fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(RuleId::MustUse, source, version)
-            .into_iter()
-            .map(|diag| diag.message.to_string())
-            .collect()
-    }
-
-    #[test]
-    fn flags_discarded_tostring() {
-        let messages = run("tostring(1)", LuaVersion::Lua54);
-        assert!(messages.iter().any(|message| message.contains("tostring")), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_used_tostring() {
-        let messages = run(
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
             "\
 local s = tostring(1)
 print(s)",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_discarded_pcall() {
-        // Discarding a pcall loses the success bool, which is the whole
-        // point of calling it.
-        let messages = run("pcall(f)", LuaVersion::Lua54);
-        assert!(messages.iter().any(|message| message.contains("pcall")), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_discarded_coroutine_create() {
-        let messages = run("coroutine.create(f)", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|message| message.contains("coroutine.create")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_discarded_table_clone_in_luau() {
-        let messages = run("table.clone(t)", LuaVersion::Luau);
-        assert!(messages.iter().any(|message| message.contains("table.clone")), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_table_insert() {
-        // table.insert mutates, so discarding the result is fine.
-        let messages = run("table.insert(t, 1)", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_method_call() {
-        let messages = run("obj:tostring()", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_discarded_string_method() {
-        let messages = run(
-            "\
-local s = 'x'
-s:upper()",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.iter().any(|message| message.contains("s:upper")), "{messages:?}");
-    }
-
-    // A bare f:seek('set') rewind is idiomatic, so seek isn't must_use.
-    #[test]
-    fn ignores_discarded_file_seek() {
-        let messages = run(
+            LuaTarget::Lua54,
+        ),
+        // `table.insert` mutates, so discarding its result is fine.
+        ("table.insert(t, 1)", LuaTarget::Lua54),
+        ("obj:tostring()", LuaTarget::Lua54),
+        (
             "\
 local f = io.open('x')
 f:seek('set')",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.is_empty(), "{messages:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+        // The call runs a full collection.
+        ("collectgarbage()", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("tostring(1)", LuaTarget::Lua54),
+        // Discarding a pcall loses the success bool, which is the whole point of
+        // calling it.
+        ("pcall(f)", LuaTarget::Lua54),
+        ("coroutine.create(f)", LuaTarget::Lua54),
+        ("table.clone(t)", LuaTarget::Luau),
+        (
+            "\
+local s = 'x'
+s:upper()",
+            LuaTarget::Lua54,
+        ),
+        ("tostring(42)", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn ignores_discarded_collectgarbage_on_luau() {
-        let messages = run("collectgarbage()", LuaVersion::Luau);
-        assert!(messages.is_empty(), "the call runs a full collection: {messages:?}");
+    fn test() {
+        Tester::new(RuleId::MustUse, PASS, FAIL).test_and_snapshot();
     }
 }

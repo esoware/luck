@@ -51,58 +51,27 @@ impl Rule for MisleadingAndOr {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::MisleadingAndOr, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_nil_middle() {
-        let diags = run("local r = (x and nil) or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_false_middle() {
-        let diags = run("local r = (x and false) or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_a_middle_operand_that_is_always_falsy() {
-        let diags = run("local r = (x and not 1) or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_unparenthesized_form() {
-        // Lua precedence: `and` binds tighter than `or`, so this is the
-        // same shape with no parens.
-        let diags = run("local r = x and nil or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_zero_middle() {
+    const PASS: &[&str] = &[
         // `0` is truthy in Lua, so the ternary works as intended.
-        let diags = run("local r = (x and 0) or y");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+        "local r = (x and 0) or y",
+        "local r = (x and y) or z",
+        "local r = x or y",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local r = (x and nil) or y",
+        "local r = (x and false) or y",
+        "local r = (x and not 1) or y",
+        // Lua precedence: `and` binds tighter than `or`, so this is the same shape
+        // with no parens.
+        "local r = x and nil or y",
+    ];
 
     #[test]
-    fn ignores_normal_ternary() {
-        let diags = run("local r = (x and y) or z");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_or_without_and() {
-        let diags = run("local r = x or y");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::MisleadingAndOr, PASS, FAIL).test_and_snapshot();
     }
 }

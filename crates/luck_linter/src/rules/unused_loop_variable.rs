@@ -60,78 +60,25 @@ impl Rule for UnusedLoopVariable {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{applied, fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnusedLoopVariable, source, LuaVersion::Lua54)
-    }
+    const PASS: &[&str] = &["for _ = 1, 10 do print() end", "for i = 1, 10 do print(i) end"];
 
-    #[test]
-    fn flags_and_fixes_with_underscore_prefix() {
-        let source = "for i = 1, 10 do print() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "for _i = 1, 10 do print() end");
-    }
-
-    #[test]
-    fn flags_numeric_for_unused() {
-        let diags = run("for i = 1, 10 do print() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`i`"));
-    }
-
-    #[test]
-    fn ignores_underscore_numeric_for() {
-        let diags = run("for _ = 1, 10 do print() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_generic_for_key_only() {
-        let diags = run("for k, v in pairs(t) do print(v) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`k`"));
-    }
-
-    #[test]
-    fn ignores_used_numeric_for() {
-        let diags = run("for i = 1, 10 do print(i) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_both_unused_generic_for() {
-        let diags = run("for k, v in pairs(t) do print() end");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_that_captures_existing_underscore_name() {
-        let source = "\
+    const FAIL: &[&str] = &[
+        "for i = 1, 10 do print() end",
+        "for k, v in pairs(t) do print(v) end",
+        "for k, v in pairs(t) do print() end",
+        // The rename shouldn't make `print(_k)` read the loop variable.
+        "\
 local _k = 1
-for k, v in pairs({}) do print(_k, v) end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            applied(source, &diags),
-            source,
-            "the rename shouldn't make `print(_k)` read the loop variable"
-        );
-    }
+for k, v in pairs({}) do print(_k, v) end",
+        // Renaming the loop variable makes `i = 5` global.
+        "for i = 1, 3 do i = 5 end",
+    ];
 
     #[test]
-    fn flags_without_fix_when_loop_variable_is_written() {
-        let diags = run("for i = 1, 3 do i = 5 end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].fix.is_none(),
-            "renaming the loop variable makes `i = 5` global: {diags:?}"
-        );
+    fn test() {
+        Tester::new(RuleId::UnusedLoopVariable, PASS, FAIL).test_and_snapshot();
     }
 }

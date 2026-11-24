@@ -14,6 +14,7 @@ use crate::diagnostic::{Finding, Message};
 use crate::directives::Directives;
 use crate::fix::FixKind;
 use crate::rules::{RuleEnum, RuleId, RuleTable, UnusedLintFilter};
+use crate::timing::{RuleTimings, Spent};
 
 /// How many nodes the pass hands its rules between asking whether the lint
 /// was cancelled.
@@ -74,7 +75,9 @@ impl Linter {
     }
 
     /// Lints `parse`, knowing the globals `stdlib` declares, and builds the
-    /// fixes of the kinds `fixes` holds, so an empty set builds none.
+    /// fixes of the kinds `fixes` holds, so an empty set builds none. Each
+    /// rule's time goes into `timings` when given, and a lint that times
+    /// nothing pays nothing for it.
     ///
     /// A parse with errors yields its errors, each an E008, and no rules run,
     /// so neither config nor a directive turns one off. So does a clean parse
@@ -91,11 +94,13 @@ impl Linter {
         parse: &ParseResult<'_>,
         stdlib: &StdlibLibrary<'_>,
         fixes: FixKind,
+        timings: Option<&RuleTimings>,
     ) -> Vec<Message> {
         if !parse.errors.is_empty() {
             return error_messages(&parse.errors);
         }
-        self.run_analyzed(parse, &self.analyze(parse, stdlib), fixes, &|| false).unwrap_or_default()
+        let analysis = self.analyze(parse, stdlib);
+        self.run_analyzed(parse, &analysis, fixes, timings, &|| false).unwrap_or_default()
     }
 
     /// [`Self::run`] on a parse and the analysis [`Self::analyze`] built of
@@ -114,6 +119,7 @@ impl Linter {
         parse: &ParseResult<'_>,
         analysis: &Analysis<'_>,
         fixes: FixKind,
+        timings: Option<&RuleTimings>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Option<Vec<Message>> {
         if !parse.errors.is_empty() {
@@ -123,7 +129,7 @@ impl Linter {
             return Some(error_messages(&analysis.errors));
         }
         let host = ContextHost::new(parse, analysis, fixes);
-        let mut messages = self.run_rules(&Rc::new(host), is_cancelled)?;
+        let mut messages = self.run_rules(&Rc::new(host), timings, is_cancelled)?;
         messages.sort_by_key(|message| message.span().start);
         Some(messages)
     }
@@ -143,6 +149,7 @@ impl Linter {
     fn run_rules(
         &self,
         host: &Rc<ContextHost<'_>>,
+        timings: Option<&RuleTimings>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Option<Vec<Message>> {
         let directives = host.directives;
@@ -169,7 +176,17 @@ impl Linter {
             rules.push(rule);
         }
 
-        let findings = execute(&rules, host, is_cancelled)?;
+        let findings = timings.map_or_else(
+            || execute::<false>(&rules, host, &mut [], is_cancelled),
+            |run_timings| {
+                let mut spent = vec![Spent::default(); rules.len()];
+                let findings = execute::<true>(&rules, host, &mut spent, is_cancelled);
+                for (rule, rule_spent) in rules.iter().zip(spent) {
+                    run_timings.add(rule.id(), rule_spent);
+                }
+                findings
+            },
+        )?;
 
         #[cfg(debug_assertions)]
         assert_dispatch_is_pure(&rules, &skipped_rules, &findings, host);
@@ -189,43 +206,17 @@ impl Linter {
             if is_cancelled() {
                 return None;
             }
-            let rule_findings = UnusedLintFilter::check(host, &used, runs);
             let id = RuleId::UnusedLintFilter;
+            let check = || UnusedLintFilter::check(host, &used, runs);
+            let rule_findings = timings.map_or_else(check, |run_timings| {
+                let mut spent = Spent::default();
+                let rule_findings = spent.time(check);
+                run_timings.add(id, spent);
+                rule_findings
+            });
             report(id, rule_findings, self.severities[id], directives, None, &mut messages);
         }
         Some(messages)
-    }
-
-    /// `rule`'s messages on `parse`, which it reports even where config turns
-    /// it off, at its own severity.
-    #[cfg(test)]
-    pub(crate) fn run_rule(
-        &self,
-        rule: RuleId,
-        parse: &ParseResult<'_>,
-        analysis: &Analysis<'_>,
-    ) -> Vec<Message> {
-        let configured = &self.rules[rule];
-        if matches!(configured, RuleEnum::UnusedLintFilter(_)) {
-            // It reads what the others reported, so the whole lint runs.
-            return self
-                .run_analyzed(parse, analysis, FixKind::all(), &|| false)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|diag| diag.code == rule.name())
-                .collect();
-        }
-        let host = Rc::new(ContextHost::new(parse, analysis, FixKind::all()));
-        if !configured.should_run(&host) {
-            return Vec::new();
-        }
-        let findings = execute(&[configured], &host, &|| false)
-            .and_then(|mut findings| findings.pop())
-            .unwrap_or_default();
-        let severity = self.severities[rule].unwrap_or_else(|| rule.default_severity());
-        let mut messages = Vec::new();
-        report(rule, findings, Some(severity), &analysis.directives, None, &mut messages);
-        messages
     }
 }
 
@@ -257,10 +248,13 @@ fn error_messages(errors: &[Diagnostic]) -> Vec<Message> {
 /// `is_cancelled` says so.
 ///
 /// Each rule's `run_once` runs first, and then one pass over the node table
-/// hands each node to the rules that run on its type.
-fn execute(
+/// hands each node to the rules that run on its type. When `TIMED`, each
+/// call goes into the rule's entry of `spent`, as oxlint's `TIMINGS` pass
+/// times each, and else nothing is timed.
+fn execute<const TIMED: bool>(
     rules: &[&RuleEnum],
     host: &Rc<ContextHost<'_>>,
+    spent: &mut [Spent],
     is_cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<Vec<Finding>>> {
     let contexts: Vec<LintContext<'_>> =
@@ -276,11 +270,15 @@ fn execute(
                 }
             }
         }
-        for (rule, context) in rules.iter().zip(&contexts) {
+        for (slot, (rule, context)) in rules.iter().zip(&contexts).enumerate() {
             if is_cancelled() {
                 return false;
             }
-            rule.run_once(context);
+            if TIMED && let Some(rule_spent) = spent.get_mut(slot) {
+                rule_spent.time(|| rule.run_once(context));
+            } else {
+                rule.run_once(context);
+            }
         }
         for (i, node) in host.nodes.iter().enumerate() {
             if i.is_multiple_of(NODES_PER_CANCEL_CHECK) && is_cancelled() {
@@ -291,7 +289,12 @@ fn execute(
                 reason = "hot loop; every bucket and rule index is in bounds by construction"
             )]
             for &slot in &buckets[bucket_of(node.kind().ty())] {
-                rules[slot].run(node, &contexts[slot]);
+                let (rule, context) = (rules[slot], &contexts[slot]);
+                if TIMED {
+                    spent[slot].time(|| rule.run(node, context));
+                } else {
+                    rule.run(node, context);
+                }
             }
         }
         true
@@ -425,7 +428,7 @@ print(x, y)";
         let linter = Linter::new(silent());
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
         let diags = linter
-            .run_analyzed(&parse, &analysis, FixKind::empty(), &|| false)
+            .run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| false)
             .expect("nothing cancels it");
         let found: Vec<(&str, u32, Severity)> =
             diags.iter().map(|diag| (diag.code, diag.span().start, diag.severity)).collect();
@@ -439,7 +442,7 @@ print(x, y)";
         let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
         let linter = Linter::new(silent());
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
-        let cancelled = linter.run_analyzed(&parse, &analysis, FixKind::empty(), &|| true);
+        let cancelled = linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| true);
         assert_eq!(cancelled, None, "a rule only a directive runs stops too");
     }
 
@@ -456,7 +459,7 @@ print(x)";
             let asked = AtomicUsize::new(0);
             let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
             let whole = linter
-                .run_analyzed(&parse, &analysis, FixKind::empty(), &counted)
+                .run_analyzed(&parse, &analysis, FixKind::empty(), None, &counted)
                 .expect("nothing cancels it");
             (asked.load(Ordering::Relaxed), whole)
         };
@@ -471,7 +474,7 @@ print(x)";
         let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
         let answered = AtomicUsize::new(0);
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed).saturating_add(1) == asked;
-        let stopped = linter.run_analyzed(&parse, &analysis, FixKind::empty(), &cancels_last);
+        let stopped = linter.run_analyzed(&parse, &analysis, FixKind::empty(), None, &cancels_last);
         assert_eq!(stopped, None, "diagnostics missing the unused `allow` would pass for whole");
     }
 
@@ -483,8 +486,31 @@ print(x)";
         let linter = Linter::new(config);
         for (source, expected) in [("print(1)", 0), ("print(x == 0/0)", 1)] {
             let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-            let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty());
+            let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), None);
             assert_eq!(diags.len(), expected, "{source}: {diags:?}");
         }
+    }
+
+    #[test]
+    fn a_timed_lint_counts_each_call_of_each_rule_that_runs() {
+        let allocator = Allocator::new();
+        let mut config = silent();
+        config.rules.set_level(RuleId::CompareNan, RuleLevel::Warn);
+        config.rules.set_level(RuleId::UndefinedVariable, RuleLevel::Warn);
+        let linter = Linter::new(config);
+        let source = "print(x == 0/0, x == 1)";
+        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let timings = RuleTimings::new();
+        let diags =
+            linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), Some(&timings));
+        assert_eq!(diags.len(), 3, "{diags:?}");
+        let mut calls: Vec<(&str, u64)> =
+            timings.sorted().iter().map(|timing| (timing.rule.name(), timing.calls)).collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [("compare_nan", 4), ("undefined_variable", 1)],
+            "`compare_nan` runs once for the file and once on each of its three operator runs"
+        );
     }
 }

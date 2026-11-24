@@ -257,7 +257,7 @@ fn lint(
     lines: &LineIndex,
 ) -> Vec<LintLine> {
     linter
-        .run(parse, library_for(suite.target), FixKind::empty())
+        .run(parse, library_for(suite.target), FixKind::empty(), None)
         .iter()
         .map(|message| {
             let (line, column) = lines.line_column(message.span().start);

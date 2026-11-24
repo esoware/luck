@@ -95,115 +95,54 @@ const fn compound_divisive_op_name(op: CompoundOp) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(RuleId::DivideByZero, source, version)
-    }
-
-    #[test]
-    fn flags_division_by_zero() {
-        let diags = run("local r = x / 0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_modulo_by_zero() {
-        let diags = run("local r = x % 0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_floor_division_by_zero() {
-        let diags = run("local r = x // 0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_float_zero() {
-        // Dividing by 0.0 gives `inf` or `nan`, which is still a bug.
-        let diags = run("local r = x / 0.0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_a_divisor_that_evaluates_to_zero() {
-        for divisor in ["-0", "-0.0", "(1 - 1)", "(0 * 5)"] {
-            let diags = run(&format!("local r = x / {divisor}"), LuaVersion::Lua54);
-            assert_eq!(diags.len(), 1, "{divisor}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_nonzero_divisor() {
-        let diags = run("local r = x / y", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_division_by_constant() {
-        let diags = run("local r = x / 2", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_hex_zero() {
-        let diags = run("local r = x / 0x0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_compound_division_by_zero_on_luau() {
-        let diags = run(
-            "\
-local x = 1
-x /= 0",
-            LuaVersion::Luau,
-        );
-        assert_eq!(diags.len(), 1, "`x /= 0` divides by zero: {diags:?}");
-    }
-
-    #[test]
-    fn flags_binary_zero_divisor_on_luau() {
-        let diags = run("local r = x / 0b0", LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "`0b0` is a literal zero: {diags:?}");
-    }
-
-    #[test]
-    fn flags_zero_hex_float() {
-        let diags = run("local r = x / 0x0p0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_nonzero_hex_float() {
-        let diags = run("local r = x / 0x1p4", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_compound_modulo_by_underscored_zero_on_luau() {
-        let diags = run(
-            "\
-local x = 1
-x %= 0_0",
-            LuaVersion::Luau,
-        );
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_compound_multiplication_by_zero_on_luau() {
-        let diags = run(
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local r = x / y", LuaTarget::Lua54),
+        ("local r = x / 2", LuaTarget::Lua54),
+        ("local r = x / 0x1p4", LuaTarget::Lua54),
+        (
             "\
 local x = 1
 x *= 0",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
+            LuaTarget::Luau,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local r = x / 0", LuaTarget::Lua54),
+        ("local r = x % 0", LuaTarget::Lua54),
+        ("local r = x // 0", LuaTarget::Lua54),
+        // Dividing by 0.0 gives `inf` or `nan`, which is still a bug.
+        ("local r = x / 0.0", LuaTarget::Lua54),
+        ("local r = x / -0", LuaTarget::Lua54),
+        ("local r = x / -0.0", LuaTarget::Lua54),
+        ("local r = x / (1 - 1)", LuaTarget::Lua54),
+        ("local r = x / (0 * 5)", LuaTarget::Lua54),
+        ("local r = x / 0x0", LuaTarget::Lua54),
+        // `x /= 0` divides by zero.
+        (
+            "\
+local x = 1
+x /= 0",
+            LuaTarget::Luau,
+        ),
+        // `0b0` is a literal zero.
+        ("local r = x / 0b0", LuaTarget::Luau),
+        ("local r = x / 0x0p0", LuaTarget::Lua54),
+        (
+            "\
+local x = 1
+x %= 0_0",
+            LuaTarget::Luau,
+        ),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::DivideByZero, PASS, FAIL).test_and_snapshot();
     }
 }

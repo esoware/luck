@@ -89,92 +89,30 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule_roblox(RuleId::RobloxManualFromScaleOrFromOffset, source)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local u = UDim2.new(0, 0, 0, 0)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(0.5, 100, 0.5, 0)", LuaTarget::LuauRoblox),
+        ("local x = 0.5 local u = UDim2.new(x, 0, 1, 0)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(0.5, 0)", LuaTarget::LuauRoblox),
+        ("local UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(0, 100, 0, 200)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(0, -100, 0, 0x20)", LuaTarget::LuauRoblox),
+        // No fix, since it would delete the comment.
+        ("local u = UDim2.new(0.5, --[[no offset]] 0, 1, 0)", LuaTarget::LuauRoblox),
+    ];
 
     #[test]
-    fn flags_scale_only_call() {
-        let diags = run("local u = UDim2.new(0.5, 0, 1, 0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("fromScale"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_offset_only_call() {
-        let diags = run("local u = UDim2.new(0, 100, 0, 200)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("fromOffset"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_to_fromscale() {
-        let source = "local u = UDim2.new(0.5, 0, 1, 0)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "local u = UDim2.fromScale(0.5, 1)");
-    }
-
-    #[test]
-    fn flags_and_fixes_to_fromoffset_keeping_source_text() {
-        let source = "local u = UDim2.new(0, -100, 0, 0x20)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "local u = UDim2.fromOffset(-100, 0x20)");
-    }
-
-    #[test]
-    fn ignores_all_zero_call() {
-        let diags = run("local u = UDim2.new(0, 0, 0, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_mixed_scale_and_offset() {
-        let diags = run("local u = UDim2.new(0.5, 100, 0.5, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_literal_args() {
-        let diags = run("local x = 0.5 local u = UDim2.new(x, 0, 1, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_short_calls() {
-        let diags = run("local u = UDim2.new(0.5, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_local_udim2() {
-        let diags = run("local UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_standalone_environment() {
-        let diags = run_rule(
-            RuleId::RobloxManualFromScaleOrFromOffset,
-            "local u = UDim2.new(0.5, 0, 1, 0)",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_for_comment_among_dropped_arguments() {
-        let diags = run("local u = UDim2.new(0.5, --[[no offset]] 0, 1, 0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::RobloxManualFromScaleOrFromOffset, PASS, FAIL).test_and_snapshot();
     }
 }

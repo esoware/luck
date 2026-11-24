@@ -10,7 +10,7 @@ use crate::common::{enable, lint, lint_bytes};
 fn fixed(source: &str, config: &LintConfig, fixes: FixKind) -> String {
     let allocator = Allocator::new();
     let result = Linter::new(config.clone())
-        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), fixes)
+        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), fixes, None)
         .expect("the fixes converge");
     assert!(result.parse.errors.is_empty(), "{:?}", result.parse.errors);
     String::from_utf8(result.parse.source.to_owned()).unwrap()
@@ -50,7 +50,7 @@ local unused = nil
 return 1";
     let config = enable(RuleId::RedundantNilInit);
     let result = Linter::new(config.clone())
-        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix)
+        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix, None)
         .expect("the fixes converge");
     assert_eq!(
         result.parse.source,
@@ -69,7 +69,7 @@ fn a_fix_copies_bytes_that_are_not_utf8_as_written() {
     let allocator = Allocator::new();
     let source = b"local a = 'caf\xE9'\nlocal b = '\xFF' -- d\xE9j\xE0\nreturn a, b";
     let result = Linter::new(enable(RuleId::MergeAdjacentLocals))
-        .fix(&allocator, source, library_for(LuaTarget::Lua51), FixKind::Fix)
+        .fix(&allocator, source, library_for(LuaTarget::Lua51), FixKind::Fix, None)
         .expect("the fixes converge");
     assert_eq!(result.parse.source, b"local a, b = 'caf\xE9', '\xFF' -- d\xE9j\xE0\nreturn a, b");
 }

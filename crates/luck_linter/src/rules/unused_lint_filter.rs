@@ -190,141 +190,58 @@ fn comment_removal(source: &[u8], span: Span, version: LuaVersion) -> TextEdit {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnusedLintFilter, source, LuaVersion::Lua54)
-    }
-
-    fn fixed(source: &str) -> String {
-        fix_and_reparse(source, &run(source), LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_an_allow_that_silences_nothing_and_removes_its_line() {
-        let source = "\
-local a = 1
--- luck: allow(undefined_variable)
-print(a)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "unused `allow` directive");
-        assert_eq!(
-            fixed(source),
-            "\
-local a = 1
-print(a)"
-        );
-    }
-
-    #[test]
-    fn flags_one_name_of_several_and_removes_only_it() {
-        let source = "\
--- luck: allow(undefined_variable, setting_global)
-x = 1";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "unused `undefined_variable` in this `allow`");
-        assert_eq!(diags[0].span().text(source.as_bytes()), b"undefined_variable");
-        assert_eq!(
-            fixed(source),
-            "\
--- luck: allow(setting_global)
-x = 1"
-        );
-    }
-
-    #[test]
-    fn flags_a_trailing_allow_and_keeps_the_code() {
-        let source = "\
-local a = 1 -- luck: allow(undefined_variable)
-print(a)";
-        assert_eq!(
-            fixed(source),
-            "\
-local a = 1
-print(a)"
-        );
-    }
-
-    #[test]
-    fn flags_a_block_allow_between_code_and_keeps_it_apart() {
-        assert_eq!(
-            fixed("print(1)--[[ luck: allow(undefined_variable) ]]print(2)"),
-            "print(1) print(2)"
-        );
-        assert_eq!(
-            fixed("print(1) --[[ luck: allow(undefined_variable) ]] print(2)"),
-            "print(1) print(2)"
-        );
-    }
-
-    #[test]
-    fn flags_an_unused_region_and_removes_its_end_too() {
-        let source = "\
--- luck: allow(undefined_variable) start
-local a = 1
--- luck: allow(undefined_variable, setting_global) end
-print(a)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            fixed(source),
-            "\
-local a = 1
--- luck: allow(setting_global) end
-print(a)"
-        );
-    }
-
-    #[test]
-    fn flags_an_unused_wildcard() {
-        let source = "\
--- luck: allow(*)
-local a = 1
-print(a)";
-        assert_eq!(run(source).len(), 1);
-    }
-
-    #[test]
-    fn ignores_an_allow_that_silences_something() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 -- luck: allow(setting_global)
 x = 1
 -- luck: allow(*)
-y = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_an_allow_whose_rule_did_not_run() {
-        let diags = run("\
+y = 1",
+        "\
 -- luck: allow(shadowing)
 local a = 1
-print(a)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_deny_warn_and_unknown_names() {
-        let diags = run("\
+print(a)",
+        "\
 -- luck: deny(undefined_variable)
 -- luck: warn(setting_global)
 -- luck: allow(not_a_rule)
 local a = 1
-print(a)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_an_allow_of_itself_and_what_one_covers() {
-        let diags = run("\
+print(a)",
+        "\
 -- #luck: allow(unused_lint_filter)
 -- luck: allow(undefined_variable)
 local a = 1
-print(a)");
-        assert!(diags.is_empty(), "{diags:?}");
+print(a)",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+local a = 1
+-- luck: allow(undefined_variable)
+print(a)",
+        "\
+-- luck: allow(undefined_variable, setting_global)
+x = 1",
+        "\
+local a = 1 -- luck: allow(undefined_variable)
+print(a)",
+        "print(1)--[[ luck: allow(undefined_variable) ]]print(2)",
+        "print(1) --[[ luck: allow(undefined_variable) ]] print(2)",
+        "\
+-- luck: allow(undefined_variable) start
+local a = 1
+-- luck: allow(undefined_variable, setting_global) end
+print(a)",
+        "\
+-- luck: allow(*)
+local a = 1
+print(a)",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::UnusedLintFilter, PASS, FAIL).test_and_snapshot();
     }
 }

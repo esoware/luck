@@ -56,140 +56,59 @@ impl Rule for ImplicitReturn {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::ImplicitReturn, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_if_only_branch_returns() {
-        let diags = run("function f(x) if x then return 1 end end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("falls through"));
-    }
-
-    #[test]
-    fn ignores_all_branches_return() {
-        let diags = run("function f(x) if x then return 1 else return 2 end end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_no_return_anywhere() {
-        let diags = run("function f() print() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_explicit_bare_return() {
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("function f(x) if x then return 1 else return 2 end end", LuaTarget::Lua54),
+        ("function f() print() end", LuaTarget::Lua54),
         // A bare `return` at the end is explicit, so nothing falls through.
-        let diags = run("function f() return end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_local_function_with_mixed_paths() {
-        let diags = run("local function f(x) if x then return 1 end end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_anonymous_function_with_mixed_paths() {
-        let diags = run("local f = function(x) if x then return 1 end end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_global_function_with_mixed_paths() {
-        let diags = run_rule(
-            RuleId::ImplicitReturn,
-            "global function f(x) if x then return 1 end end",
-            LuaVersion::Lua55,
-        );
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_type_function_with_mixed_paths() {
-        let source = "type function t1(a) if a then return a end end";
-        let diags = run_rule(RuleId::ImplicitReturn, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_type_alias() {
-        let diags = run_rule(RuleId::ImplicitReturn, "type T = number", LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_only_the_nested_function_with_mixed_paths() {
-        // The outer function never returns, so only the inner one fires.
-        let source = "function f() local function g(x) if x then return 1 end end end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_elseif_chain_without_else() {
-        let diags = run("function f(x, y) if x then return 1 elseif y then return 2 end end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_return_only_inside_for_loop() {
-        // The loop body may never run, so the function can fall through.
-        let diags = run("function f() for i = 1, 10 do return i end end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_while_true_with_return() {
+        ("function f() return end", LuaTarget::Lua54),
+        ("type T = number", LuaTarget::Luau),
         // `while true do ... return end` always returns.
-        let diags = run("function f() while true do return 1 end end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_fallthrough_after_while_true_with_conditional_break() {
-        let diags = run(
-            "local function f(c, d) if c then return 1 end while true do if d then break end end end",
-        );
-        assert_eq!(diags.len(), 1, "the `break` path falls off the end: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_return_after_repeat_continue_until_true() {
-        let source = "\
+        ("function f() while true do return 1 end end", LuaTarget::Lua54),
+        // `continue` ends the repeat, so `return 2` runs.
+        (
+            "\
 local function f(x)
  if x then return 1 end
  repeat continue until true
  return 2
-end";
-        let diags = run_rule(RuleId::ImplicitReturn, source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "`continue` ends the repeat, so `return 2` runs: {diags:?}");
-    }
+end",
+            LuaTarget::Luau,
+        ),
+        // `1` is always truthy, so nothing falls through.
+        ("local function f(x) while 1 do if x then return 1 end end end", LuaTarget::Lua54),
+        // No path returns a value, so no `nil` is implicit.
+        ("local function f(x) if not x then return end print(x) end", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("function f(x) if x then return 1 end end", LuaTarget::Lua54),
+        ("local function f(x) if x then return 1 end end", LuaTarget::Lua54),
+        ("local f = function(x) if x then return 1 end end", LuaTarget::Lua54),
+        ("global function f(x) if x then return 1 end end", LuaTarget::Lua55),
+        ("type function t1(a) if a then return a end end", LuaTarget::Luau),
+        // The outer function never returns, so only the inner one fires.
+        ("function f() local function g(x) if x then return 1 end end end", LuaTarget::Lua54),
+        ("function f(x, y) if x then return 1 elseif y then return 2 end end", LuaTarget::Lua54),
+        // The loop body may never run, so the function can fall through.
+        ("function f() for i = 1, 10 do return i end end", LuaTarget::Lua54),
+        // The `break` path falls off the end.
+        (
+            "local function f(c, d) if c then return 1 end while true do if d then break end end end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "local function f(x, y) if x then return end if y then return 1 end end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn ignores_while_one_infinite_loop() {
-        let diags = run("local function f(x) while 1 do if x then return 1 end end end");
-        assert!(diags.is_empty(), "`1` is always truthy, so nothing falls through: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_guard_clause_bare_return() {
-        let diags = run("local function f(x) if not x then return end print(x) end");
-        assert!(diags.is_empty(), "no path returns a value, so no `nil` is implicit: {diags:?}");
-    }
-
-    #[test]
-    fn flags_value_return_beside_a_guard_clause() {
-        let diags = run("local function f(x, y) if x then return end if y then return 1 end end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::ImplicitReturn, PASS, FAIL).test_and_snapshot();
     }
 }

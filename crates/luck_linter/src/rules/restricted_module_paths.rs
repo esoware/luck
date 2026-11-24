@@ -76,99 +76,55 @@ fn path_matches(path: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::config::LintConfig;
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule_with_config;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, paths: &[&str]) -> Vec<Message> {
-        let lint = serde_json::json!({
-            "rules": { "restricted_module_paths": ["error", { "paths": paths }] }
-        });
-        let config: LintConfig = serde_json::from_value(lint).expect("a valid `lint` section");
-        run_rule_with_config(RuleId::RestrictedModulePaths, source, LuaVersion::Lua54, &config)
-    }
-
-    #[test]
-    fn flags_matching_path() {
-        let diags = run("require(\"forbidden.lib\")", &["forbidden.lib"]);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("forbidden.lib"), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_unrelated_path() {
-        let diags = run("require(\"ok.lib\")", &["forbidden.lib"]);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_empty_config() {
-        let diags = run("require(\"anything\")", &[]);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_bare_quoted_form() {
-        // `require"x"` parses as a single-string-arg call (no parens).
-        let diags = run("require\"forbidden.lib\"", &["forbidden.lib"]);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_a_require_through_the_global_table() {
-        for source in ["_G.require(\"forbidden.lib\")", "_ENV[\"require\"](\"forbidden.lib\")"] {
-            let diags = run(source, &["forbidden.lib"]);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_method_form() {
-        let diags = run(
+    const PASS: &[(&str, LuaTarget, Option<&str>)] = &[
+        (r#"require("ok.lib")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.lib"]}"#)),
+        (r#"require("anything")"#, LuaTarget::Lua54, Some(r#"{"paths": []}"#)),
+        (
             "\
 local x = {}
 x:require(\"forbidden.lib\")",
-            &["forbidden.lib"],
-        );
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_nonliteral_argument() {
-        // Can't statically resolve a variable's value; skip.
-        let diags = run(
+            LuaTarget::Lua54,
+            Some(r#"{"paths": ["forbidden.lib"]}"#),
+        ),
+        // A variable's value can't be resolved statically.
+        (
             "\
 local p = \"forbidden.lib\"
 require(p)",
-            &["forbidden.lib"],
-        );
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+            LuaTarget::Lua54,
+            Some(r#"{"paths": ["forbidden.lib"]}"#),
+        ),
+        (r#"require("forbiddenly")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+    ];
+
+    const FAIL: &[(&str, LuaTarget, Option<&str>)] = &[
+        (r#"require("forbidden.lib")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.lib"]}"#)),
+        // `require"x"` is a call with one string argument and no parentheses.
+        (r#"require"forbidden.lib""#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.lib"]}"#)),
+        (
+            r#"_G.require("forbidden.lib")"#,
+            LuaTarget::Lua54,
+            Some(r#"{"paths": ["forbidden.lib"]}"#),
+        ),
+        (
+            r#"_ENV["require"]("forbidden.lib")"#,
+            LuaTarget::Lua54,
+            Some(r#"{"paths": ["forbidden.lib"]}"#),
+        ),
+        (r#"require("forbidden")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+        (r#"require("forbidden.sub")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+        (r#"require("forbidden\46sub")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+        ("require[[forbidden]]", LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+        (r"require'\x66orbidden'", LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+    ];
 
     #[test]
-    fn flags_wildcard_module_and_submodules() {
-        for source in ["require(\"forbidden\")", "require(\"forbidden.sub\")"] {
-            let diags = run(source, &["forbidden.*"]);
-            assert_eq!(diags.len(), 1, "{diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_name_extending_wildcard_prefix() {
-        let diags = run("require(\"forbiddenly\")", &["forbidden.*"]);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_a_path_spelled_with_escapes_or_long_brackets() {
-        for source in
-            [r#"require("forbidden\46sub")"#, "require[[forbidden]]", "require'\\x66orbidden'"]
-        {
-            let diags = run(source, &["forbidden.*"]);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-        }
+    fn test() {
+        Tester::new(RuleId::RestrictedModulePaths, PASS, FAIL).test_and_snapshot();
     }
 }

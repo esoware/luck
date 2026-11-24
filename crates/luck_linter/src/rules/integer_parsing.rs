@@ -70,66 +70,31 @@ fn check_number(literal: &NumberLiteral<'_>, version: LuaVersion) -> Option<Find
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use luck_token::LuaTarget;
+
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(RuleId::IntegerParsing, source, version)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local x = 0xFF", LuaTarget::Lua53),
+        ("local x = 100", LuaTarget::Lua54),
+        ("local x = 1.5", LuaTarget::Lua54),
+        // 1000 is exact in a double.
+        ("local x = 1_000", LuaTarget::Luau),
+        // 5 is exact in a double.
+        ("local x = 0b101", LuaTarget::Luau),
+        // 2^53 + 2 is exact in a double.
+        ("local x = 9007199254740994", LuaTarget::Lua51),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local x = 0xFFFFFFFFFFFFFFFFFF", LuaTarget::Lua53),
+        ("local x = 9007199254740993", LuaTarget::Lua51),
+        ("local x = 99999999999999999999", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn flags_hex_over_64bits_on_53() {
-        let diags = run("local x = 0xFFFFFFFFFFFFFFFFFF", LuaVersion::Lua53);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_small_hex() {
-        let diags = run("local x = 0xFF", LuaVersion::Lua53);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_decimal_above_2pow53_on_51() {
-        let diags = run("local x = 9007199254740993", LuaVersion::Lua51);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_small_decimal() {
-        let diags = run("local x = 100", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_float_literal() {
-        let diags = run("local x = 1.5", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_decimal_above_i64_on_54() {
-        let diags = run("local x = 99999999999999999999", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_separated_literal_on_luau() {
-        let diags = run("local x = 1_000", LuaVersion::Luau);
-        assert!(diags.is_empty(), "1000 is exact in a double: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_binary_literal_on_luau() {
-        let diags = run("local x = 0b101", LuaVersion::Luau);
-        assert!(diags.is_empty(), "5 is exact in a double: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_exactly_representable_integer_on_lua51() {
-        let diags = run("local x = 9007199254740994", LuaVersion::Lua51);
-        assert!(diags.is_empty(), "2^53 + 2 is exact in a double: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::IntegerParsing, PASS, FAIL).test_and_snapshot();
     }
 }

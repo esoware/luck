@@ -2,12 +2,13 @@ use alloc::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
+use luck_allocator::ThreadAllocators;
 use luck_bundler::{DependencyGraph, DynamicRequire, ModuleId};
 use luck_resolver::to_slash_lossy;
 use luck_token::LuaTarget;
 
 use crate::exit::{Exit, fail_with_diags};
-use crate::project::{bundle_arenas, bundle_options, existing_file, one_shot_project};
+use crate::project::{bundle_options, existing_file, one_shot_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -55,7 +56,7 @@ impl GraphArgs {
         let version = target.version();
         let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
-        let arenas = bundle_arenas();
+        let arenas = ThreadAllocators::new();
         let dependency_graph = DependencyGraph::build(&arenas, entry_path, &options)
             .map_err(|errors| fail_with_diags(&errors, version))?;
 

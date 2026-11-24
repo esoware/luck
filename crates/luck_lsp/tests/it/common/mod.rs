@@ -1,4 +1,5 @@
 use core::mem;
+use core::num::NonZero;
 use core::str::FromStr as _;
 use core::time::Duration;
 use std::io;
@@ -65,7 +66,12 @@ impl Client {
         let (client, server) = Connection::memory();
         let serving = thread::Builder::new()
             .name("luck-lsp-test-server".to_owned())
-            .spawn(move || luck_lsp::serve(server))
+            .spawn(move || {
+                luck_lsp::serve(
+                    server,
+                    thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN),
+                )
+            })
             .expect("the server thread starts");
         let mut started = Self {
             connection: client,

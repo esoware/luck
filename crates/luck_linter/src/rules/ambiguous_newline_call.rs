@@ -60,91 +60,54 @@ fn check_call(call: Call<'_>, source: &[u8], version: LuaVersion) -> Option<Find
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::AmbiguousNewlineCall, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_paren_on_next_line() {
-        // Parses as `local x = f(3)`, though it reads as two statements.
-        let diags = run("\
-local f = print
-local x = f
-(3)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_stmt_level_split_call() {
-        let diags = run("\
-local f = print
-f
-(3)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_split_chained_call() {
-        let diags = run("\
-local f = print
-local x = f(1)
-(2)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_split_method_call() {
-        let diags = run("\
-local t = {}
-local x = t:m
-(1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_with_comment_in_gap() {
-        let diags = run("\
-local f = print
-local x = f -- note
-(3)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_same_line_call() {
-        let diags = run("print(1)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_multiline_args() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "print(1)",
+        "\
 print(
 1,
 2
-)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_string_and_table_calls() {
-        let diags = run("\
+)",
+        "\
 local f = print
 f
 \"s\"
 f
-{}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+{}",
+    ];
+
+    const FAIL: &[&str] = &[
+        // Parses as `local x = f(3)`, though it reads as two statements.
+        "\
+local f = print
+local x = f
+(3)",
+        "\
+local f = print
+f
+(3)",
+        "\
+local f = print
+local x = f(1)
+(2)",
+        "\
+local t = {}
+local x = t:m
+(1)",
+        "\
+local f = print
+local x = f -- note
+(3)",
+        // Lua reads a lone CR as a line break.
+        "\
+local f = print
+f\r(3)",
+    ];
 
     #[test]
-    fn flags_paren_after_cr_only_line_break() {
-        let diags = run("local f = print\nf\r(3)");
-        assert_eq!(diags.len(), 1, "Lua reads a lone CR as a line break: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::AmbiguousNewlineCall, PASS, FAIL).test_and_snapshot();
     }
 }

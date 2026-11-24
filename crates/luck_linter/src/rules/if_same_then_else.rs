@@ -40,68 +40,36 @@ impl Rule for IfSameThenElse {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::IfSameThenElse, source, LuaVersion::Lua54)
-    }
+    const PASS: &[&str] = &[
+        "if a then print(1) else print(2) end",
+        "if a then print(1) end",
+        "\
+if a then
+  -- nothing
+else
+  -- nothing
+end",
+    ];
 
-    #[test]
-    fn flags_identical_call_branches() {
-        let diags = run("if a then print(1) else print(1) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_identical_assignment_branches() {
-        let diags = run("if cond then x = 1 else x = 1 end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_different_branches() {
-        let diags = run("if a then print(1) else print(2) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_if_without_else() {
-        let diags = run("if a then print(1) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_branches_that_differ_only_in_spacing_and_comments() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "if a then print(1) else print(1) end",
+        "if cond then x = 1 else x = 1 end",
+        "\
 if a then
   print(1, x) -- the first
 else
   print( 1,x )
-end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
+end",
+        // The condition decides whether `elseif` runs, so removing the `if` isn't
+        // safe.
+        "if a then f() elseif b then g() else f() end",
+    ];
 
     #[test]
-    fn ignores_empty_branches() {
-        let diags = run("\
-if a then
-  -- nothing
-else
-  -- nothing
-end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_identical_branches_with_elseif_without_dead_condition_help() {
-        let diags = run("if a then f() elseif b then g() else f() end");
-        assert!(
-            diags.iter().all(|diag| !diag.help.as_deref().unwrap_or("").contains("no effect")),
-            "the condition decides whether `elseif` runs, so removing the `if` isn't safe: {diags:?}"
-        );
+    fn test() {
+        Tester::new(RuleId::IfSameThenElse, PASS, FAIL).test_and_snapshot();
     }
 }

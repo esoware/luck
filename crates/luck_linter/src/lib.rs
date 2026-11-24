@@ -20,7 +20,7 @@
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());
 //! let parse = luck_parser::parse(&allocator, b"print(1)", LuaTarget::Lua54.version());
-//! let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty());
+//! let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), None);
 //! assert!(diags.is_empty());
 //! ```
 
@@ -53,6 +53,7 @@ mod roblox;
 mod rule;
 mod rules;
 mod suggest;
+mod timing;
 mod underscore_fix;
 
 pub use config::{CategoryLevels, LintConfig, RuleLevel, RuleSettings};
@@ -60,3 +61,4 @@ pub use diagnostic::{Category, Message};
 pub use fix::{Fix, FixError, FixKind, Fixed, TextEdit, non_overlapping_edits};
 pub use linter::{Analysis, Linter};
 pub use rules::RuleId;
+pub use timing::{RuleTiming, RuleTimings};

@@ -34,61 +34,28 @@ impl Rule for UnusedLabel {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnusedLabel, source, LuaVersion::Lua54)
-    }
+    const PASS: &[&str] = &[
+        "do ::a:: print(1) goto a end",
+        "do ::a:: do print() goto a end end",
+        "::start:: print(1) goto start",
+    ];
+
+    const FAIL: &[&str] = &[
+        "do ::a:: print(1) end",
+        // `g`'s `goto` takes its own label, since a `goto` can't leave its
+        // function, and no `goto` takes `f`'s.
+        "function f() ::a:: print() end function g() ::a:: goto a end",
+        "::start:: print(1)",
+        // No label is visible across functions, so the inner `goto` takes the inner
+        // label and the outer one stays unused.
+        "::a:: local f = function() ::a:: goto a end",
+    ];
 
     #[test]
-    fn ignores_label_with_matching_goto() {
-        let diags = run("do ::a:: print(1) goto a end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_label_with_no_goto() {
-        let diags = run("do ::a:: print(1) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`a`"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_label_in_different_function() {
-        // g's goto targets g's own label (a cross-function goto would
-        // not parse); f's label has no goto anywhere.
-        let diags = run("function f() ::a:: print() end function g() ::a:: goto a end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_goto_in_inner_block() {
-        let diags = run("do ::a:: do print() goto a end end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_unused_top_level_label() {
-        let diags = run("::start:: print(1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_top_level_label_used() {
-        let diags = run("::start:: print(1) goto start");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_label_unreachable_from_inner_function() {
-        // The inner goto binds to the inner function's own label; the
-        // outer label stays unused (labels are not visible across
-        // function boundaries).
-        let diags = run("::a:: local f = function() ::a:: goto a end");
-        assert_eq!(diags.len(), 1, "outer label is unreachable from inner function: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::UnusedLabel, PASS, FAIL).test_and_snapshot();
     }
 }

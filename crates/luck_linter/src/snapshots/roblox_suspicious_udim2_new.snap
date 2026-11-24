@@ -1,0 +1,26 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: `UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)
+ --> Roblox:1:11
+1 | local u = UDim2.new(0.5, 1)
+  |           ^^^^^^^^^^^^^^^^^
+help: did you mean to use `UDim2.fromScale`?
+
+warning: `UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)
+ --> Roblox:1:11
+1 | local u = UDim2.new(100, 200)
+  |           ^^^^^^^^^^^^^^^^^^^
+help: did you mean to use `UDim2.fromOffset`?
+
+warning: `UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)
+ --> Roblox:1:11
+1 | local u = UDim2.new(-0.5)
+  |           ^^^^^^^^^^^^^^^
+help: did you mean to use `UDim2.fromScale`?
+
+warning: `UDim2.new` takes 4 components (`xScale`, `xOffset`, `yScale`, `yOffset`)
+ --> Roblox:1:11
+1 | local u = UDim2.new(1, 0, 1)
+  |           ^^^^^^^^^^^^^^^^^^
+help: did you mean to use `UDim2.fromScale`?

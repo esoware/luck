@@ -43,7 +43,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let linter = Linter::new(LintConfig::default());
     let without_vim = linter.analyze(&parse, library_for(LuaTarget::Lua54));
     let flagged = linter
-        .run_analyzed(&parse, &without_vim, FixKind::empty(), &|| false)
+        .run_analyzed(&parse, &without_vim, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(flagged.iter().any(|diag| diag.code == "undefined_variable"), "{flagged:?}");
 
@@ -52,7 +52,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let analysis = with_vim.analyze(&parse, library_for(LuaTarget::Lua54));
     assert!(analysis.semantic().is_known_global("vim"));
     let quiet = with_vim
-        .run_analyzed(&parse, &analysis, FixKind::empty(), &|| false)
+        .run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(quiet.iter().all(|diag| diag.code != "undefined_variable"), "{quiet:?}");
 }
@@ -64,7 +64,7 @@ fn run_analyzed_reports_parse_errors_without_running_rules() {
     let linter = Linter::new(LintConfig::default());
     let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
     let diags = linter
-        .run_analyzed(&parse, &analysis, FixKind::empty(), &|| true)
+        .run_analyzed(&parse, &analysis, FixKind::empty(), None, &|| true)
         .expect("a parse error is reported before any rule could be cancelled");
     assert!(!diags.is_empty(), "{diags:?}");
     assert!(diags.iter().all(|diag| diag.code == "E008"), "{diags:?}");

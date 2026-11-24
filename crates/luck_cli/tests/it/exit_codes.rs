@@ -32,6 +32,19 @@ fn lint_undefined_variable_exits_failure() {
 }
 
 #[test]
+fn threads_takes_a_count_of_one_or_more() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "bad.lua", "return missingglobal\n");
+
+    luck_in(directory.path()).args(["--threads", "1", "lint", "bad.lua"]).assert().code(1i32);
+    luck_in(directory.path())
+        .args(["lint", "bad.lua", "--threads", "0"])
+        .assert()
+        .code(2i32)
+        .stderr(predicate::str::contains("--threads"));
+}
+
+#[test]
 fn check_parse_error_exits_failure() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "broken.lua", "local x = 1 +\n");

@@ -69,92 +69,75 @@ impl Rule for RedefiningLocal {
 mod tests {
     use core::fmt::Write as _;
 
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::RedefiningLocal, source, LuaVersion::Lua54)
+    /// `count` locals, then the first declared again.
+    fn locals_then_the_first_again(count: u32) -> String {
+        let mut source = String::new();
+        for i in 0..count {
+            let _unused = writeln!(source, "local x{i} = 1");
+        }
+        source.push_str("local x0 = 1");
+        source
     }
 
-    #[test]
-    fn flags_same_block_redeclaration() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
+do local x = 1 end
+do local x = 2 end",
+            LuaTarget::Lua54,
+        ),
+        // Inner block shadowing is `shadowing`'s job.
+        (
+            "\
+local x = 1
+do local x = 2 end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local _ = 1
+local _ = 2",
+            LuaTarget::Lua54,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
 do local x = 1
 local x = 2
-print(x) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(9));
-    }
-
-    #[test]
-    fn ignores_sibling_blocks() {
-        let diags = run("\
-do local x = 1 end
-do local x = 2 end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_nested_block_shadowing() {
-        // Inner block shadowing is `shadowing`'s job.
-        let diags = run("\
-local x = 1
-do local x = 2 end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_multiple_redeclarations() {
-        let diags = run("\
+print(x) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local x = 1
 local x = 2
-local x = 3");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_local_function_redeclaration() {
-        let diags = run("\
+local x = 3",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local function f() end
-local function f() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
+local function f() end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn ignores_underscore_names() {
-        let diags = run("\
-local _ = 1
-local _ = 2");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    fn locals_declared_twice(count: u32) -> String {
-        let mut locals = String::new();
-        for i in 0..count {
-            let _unused = writeln!(locals, "local x{i} = 1");
-        }
-        format!("{locals}{locals}")
-    }
-
-    #[test]
-    fn flags_each_redeclaration_in_a_block_at_the_local_limit() {
-        let diags = run(&locals_declared_twice(100));
-        assert_eq!(diags.len(), 100, "{diags:?}");
-        assert_eq!(
-            diags[0].labels.first().map(|label| label.span.start),
-            Some(6),
-            "{:?}",
-            diags[0]
-        );
-    }
-
-    #[test]
-    fn ignores_the_rest_of_a_block_past_the_local_limit() {
-        let diags = run(&locals_declared_twice(201));
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        let at_limit = locals_then_the_first_again(199);
+        // Only Luau's compiler, not luck, rejects this many active locals.
+        let past_limit = locals_then_the_first_again(201);
+        let pass: Vec<_> =
+            PASS.iter().copied().chain([(past_limit.as_str(), LuaTarget::Luau)]).collect();
+        let fail: Vec<_> =
+            FAIL.iter().copied().chain([(at_limit.as_str(), LuaTarget::Lua54)]).collect();
+        Tester::new(RuleId::RedefiningLocal, &pass, &fail).test_and_snapshot();
     }
 }

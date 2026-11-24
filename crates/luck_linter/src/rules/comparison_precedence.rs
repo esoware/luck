@@ -103,79 +103,33 @@ fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::ComparisonPrecedence, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_less_then_equal() {
-        let diags = run("local x = a < b == c");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_equal_then_equal() {
-        let diags = run("local x = a == b == c");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_single_comparison() {
-        let diags = run("local x = a < b");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_parenthesized_inner() {
+    const PASS: &[&str] = &[
+        "local x = a < b",
         // The parentheses show the intent.
-        let diags = run("local x = (a < b) == c");
-        assert!(diags.is_empty(), "parenthesized intent should be respected: {diags:?}");
-    }
-
-    #[test]
-    fn flags_less_chain() {
-        let diags = run("local x = a < b < c");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_not_equality() {
-        let diags = run("local x = not a == b");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("(not x) == y"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_not_relational() {
-        for op in ["<", "<=", ">", ">="] {
-            let diags = run(&format!("local x = not a {op} b"));
-            assert_eq!(diags.len(), 1, "op {op}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_parenthesized_not() {
-        let diags = run("local x = (not a) == b");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_double_not() {
+        "local x = (a < b) == c",
+        "local x = (not a) == b",
         // `not x == not y` compares two negations; Luau exempts this too.
-        let diags = run("local x = not a == not b");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+        "local x = not a == not b",
+        // The idiomatic way to write a range check in Lua.
+        "local x = a < b and b < c",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local x = a < b == c",
+        "local x = a == b == c",
+        "local x = a < b < c",
+        "local x = not a == b",
+        "local x = not a < b",
+        "local x = not a <= b",
+        "local x = not a > b",
+        "local x = not a >= b",
+    ];
 
     #[test]
-    fn ignores_logical_chain() {
-        // The idiomatic way to write a range check in Lua.
-        let diags = run("local x = a < b and b < c");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::ComparisonPrecedence, PASS, FAIL).test_and_snapshot();
     }
 }

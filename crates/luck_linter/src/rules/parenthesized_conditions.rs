@@ -101,110 +101,39 @@ fn replacement_beside(neighbor: Option<&u8>) -> &'static [u8] {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::ParenthesizedConditions, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_each_parenthesized_condition() {
-        let diags = run("\
-local c = 1
-if (c) then elseif (c) then end
-while (c) do break end");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            [
-                "unnecessary parentheses around `if` condition",
-                "unnecessary parentheses around `elseif` condition",
-                "unnecessary parentheses around `while` condition",
-            ],
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_bare_and_partly_parenthesized_conditions() {
-        let diags = run("\
+    const PASS: &[&str] = &["\
 local a, b = 1, 2
 if a then end
 while (a) == b do break end
 if (a).b then end
-if (f)() then end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+if (f)() then end"];
 
-    #[test]
-    fn flags_and_fixes_a_truncated_call_and_the_outer_pair() {
-        let source = "\
+    const FAIL: &[&str] = &[
+        "\
+local c = 1
+if (c) then elseif (c) then end
+while (c) do break end",
+        "\
 if (f()) then end
-while ((c)) do break end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(
-            fixed,
-            "\
-if f() then end
-while (c) do break end"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_parenthesized_comparison() {
-        let source = "\
+while ((c)) do break end",
+        "\
 local c = 1
-if (c == 1) then end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(
-            fixed,
-            "\
-local c = 1
-if c == 1 then end"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_keywords_separated() {
-        let source = "if(x)then y() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "if x then y() end", "the fix should keep the tokens apart");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_comment() {
-        let source = "if (--[[why]] x) then end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
-    }
-
-    #[test]
-    fn flags_and_fixes_elseif_and_while_keywords_glued_to_parens() {
-        let source = "\
+if (c == 1) then end",
+        // The fix should keep the tokens apart.
+        "if(x)then y() end",
+        // The fix shouldn't delete the comment.
+        "if (--[[why]] x) then end",
+        "\
 local c = 1
 if c then elseif(c)then end
-while(c)do break end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(
-            fixed,
-            "\
-local c = 1
-if c then elseif c then end
-while c do break end"
-        );
+while(c)do break end",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::ParenthesizedConditions, PASS, FAIL).test_and_snapshot();
     }
 }

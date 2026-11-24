@@ -226,378 +226,139 @@ fn literal_error(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::FormatString, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn ignores_correct_arg_count() {
-        let diags = run("string.format(\"%d\", 1)");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_too_few_args() {
-        let diags = run("string.format(\"%q\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("format takes 1, got 0"), "msg: {}", diags[0].message);
-    }
-
-    #[test]
-    fn flags_too_few_args_without_parentheses() {
-        for source in [
-            "string.format\"%d\"",
-            "local s = (\"%d %d\"):format\"x\"",
-            "local s = (\"%d %d\"):format{}",
-        ] {
-            let diags = run(source);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-            assert!(diags[0].message.contains("wrong argument count"), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_method_form_string_and_table_args_without_parentheses() {
-        for source in ["local s = (\"%s\"):format\"x\"", "local s = (\"%s\"):format{}"] {
-            let diags = run(source);
-            assert!(diags.is_empty(), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_unknown_specifier() {
-        let diags = run("string.format(\"%z\", 1)");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("unknown specifier"), "msg: {}", diags[0].message);
-    }
-
-    #[test]
-    fn flags_pattern_unterminated_set() {
-        let diags = run("string.match(\"abc\", \"[abc\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("unterminated set"), "msg: {}", diags[0].message);
-    }
-
-    #[test]
-    fn ignores_valid_pack_format() {
-        let diags = run("string.pack(\">i4\", 1)");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_invalid_pack_option() {
-        let diags = run("string.pack(\"Q\", 1)");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("invalid pack option"), "msg: {}", diags[0].message);
-    }
-
-    #[test]
-    fn ignores_method_form_correct_format() {
-        // The receiver is the format string, so `1` is the one argument
-        // that `%d` needs.
-        let diags = run("(\"%d\"):format(1)");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_method_form_bad_format() {
-        let diags = run("(\"%z\"):format(1)");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_nonliteral_format() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (r#"string.format("%d", 1)"#, LuaTarget::Lua54),
+        (r#"local s = ("%s"):format"x""#, LuaTarget::Lua54),
+        (r#"local s = ("%s"):format{}"#, LuaTarget::Lua54),
+        (r#"string.pack(">i4", 1)"#, LuaTarget::Lua54),
+        // The receiver is the format string, so `1` is the one argument that `%d`
+        // needs.
+        (r#"("%d"):format(1)"#, LuaTarget::Lua54),
+        (
+            "\
 local fmt = \"%d\"
-string.format(fmt, 1)");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_vararg_args() {
-        let diags = run("local function f(...) return string.format(\"%d %d\", ...) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_function_call_args() {
+string.format(fmt, 1)",
+            LuaTarget::Lua54,
+        ),
+        (r#"local function f(...) return string.format("%d %d", ...) end"#, LuaTarget::Lua54),
         // `f()` can return any number of values.
-        let diags = run("\
+        (
+            "\
 local function f() end
-string.format(\"%d %d\", f())");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_a_long_bracket_format_where_its_text_is() {
-        let source = "string.format([==[\n%z]==], 1)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(diags[0].span().text(source.as_bytes()), b"z");
-    }
-
-    #[test]
-    fn flags_a_format_spelled_with_escapes_over_the_whole_literal() {
-        let source = "string.format(\"\\37z\", 1)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(diags[0].span().text(source.as_bytes()), b"\"\\37z\"");
-    }
-
-    #[test]
-    fn flags_gsub_bad_replacement() {
-        let diags = run("string.gsub(\"x\", \"y\", \"%q\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("replacement"), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_gsub_unfinished_replacement() {
-        let diags = run("string.gsub(\"x\", \"y\", \"a%\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_gsub_capture_out_of_range() {
-        let diags = run("string.gsub(\"x\", \"(a)(b)\", \"%3\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("capture index"), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_gsub_method_form_replacement() {
-        let diags = run("(\"x\"):gsub(\"(a)\", \"%2\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_gsub_valid_replacement() {
-        // `%%` escapes, `%0` is the whole match, and `%1` is the first
-        // capture, or the whole match when the pattern has none.
-        for source in
-            ["string.gsub(\"x\", \"(a)\", \"%%%0%1\")", "string.gsub(\"x\", \"a\", \"%1\")"]
-        {
-            let diags = run(source);
-            assert!(diags.is_empty(), "got: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_gsub_nonliteral_pattern_index() {
+string.format(\"%d %d\", f())",
+            LuaTarget::Lua54,
+        ),
+        // `%%` escapes, `%0` is the whole match, and `%1` is the first capture, or
+        // the whole match when the pattern has none.
+        (r#"string.gsub("x", "(a)", "%%%0%1")"#, LuaTarget::Lua54),
+        (r#"string.gsub("x", "a", "%1")"#, LuaTarget::Lua54),
         // An unknown capture count disables the index check.
-        let diags = run("\
+        (
+            "\
 local p = \"(a)\"
-string.gsub(\"x\", p, \"%9\")");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_os_date_bad_specifier() {
-        let diags = run("os.date(\"%Q\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("date format"), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_os_date_unfinished() {
-        let diags = run("os.date(\"abc%\")");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_os_date_valid() {
-        for format in ["\"%Y-%m-%d %H:%M:%S\"", "\"*t\"", "\"!*t\"", "\"100%%\""] {
-            let diags = run(&format!("os.date({format})"));
-            assert!(diags.is_empty(), "format {format}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_shadowed_os() {
-        let diags = run("\
+string.gsub(\"x\", p, \"%9\")",
+            LuaTarget::Lua54,
+        ),
+        (r#"os.date("%Y-%m-%d %H:%M:%S")"#, LuaTarget::Lua54),
+        (r#"os.date("*t")"#, LuaTarget::Lua54),
+        (r#"os.date("!*t")"#, LuaTarget::Lua54),
+        (r#"os.date("100%%")"#, LuaTarget::Lua54),
+        (
+            "\
 local os = {}
-os.date(\"%Q\")");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_luau_star_format_specifier() {
-        let diags =
-            run_rule(RuleId::FormatString, "local s = string.format(\"%*\", 1)", LuaVersion::Luau);
-        assert!(diags.is_empty(), "Luau accepts the `%*` conversion: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_percent_p_format_on_lua54() {
-        let diags = run("local s = string.format(\"%p\", {})");
-        assert!(diags.is_empty(), "Lua 5.4 accepts the `%p` conversion: {diags:?}");
-    }
-
-    #[test]
-    fn flags_percent_a_format_on_lua51() {
-        let diags =
-            run_rule(RuleId::FormatString, "local s = string.format(\"%a\", 1)", LuaVersion::Lua51);
-        assert_eq!(diags.len(), 1, "Lua 5.1 rejects the `%a` conversion: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_repeated_format_flags() {
-        let diags = run("local s = string.format(\"%--d\", 1)");
-        assert!(diags.is_empty(), "every dialect accepts a repeated format flag: {diags:?}");
-    }
-
-    #[test]
-    fn flags_modifier_on_percent_q_on_lua54() {
-        let diags = run("local s = string.format(\"%5q\", \"a\")");
-        assert_eq!(diags.len(), 1, "Lua 5.4 rejects a modifier on `%q`: {diags:?}");
-    }
-
-    #[test]
-    fn flags_alternate_flag_on_percent_d_on_lua54() {
-        let diags = run("local s = string.format(\"%#d\", 1)");
-        assert_eq!(diags.len(), 1, "Lua 5.4 rejects the `#` flag on `%d`: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_plain_find_special_characters() {
-        let diags = run("local i = string.find(s, \"[\", 1, true)");
-        assert!(diags.is_empty(), "a plain find doesn't read a pattern: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_method_match_subject_literal() {
-        let diags = run("local m = (\"[abc\"):match(\"b\")");
-        assert!(diags.is_empty(), "the receiver of `:match` is the subject: {diags:?}");
-    }
-
-    #[test]
-    fn flags_method_match_bad_pattern() {
-        let diags = run("local m = (\"abc\"):match(\"[\")");
-        assert_eq!(diags.len(), 1, "the argument of `:match` is the pattern: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_quantifier_with_nothing_to_repeat() {
-        for source in [
-            "local s = string.gsub(x, \"-\", \"_\")",
-            "local s = string.find(x, \"+\")",
-            "local s = string.match(x, \"^-?%d+$\")",
-        ] {
-            let diags = run(source);
-            assert!(diags.is_empty(), "{source}: `lstrlib.c` reads these as literals: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_set_with_leading_close_bracket() {
-        let diags = run("local i = string.find(s, \"[]]\")");
-        assert!(diags.is_empty(), "a `]` first in a set is a member: {diags:?}");
-    }
-
-    #[test]
-    fn flags_back_reference_without_capture() {
-        let diags = run("local i = string.find(s, \"%1\")");
-        assert_eq!(diags.len(), 1, "`%1` with no capture raises an error: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_packsize_value_options() {
-        let diags = run("local n = string.packsize(\"i4\")");
-        assert!(diags.is_empty(), "`string.packsize` takes only the format: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_unpack_of_multiple_values() {
-        let diags = run("local a, b = string.unpack(\"i4 i4\", s)");
-        assert!(diags.is_empty(), "`string.unpack` takes the data, not one value each: {diags:?}");
-    }
-
-    #[test]
-    fn flags_pack_integer_size_out_of_limits() {
-        let diags = run("local p = string.pack(\"i17\", 1)");
-        assert_eq!(diags.len(), 1, "integer sizes above 16 raise an error: {diags:?}");
-    }
-
-    #[test]
-    fn flags_error_over_the_whole_character() {
-        let source = "local s = string.format(\"%\u{e9}\", 1)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            diags[0].span().text(source.as_bytes()),
-            "\u{e9}".as_bytes(),
-            "the span should cover the whole character: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_error_without_garbling_the_character() {
-        let diags = run("local s = string.format(\"%\u{e9}\", 1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            !diags[0].message.contains('\u{c3}'),
-            "the lead byte shouldn't print as a Latin-1 character: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_find_without_special_characters() {
-        let diags = run("local i = string.find(s, \"a)\")");
-        assert!(diags.is_empty(), "a pattern with no special characters is plain: {diags:?}");
-    }
-
-    #[test]
-    fn flags_find_pattern_when_plain_is_false() {
-        let diags = run("local i = string.find(s, \"[\", 1, false)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_find_with_unknown_plain_argument() {
-        let diags = run("local i = string.find(s, \"[\", 1, plain)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_pattern_method_on_unknown_receiver() {
-        let diags = run("local i = obj:match(\"[\")");
-        assert!(diags.is_empty(), "`obj` isn't known to be a string: {diags:?}");
-    }
-
-    #[test]
-    fn flags_pattern_method_on_string_local() {
-        let diags = run("\
-local s = \"abc\"
-local i = s:match(\"[\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_literal_with_numeric_escape() {
-        let diags = run("local s = string.format(\"\\37d\", 1)");
-        assert!(diags.is_empty(), "`\\37` spells a `%` the raw body can't show: {diags:?}");
-    }
-
-    #[test]
-    fn flags_pack_on_lua53_but_not_lua51() {
-        let source = "local p = string.pack(\"i17\", 1)";
-        let on_53 = run_rule(RuleId::FormatString, source, LuaVersion::Lua53);
-        assert_eq!(on_53.len(), 1, "{on_53:?}");
-        let on_51 = run_rule(RuleId::FormatString, source, LuaVersion::Lua51);
-        assert!(on_51.is_empty(), "Lua 5.1 has no `string.pack`: {on_51:?}");
-    }
-
-    #[test]
-    fn ignores_rebound_string_global() {
-        let diags = run("\
+os.date(\"%Q\")",
+            LuaTarget::Lua54,
+        ),
+        // Luau accepts the `%*` conversion.
+        (r#"local s = string.format("%*", 1)"#, LuaTarget::Luau),
+        // Lua 5.4 accepts the `%p` conversion.
+        (r#"local s = string.format("%p", {})"#, LuaTarget::Lua54),
+        // Every dialect accepts a repeated format flag.
+        (r#"local s = string.format("%--d", 1)"#, LuaTarget::Lua54),
+        // A plain find doesn't read a pattern.
+        (r#"local i = string.find(s, "[", 1, true)"#, LuaTarget::Lua54),
+        // The receiver of `:match` is the subject.
+        (r#"local m = ("[abc"):match("b")"#, LuaTarget::Lua54),
+        // `lstrlib.c` reads these as literals.
+        (r#"local s = string.gsub(x, "-", "_")"#, LuaTarget::Lua54),
+        (r#"local s = string.find(x, "+")"#, LuaTarget::Lua54),
+        (r#"local s = string.match(x, "^-?%d+$")"#, LuaTarget::Lua54),
+        // A `]` first in a set is a member.
+        (r#"local i = string.find(s, "[]]")"#, LuaTarget::Lua54),
+        // `string.packsize` takes only the format.
+        (r#"local n = string.packsize("i4")"#, LuaTarget::Lua54),
+        // `string.unpack` takes the data, not one value each.
+        (r#"local a, b = string.unpack("i4 i4", s)"#, LuaTarget::Lua54),
+        // A pattern with no special characters is plain.
+        (r#"local i = string.find(s, "a)")"#, LuaTarget::Lua54),
+        (r#"local i = string.find(s, "[", 1, plain)"#, LuaTarget::Lua54),
+        // `obj` isn't known to be a string.
+        (r#"local i = obj:match("[")"#, LuaTarget::Lua54),
+        // `\37` spells a `%` the raw body can't show.
+        (r#"local s = string.format("\37d", 1)"#, LuaTarget::Lua54),
+        // Lua 5.1 has no `string.pack`.
+        (r#"local p = string.pack("i17", 1)"#, LuaTarget::Lua51),
+        (
+            "\
 string = {}
-local i = string.match(\"x\", \"[\")");
-        assert!(diags.is_empty(), "{diags:?}");
+local i = string.match(\"x\", \"[\")",
+            LuaTarget::Lua54,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (r#"string.format("%q")"#, LuaTarget::Lua54),
+        (r#"string.format"%d""#, LuaTarget::Lua54),
+        (r#"local s = ("%d %d"):format"x""#, LuaTarget::Lua54),
+        (r#"local s = ("%d %d"):format{}"#, LuaTarget::Lua54),
+        (r#"string.format("%z", 1)"#, LuaTarget::Lua54),
+        (r#"string.match("abc", "[abc")"#, LuaTarget::Lua54),
+        (r#"string.pack("Q", 1)"#, LuaTarget::Lua54),
+        (r#"("%z"):format(1)"#, LuaTarget::Lua54),
+        (
+            "\
+string.format([==[
+%z]==], 1)",
+            LuaTarget::Lua54,
+        ),
+        (r#"string.format("\37z", 1)"#, LuaTarget::Lua54),
+        (r#"string.gsub("x", "y", "%q")"#, LuaTarget::Lua54),
+        (r#"string.gsub("x", "y", "a%")"#, LuaTarget::Lua54),
+        (r#"string.gsub("x", "(a)(b)", "%3")"#, LuaTarget::Lua54),
+        (r#"("x"):gsub("(a)", "%2")"#, LuaTarget::Lua54),
+        (r#"os.date("%Q")"#, LuaTarget::Lua54),
+        (r#"os.date("abc%")"#, LuaTarget::Lua54),
+        // Lua 5.1 rejects the `%a` conversion.
+        (r#"local s = string.format("%a", 1)"#, LuaTarget::Lua51),
+        // Lua 5.4 rejects a modifier on `%q`.
+        (r#"local s = string.format("%5q", "a")"#, LuaTarget::Lua54),
+        // Lua 5.4 rejects the `#` flag on `%d`.
+        (r#"local s = string.format("%#d", 1)"#, LuaTarget::Lua54),
+        // The argument of `:match` is the pattern.
+        (r#"local m = ("abc"):match("[")"#, LuaTarget::Lua54),
+        // `%1` with no capture raises an error.
+        (r#"local i = string.find(s, "%1")"#, LuaTarget::Lua54),
+        // Integer sizes above 16 raise an error.
+        (r#"local p = string.pack("i17", 1)"#, LuaTarget::Lua54),
+        // The span and the message take the whole character, not its first byte.
+        ("local s = string.format(\"%\u{e9}\", 1)", LuaTarget::Lua54),
+        (r#"local i = string.find(s, "[", 1, false)"#, LuaTarget::Lua54),
+        (
+            "\
+local s = \"abc\"
+local i = s:match(\"[\")",
+            LuaTarget::Lua54,
+        ),
+        (r#"local p = string.pack("i17", 1)"#, LuaTarget::Lua53),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::FormatString, PASS, FAIL).test_and_snapshot();
     }
 }

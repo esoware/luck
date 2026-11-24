@@ -84,72 +84,33 @@ fn unknown_member(prefix: ChainHead<'_>, last_segment: &str, span: Span) -> Find
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run_roblox(source: &str) -> Vec<Message> {
-        run_rule_roblox(RuleId::RobloxUnknownEnumMember, source)
-    }
-
-    #[test]
-    fn flags_unknown_enum_type() {
-        let diags = run_roblox("local m = Enum.Materialz");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("unknown enum type `Enum.Materialz`"));
-    }
-
-    #[test]
-    fn flags_unknown_enum_item() {
-        let diags = run_roblox("local m = Enum.Material.Grassz");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].message.contains("`Grassz` is not an item of `Enum.Material`"),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_unknown_item_member() {
-        let diags = run_roblox("local n = Enum.Material.Grass.Nome");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0].message.contains("`Nome` is not a member of `Enum.Material.Grass`"),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_valid_enum_chain() {
-        let diags = run_roblox("local v = Enum.Material.Grass.Value");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_only_first_unknown_segment() {
-        // Only the innermost failing access reports; the outer one
-        // stays silent instead of cascading.
-        let diags = run_roblox("local m = Enum.Materialz.Grass");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("unknown enum type"));
-    }
-
-    #[test]
-    fn ignores_shadowed_enum_global() {
-        let diags = run_roblox(
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local v = Enum.Material.Grass.Value", LuaTarget::LuauRoblox),
+        (
             "\
 local Enum = { Materialz = 1 }
 local m = Enum.Materialz",
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+            LuaTarget::LuauRoblox,
+        ),
+        ("local m = Enum.Materialz", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local m = Enum.Materialz", LuaTarget::LuauRoblox),
+        ("local m = Enum.Material.Grassz", LuaTarget::LuauRoblox),
+        ("local n = Enum.Material.Grass.Nome", LuaTarget::LuauRoblox),
+        // Only the innermost failing access reports; the outer one stays silent
+        // instead of cascading.
+        ("local m = Enum.Materialz.Grass", LuaTarget::LuauRoblox),
+    ];
 
     #[test]
-    fn ignores_standalone_environment() {
-        let diags =
-            run_rule(RuleId::RobloxUnknownEnumMember, "local m = Enum.Materialz", LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::RobloxUnknownEnumMember, PASS, FAIL).test_and_snapshot();
     }
 }

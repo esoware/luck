@@ -93,81 +93,43 @@ fn malformed_message(error: DirectiveError, source: &[u8]) -> Cow<'static, str> 
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::InvalidLintFilter, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_unknown_name() {
-        let diags = run("\
--- luck: allow(not_a_real_rule)
-local _x = 1");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("not_a_real_rule"));
-    }
-
-    #[test]
-    fn flags_the_parse_error_code_which_no_directive_can_silence() {
-        let diags = run("\
--- #luck: allow(E008)
-local _x = 1");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "unknown lint rule `E008`");
-    }
-
-    #[test]
-    fn flags_a_misspelled_region_word() {
-        let source = "\
--- luck: allow(unused_variable) strat
-local _x = 1";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].span().text(source.as_bytes()), b"strat");
-    }
-
-    #[test]
-    fn flags_a_luck_comment_that_is_no_directive() {
-        let diags = run("\
--- luck: alow(unused_variable)
--- luck: format offf
-local _x = 1");
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        assert!(diags[0].message.starts_with("unknown directive `alow(unused_variable)`"));
-        assert!(diags[1].message.contains("after `format`"));
-    }
-
-    #[test]
-    fn flags_an_end_that_closes_no_region() {
-        let diags = run("\
-local _x = 1
--- luck: deny(unused_variable) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "no `deny(unused_variable) start` for this `end` to close");
-    }
-
-    #[test]
-    fn ignores_wildcard() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 -- luck: allow(*)
-local _x = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_known_name_and_formatter_directives() {
-        let diags = run("\
+local _x = 1",
+        "\
 -- luck: allow(unused_variable)
 -- luck: format off
 local _x = 1
 -- luck: format on
 -- luck: ignore because aligned
-local _y = 2");
-        assert!(diags.is_empty(), "{diags:?}");
+local _y = 2",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+-- luck: allow(not_a_real_rule)
+local _x = 1",
+        "\
+-- #luck: allow(E008)
+local _x = 1",
+        "\
+-- luck: allow(unused_variable) strat
+local _x = 1",
+        "\
+-- luck: alow(unused_variable)
+-- luck: format offf
+local _x = 1",
+        "\
+local _x = 1
+-- luck: deny(unused_variable) end",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::InvalidLintFilter, PASS, FAIL).test_and_snapshot();
     }
 }

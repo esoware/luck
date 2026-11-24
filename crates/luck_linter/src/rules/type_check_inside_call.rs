@@ -57,61 +57,27 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::TypeCheckInsideCall, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_equality_inside_type_call() {
-        let diags = run("if type(x == \"string\") then end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_inequality_inside_typeof_call() {
-        let diags = run("local ok = typeof(x ~= \"Instance\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_method_call_on_a_table_named_type() {
-        let source = "\
+    const PASS: &[&str] = &[
+        "\
 type = {}
 function type:f(v) return v end
-type:f(1 == 2)";
-        let diags = run(source);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_method_call_on_a_table_named_typeof() {
-        let diags = run("typeof:f(a == b)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_comparison_outside_call() {
-        let diags = run("local ok = type(x) == \"string\"");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_comparison_among_several_args() {
-        let diags = run("type(x == 1, y)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_type() {
-        let diags = run("\
+type:f(1 == 2)",
+        "typeof:f(a == b)",
+        r#"local ok = type(x) == "string""#,
+        "type(x == 1, y)",
+        "\
 local function type(v) return v end
-local ok = type(x == 1)");
-        assert!(diags.is_empty(), "{diags:?}");
+local ok = type(x == 1)",
+    ];
+
+    const FAIL: &[&str] =
+        &[r#"if type(x == "string") then end"#, r#"local ok = typeof(x ~= "Instance")"#];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::TypeCheckInsideCall, PASS, FAIL).test_and_snapshot();
     }
 }

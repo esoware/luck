@@ -14,7 +14,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
-use crate::project::{bundle_arenas, current_directory, load_project};
+use crate::project::{current_directory, load_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -106,7 +106,7 @@ impl BuildArgs {
             print_build_header(first_build);
         }
 
-        let mut arenas = bundle_arenas();
+        let mut arenas = ThreadAllocators::new();
         for build in &builds {
             match self.build_one(&mut arenas, &project, build, verbosity) {
                 Ok(_) => {}
@@ -129,7 +129,7 @@ impl BuildArgs {
     /// Returns [`Exit::Failure`] when the file watcher can't start, and the
     /// exit code when a build's output can't be written.
     fn rebuild_on_change(&self, verbosity: Verbosity) -> Result<(), Exit> {
-        let mut arenas = bundle_arenas();
+        let mut arenas = ThreadAllocators::new();
         let mut read_files = self.build_for_watch(&mut arenas, verbosity)?;
 
         loop {
@@ -435,8 +435,9 @@ mod tests {
 
     /// The directories watched for what `args` builds, canonical.
     fn watched_for(args: &BuildArgs) -> Vec<PathBuf> {
-        let read_files =
-            args.build_for_watch(&mut bundle_arenas(), Verbosity::Quiet).expect("watch goes on");
+        let read_files = args
+            .build_for_watch(&mut ThreadAllocators::new(), Verbosity::Quiet)
+            .expect("watch goes on");
         watched_directories(&read_files)
             .iter()
             .map(|directory| FileSystemOs.canonicalize_existing(directory))

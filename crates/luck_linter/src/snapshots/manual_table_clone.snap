@@ -1,0 +1,50 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: manual table copy can be replaced with a stdlib call
+ --> Luau:1:1
+1 | local out = {}
+  | ^^^^^^^^^^^^^^
+2 | for k, v in pairs(src) do out[k] = v end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `table.clone(src)` instead
+
+warning: manual table copy can be replaced with a stdlib call
+ --> Lua54:1:1
+1 | local out = {}
+  | ^^^^^^^^^^^^^^
+2 | for i = 1, #src do out[i] = src[i] end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `table.move(src, 1, #src, 1, {})` instead
+
+warning: manual table copy can be replaced with a stdlib call
+ --> Lua55:1:1
+1 | local out = {}
+  | ^^^^^^^^^^^^^^
+2 | for i = 1, #src do out[i] = src[i] end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `table.move(src, 1, #src, 1, {})` instead
+
+warning: manual table copy can be replaced with a stdlib call
+ --> Lua54:1:1
+1 | local out = {}
+  | ^^^^^^^^^^^^^^
+2 | for i = 0x1, #src, 0x1 do out[i] = src[i] end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `table.move(src, 1, #src, 1, {})` instead
+
+warning: manual table copy can be replaced with a stdlib call
+ --> Luau:1:1
+1 | local out = {}
+  | ^^^^^^^^^^^^^^
+2 | for k, v in ipairs(src) do out[k] = v end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `table.clone(src)` instead
+
+warning: manual table copy can be replaced with a stdlib call
+ --> Lua54:1:1
+1 | local out = {};
+  | ^^^^^^^^^^^^^^^
+2 | for i = 1, #src do out[i] = src[i] end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `table.move(src, 1, #src, 1, {})` instead

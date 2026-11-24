@@ -17,7 +17,8 @@ A diagnostic may carry a `Fix`, a set of text edits applied together, of one `Fi
 
 ## Usage
 
-- `Linter::new(config)` compiles the settings once, and `run(parse, stdlib, fixes)` lints a parse with them, building the fixes of the kinds `fixes` holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `run_analyzed`, which asks the host between rules whether to stop, so a lint of a version the user has already edited stops early.
+- `Linter::new(config)` compiles the settings once, and `run(parse, stdlib, fixes, timings)` lints a parse with them, building the fixes of the kinds `fixes` holds. A host that also keeps the analysis, as the language server does, calls `analyze` and then `run_analyzed`, which asks the host between rules whether to stop, so a lint of a version the user has already edited stops early.
+- Every lint takes an optional `RuleTimings`, which every thread of a run shares, as oxlint's `RuleTimingStore` is. Given one, the pass times each call of each rule and adds a file's totals once it's done, and `RuleTimings::sorted` lists the rules slowest first, as `luck lint --timings` prints them. Without one, the pass is compiled with no timing in it, so a lint that times nothing pays nothing for it.
 - A source is bytes, as Lua reads it, and so is a fix's replacement, which keeps the bytes of the code it copies.
 - `Linter::fix` lints and applies the fixes of the kinds asked for, round after round, until none is left. Of two overlapping fixes a round applies one, and the next round lints the result again. It returns the fixed source's parse and diagnostics, or an error when a round's fixes break the syntax or fixes are still coming after 10 rounds, so a caller writes back every fix or none.
 - `non_overlapping_edits` picks the edits of one round, which the language server's fix-all sends.
@@ -32,6 +33,6 @@ use luck_token::LuaTarget;
 let allocator = Allocator::new();
 let linter = Linter::new(LintConfig::default());
 let parse = luck_parser::parse(&allocator, b"print(undefined_name)", LuaTarget::Lua54.version());
-let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty());
+let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), None);
 assert_eq!(diags[0].code, "undefined_variable");
 ```

@@ -41,69 +41,34 @@ impl Rule for PlaceholderRead {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::PlaceholderRead, source, LuaVersion::Lua54)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local _ = f()", LuaTarget::Lua54),
+        ("_ = f()", LuaTarget::Lua54),
+        ("_ += 1", LuaTarget::Luau),
+        ("for _ = 1, 10 do end", LuaTarget::Lua54),
+        ("local function f(_) end", LuaTarget::Lua54),
+    ];
 
-    #[test]
-    fn flags_print_of_underscore() {
-        let diags = run("print(_)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_declaration() {
-        let diags = run("local _ = f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_assignment_target() {
-        let diags = run("_ = f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_prefix_and_key_of_assignment_target() {
-        let diags = run("\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("print(_)", LuaTarget::Lua54),
+        (
+            "\
 _[_] = 1
-_.x = 2");
-        assert_eq!(diags.len(), 3, "{diags:?}");
-    }
+_.x = 2",
+            LuaTarget::Lua54,
+        ),
+        // Only the read in the body fires, not the binding.
+        ("for _, v in pairs(t) do print(_) end", LuaTarget::Lua54),
+        ("local function f(_) return _ end", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn ignores_compound_assignment_target() {
-        let diags = run_rule(RuleId::PlaceholderRead, "_ += 1", LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_read_inside_generic_for_body() {
-        let diags = run("for _, v in pairs(t) do print(_) end");
-        assert_eq!(diags.len(), 1, "binding should not fire, body read should: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_for_binding() {
-        let diags = run("for _ = 1, 10 do end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_function_parameter() {
-        let diags = run("local function f(_) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_read_inside_function_body() {
-        let diags = run("local function f(_) return _ end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::PlaceholderRead, PASS, FAIL).test_and_snapshot();
     }
 }

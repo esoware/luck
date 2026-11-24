@@ -133,6 +133,26 @@ fn json_format_carries_lines_and_columns() {
         .stdout(predicate::str::contains(r#""end_column":13"#));
 }
 
+#[test]
+fn timings_go_to_stderr_with_a_row_per_rule_that_ran() {
+    let project = TempDir::new().expect("project");
+    write_file(project.path(), "main.lua", WARNING_ONLY);
+
+    luck_in(project.path())
+        .args(["lint", "main.lua", "--format", "json", "--timings"])
+        .assert()
+        .code(0i32)
+        .stdout(predicate::str::contains("Rule timings").not())
+        .stderr(predicate::str::contains("Rule timings:"))
+        .stderr(predicate::function(|stderr: &str| has_row(stderr, "unused_variable")))
+        .stderr(predicate::function(|stderr: &str| !has_row(stderr, "shadowing")));
+}
+
+/// Whether a line of `table` starts with `rule`'s name.
+fn has_row(table: &str, rule: &str) -> bool {
+    table.lines().any(|line| line.split_whitespace().next() == Some(rule))
+}
+
 /// The printed config is a `lint` section, so feeding it back changes nothing.
 #[test]
 fn print_config_output_pastes_back_into_luck_json() {

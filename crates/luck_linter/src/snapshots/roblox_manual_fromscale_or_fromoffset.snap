@@ -1,0 +1,32 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: this `UDim2.new` can be written as `UDim2.fromScale`
+ --> Roblox:1:11
+1 | local u = UDim2.new(0.5, 0, 1, 0)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^
+help: use `UDim2.fromScale(0.5, 1)`
+fix: replace with `UDim2.fromScale`
+  | local u = UDim2.fromScale(0.5, 1)
+
+warning: this `UDim2.new` can be written as `UDim2.fromOffset`
+ --> Roblox:1:11
+1 | local u = UDim2.new(0, 100, 0, 200)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `UDim2.fromOffset(100, 200)`
+fix: replace with `UDim2.fromOffset`
+  | local u = UDim2.fromOffset(100, 200)
+
+warning: this `UDim2.new` can be written as `UDim2.fromOffset`
+ --> Roblox:1:11
+1 | local u = UDim2.new(0, -100, 0, 0x20)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `UDim2.fromOffset(-100, 0x20)`
+fix: replace with `UDim2.fromOffset`
+  | local u = UDim2.fromOffset(-100, 0x20)
+
+warning: this `UDim2.new` can be written as `UDim2.fromScale`
+ --> Roblox:1:11
+1 | local u = UDim2.new(0.5, --[[no offset]] 0, 1, 0)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `UDim2.fromScale(0.5, 1)`

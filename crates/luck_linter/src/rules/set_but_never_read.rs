@@ -65,67 +65,53 @@ impl Rule for SetButNeverRead {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::SetButNeverRead, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_write_without_read() {
-        let diags = run("\
-local x
-x = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn ignores_write_with_subsequent_read() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local x
 x = 1
-return x");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_pure_unused_declaration() {
+return x",
+            LuaTarget::Lua54,
+        ),
         // No post-declaration write; that's `unused_variable`'s job.
-        let diags = run("local x = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_prefixed() {
-        let diags = run("\
+        ("local x = 1", LuaTarget::Lua54),
+        (
+            "\
 local _x
-_x = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_multiple_writes_no_reads() {
-        let diags = run("\
-local x
-x = 1
-x = 2");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_exported_local_only_written() {
-        let diags = run_rule(
-            RuleId::SetButNeverRead,
+_x = 1",
+            LuaTarget::Lua54,
+        ),
+        (
             "\
 export local counter = 0
 counter = 1",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "got: {diags:?}");
+            LuaTarget::Luau,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
+local x
+x = 1",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local x
+x = 1
+x = 2",
+            LuaTarget::Lua54,
+        ),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::SetButNeverRead, PASS, FAIL).test_and_snapshot();
     }
 }

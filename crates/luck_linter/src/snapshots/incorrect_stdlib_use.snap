@@ -1,0 +1,74 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: `table.insert` requires at least 2 argument(s), got 0
+ --> Lua54:1:1
+1 | table.insert()
+  | ^^^^^^^^^^^^^^
+
+error: `type` accepts at most 1 argument(s), got 3
+ --> Lua54:1:1
+1 | type(1, 2, 3)
+  | ^^^^^^^^^^^^^
+
+error: `collectgarbage` argument 1 must be one of `collect`, `count`, `isrunning`, `restart`, `setpause`, `setstepmul`, `step`, `stop`, ... (10 allowed values), got `frob`
+ --> Lua54:1:16
+1 | collectgarbage('frob')
+  |                ^^^^^^
+
+error: `collectgarbage` argument 1 must be one of `collect`, `count`, `isrunning`, `restart`, `setpause`, `setstepmul`, `step`, `stop`, ... (10 allowed values), got `frob`
+ --> Lua54:1:15
+1 | collectgarbage'frob'
+  |               ^^^^^^
+
+error: no overload of `CFrame.new` accepts 5 argument(s)
+ --> Roblox:1:11
+1 | local c = CFrame.new(1, 2, 3, 4, 5)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `f:setvbuf` requires at least 1 argument(s), got 0
+ --> Lua54:2:1
+1 | local f = io.open('x')
+2 | f:setvbuf()
+  | ^^^^^^^^^^^
+
+error: `f:seek` argument 1 must be one of `set`, `cur`, `end`, got `nope`
+ --> Lua54:2:8
+1 | local f = io.open('x')
+2 | f:seek('nope')
+  |        ^^^^^^
+
+error: `string:rep` requires at least 1 argument(s), got 0
+ --> Lua54:1:11
+1 | local s = ('x'):rep()
+  |           ^^^^^^^^^^^
+
+error: `game:GetService` argument 1 must be one of `AccountService`, `AchievementService`, `ActivityHistoryEventService`, `AdService`, `AnalyticsService`, `AnimationClipProvider`, `AnimationFromVideoCreatorService`, `AnimationFromVideoCreatorStudioService`, ... (314 allowed values), got `Playerz`
+ --> Roblox:1:17
+1 | game:GetService('Playerz')
+  |                 ^^^^^^^^^
+
+error: `game:GetService` argument 1 must be one of `AccountService`, `AchievementService`, `ActivityHistoryEventService`, `AdService`, `AnalyticsService`, `AnimationClipProvider`, `AnimationFromVideoCreatorService`, `AnimationFromVideoCreatorStudioService`, ... (314 allowed values), got `Playerz`
+ --> Roblox:1:16
+1 | game:GetService'Playerz'
+  |                ^^^^^^^^^
+
+error: `Instance.new` argument 1 must be one of `Accessory`, `AccessoryDescription`, `Accoutrement`, `Actor`, `AdGui`, `AdPortal`, `AdvancedDragger`, `AirController`, ... (354 allowed values), got `Playerz`
+ --> Roblox:1:14
+1 | Instance.new('Playerz')
+  |              ^^^^^^^^^
+
+error: `Instance.new` argument 1 must be one of `Accessory`, `AccessoryDescription`, `Accoutrement`, `Actor`, `AdGui`, `AdPortal`, `AdvancedDragger`, `AirController`, ... (354 allowed values), got `BasePart`
+ --> Roblox:1:14
+1 | Instance.new('BasePart')
+  |              ^^^^^^^^^^
+
+error: `game:GetService` requires at least 1 argument(s), got 0
+ --> Roblox:1:1
+1 | game:GetService()
+  | ^^^^^^^^^^^^^^^^^
+
+error: `BrickColor.new` argument 1 must be one of `White`, `Grey`, `Light yellow`, `Brick yellow`, `Light green (Mint)`, `Light reddish violet`, `Pastel Blue`, `Light orange brown`, ... (204 allowed values), got `Bright rad`
+ --> Roblox:1:16
+1 | BrickColor.new('Bright rad')
+  |                ^^^^^^^^^^^^

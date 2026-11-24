@@ -136,10 +136,10 @@
 //! let linter = Linter::new(LintConfig::default());
 //! let stdlib = luck::stdlib::library_for(LuaTarget::Lua54);
 //! let parse = luck::parser::parse(&allocator, b"print(undefined_name)", LuaTarget::Lua54.version());
-//! let diags = linter.run(&parse, stdlib, FixKind::empty());
+//! let diags = linter.run(&parse, stdlib, FixKind::empty(), None);
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = linter.fix(&allocator, b"unpack(t)", stdlib, FixKind::Fix);
+//! let fixed = linter.fix(&allocator, b"unpack(t)", stdlib, FixKind::Fix, None);
 //! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"table.unpack(t)"[..]));
 //! # }
 //! ```

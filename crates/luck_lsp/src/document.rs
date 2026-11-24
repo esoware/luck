@@ -310,6 +310,7 @@ impl DocumentState {
             self.parse(),
             self.analysis(),
             FixKind::all(),
+            None,
             is_cancelled,
         )
     }

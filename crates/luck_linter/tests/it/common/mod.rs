@@ -16,7 +16,7 @@ pub(crate) fn lint_bytes(
 ) -> Vec<Message> {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source, target.version());
-    Linter::new(config.clone()).run(&parse, library_for(target), fixes)
+    Linter::new(config.clone()).run(&parse, library_for(target), fixes, None)
 }
 
 pub(crate) fn with_level(rule: RuleId, level: RuleLevel) -> LintConfig {

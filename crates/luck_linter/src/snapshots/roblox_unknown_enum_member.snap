@@ -1,0 +1,26 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: unknown enum type `Enum.Materialz`
+ --> Roblox:1:16
+1 | local m = Enum.Materialz
+  |                ^^^^^^^^^
+help: enum data is generated from the Roblox API dump, so check the spelling
+
+error: `Grassz` is not an item of `Enum.Material`
+ --> Roblox:1:25
+1 | local m = Enum.Material.Grassz
+  |                         ^^^^^^
+help: enum data is generated from the Roblox API dump, so check the spelling
+
+error: `Nome` is not a member of `Enum.Material.Grass`
+ --> Roblox:1:31
+1 | local n = Enum.Material.Grass.Nome
+  |                               ^^^^
+help: enum data is generated from the Roblox API dump, so check the spelling
+
+error: unknown enum type `Enum.Materialz`
+ --> Roblox:1:16
+1 | local m = Enum.Materialz.Grass
+  |                ^^^^^^^^^
+help: enum data is generated from the Roblox API dump, so check the spelling

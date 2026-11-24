@@ -49,70 +49,58 @@ impl Rule for Shadowing {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::Shadowing, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_nested_block_shadow() {
-        // Inner-scope redeclaration of an outer local. `redefining_local`
-        // covers only the same block.
-        let source = "\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local x = 1
-do local x = 2 print(x) end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(6));
-    }
-
-    #[test]
-    fn flags_loop_variable_shadow() {
-        let diags = run("\
-local i = 1
-for i = 1, 3 do print(i) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_distinct_names() {
-        let diags = run("\
-local x = 1
-do local y = 2 print(y) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_names() {
-        let diags = run("\
+do local y = 2 print(y) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local _ = 1
-do local _ = 2 end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_implicit_self_of_nested_method() {
-        let diags = run("\
+do local _ = 2 end",
+            LuaTarget::Lua54,
+        ),
+        // An implicit `self` has no name to change.
+        (
+            "\
 local M = {}
 function M:a()
  local t = {}
  function t:b() return self end
  return t
 end
-return M");
-        assert!(diags.is_empty(), "an implicit `self` has no name to change: {diags:?}");
-    }
+return M",
+            LuaTarget::Lua54,
+        ),
+        ("local function f(...) local arg = { ... } return arg end", LuaTarget::Lua51),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        // Inner-scope redeclaration of an outer local. `redefining_local` covers
+        // only the same block.
+        (
+            "\
+local x = 1
+do local x = 2 print(x) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local i = 1
+for i = 1, 3 do print(i) end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn ignores_local_arg_in_a_lua51_vararg_function() {
-        let source = "local function f(...) local arg = { ... } return arg end";
-        let diags = run_rule(RuleId::Shadowing, source, LuaVersion::Lua51);
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::Shadowing, PASS, FAIL).test_and_snapshot();
     }
 }

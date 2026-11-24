@@ -1,0 +1,30 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: `if` and `else` branches have identical bodies
+ --> Lua54:1:1
+1 | if a then print(1) else print(1) end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the condition has no effect, so remove the `if`
+
+warning: `if` and `else` branches have identical bodies
+ --> Lua54:1:1
+1 | if cond then x = 1 else x = 1 end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the condition has no effect, so remove the `if`
+
+warning: `if` and `else` branches have identical bodies
+ --> Lua54:1:1
+1 | if a then
+  | ^^^^^^^^^
+2 |   print(1, x) -- the first
+3 | else
+4 |   print( 1,x )
+5 | end
+  | ^^^
+help: the condition has no effect, so remove the `if`
+
+warning: `if` and `else` branches have identical bodies
+ --> Lua54:1:1
+1 | if a then f() elseif b then g() else f() end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -45,8 +45,8 @@
 //!
 //! # Usage
 //!
-//! The server runs every job on workers it starts with
-//! [`luck_ast::MIN_STACK_BYTES`] of stack.
+//! The server runs every job on the workers it starts, as many as its caller
+//! asks for, each with [`luck_ast::MIN_STACK_BYTES`] of stack.
 
 #![cfg_attr(
     test,

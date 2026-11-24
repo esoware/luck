@@ -57,99 +57,53 @@ fn check_params(function: FunctionNode<'_>, context: &LintContext<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaVersion, offset_to_index};
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::DuplicateParameter, source, LuaVersion::Lua54)
+    /// A function of `count` parameters, one a line, then the first again.
+    fn params_then_the_first_again(count: u32) -> String {
+        let params: Vec<String> = (0..count).map(|i| format!("p{i},")).collect();
+        format!("local function f(\n{}\np0) end", params.join("\n"))
     }
 
-    #[test]
-    fn flags_duplicate_parameter() {
-        let source = "local function f(a, b, a) end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`a`"));
-        // The second occurrence is the one flagged.
-        assert_eq!(offset_to_index(diags[0].span().start), source.rfind('a').unwrap());
-    }
-
-    #[test]
-    fn flags_duplicate_in_function_expr() {
-        let diags = run("local f = function(x, x) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn flags_duplicate_in_function_decl() {
-        let diags = run("function f(a, a) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_every_duplicate_occurrence() {
-        let diags = run("local function f(a, a, a) end");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_explicit_self_in_colon_method() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local function f(a, b, c) end", LuaTarget::Lua54),
+        ("local function f(_, _) end", LuaTarget::Lua54),
+        (
+            "\
 local t = {}
-function t:m(self) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`self`"));
-    }
+function t.m(self) end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
-    #[test]
-    fn flags_duplicate_in_global_function() {
-        let diags =
-            run_rule(RuleId::DuplicateParameter, "global function f(a, a) end", LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_distinct_parameters() {
-        let diags = run("local function f(a, b, c) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_parameters() {
-        let diags = run("local function f(_, _) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_self_in_dot_function() {
-        let diags = run("\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local function f(a, b, a) end", LuaTarget::Lua54),
+        ("local f = function(x, x) end", LuaTarget::Lua54),
+        ("function f(a, a) end", LuaTarget::Lua54),
+        ("local function f(a, a, a) end", LuaTarget::Lua54),
+        (
+            "\
 local t = {}
-function t.m(self) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+function t:m(self) end",
+            LuaTarget::Lua54,
+        ),
+        ("global function f(a, a) end", LuaTarget::Lua55),
+        // The named vararg repeats parameter `a`.
+        ("local function f(a, ...a) return a end", LuaTarget::Lua55),
+    ];
 
     #[test]
-    fn flags_named_vararg_matching_parameter() {
-        let source = "local function f(a, ...a) return a end";
-        let diags = run_rule(RuleId::DuplicateParameter, source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");
-    }
-
-    #[test]
-    fn flags_each_repeat_in_a_list_at_the_local_limit() {
-        let params = (0..100u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
-        let diags = run(&format!("local function f({params}, {params}) end"));
-        assert_eq!(diags.len(), 100, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_a_list_past_the_local_limit() {
-        let params = (0..101u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
-        let diags = run(&format!("local function f({params}, {params}) end"));
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        let at_limit = params_then_the_first_again(199);
+        // Only Luau's compiler, not luck, rejects this many parameters.
+        let past_limit = params_then_the_first_again(200);
+        let pass: Vec<_> =
+            PASS.iter().copied().chain([(past_limit.as_str(), LuaTarget::Luau)]).collect();
+        let fail: Vec<_> =
+            FAIL.iter().copied().chain([(at_limit.as_str(), LuaTarget::Lua54)]).collect();
+        Tester::new(RuleId::DuplicateParameter, &pass, &fail).test_and_snapshot();
     }
 }

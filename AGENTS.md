@@ -122,7 +122,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - A crate's integration tests are one binary. `tests/it/main.rs` declares a module per file, and shared helpers live in `tests/it/common/mod.rs`. Declare `mod common;`, never `pub mod common;`, and give its items `pub(crate)`. A `pub` module hides a helper nothing calls from the dead-code lint.
 - A test that rewrites a committed file is `#[ignore]`d and named `regenerate_*`, so it runs only when asked for with `--ignored`.
 - Lua fixtures that several crates' tests read live in `tests/fixtures/`, whose `idiomatic/` must stay lint-clean.
-- Lint rule tests name positive cases `flags_*` and negative ones `ignores_*`, and run through `crate::fixtures::run_rule`. A count assertion carries a `"{diags:?}"` message. Suppression has its own tests in `luck_linter`, so a rule's tests leave it out.
+- A lint rule's tests are one `#[test] fn test()` that hands the `PASS` and `FAIL` consts of its test module to `crate::fixtures::Tester`, as oxlint's tests hand their pass and fail lists to its `Tester`. It checks that each passing case finds nothing, applies each fix and checks that the result reparses, and snapshots every finding of the failing cases in `src/snapshots/<rule>.snap`. Suppression has its own tests in `luck_linter`, so a rule's cases leave it out.
 - A fix test applies the edit and asserts that the result reparses.
 - Formatter tests go through `assert_format`, `assert_format_with`, `assert_format_range`, or, for a tree built in code, `assert_format_block`.
 - An error path asserts on the returned errors, never with `#[should_panic]`.

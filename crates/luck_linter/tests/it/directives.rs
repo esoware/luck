@@ -339,7 +339,7 @@ print(a) -- luck: allow(unused_variable, undefined_variable)
 ";
     let allocator = Allocator::new();
     let fixed = Linter::new(LintConfig::default())
-        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix)
+        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix, None)
         .expect("fixes converge");
     assert_eq!(
         fixed.parse.source,

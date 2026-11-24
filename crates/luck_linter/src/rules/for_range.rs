@@ -168,127 +168,54 @@ fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::ForRange, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_zero_step() {
-        let diags = run("for i = 1, 10, 0 do end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("step 0"));
-    }
-
-    #[test]
-    fn flags_negative_step_ascending() {
-        let diags = run("for i = 1, 10, -1 do end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("negative step"));
-    }
-
-    #[test]
-    fn flags_zero_start_with_length() {
-        let diags = run("for i = 0, #t do end");
-        assert_eq!(diags.len(), 1, "expected 1 diag, got: {diags:?}");
-        assert!(diags[0].message.contains("1-indexed"));
-    }
-
-    #[test]
-    fn flags_descending_with_positive_step() {
-        let diags = run("for i = 10, 1, 1 do end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("positive step"));
-    }
-
-    #[test]
-    fn flags_hex_bounds() {
-        let diags = run("for i = 0x10, 1, 1 do end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("from 16 to 1"), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_ascending_range_without_step() {
-        let diags = run("for i = 1, 10 do end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_descending_range_with_negative_step() {
-        let diags = run("for i = 10, 1, -1 do end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_zero_start_with_plain_number_limit() {
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("for i = 1, 10 do end", LuaTarget::Lua54),
+        ("for i = 10, 1, -1 do end", LuaTarget::Lua54),
         // `0, 5` may be deliberate. Only `0, #t` fires.
-        let diags = run("for i = 0, 5 do end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_length_to_zero() {
-        let diags = run("\
+        ("for i = 0, 5 do end", LuaTarget::Lua54),
+        (
+            "\
 local t = {}
-for i = #t, 0 do print(i) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("1-indexed"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_length_to_one_without_step() {
-        let diags = run("\
-local t = {}
-for i = #t, 1 do print(i) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("backwards"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_fractional_limit_mismatch() {
-        let diags = run("for i = 1, 8.75 do print(i) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("ends at 8"), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_length_to_one_with_negative_step() {
-        let diags = run("\
-local t = {}
-for i = #t, 1, -1 do print(i) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_integer_stride_missing_limit() {
+for i = #t, 1, -1 do print(i) end",
+            LuaTarget::Lua54,
+        ),
         // `for i = 1, 10, 2` stops at 9; integer strides are idiomatic.
-        let diags = run("for i = 1, 10, 2 do print(i) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_fractional_step_landing_on_limit() {
-        let diags = run("for i = 1, 2.5, 0.5 do print(i) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_reversed_for_loop_no_step() {
+        ("for i = 1, 10, 2 do print(i) end", LuaTarget::Lua54),
+        ("for i = 1, 2.5, 0.5 do print(i) end", LuaTarget::Lua54),
         // With no step, this is `reversed_for_loop`'s case.
-        let diags = run("for i = 10, 1 do end");
-        assert!(diags.is_empty(), "for_range must defer to reversed_for_loop: {diags:?}");
-    }
+        ("for i = 10, 1 do end", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("for i = 1, 10, 0 do end", LuaTarget::Lua54),
+        ("for i = 1, 10, -1 do end", LuaTarget::Lua54),
+        ("for i = 0, #t do end", LuaTarget::Lua54),
+        ("for i = 10, 1, 1 do end", LuaTarget::Lua54),
+        ("for i = 0x10, 1, 1 do end", LuaTarget::Lua54),
+        (
+            "\
+local t = {}
+for i = #t, 0 do print(i) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local t = {}
+for i = #t, 1 do print(i) end",
+            LuaTarget::Lua54,
+        ),
+        ("for i = 1, 8.75 do print(i) end", LuaTarget::Lua54),
+        // `1_000` is a number literal above the limit.
+        ("for i = 1_000, 1, 1 do print(i) end", LuaTarget::Luau),
+    ];
 
     #[test]
-    fn flags_underscore_separated_bound_on_luau() {
-        let diags =
-            run_rule(RuleId::ForRange, "for i = 1_000, 1, 1 do print(i) end", LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "1_000 is a number literal above the limit: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::ForRange, PASS, FAIL).test_and_snapshot();
     }
 }

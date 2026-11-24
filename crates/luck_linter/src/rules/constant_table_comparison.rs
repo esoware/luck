@@ -48,33 +48,23 @@ impl Rule for ConstantTableComparison {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::ConstantTableComparison, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_equality_with_table_literal() {
-        let diags = run("local same = x == {}");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_inequality_with_table_literal_on_left() {
-        let diags = run("local differs = {1} ~= x");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_comparison_of_table_variables() {
-        let diags = run("\
+    const PASS: &[&str] = &["\
 local t = {}
-local same = x == t");
-        assert!(diags.is_empty(), "{diags:?}");
+local same = x == t"];
+
+    const FAIL: &[&str] = &[
+        "local same = x == {}",
+        "local differs = {1} ~= x",
+        "\
+local x = {}
+if x == {} then end",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::ConstantTableComparison, PASS, FAIL).test_and_snapshot();
     }
 }

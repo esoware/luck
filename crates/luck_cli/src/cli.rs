@@ -1,10 +1,13 @@
+use core::num::NonZero;
 use std::process::ExitCode;
+use std::thread;
 
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
     BuildArgs, BundleArgs, CheckArgs, FmtArgs, GraphArgs, InitArgs, LintArgs, LspArgs, MinifyArgs,
 };
+use crate::project::start_thread_pool;
 use crate::verbosity::Verbosity;
 
 #[derive(Parser)]
@@ -22,6 +25,10 @@ pub(crate) struct Cli {
     /// Hide progress, summaries, and warnings.
     #[arg(long, global = true)]
     pub quiet: bool,
+
+    /// How many threads to work on files with [default: one per CPU core].
+    #[arg(long, global = true, value_name = "INT")]
+    pub threads: Option<NonZero<usize>>,
 }
 
 #[derive(Subcommand)]
@@ -54,10 +61,34 @@ pub(crate) enum Command {
     Lsp(LspArgs),
 }
 
+impl Command {
+    /// Whether the command works on its files on rayon's pool. The language
+    /// server starts threads of its own.
+    const fn uses_thread_pool(&self) -> bool {
+        match self {
+            Self::Build(_)
+            | Self::Bundle(_)
+            | Self::Graph(_)
+            | Self::Lint(_)
+            | Self::Fmt(_)
+            | Self::Check(_) => true,
+            Self::Init(_) | Self::Minify(_) | Self::Lsp(_) => false,
+        }
+    }
+}
+
 pub(crate) fn run() -> ExitCode {
     let cli = Cli::parse();
 
     let verbosity = if cli.quiet { Verbosity::Quiet } else { Verbosity::Normal };
+    let threads = cli
+        .threads
+        .unwrap_or_else(|| thread::available_parallelism().unwrap_or(NonZero::<usize>::MIN));
+    if cli.command.uses_thread_pool()
+        && let Err(exit) = start_thread_pool(threads)
+    {
+        return exit.into();
+    }
 
     let outcome = match cli.command {
         Command::Init(args) => args.run(verbosity),
@@ -68,10 +99,24 @@ pub(crate) fn run() -> ExitCode {
         Command::Lint(args) => args.run(verbosity),
         Command::Fmt(args) => args.run(verbosity),
         Command::Check(args) => args.run(verbosity),
-        Command::Lsp(args) => args.run(),
+        Command::Lsp(args) => args.run(threads),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(exit) => exit.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn threads_is_a_count_of_one_or_more_any_command_takes() {
+        let threads = |args: &[&str]| Cli::try_parse_from(args).map(|cli| cli.threads);
+        assert_eq!(threads(&["luck", "lint"]).ok(), Some(None));
+        assert_eq!(threads(&["luck", "--threads", "4", "lint"]).ok(), Some(NonZero::new(4)));
+        assert_eq!(threads(&["luck", "fmt", "--threads", "1"]).ok(), Some(NonZero::new(1)));
+        assert_eq!(threads(&["luck", "check", "--threads", "0"]).ok(), None);
     }
 }

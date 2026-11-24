@@ -1,0 +1,46 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: statement starts on the same line as the previous statement
+ --> Lua54:1:13
+1 | local a = 1 local b = 2
+  |             ^^^^^^^^^^^
+  | ----------- the previous statement
+help: put each statement on its own line
+
+warning: statement starts on the same line as the previous statement
+ --> Lua54:1:14
+1 | local a = 1; local b = 2
+  |              ^^^^^^^^^^^
+  | ----------- the previous statement
+help: put each statement on its own line
+
+warning: statement starts on the same line as the previous statement
+ --> Lua54:2:15
+1 | do
+2 |   local a = 1 local b = 2
+  |               ^^^^^^^^^^^
+  |   ----------- the previous statement
+3 | end
+help: put each statement on its own line
+
+warning: statement starts on the same line as the previous statement
+ --> Lua54:1:13
+1 | local a = 1 local b = 2 local c = 3
+  |             ^^^^^^^^^^^
+  | ----------- the previous statement
+help: put each statement on its own line
+
+warning: statement starts on the same line as the previous statement
+ --> Lua54:1:25
+1 | local a = 1 local b = 2 local c = 3
+  |                         ^^^^^^^^^^^
+  |             ----------- the previous statement
+help: put each statement on its own line
+
+warning: statement starts on the same line as the previous statement
+ --> Lua54:1:32
+1 | local function f() local x = 1 return x end
+  |                                ^^^^^^^^
+  |                    ----------- the previous statement
+help: put each statement on its own line

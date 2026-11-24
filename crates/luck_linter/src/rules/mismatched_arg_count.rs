@@ -98,136 +98,67 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{labeled, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::MismatchedArgCount, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_extra_args_to_local_function() {
-        let source = "\
+    const PASS: &[&str] = &[
+        "\
 local function f(a, b) return a + b end
-f(1, 2, 3)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.ends_with("which accepts only 2"), "{diags:?}");
-        assert_eq!(labeled(&diags[0], source), ["f"]);
-    }
-
-    #[test]
-    fn flags_extra_args_to_function_expr() {
-        let diags = run("\
-local f = function(a) return a end
-f(1, 2)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_zero_param_function() {
-        let diags = run("\
-local function f() end
-f(1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_guaranteed_overflow_with_trailing_call() {
-        // g() may yield nothing, but 1 and 2 already exceed one param.
-        let diags = run("\
-local function g() end
-local function f(a) return a end
-f(1, 2, g())");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_string_and_table_arguments_without_parentheses() {
-        let diags = run("\
-local function f() end
-f\"x\"
-f{}");
-        assert_eq!(diags.len(), 2, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_exact_arg_count() {
-        let diags = run("\
-local function f(a, b) return a + b end
-f(1, 2)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_fewer_args() {
+f(1, 2)",
         // Missing args are nil, which is how Lua does optional arguments.
-        let diags = run("\
+        "\
 local function f(a, b) return a or b end
-f(1)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_vararg_function() {
-        let diags = run("\
+f(1)",
+        "\
 local function f(...) return ... end
-f(1, 2, 3, 4)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_trailing_call_at_boundary() {
-        // f(1, g()): g() may yield zero values, so 1 arg is guaranteed.
-        let diags = run("\
+f(1, 2, 3, 4)",
+        // `g()` may return nothing, so `f(1, g())` passes one argument for sure.
+        "\
 local function g() end
 local function f(a) return a end
-f(1, g())");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_reassigned_function() {
-        let diags = run("\
+f(1, g())",
+        "\
 local function f(a) return a end
 f = function(a, b, c) return a end
-f(1, 2, 3)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_global_function_calls() {
-        let diags = run("print(1, 2, 3)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_table_field_calls() {
-        let diags = run("\
+f(1, 2, 3)",
+        "print(1, 2, 3)",
+        "\
 local t = { f = function(a) return a end }
-t.f(1, 2)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_call_to_shadowing_local() {
-        let diags = run("\
+t.f(1, 2)",
+        "\
 local function f(a) return a end
 do local f = print
-f(1, 2) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_recursive_call_within_limit() {
-        let diags = run("\
+f(1, 2) end",
+        "\
 local function f(a)
     if a > 0 then return f(a - 1) end
 end
-f(3)");
-        assert!(diags.is_empty(), "{diags:?}");
+f(3)",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+local function f(a, b) return a + b end
+f(1, 2, 3)",
+        "\
+local f = function(a) return a end
+f(1, 2)",
+        "\
+local function f() end
+f(1)",
+        // `g()` may return nothing, but `1` and `2` already exceed one parameter.
+        "\
+local function g() end
+local function f(a) return a end
+f(1, 2, g())",
+        "\
+local function f() end
+f\"x\"
+f{}",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::MismatchedArgCount, PASS, FAIL).test_and_snapshot();
     }
 }

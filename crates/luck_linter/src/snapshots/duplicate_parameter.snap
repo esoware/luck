@@ -1,0 +1,62 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: parameter `a` is already defined
+ --> Lua54:1:24
+1 | local function f(a, b, a) end
+  |                        ^
+  |                  - first defined here
+
+error: parameter `x` is already defined
+ --> Lua54:1:23
+1 | local f = function(x, x) end
+  |                       ^
+  |                    - first defined here
+
+error: parameter `a` is already defined
+ --> Lua54:1:15
+1 | function f(a, a) end
+  |               ^
+  |            - first defined here
+
+error: parameter `a` is already defined
+ --> Lua54:1:21
+1 | local function f(a, a, a) end
+  |                     ^
+  |                  - first defined here
+
+error: parameter `a` is already defined
+ --> Lua54:1:24
+1 | local function f(a, a, a) end
+  |                        ^
+  |                  - first defined here
+
+error: parameter `self` is already defined
+ --> Lua54:2:14
+1 | local t = {}
+2 | function t:m(self) end
+  |              ^^^^
+help: a method declared with `:` already has `self`
+
+error: parameter `a` is already defined
+ --> Lua55:1:22
+1 | global function f(a, a) end
+  |                      ^
+  |                   - first defined here
+
+error: parameter `a` is already defined
+ --> Lua55:1:24
+1 | local function f(a, ...a) return a end
+  |                        ^
+  |                  - first defined here
+
+error: parameter `p0` is already defined
+   --> Lua54:201:1
+  1 | local function f(
+  2 | p0,
+    | -- first defined here
+  3 | p1,
+...
+200 | p198,
+201 | p0) end
+    | ^^

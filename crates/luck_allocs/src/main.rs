@@ -124,7 +124,7 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     });
     let every_rule = Linter::new(every_rule());
     let ((), linter) = record_stats_in(allocator, || {
-        drop(every_rule.run(&parse, library_for(target), FixKind::empty()));
+        drop(every_rule.run(&parse, library_for(target), FixKind::empty(), None));
     });
     let ((), codegen) = record_stats_in(allocator, || {
         drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));

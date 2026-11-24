@@ -43,75 +43,43 @@ impl Rule for MutatingUninitialized {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::MutatingUninitialized, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_field_write_on_uninitialized() {
-        let diags = run("\
-local x
-x.foo = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn flags_index_write_on_uninitialized() {
-        let diags = run("\
-local x
-x[1] = 2");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn ignores_when_initialized() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local x = {}
-x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_when_assigned_first() {
-        let diags = run("\
+x.foo = 1",
+        "\
 local x
 x = {}
-x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_read_before_field_write() {
-        let diags = run("\
+x.foo = 1",
+        "\
 local x
 print(x)
-x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_prefixed() {
-        let diags = run("\
+x.foo = 1",
+        "\
 local _x
-_x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_forward_declaration_field_write_in_closure() {
-        let diags = run("\
+_x.foo = 1",
+        // The closure runs after the assignment.
+        "\
 local M
 local function init() M.x = 1 end
 M = {}
-init()");
-        assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
+init()",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+local x
+x.foo = 1",
+        "\
+local x
+x[1] = 2",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::MutatingUninitialized, PASS, FAIL).test_and_snapshot();
     }
 }

@@ -1,0 +1,26 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: `Color3.new` components are on a 0 to 1 scale
+ --> Roblox:1:11
+1 | local c = Color3.new(255, 0, 0)
+  |           ^^^^^^^^^^^^^^^^^^^^^
+help: use `Color3.fromRGB` for 0 to 255 values
+
+error: `Color3.new` components are on a 0 to 1 scale
+ --> Roblox:1:11
+1 | local c = Color3.new(- -2, 0, 0)
+  |           ^^^^^^^^^^^^^^^^^^^^^^
+help: use `Color3.fromRGB` for 0 to 255 values
+
+error: `Color3.new` components are on a 0 to 1 scale
+ --> Roblox:1:11
+1 | local c = Color3.new(-1, 0, 0)
+  |           ^^^^^^^^^^^^^^^^^^^^
+help: use `Color3.fromRGB` for 0 to 255 values
+
+error: `Color3.new` components are on a 0 to 1 scale
+ --> Roblox:1:11
+1 | local c = Color3.new(0.5, 1.5, 0)
+  |           ^^^^^^^^^^^^^^^^^^^^^^^
+help: use `Color3.fromRGB` for 0 to 255 values

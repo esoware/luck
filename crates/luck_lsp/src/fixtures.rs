@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use core::num::NonZero;
 use std::path::{Path, PathBuf};
 
 use crossbeam_channel::unbounded;
@@ -47,7 +48,7 @@ pub(crate) fn document_linted_by(text: &str, target: LuaTarget, lint: LintConfig
 /// A session with no workspace folders, in UTF-16 positions, whose tasks
 /// nothing reads.
 pub(crate) fn session() -> Session {
-    Session::new(PositionEncoding::Utf16, unbounded().0, 1)
+    Session::new(PositionEncoding::Utf16, unbounded().0, NonZero::<usize>::MIN)
 }
 
 fn document_with(

@@ -63,133 +63,38 @@ fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_>) -> Option<Finding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::StringIndexToField, source, LuaVersion::Lua54)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        (r#"local x = t["end"]"#, LuaTarget::Lua54),
+        // Lua 5.5 builds without `LUA_COMPAT_GLOBAL` reserve `global`.
+        (r#"local x = t["global"]"#, LuaTarget::Lua55),
+        (r#"local x = t["with space"]"#, LuaTarget::Lua54),
+        (r#"local x = t["1bad"]"#, LuaTarget::Lua54),
+        (r#"local x = t["a\nb"]"#, LuaTarget::Lua54),
+    ];
 
-    #[test]
-    fn flags_identifier_safe_key() {
-        let source = "local x = t[\"foo\"]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t.foo");
-    }
-
-    #[test]
-    fn flags_key_quoted_as_written() {
-        let diags = run("local x = t['foo']");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "`['foo']` is equivalent to `.foo`");
-    }
-
-    #[test]
-    fn flags_without_fix_for_comment_inside_brackets() {
-        let diags = run("local x = t[--[[why]] \"foo\"]");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_keyword_key() {
-        let diags = run("local x = t[\"end\"]");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    /// Luau reads `continue` as a name wherever a name goes, a field included.
-    #[test]
-    fn flags_luau_continue_key() {
-        let source = "local x = t[\"continue\"]";
-        let diags = run_rule(RuleId::StringIndexToField, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Luau), "local x = t.continue");
-    }
-
-    /// Lua 5.5 builds without `LUA_COMPAT_GLOBAL` reserve `global`.
-    #[test]
-    fn ignores_lua55_global_key() {
-        let diags =
-            run_rule(RuleId::StringIndexToField, "local x = t[\"global\"]", LuaVersion::Lua55);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_identifier_key() {
-        let diags = run("local x = t[\"with space\"]");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_start() {
-        let diags = run("local x = t[\"1bad\"]");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_an_index_after_parentheses() {
-        let source = "local x = (t)['a'] .. (t.u)['b']";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = (t).a .. (t.u).b");
-    }
-
-    #[test]
-    fn flags_each_nested_index() {
-        let source = "local x = t[\"a\"][\"b\"]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t.a.b");
-    }
-
-    #[test]
-    fn flags_assignment_targets() {
-        let source = "t[\"a\"][\"b\"], u[\"c\"] = 1, 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 3, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "t.a.b, u.c = 1, 2");
-    }
-
-    #[test]
-    fn flags_compound_assignment_target() {
-        let source = "t[\"count\"] += 1";
-        let diags = run_rule(RuleId::StringIndexToField, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "t.count += 1");
-    }
-
-    #[test]
-    fn ignores_a_key_whose_value_is_no_name() {
-        let diags = run("local x = t[\"a\\nb\"]");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_a_key_spelled_with_escapes_or_long_brackets() {
-        let source = "local x = t[\"\\102oo\"] + t[ [[bar]] ]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        assert_eq!(diags[0].message, "`[\"\\102oo\"]` is equivalent to `.foo`");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t.foo + t.bar");
-    }
-
-    #[test]
-    fn flags_underscore_prefixed_key() {
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (r#"local x = t["foo"]"#, LuaTarget::Lua54),
+        ("local x = t['foo']", LuaTarget::Lua54),
+        // No fix, since it would delete the comment.
+        (r#"local x = t[--[[why]] "foo"]"#, LuaTarget::Lua54),
+        // Luau reads `continue` as a name wherever a name goes, a field included.
+        (r#"local x = t["continue"]"#, LuaTarget::Luau),
+        ("local x = (t)['a'] .. (t.u)['b']", LuaTarget::Lua54),
+        (r#"local x = t["a"]["b"]"#, LuaTarget::Lua54),
+        (r#"t["a"]["b"], u["c"] = 1, 2"#, LuaTarget::Lua54),
+        (r#"t["count"] += 1"#, LuaTarget::Luau),
+        (r#"local x = t["\102oo"] + t[ [[bar]] ]"#, LuaTarget::Lua54),
         // A leading `_` is valid in an identifier.
-        let source = "local x = t[\"_priv\"]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t._priv");
+        (r#"local x = t["_priv"]"#, LuaTarget::Lua54),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::StringIndexToField, PASS, FAIL).test_and_snapshot();
     }
 }

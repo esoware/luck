@@ -164,145 +164,47 @@ fn same_target(left: &Expression<'_>, right: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<Message> {
-        run_rule(RuleId::TableOperations, source, version)
-    }
-
-    #[test]
-    fn flags_insert_index_zero() {
-        let diags = run("table.insert(t, 0, v)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("1-based"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_hex_index_zero() {
-        for source in [
-            "table.insert(t, 0x0, v)",
-            "table.remove(t, 0x0)",
-            "table.move(t, 0x0, #t, 1)",
-            "table.move(t, 1, #t, 0x0, u)",
-        ] {
-            let diags = run(source, LuaVersion::Lua54);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_hex_length_offset() {
-        for source in ["table.insert(t, #t + 0x1, v)", "table.remove(t, #t - 0x1)"] {
-            let diags = run(source, LuaVersion::Lua54);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_insert_length_index() {
-        let diags = run("table.insert(t, #t, v)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("before the last"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_insert_length_plus_one() {
-        let diags = run("table.insert(t, #t + 1, v)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("redundant"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_insert_dotted_path_identity() {
-        let diags = run("table.insert(a.b, #a.b, v)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_remove_index_zero() {
-        let diags = run("table.remove(t, 0)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_remove_length_minus_one() {
-        let diags = run("table.remove(t, #t - 1)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_move_start_index_zero() {
-        let diags = run("table.move(t, 0, #t, 1)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_move_destination_index_zero() {
-        let diags = run("table.move(t, 1, #t, 0, u)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_create_with_table_literal() {
-        let diags = run("local x = table.create(3, {})", LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("same table"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_call_in_expr_position() {
-        let diags = run("local last = table.remove(t, 0)", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_plain_append() {
-        let diags = run("table.insert(t, v)", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_insert_index_one() {
-        let diags = run("table.insert(t, 1, v)", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_length_of_different_table() {
-        let diags = run("table.insert(t, #u, v)", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_length_of_different_path() {
-        let diags = run("table.insert(a.b, #a.c, v)", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_table_local() {
-        let diags = run(
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("table.insert(t, v)", LuaTarget::Lua54),
+        ("table.insert(t, 1, v)", LuaTarget::Lua54),
+        ("table.insert(t, #u, v)", LuaTarget::Lua54),
+        ("table.insert(a.b, #a.c, v)", LuaTarget::Lua54),
+        (
             "\
 local table = {}
 table.insert(t, 0, v)",
-            LuaVersion::Lua54,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+        ("table.move(t, 1, #t, 1, u)", LuaTarget::Lua54),
+        ("local x = table.create(3, 0)", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("table.insert(t, 0, v)", LuaTarget::Lua54),
+        ("table.insert(t, 0x0, v)", LuaTarget::Lua54),
+        ("table.remove(t, 0x0)", LuaTarget::Lua54),
+        ("table.move(t, 0x0, #t, 1)", LuaTarget::Lua54),
+        ("table.move(t, 1, #t, 0x0, u)", LuaTarget::Lua54),
+        ("table.insert(t, #t + 0x1, v)", LuaTarget::Lua54),
+        ("table.remove(t, #t - 0x1)", LuaTarget::Lua54),
+        ("table.insert(t, #t, v)", LuaTarget::Lua54),
+        ("table.insert(t, #t + 1, v)", LuaTarget::Lua54),
+        ("table.insert(a.b, #a.b, v)", LuaTarget::Lua54),
+        ("table.remove(t, 0)", LuaTarget::Lua54),
+        ("table.remove(t, #t - 1)", LuaTarget::Lua54),
+        ("table.move(t, 0, #t, 1)", LuaTarget::Lua54),
+        ("table.move(t, 1, #t, 0, u)", LuaTarget::Lua54),
+        ("local x = table.create(3, {})", LuaTarget::Luau),
+        ("local last = table.remove(t, 0)", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn ignores_valid_move() {
-        let diags = run("table.move(t, 1, #t, 1, u)", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_create_with_scalar_fill() {
-        let diags = run("local x = table.create(3, 0)", LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::TableOperations, PASS, FAIL).test_and_snapshot();
     }
 }

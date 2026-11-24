@@ -57,71 +57,28 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule_roblox(RuleId::RobloxIncorrectColor3NewBounds, source)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local c = Color3.new(0, 0.5, 1)", LuaTarget::LuauRoblox),
+        ("local r = 255 local c = Color3.new(r, 0, 0)", LuaTarget::LuauRoblox),
+        ("local Color3 = {} local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
+        ("local c = Color3.new(255, 0, 0)", LuaTarget::Luau),
+        ("local c = Color3.fromRGB(255, 0, 0)", LuaTarget::LuauRoblox),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
+        ("local c = Color3.new(- -2, 0, 0)", LuaTarget::LuauRoblox),
+        ("local c = Color3.new(-1, 0, 0)", LuaTarget::LuauRoblox),
+        ("local c = Color3.new(0.5, 1.5, 0)", LuaTarget::LuauRoblox),
+    ];
 
     #[test]
-    fn flags_component_above_one() {
-        let diags = run("local c = Color3.new(255, 0, 0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_component_under_repeated_minus() {
-        let diags = run("local c = Color3.new(- -2, 0, 0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_negative_component() {
-        let diags = run("local c = Color3.new(-1, 0, 0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_float_component_above_one() {
-        let diags = run("local c = Color3.new(0.5, 1.5, 0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_components_in_bounds() {
-        let diags = run("local c = Color3.new(0, 0.5, 1)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_literal_args() {
-        let diags = run("local r = 255 local c = Color3.new(r, 0, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_local_color3() {
-        let diags = run("local Color3 = {} local c = Color3.new(255, 0, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_standalone_environment() {
-        let diags = run_rule(
-            RuleId::RobloxIncorrectColor3NewBounds,
-            "local c = Color3.new(255, 0, 0)",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_other_constructors() {
-        let diags = run("local c = Color3.fromRGB(255, 0, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::RobloxIncorrectColor3NewBounds, PASS, FAIL).test_and_snapshot();
     }
 }

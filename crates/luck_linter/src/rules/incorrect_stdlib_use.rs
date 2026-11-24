@@ -114,280 +114,101 @@ fn invalid_constant_args(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(RuleId::IncorrectStdlibUse, source, version)
-            .into_iter()
-            .map(|diag| diag.message.to_string())
-            .collect()
-    }
-
-    fn run_roblox(source: &str) -> Vec<String> {
-        run_rule_roblox(RuleId::IncorrectStdlibUse, source)
-            .into_iter()
-            .map(|diag| diag.message.to_string())
-            .collect()
-    }
-
-    #[test]
-    fn flags_too_few_args() {
-        let messages = run("table.insert()", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|message| message.contains("requires at least 2")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_too_many_args() {
-        let messages = run("type(1, 2, 3)", LuaVersion::Lua54);
-        assert!(messages.iter().any(|message| message.contains("at most 1")), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_correct_call() {
-        let messages = run("table.insert(t, 1)", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_invalid_constant_string() {
-        // `collectgarbage` first arg must be one of the option names.
-        let messages = run("collectgarbage('frob')", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_invalid_constant_string_without_parentheses() {
-        let messages = run("collectgarbage'frob'", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_valid_constant_string() {
-        let messages = run("collectgarbage('collect')", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_method_call() {
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("table.insert(t, 1)", LuaTarget::Lua54),
+        ("collectgarbage('collect')", LuaTarget::Lua54),
         // `obj` has no known shape, so `foo` doesn't resolve to the stdlib.
-        let messages = run("obj:foo()", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_every_valid_cframe_new_overload() {
-        // Every `CFrame.new` overload: no arguments, one or two `Vector3`s,
-        // and 3, 7, or 12 numbers.
-        let source = "\
+        ("obj:foo()", LuaTarget::Lua54),
+        // Every `CFrame.new` overload: no arguments, one or two `Vector3`s, and 3,
+        // 7, or 12 numbers.
+        (
+            "\
 local v = Vector3.new(1, 2, 3)
 local a = CFrame.new()
 local b = CFrame.new(v)
 local c = CFrame.new(v, v)
 local d = CFrame.new(1, 2, 3)
 local e = CFrame.new(1, 2, 3, 4, 5, 6, 7)
-local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)";
-        let messages = run_roblox(source);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_cframe_new_between_overload_arities() {
-        let messages = run_roblox("local c = CFrame.new(1, 2, 3, 4, 5)");
-        assert!(!messages.is_empty(), "5 args matches no CFrame.new overload: {messages:?}");
-    }
-
-    #[test]
-    fn ignores_valid_udim2_overloads() {
-        let source = "\
+local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)",
+            LuaTarget::LuauRoblox,
+        ),
+        (
+            "\
 local u = UDim.new(0, 10)
 local a = UDim2.new(0, 0, 1, 0)
-local b = UDim2.new(u, u)";
-        let messages = run_roblox(source);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_collectgarbage_param_form_in_55() {
-        // The 5.5 three-arg tuning form matches only the `param`
-        // overload; the plain-option overloads must not reject it.
-        let messages = run("collectgarbage('param', 'pause', 100)", LuaVersion::Lua55);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_collectgarbage_incremental_tuning_in_54() {
-        let messages = run("collectgarbage('incremental', 100, 200, 13)", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_base() {
-        let messages = run(
+local b = UDim2.new(u, u)",
+            LuaTarget::LuauRoblox,
+        ),
+        // The 5.5 three-arg tuning form matches only the `param` overload; the
+        // plain-option overloads must not reject it.
+        ("collectgarbage('param', 'pause', 100)", LuaTarget::Lua55),
+        ("collectgarbage('incremental', 100, 200, 13)", LuaTarget::Lua54),
+        (
             "\
 local type = f
 type(1, 2, 3)",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_file_method_missing_args() {
-        let messages = run(
-            "\
-local f = io.open('x')
-f:setvbuf()",
-            LuaVersion::Lua54,
-        );
-        assert!(
-            messages.iter().any(|message| message.contains("requires at least 1")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_file_method_bad_constant() {
-        let messages = run(
-            "\
-local f = io.open('x')
-f:seek('nope')",
-            LuaVersion::Lua54,
-        );
-        assert!(
-            messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_string_literal_method_missing_args() {
-        let messages = run("local s = ('x'):rep()", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|message| message.contains("requires at least 1")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_method_on_unshaped_local() {
-        let messages = run(
+            LuaTarget::Lua54,
+        ),
+        (
             "\
 local f = something()
 f:setvbuf()",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.is_empty(), "{messages:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+        ("game:GetService('ProximityPromptService')", LuaTarget::LuauRoblox),
+        ("local x = script:IsA('BasePart')", LuaTarget::LuauRoblox),
+        ("Instance.new('Folder')", LuaTarget::LuauRoblox),
+        ("BrickColor.new('Bright red')", LuaTarget::LuauRoblox),
+        // The three-number form skips the name check.
+        ("BrickColor.new(1, 0, 0)", LuaTarget::LuauRoblox),
+        // `error()` raises a nil error.
+        ("error()", LuaTarget::Lua54),
+        // `os.setlocale()` queries the locale.
+        ("local l = os.setlocale()", LuaTarget::Lua54),
+        // Standalone Luau accepts `collect`.
+        ("collectgarbage('collect')", LuaTarget::Luau),
+        // Lua 5.2 accepts `setmajorinc`.
+        (r#"local n = collectgarbage("setmajorinc", 100)"#, LuaTarget::Lua52),
+    ];
 
-    #[test]
-    fn flags_get_service_typo() {
-        let messages = run_roblox("game:GetService('Playerz')");
-        assert!(
-            messages.iter().any(|message| message.contains("argument 1 must be")
-                && message.contains("allowed values")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_get_service_typo_without_parentheses() {
-        let messages = run_roblox("game:GetService'Playerz'");
-        assert!(
-            messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_valid_service_name() {
-        let messages = run_roblox("game:GetService('ProximityPromptService')");
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_instance_new_unknown_class() {
-        let messages = run_roblox("Instance.new('Playerz')");
-        assert!(
-            messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_instance_new_abstract_class() {
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("table.insert()", LuaTarget::Lua54),
+        ("type(1, 2, 3)", LuaTarget::Lua54),
+        // `collectgarbage` first arg must be one of the option names.
+        ("collectgarbage('frob')", LuaTarget::Lua54),
+        ("collectgarbage'frob'", LuaTarget::Lua54),
+        // Five arguments match no `CFrame.new` overload.
+        ("local c = CFrame.new(1, 2, 3, 4, 5)", LuaTarget::LuauRoblox),
+        (
+            "\
+local f = io.open('x')
+f:setvbuf()",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local f = io.open('x')
+f:seek('nope')",
+            LuaTarget::Lua54,
+        ),
+        ("local s = ('x'):rep()", LuaTarget::Lua54),
+        ("game:GetService('Playerz')", LuaTarget::LuauRoblox),
+        ("game:GetService'Playerz'", LuaTarget::LuauRoblox),
+        ("Instance.new('Playerz')", LuaTarget::LuauRoblox),
         // `BasePart` exists but isn't creatable, so `IsA` accepts it and
         // `Instance.new` doesn't.
-        let instance_new_messages = run_roblox("Instance.new('BasePart')");
-        assert!(
-            instance_new_messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{instance_new_messages:?}"
-        );
-        let is_a_messages = run_roblox("local x = script:IsA('BasePart')");
-        assert!(is_a_messages.is_empty(), "{is_a_messages:?}");
-    }
+        ("Instance.new('BasePart')", LuaTarget::LuauRoblox),
+        ("game:GetService()", LuaTarget::LuauRoblox),
+        ("BrickColor.new('Bright rad')", LuaTarget::LuauRoblox),
+    ];
 
     #[test]
-    fn ignores_valid_instance_new() {
-        let messages = run_roblox("Instance.new('Folder')");
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_get_service_arity() {
-        let messages = run_roblox("game:GetService()");
-        assert!(
-            messages.iter().any(|message| message.contains("requires at least 1")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_brickcolor_unknown_name() {
-        let unknown_name_messages = run_roblox("BrickColor.new('Bright rad')");
-        assert!(
-            unknown_name_messages.iter().any(|message| message.contains("argument 1 must be")),
-            "{unknown_name_messages:?}"
-        );
-        let known_name_messages = run_roblox("BrickColor.new('Bright red')");
-        assert!(known_name_messages.is_empty(), "{known_name_messages:?}");
-        // The 3-number form skips the constant check entirely.
-        let number_form_messages = run_roblox("BrickColor.new(1, 0, 0)");
-        assert!(number_form_messages.is_empty(), "{number_form_messages:?}");
-    }
-
-    #[test]
-    fn ignores_error_without_arguments() {
-        let messages = run("error()", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "`error()` raises a nil error: {messages:?}");
-    }
-
-    #[test]
-    fn ignores_setlocale_without_arguments() {
-        let messages = run("local l = os.setlocale()", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "`os.setlocale()` queries the locale: {messages:?}");
-    }
-
-    #[test]
-    fn ignores_collectgarbage_collect_on_luau() {
-        let messages = run("collectgarbage('collect')", LuaVersion::Luau);
-        assert!(messages.is_empty(), "standalone Luau accepts `collect`: {messages:?}");
-    }
-
-    #[test]
-    fn ignores_setmajorinc_on_lua52() {
-        let messages = run("local n = collectgarbage(\"setmajorinc\", 100)", LuaVersion::Lua52);
-        assert!(messages.is_empty(), "Lua 5.2 accepts `setmajorinc`: {messages:?}");
+    fn test() {
+        Tester::new(RuleId::IncorrectStdlibUse, PASS, FAIL).test_and_snapshot();
     }
 }

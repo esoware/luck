@@ -24,7 +24,12 @@ fn bench_linter(criterion: &mut Criterion) {
         let parse_result = file.parse(&allocator);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
-                linter.run(black_box(&parse_result), library_for(file.target), FixKind::empty())
+                linter.run(
+                    black_box(&parse_result),
+                    library_for(file.target),
+                    FixKind::empty(),
+                    None,
+                )
             });
         });
     }
@@ -40,6 +45,7 @@ fn bench_linter(criterion: &mut Criterion) {
                         black_box(parse_result),
                         library_for(project.target),
                         FixKind::empty(),
+                        None,
                     ));
                 }
             });

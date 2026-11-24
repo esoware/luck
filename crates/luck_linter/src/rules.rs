@@ -150,8 +150,7 @@ macro_rules! declare_all_lint_rules {
             }
 
             /// The rule's source on GitHub, at the release this linter is,
-            /// where its doc comment and its `flags_` and `ignores_` tests
-            /// document it.
+            /// where its doc comment and its test cases document it.
             #[must_use]
             pub const fn docs_url(self) -> &'static str {
                 match self {

@@ -83,95 +83,38 @@ fn table_key<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::DuplicateKeys, source, LuaVersion::Lua54)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local t = { 1, 1, a = 1, b = 1, [1] = 2, [x] = 3, [x] = 4 }", LuaTarget::Lua54),
+        ("local t = { [9007199254740993] = 1, [9007199254740992] = 2 }", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local t = { a = 1, b = 2, a = 3 }", LuaTarget::Lua54),
+        (r#"local t = { a = 1, ["a"] = 2 }"#, LuaTarget::Lua54),
+        (r#"local t = { a = 1, ["\97"] = 2 }"#, LuaTarget::Lua54),
+        ("local t = { a = 1, a = 2, a = 3 }", LuaTarget::Lua54),
+        // A `f{}` table is a table constructor.
+        ("foo{ a = 1, a = 2 }", LuaTarget::Lua54),
+        // Both fields set key 1.
+        (r#"local t = { [1] = "a", [1] = "b" }"#, LuaTarget::Lua54),
+        (r#"local t = { [1] = "a", [1.0] = "b", [-2] = "c", [-2.0] = "d" }"#, LuaTarget::Lua54),
+        // NaN is no key.
+        (
+            "local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }",
+            LuaTarget::Lua54,
+        ),
+        ("local t = { [9007199254740993] = 1, [9007199254740992] = 2 }", LuaTarget::Lua51),
+        ("local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }", LuaTarget::Lua54),
+        ("local t = { a = 1, a = 2 }", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn flags_repeated_name_key() {
-        let diags = run("local t = { a = 1, b = 2, a = 3 }");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].span().start, 26);
-        assert_eq!(diags[0].labels.first().map(|label| label.span.start), Some(12));
-    }
-
-    #[test]
-    fn flags_bracketed_string_matching_name_key() {
-        let diags = run("local t = { a = 1, [\"a\"] = 2 }");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_escaped_key_by_decoded_value() {
-        let diags = run("local t = { a = 1, [\"\\97\"] = 2 }");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`a`"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_every_repeat_against_the_first() {
-        let diags = run("local t = { a = 1, a = 2, a = 3 }");
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        assert!(
-            diags.iter().all(|diag| diag.labels.first().map(|label| label.span.start) == Some(12)),
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_distinct_and_positional_keys() {
-        let diags = run("local t = { 1, 1, a = 1, b = 1, [1] = 2, [x] = 3, [x] = 4 }");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_duplicate_keys_in_table_call_argument() {
-        let diags = run("foo{ a = 1, a = 2 }");
-        assert_eq!(diags.len(), 1, "a `f{{...}}` table is a table constructor: {diags:?}");
-    }
-
-    #[test]
-    fn flags_duplicate_numeric_keys() {
-        let diags = run("local t = { [1] = \"a\", [1] = \"b\" }");
-        assert_eq!(diags.len(), 1, "both fields set key 1: {diags:?}");
-    }
-
-    #[test]
-    fn flags_numeric_keys_spelled_differently() {
-        let diags = run("local t = { [1] = \"a\", [1.0] = \"b\", [-2] = \"c\", [-2.0] = \"d\" }");
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        assert!(diags[0].message.contains("`1`"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_keys_that_evaluate_alike() {
-        let diags =
-            run("local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }");
-        assert_eq!(diags.len(), 2, "NaN is no key: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_integers_lua53_tells_apart() {
-        let diags = run("local t = { [9007199254740993] = 1, [9007199254740992] = 2 }");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_integers_that_read_as_one_double() {
-        let source = "local t = { [9007199254740993] = 1, [9007199254740992] = 2 }";
-        let diags = run_rule(RuleId::DuplicateKeys, source, LuaVersion::Lua51);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_keys_spelled_in_hex_or_long_brackets() {
-        let diags = run("local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }");
-        assert_eq!(diags.len(), 2, "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::DuplicateKeys, PASS, FAIL).test_and_snapshot();
     }
 }

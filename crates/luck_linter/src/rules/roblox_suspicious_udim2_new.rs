@@ -63,74 +63,28 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule_roblox(RuleId::RobloxSuspiciousUdim2New, source)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local u = UDim2.new(0.5, 0, 0.5, 0)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new()", LuaTarget::LuauRoblox),
+        ("local x = 1 local u = UDim2.new(x, 0)", LuaTarget::LuauRoblox),
+        ("local UDim2 = {} local u = UDim2.new(1, 2)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(1, 2)", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local u = UDim2.new(0.5, 1)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(100, 200)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(-0.5)", LuaTarget::LuauRoblox),
+        ("local u = UDim2.new(1, 0, 1)", LuaTarget::LuauRoblox),
+    ];
 
     #[test]
-    fn flags_two_scale_args() {
-        let diags = run("local u = UDim2.new(0.5, 1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].help.as_deref().unwrap().contains("fromScale"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_two_offset_args() {
-        let diags = run("local u = UDim2.new(100, 200)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].help.as_deref().unwrap().contains("fromOffset"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_single_negative_arg() {
-        let diags = run("local u = UDim2.new(-0.5)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].help.as_deref().unwrap().contains("fromScale"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_three_args() {
-        let diags = run("local u = UDim2.new(1, 0, 1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_four_args() {
-        let diags = run("local u = UDim2.new(0.5, 0, 0.5, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_zero_args() {
-        let diags = run("local u = UDim2.new()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_literal_args() {
-        let diags = run("local x = 1 local u = UDim2.new(x, 0)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_local_udim2() {
-        let diags = run("local UDim2 = {} local u = UDim2.new(1, 2)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_standalone_environment() {
-        let diags = run_rule(
-            RuleId::RobloxSuspiciousUdim2New,
-            "local u = UDim2.new(1, 2)",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::RobloxSuspiciousUdim2New, PASS, FAIL).test_and_snapshot();
     }
 }

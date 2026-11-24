@@ -64,42 +64,11 @@ fn enclosing_function(tree: &Scoping, scope: ScopeId) -> Option<ScopeId> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::GlobalUsedAsLocal, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_global_confined_to_one_function() {
-        let diags = run("\
-local function f()
-    counter = 0
-    counter = counter + 1
-    return counter
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("counter"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_write_only_global_in_one_function() {
-        let diags = run("\
-local function f()
-    cache = {}
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_global_used_in_two_functions() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local function f()
     shared_state = 1
 end
@@ -107,54 +76,29 @@ local function g()
     return shared_state
 end
 f()
-g()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_global_also_used_at_top_level() {
-        let diags = run("\
+g()",
+        "\
 local function f()
     counter = 1
 end
 f()
-print(counter)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_module_level_global() {
+print(counter)",
         // Top-level globals may be the module's exports.
-        let diags = run("\
+        "\
 counter = 0
-counter = counter + 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_read_only_global() {
-        let diags = run("\
+counter = counter + 1",
+        "\
 local function f()
     return config
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_stdlib_globals() {
-        let diags = run("\
+f()",
+        "\
 local function f()
     print(1)
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_nested_function_split_usage() {
+f()",
         // `g` is a separate function, so `state` is used in two.
-        let diags = run("\
+        "\
 local function f()
     state = 1
     local function g()
@@ -162,7 +106,26 @@ local function f()
     end
     return g
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
+f()",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+local function f()
+    counter = 0
+    counter = counter + 1
+    return counter
+end
+f()",
+        "\
+local function f()
+    cache = {}
+end
+f()",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::GlobalUsedAsLocal, PASS, FAIL).test_and_snapshot();
     }
 }

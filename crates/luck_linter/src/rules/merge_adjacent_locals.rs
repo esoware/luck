@@ -148,219 +148,147 @@ fn build_merged(source: &[u8], first: &SimpleBinding<'_>, second: &SimpleBinding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::MergeAdjacentLocals, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_and_fixes_two_simple_locals() {
-        let source = "\
-local a = 1
-local b = 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b = 1, 2");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_the_parentheses_a_value_is_in() {
-        let source = "\
-local a = (x)
-local b = (y)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b = (x), (y)");
-    }
-
-    #[test]
-    fn flags_and_fixes_repeating_shared_attribute() {
-        let source = "\
-local a <const> = 1
-local b <const> = 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a <const>, b <const> = 1, 2");
-    }
-
-    #[test]
-    fn flags_and_fixes_a_shared_attribute_spelled_with_other_spacing() {
-        let source = "\
-local a <const> = 1
-local b < const > = 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a <const>, b <const> = 1, 2");
-    }
-
-    #[test]
-    fn flags_alternate_pairs_only() {
-        // A merged pair's second local can't start another pair, so no two
-        // fixes overlap.
-        let diags = run("\
-local a = 1
-local b = 2
-local c = 3");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_close_attribute() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local a <close> = nil
-local b <close> = nil");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_second_value_reading_first_name() {
-        let diags = run("\
+local b <close> = nil",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local a = 1
-local b = a + 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_second_value_reading_first_name_in_a_closure() {
-        let diags = run("\
+local b = a + 1",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local a = 1
-local b = function() return a end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_field_named_like_first_name() {
-        let source = "\
-local a = 1
-local b = t.a";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b = 1, t.a");
-    }
-
-    #[test]
-    fn flags_and_fixes_string_spelling_first_name() {
-        let source = "\
-local a = 1
-local b = \"a\"";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b = 1, \"a\"");
-    }
-
-    #[test]
-    fn flags_and_fixes_parameter_named_like_first_name() {
-        let source = "\
-local a = 1
-local b = function(a) return a end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b = 1, function(a) return a end");
-    }
-
-    #[test]
-    fn ignores_when_comment_between() {
-        let source = "\
+local b = function() return a end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local a = 1
 -- keep apart
-local b = 2";
-        let diags = run(source);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_multi_binding_source() {
-        let diags = run("\
+local b = 2",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local a, b = 1, 2
-local c = 3");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_uninitialized() {
-        let diags = run("\
+local c = 3",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local a
-local b = 2");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_locals_separated_by_semicolon() {
-        let source = "local a = 1; local b = 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Lua54), "local a, b = 1, 2");
-    }
-
-    #[test]
-    fn ignores_annotation_mismatch() {
+local b = 2",
+            LuaTarget::Lua54,
+        ),
         // Lua 5.4 attribute on only one of the two.
-        let diags = run("\
+        (
+            "\
 local a <const> = 1
-local b = 2");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_type_annotations() {
-        let source = "\
-local a: number = 1
-local b: string = \"x\"";
-        let diags = run_rule(RuleId::MergeAdjacentLocals, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "local a: number, b: string = 1, \"x\"");
-    }
-
-    #[test]
-    fn ignores_export() {
-        let diags = run_rule(
-            RuleId::MergeAdjacentLocals,
+local b = 2",
+            LuaTarget::Lua54,
+        ),
+        // The merge would drop `export`.
+        (
             "\
 export local a = 1
 export local b = 2",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "the merge would drop `export`: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_const() {
-        let diags = run_rule(
-            RuleId::MergeAdjacentLocals,
+            LuaTarget::Luau,
+        ),
+        // The merge would make the bindings mutable.
+        (
             "\
 const a = 1
 const b = 2",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "the merge would make the bindings mutable: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_comment_inside_first_local() {
-        let diags = run("\
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local a --[[why]] = 1
-local b = 2");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+local b = 2",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a = 1 -- the count
+local b = 2",
+            LuaTarget::Lua54,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
+local a = 1
+local b = 2",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a = (x)
+local b = (y)",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a <const> = 1
+local b <const> = 2",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a <const> = 1
+local b < const > = 2",
+            LuaTarget::Lua54,
+        ),
+        // A merged pair's second local can't start another pair, so no two fixes
+        // overlap.
+        (
+            "\
+local a = 1
+local b = 2
+local c = 3",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a = 1
+local b = t.a",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a = 1
+local b = \"a\"",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local a = 1
+local b = function(a) return a end",
+            LuaTarget::Lua54,
+        ),
+        ("local a = 1; local b = 2", LuaTarget::Lua54),
+        (
+            "\
+local a: number = 1
+local b: string = \"x\"",
+            LuaTarget::Luau,
+        ),
+    ];
 
     #[test]
-    fn ignores_comment_trailing_first_local() {
-        let diags = run("\
-local a = 1 -- the count
-local b = 2");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::MergeAdjacentLocals, PASS, FAIL).test_and_snapshot();
     }
 }

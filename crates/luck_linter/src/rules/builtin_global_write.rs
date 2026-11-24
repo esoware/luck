@@ -154,207 +154,103 @@ fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::config::LintConfig;
-    use crate::diagnostic::Message;
-    use crate::fixtures::{run_rule, run_rule_roblox, run_rule_with_config};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::BuiltinGlobalWrite, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_assignment_to_builtin() {
-        let diags = run("print = 5");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`print`"));
-    }
-
-    #[test]
-    fn flags_global_function_decl_over_builtin() {
-        let diags = run("function print() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`print`"));
-    }
-
-    #[test]
-    fn flags_dotted_function_decl_on_builtin() {
-        let diags = run("function table.foo() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`table.foo`"));
-    }
-
-    #[test]
-    fn flags_method_decl_on_builtin() {
-        let diags = run("function string:shout() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`string:shout`"));
-    }
-
-    #[test]
-    fn flags_field_write_on_builtin() {
-        let diags = run("table.insert = function() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`table.insert`"));
-    }
-
-    #[test]
-    fn flags_index_write_on_builtin() {
-        let diags = run("string[\"format\"] = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`string`"));
-    }
-
-    #[test]
-    fn flags_nested_field_write_on_builtin() {
-        let diags = run("do math.pi = 3 end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`math.pi`"));
-    }
-
-    #[test]
-    fn ignores_shadowed_builtin() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
+        (
+            "\
 local print = 1
-print = 5");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_field_write_on_shadowed_builtin() {
-        let diags = run("\
+print = 5",
+            LuaTarget::Lua54,
+            None,
+            None,
+        ),
+        (
+            "\
 local table = {}
-table.insert = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_function_decl_on_shadowed_builtin() {
-        let diags = run("\
+table.insert = 1",
+            LuaTarget::Lua54,
+            None,
+            None,
+        ),
+        (
+            "\
 local table = {}
-function table.foo() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_g_field_writes() {
-        let diags = run("_G.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_writable_leaf_property() {
+function table.foo() end",
+            LuaTarget::Lua54,
+            None,
+            None,
+        ),
+        ("_G.foo = 1", LuaTarget::Lua54, None, None),
         // The model marks `package.path` writable.
-        let diags = run("package.path = package.path .. ';./?.lua'");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_writable_global_assignment() {
+        ("package.path = package.path .. ';./?.lua'", LuaTarget::Lua54, None, None),
         // `_PROMPT` exists to be set.
-        let diags = run("_PROMPT = '> '");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_shared_field_write_on_roblox() {
-        let diags = run_rule_roblox(RuleId::BuiltinGlobalWrite, "shared.score = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_readonly_leaf_beside_writable_sibling() {
-        // Only leaves the model marks writable, like `package.path`, are
-        // exempt.
-        let diags = run("math.huge = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_reads() {
-        let diags = run("print(table.concat({}))");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_plain_global_write() {
+        ("_PROMPT = '> '", LuaTarget::Lua54, None, None),
+        ("shared.score = 1", LuaTarget::LuauRoblox, None, None),
+        ("print(table.concat({}))", LuaTarget::Lua54, None, None),
         // `setting_global` covers globals that aren't builtins.
-        let diags = run("my_module_state = 5");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_extra_global_write() {
-        let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
-        let diags = run_rule_with_config(
-            RuleId::BuiltinGlobalWrite,
+        ("my_module_state = 5", LuaTarget::Lua54, None, None),
+        (
             "\
 vim = 5
 vim.api = 1",
-            LuaVersion::Lua54,
-            &config,
-        );
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_builtin_listed_in_extra_globals() {
-        // `table` is a stdlib name, so only the `extra_globals` entry keeps
-        // these writes quiet.
-        let config =
-            LintConfig { extra_globals: vec!["table".to_owned()], ..LintConfig::default() };
-        let diags = run_rule_with_config(
-            RuleId::BuiltinGlobalWrite,
+            LuaTarget::Lua54,
+            None,
+            Some(r#"{"extra_globals": ["vim"]}"#),
+        ),
+        // `table` is a stdlib name, so only the `extra_globals` entry keeps these
+        // writes quiet.
+        (
             "\
 table = 5
 table.insert = 1
 function table.foo() end",
-            LuaVersion::Lua54,
-            &config,
-        );
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_package_preload_entry_write() {
-        let diags = run("package.preload.foo = function() end");
-        assert!(diags.is_empty(), "`package.preload` exists to be filled: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_package_loaded_entry_write() {
-        let diags = run("package.loaded[name] = nil");
-        assert!(diags.is_empty(), "clearing a loaded module is documented: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_roblox_instance_property_write() {
-        let diags = run_rule_roblox(RuleId::BuiltinGlobalWrite, "script.Parent.Visible = false");
-        assert!(diags.is_empty(), "this sets a property, not a builtin: {diags:?}");
-    }
-
-    #[test]
-    fn flags_only_the_whole_name_write_of_a_rebound_builtin() {
-        let diags = run("\
-table = {}
-table.insert = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`table`"), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_field_write_under_a_local_env() {
-        let diags = run("\
+            LuaTarget::Lua54,
+            None,
+            Some(r#"{"extra_globals": ["table"]}"#),
+        ),
+        // `package.preload` exists to be filled.
+        ("package.preload.foo = function() end", LuaTarget::Lua54, None, None),
+        // Clearing a loaded module is documented.
+        ("package.loaded[name] = nil", LuaTarget::Lua54, None, None),
+        // This sets a property, not a builtin.
+        ("script.Parent.Visible = false", LuaTarget::LuauRoblox, None, None),
+        (
+            "\
 local _ENV = {}
-table.insert = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+table.insert = 1",
+            LuaTarget::Lua54,
+            None,
+            None,
+        ),
+        ("function package.preload.foo() end", LuaTarget::Lua54, None, None),
+    ];
+
+    const FAIL: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
+        ("print = 5", LuaTarget::Lua54, None, None),
+        ("function print() end", LuaTarget::Lua54, None, None),
+        ("function table.foo() end", LuaTarget::Lua54, None, None),
+        ("function string:shout() end", LuaTarget::Lua54, None, None),
+        ("table.insert = function() end", LuaTarget::Lua54, None, None),
+        (r#"string["format"] = 1"#, LuaTarget::Lua54, None, None),
+        ("do math.pi = 3 end", LuaTarget::Lua54, None, None),
+        // Only leaves the model marks writable, like `package.path`, are exempt.
+        ("math.huge = 1", LuaTarget::Lua54, None, None),
+        (
+            "\
+table = {}
+table.insert = 1",
+            LuaTarget::Lua54,
+            None,
+            None,
+        ),
+    ];
 
     #[test]
-    fn ignores_function_decl_on_builtin_value() {
-        let diags = run("function package.preload.foo() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::BuiltinGlobalWrite, PASS, FAIL).test_and_snapshot();
     }
 }

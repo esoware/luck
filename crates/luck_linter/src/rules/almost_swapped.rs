@@ -72,56 +72,36 @@ fn expr_var_name<'ast>(expr: &Expression<'ast>) -> Option<&'ast str> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::AlmostSwapped, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_failed_swap() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
+local a, b = 1, 2
+a, b = b, a",
+        "\
 local a, b = 1, 2
 a = b
-b = a");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
+b = 3",
+    ];
 
-    #[test]
-    fn flags_failed_swap_in_nested_function() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "\
+local a, b = 1, 2
+a = b
+b = a",
+        "\
 local f = function() local a, b = 1, 2
 a = b
-b = a end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
+b = a end",
+        // A `;` doesn't change the failed swap.
+        "\
+local a, b = 1, 2
+a = b; b = a",
+    ];
 
     #[test]
-    fn ignores_correct_swap() {
-        let diags = run("\
-local a, b = 1, 2
-a, b = b, a");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_unrelated_assignments() {
-        let diags = run("\
-local a, b = 1, 2
-a = b
-b = 3");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_failed_swap_separated_by_semicolon() {
-        let diags = run("\
-local a, b = 1, 2
-a = b; b = a");
-        assert_eq!(diags.len(), 1, "a `;` doesn't change the failed swap: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::AlmostSwapped, PASS, FAIL).test_and_snapshot();
     }
 }

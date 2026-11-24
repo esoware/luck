@@ -1,0 +1,56 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: unused loop variable `i`
+ --> Lua54:1:5
+1 | for i = 1, 10 do print() end
+  |     ^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+suggestion: prefix `i` with `_`
+  | for _i = 1, 10 do print() end
+
+warning: unused loop variable `k`
+ --> Lua54:1:5
+1 | for k, v in pairs(t) do print(v) end
+  |     ^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+suggestion: prefix `k` with `_`
+  | for _k, v in pairs(t) do print(v) end
+
+warning: unused loop variable `k`
+ --> Lua54:1:5
+1 | for k, v in pairs(t) do print() end
+  |     ^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+suggestion: prefix `k` with `_`
+  | for _k, v in pairs(t) do print() end
+
+warning: unused loop variable `v`
+ --> Lua54:1:8
+1 | for k, v in pairs(t) do print() end
+  |        ^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+suggestion: prefix `v` with `_`
+  | for k, _v in pairs(t) do print() end
+
+all fixes:
+  | for _k, _v in pairs(t) do print() end
+
+warning: unused loop variable `k`
+ --> Lua54:2:5
+1 | local _k = 1
+2 | for k, v in pairs({}) do print(_k, v) end
+  |     ^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+
+warning: unused loop variable `i`
+ --> Lua54:1:5
+1 | for i = 1, 3 do i = 5 end
+  |     ^
+tag: unnecessary
+help: prefix with `_` to suppress this warning

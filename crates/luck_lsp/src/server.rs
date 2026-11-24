@@ -11,7 +11,6 @@ use core::num::NonZero;
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::thread;
 
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use ls_types::notification::{
@@ -106,7 +105,7 @@ impl LspRequest for FixAllWorkspace {
 
 /// Serves one client over `connection` until it sends `exit`.
 ///
-/// Every job runs on threads this starts with
+/// Every job runs on the `threads` threads this starts, each with
 /// [`luck_ast::MIN_STACK_BYTES`] of stack.
 ///
 /// # Errors
@@ -115,7 +114,7 @@ impl LspRequest for FixAllWorkspace {
 /// broke, the client didn't start with `initialize`, a worker didn't start,
 /// or the client sent `exit` without `shutdown` before it, which makes the
 /// server exit with an error.
-pub fn serve(connection: Connection) -> io::Result<()> {
+pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> {
     let (id, params) = connection.initialize_start().map_err(io::Error::other)?;
     let InitializeParams { capabilities, workspace_folders, .. } =
         match serde_json::from_value::<InitializeParams>(params) {
@@ -134,7 +133,6 @@ pub fn serve(connection: Connection) -> io::Result<()> {
 
     let Connection { sender, receiver } = connection;
     let (tasks, finished) = unbounded();
-    let threads = thread::available_parallelism().map_or(1, NonZero::get);
     let mut server = Server {
         sender,
         session: Arc::new(Session::new(encoding, tasks, threads)),

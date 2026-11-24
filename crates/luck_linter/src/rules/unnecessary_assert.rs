@@ -50,116 +50,52 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::UnnecessaryAssert, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_assert_true() {
-        let diags = run("assert(true)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("always passes"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_zero() {
-        // 0 is truthy in Lua.
-        let diags = run("assert(0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_string() {
-        let diags = run("assert(\"always\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_table() {
-        let diags = run("assert({})");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_false() {
-        let diags = run("assert(false, \"unreachable\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("always errors"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_nil() {
-        let diags = run("assert(nil)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_an_argument_whose_truthiness_is_known() {
-        for (source, message) in [
-            ("assert(1 + 1 == 2)", "always passes"),
-            ("assert(x or true)", "always passes"),
-            ("assert(not 1)", "always errors"),
-        ] {
-            let diags = run(source);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-            assert!(diags[0].message.contains(message), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_an_interpolated_string_with_an_expression_on_luau() {
-        // Its `format` comes through the string metatable, which a program
-        // can change.
-        let diags = run_rule(RuleId::UnnecessaryAssert, "assert(`a{x}`)", LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_string_and_table_arguments_without_parentheses() {
-        for source in ["assert\"\"", "assert'x'", "assert[[x]]", "assert{}", "assert{ false }"] {
-            let diags = run(source);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-            assert!(diags[0].message.contains("always passes"), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_assert_in_expr_position() {
-        let diags = run("local ok = assert(true)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_variable_condition() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        // Its `format` comes through the string metatable, which a program can
+        // change.
+        ("assert(`a{x}`)", LuaTarget::Luau),
+        (
+            "\
 local x = 1
-assert(x)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_call_condition() {
-        let diags = run("assert(next({}))");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_assert() {
-        let diags = run("\
+assert(x)",
+            LuaTarget::Lua54,
+        ),
+        ("assert(next({}))", LuaTarget::Lua54),
+        (
+            "\
 local assert = function() end
-assert(true)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+assert(true)",
+            LuaTarget::Lua54,
+        ),
+        ("assert()", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("assert(true)", LuaTarget::Lua54),
+        // 0 is truthy in Lua.
+        ("assert(0)", LuaTarget::Lua54),
+        (r#"assert("always")"#, LuaTarget::Lua54),
+        ("assert({})", LuaTarget::Lua54),
+        (r#"assert(false, "unreachable")"#, LuaTarget::Lua54),
+        ("assert(nil)", LuaTarget::Lua54),
+        ("assert(1 + 1 == 2)", LuaTarget::Lua54),
+        ("assert(x or true)", LuaTarget::Lua54),
+        ("assert(not 1)", LuaTarget::Lua54),
+        (r#"assert"""#, LuaTarget::Lua54),
+        ("assert'x'", LuaTarget::Lua54),
+        ("assert[[x]]", LuaTarget::Lua54),
+        ("assert{}", LuaTarget::Lua54),
+        ("assert{ false }", LuaTarget::Lua54),
+        ("local ok = assert(true)", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn ignores_empty_assert() {
-        let diags = run("assert()");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::UnnecessaryAssert, PASS, FAIL).test_and_snapshot();
     }
 }

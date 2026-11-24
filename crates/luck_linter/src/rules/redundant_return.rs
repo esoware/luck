@@ -52,106 +52,58 @@ impl Rule for RedundantReturn {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::RedundantReturn, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_trailing_bare_return_in_function() {
-        let diags = run("\
-local function f()
-    print(1)
-    return
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_trailing_bare_return_in_chunk() {
-        let diags = run("\
-print(1)
-return");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_return_only_body() {
-        let diags = run("\
-local function f()
-    return
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_trailing_return() {
-        let source = "\
-local function f()
-    print(1)
-    return
-end
-f()";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(!fixed.contains("return"), "{fixed}");
-    }
-
-    #[test]
-    fn flags_and_fixes_trailing_return_with_semicolon() {
-        let source = "\
-local function f()
-    print(1)
-    return;
-end
-f()";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(!fixed.contains("return"), "{fixed}");
-    }
-
-    #[test]
-    fn ignores_return_with_values() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local function f()
     return 1
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_early_return_in_nested_block() {
-        let diags = run("\
+f()",
+        "\
 local function f(x)
     if x then
         return
     end
     print(x)
 end
-f(1)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+f(1)",
+    ];
 
-    #[test]
-    fn flags_nested_function_tail_return() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "\
+local function f()
+    print(1)
+    return
+end
+f()",
+        "\
+print(1)
+return",
+        "\
+local function f()
+    return
+end
+f()",
+        "\
+local function f()
+    print(1)
+    return;
+end
+f()",
+        "\
 local f = function()
     local g = function()
         return
     end
     return g
 end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
+f()",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::RedundantReturn, PASS, FAIL).test_and_snapshot();
     }
 }

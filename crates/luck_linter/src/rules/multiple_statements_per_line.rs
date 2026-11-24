@@ -49,63 +49,30 @@ impl Rule for MultipleStatementsPerLine {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
-    use crate::diagnostic::Message;
-    use crate::fixtures::{labeled, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::MultipleStatementsPerLine, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_adjacent_locals_one_line() {
-        let source = "local a = 1 local b = 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert_eq!(labeled(&diags[0], source), ["local a = 1"]);
-    }
-
-    #[test]
-    fn ignores_separate_lines() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local a = 1
-local b = 2");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+local b = 2",
+        // Lua reads a lone CR as a line break.
+        "local a = 1\rlocal b = 2",
+    ];
 
-    #[test]
-    fn flags_semicolon_separated() {
-        let diags = run("local a = 1; local b = 2");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_inside_nested_block() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "local a = 1 local b = 2",
+        "local a = 1; local b = 2",
+        "\
 do
   local a = 1 local b = 2
-end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
+end",
+        "local a = 1 local b = 2 local c = 3",
+        "local function f() local x = 1 return x end",
+    ];
 
     #[test]
-    fn flags_three_on_one_line() {
-        // One diagnostic per adjacent pair: a-b and b-c.
-        let diags = run("local a = 1 local b = 2 local c = 3");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_return_on_same_line() {
-        let diags = run("local function f() local x = 1 return x end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_cr_only_line_breaks() {
-        let diags = run("local a = 1\rlocal b = 2");
-        assert!(diags.is_empty(), "Lua reads a lone CR as a line break: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::MultipleStatementsPerLine, PASS, FAIL).test_and_snapshot();
     }
 }

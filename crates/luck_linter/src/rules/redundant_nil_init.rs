@@ -116,139 +116,43 @@ fn last_binding_end(local: &LocalAssignment<'_>) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use crate::diagnostic::Message;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<Message> {
-        run_rule(RuleId::RedundantNilInit, source, LuaVersion::Lua54)
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local x = 1", LuaTarget::Lua54),
+        ("local x", LuaTarget::Lua54),
+        ("local a, b = nil, 1", LuaTarget::Lua54),
+        // Dropping the nil here would change `b` from `nil` to the second return
+        // value of `f()`.
+        ("local a, b = f(), nil", LuaTarget::Lua54),
+        // Likewise after a `...`.
+        ("local function g(...) local a, b = ..., nil end", LuaTarget::Lua54),
+        // Luau requires an initializer on `const`.
+        ("const x = nil", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local x = nil", LuaTarget::Lua54),
+        ("local a, b = nil, nil", LuaTarget::Lua54),
+        ("local x <const> = nil", LuaTarget::Lua54),
+        ("local a, b = 1, nil", LuaTarget::Lua54),
+        ("local a, b = (x), (nil)", LuaTarget::Lua54),
+        ("local c = (nil)", LuaTarget::Lua54),
+        // The fix should keep the annotation.
+        ("local x: number? = nil", LuaTarget::Luau),
+        // The fix shouldn't delete the comment.
+        ("local x --[[why]] = nil", LuaTarget::Lua54),
+        // No fix, since it would delete the comment.
+        ("local x = --[[why]] nil", LuaTarget::Lua54),
+        ("local a, b = 1, --[[why]] nil", LuaTarget::Lua54),
+        ("export local x = nil", LuaTarget::Luau),
+    ];
 
     #[test]
-    fn flags_single_nil() {
-        let source = "local x = nil";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "expected one diag, got {diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x");
-    }
-
-    #[test]
-    fn flags_multiple_nil_values() {
-        let source = "local a, b = nil, nil";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_attribute() {
-        let source = "local x <const> = nil";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x <const>");
-    }
-
-    #[test]
-    fn flags_trailing_nil_only() {
-        let source = "local a, b = 1, nil";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local a, b = 1");
-    }
-
-    #[test]
-    fn flags_and_fixes_values_in_parentheses() {
-        for (source, expected) in
-            [("local a, b = (x), (nil)", "local a, b = (x)"), ("local c = (nil)", "local c")]
-        {
-            let diags = run(source);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-            assert_eq!(fix_and_reparse(source, &diags, LuaVersion::Lua54), expected, "{source}");
-        }
-    }
-
-    #[test]
-    fn ignores_non_nil_rhs() {
-        let diags = run("local x = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_uninitialized() {
-        let diags = run("local x");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_leading_nil_when_more_values_follow() {
-        let diags = run("local a, b = nil, 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_trailing_nil_after_function_call() {
-        // Dropping the nil here would change `b` from `nil` to the
-        // second return value of `f()`.
-        let diags = run("local a, b = f(), nil");
-        assert!(diags.is_empty(), "must not drop nil after call; got {diags:?}");
-    }
-
-    #[test]
-    fn ignores_trailing_nil_after_vararg() {
-        let diags = run("local function g(...) local a, b = ..., nil end");
-        assert!(diags.is_empty(), "must not drop nil after vararg; got {diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_type_annotation() {
-        let source = "local x: number? = nil";
-        let diags = run_rule(RuleId::RedundantNilInit, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "local x: number?", "the fix should keep the annotation");
-    }
-
-    #[test]
-    fn ignores_luau_const_nil() {
-        let diags = run_rule(RuleId::RedundantNilInit, "const x = nil", LuaVersion::Luau);
-        assert!(diags.is_empty(), "Luau requires an initializer on `const`: {diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_comment() {
-        let source = "local x --[[why]] = nil";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
-    }
-
-    #[test]
-    fn flags_without_fix_for_comment_after_the_equals() {
-        let diags = run("local x = --[[why]] nil");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "the fix would delete the comment: {diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_for_comment_among_trailing_nils() {
-        let diags = run("local a, b = 1, --[[why]] nil");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_luau_export_nil() {
-        let source = "export local x = nil";
-        let diags = run_rule(RuleId::RedundantNilInit, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "export local x");
+    fn test() {
+        Tester::new(RuleId::RedundantNilInit, PASS, FAIL).test_and_snapshot();
     }
 }

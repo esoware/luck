@@ -9,7 +9,7 @@ use std::{env, thread};
 
 use globset::GlobSet;
 use ignore::{DirEntry, WalkBuilder, WalkState};
-use luck_allocator::{Allocator, AllocatorPool, ThreadAllocators};
+use luck_allocator::{Allocator, AllocatorPool};
 use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_config::{CONFIG_FILE_NAME, Project, ProjectFilter, find_config, glob_set};
@@ -37,11 +37,19 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
 }
 
-/// The arenas the bundler reads modules into, each thread of rayon's pool its
-/// own, once that pool is built with the stack a deep module needs.
-pub(crate) fn bundle_arenas() -> ThreadAllocators {
-    let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
-    ThreadAllocators::new()
+/// Builds rayon's global pool, which a command that works on many files runs
+/// them on, with `threads` threads, each with the stack a deep file needs.
+///
+/// # Errors
+///
+/// Reports the failure and returns [`Exit::Failure`] when a thread can't
+/// start.
+pub(crate) fn start_thread_pool(threads: NonZero<usize>) -> Result<(), Exit> {
+    ThreadPoolBuilder::new()
+        .num_threads(threads.get())
+        .stack_size(MIN_STACK_BYTES)
+        .build_global()
+        .map_err(|e| operation_error(format!("can't start {threads} threads: {e}")))
 }
 
 /// How `bundle` and `graph` resolve and read modules: as `project` says, with
@@ -570,9 +578,6 @@ pub(crate) fn for_each_outcome_in_order<Outcome>(
 where
     Outcome: Send,
 {
-    // Before anything starts rayon's default pool, whose threads' stacks are
-    // too small for a deep file.
-    let _already_built = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
     let thread_count = rayon::current_num_threads();
     let pool = AllocatorPool::new(thread_count);
     // A smaller window leaves threads idle behind a slow file, and a larger

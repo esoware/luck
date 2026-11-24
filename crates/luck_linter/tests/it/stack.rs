@@ -26,7 +26,7 @@ fn linting_and_fixing_fit_the_smallest_stack() {
         for target in LuaTarget::ALL.into_iter().filter(|target| target.version() == version) {
             let allocator = Allocator::new();
             let fixed = linter
-                .fix(&allocator, source.as_bytes(), library_for(target), FixKind::all())
+                .fix(&allocator, source.as_bytes(), library_for(target), FixKind::all(), None)
                 .expect("the fixes converge");
             assert!(fixed.parse.errors.is_empty(), "{:?}", fixed.parse.errors.first());
         }
