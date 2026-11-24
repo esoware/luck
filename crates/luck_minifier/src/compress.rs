@@ -39,14 +39,14 @@ use luck_ast::{
     SuffixedExpression, TableConstructor, TreeCounts, Type, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
-use luck_semantic::{Reference, ReferenceId, Scoping, SemanticBuilder, SymbolId};
+use luck_semantic::{Scoping, SymbolId};
 use luck_token::{LuaVersion, UnOp};
 use luck_value::ConstantEvaluation as _;
 
 use self::inline_locals::Held;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
 use self::simplify_parens::Place;
-use crate::binding::{NameIndexes, ResolvedNames, is_droppable_function};
+use crate::binding::{NameIndexes, ResolvedNames, analyze, is_droppable_function};
 use crate::limits::{GENERIC_FOR_STATE_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals};
 use crate::transform_config::TransformConfig;
 
@@ -56,28 +56,24 @@ use crate::transform_config::TransformConfig;
 const MAX_PASSES: usize = 10;
 const MAX_ROUNDS: usize = 4;
 
-/// `chunk`'s scoping, which a rewrite reads its bindings from.
-pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts) -> Scoping {
-    SemanticBuilder::new().with_counts(counts).build(chunk).semantic.into_scoping()
-}
-
 /// Compresses `chunk` until a pass changes nothing, then lifts its
 /// functions' declarations and compresses what that leaves, until lifting
-/// finds nothing more. A lift names what it hoists from `names`.
+/// finds nothing more. A lift indexes the names it hoists from
+/// `name_indexes`.
 pub(crate) fn compress<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
     counts: TreeCounts,
     config: TransformConfig,
-    names: &mut NameIndexes,
+    name_indexes: &mut NameIndexes,
 ) {
     let mut scoping = analyze(chunk, counts);
     for round in 1..=MAX_ROUNDS {
-        let mut compressor = Compressor::new(allocator, chunk.version, config, &mut scoping);
+        let mut compressor = Compressor::new(allocator, config, &mut scoping);
         compressor.run(&mut chunk.block);
         #[cfg(debug_assertions)]
         compressor.assert_references_match(chunk, counts);
-        if !(config.lift_locals && compressor.lift(&mut chunk.block, names)) {
+        if !(config.lift_locals && compressor.lift(&mut chunk.block, name_indexes)) {
             return;
         }
         debug_assert!(round < MAX_ROUNDS, "lifting a lifted tree lifted more");
@@ -147,7 +143,8 @@ pub(crate) struct Compressor<'walk, 'ast> {
     /// innermost last.
     landed_counts: Vec<usize>,
     live_registers: usize,
-    /// The bindings of the group being merged.
+    /// The bindings of the group being merged, or of the bare `local` being
+    /// fused.
     group: Vec<SymbolId>,
     /// The calls the unused `local`s of the block the walk is leaving
     /// leave, each after its index.
@@ -164,7 +161,6 @@ pub(crate) struct Compressor<'walk, 'ast> {
 impl<'walk, 'ast> Compressor<'walk, 'ast> {
     pub(crate) fn new(
         allocator: &'ast Allocator,
-        version: LuaVersion,
         config: TransformConfig,
         scoping: &'walk mut Scoping,
     ) -> Self {
@@ -172,7 +168,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         let held_index = vec![inline_locals::NOT_HELD; scoping.symbols().len()];
         Self {
             allocator,
-            version,
+            version: scoping.version(),
             config,
             scoping,
             dropped,
@@ -267,33 +263,17 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         }
     }
 
-    /// The live references of `symbol`, a recursive `local function`'s to
-    /// itself in its body aside, which keep nothing alive.
-    fn live_references(&self, symbol: SymbolId) -> impl Iterator<Item = &Reference> {
-        self.scoping
-            .resolved_references(symbol)
-            .iter()
-            .filter(|reference| !self.dropped.contains(reference.index()))
-            .map(|&reference| self.scoping.reference(reference))
-            .filter(|reference| !reference.is_recursive)
-    }
-
     /// Whether code the tree keeps reads or writes the symbol `name`
-    /// declares. A name that declares none is taken to be used.
+    /// declares. A name that declares none is taken to be used, and a
+    /// recursive `local function`'s references to itself in its body keep
+    /// nothing alive.
     fn is_used(&self, name: &Name<'_>) -> bool {
-        self.scoping
-            .symbol_of(name)
-            .is_none_or(|symbol| self.live_references(symbol).next().is_some())
-    }
-
-    /// The symbol `name` refers to, if it's a local's.
-    fn resolved(&self, name: &Name<'_>) -> Option<SymbolId> {
-        let reference = self.scoping.reference_of(name)?;
-        self.scoping.reference(reference).resolved
-    }
-
-    fn mark_dropped(&mut self, reference: ReferenceId) {
-        self.dropped.insert(reference.index());
+        self.scoping.symbol_of(name).is_none_or(|symbol| {
+            self.scoping.resolved_references(symbol).iter().any(|&reference| {
+                !self.dropped.contains(reference.index())
+                    && !self.scoping.reference(reference).is_recursive
+            })
+        })
     }
 
     /// Walks each statement, and drops the ones the walk leaves nothing of.
@@ -328,7 +308,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             }
             Statement::LocalFunction(local_function) => {
                 if should_remove_dead_code
-                    && is_droppable_function(local_function, self.version)
+                    && is_droppable_function(local_function, self.scoping)
                     && !self.is_used(&local_function.name)
                 {
                     self.drop_stmt(stmt);
@@ -351,8 +331,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Statement::RepeatLoop(_) => return self.visit_repeat(stmt),
             Statement::DoBlock(do_block) => {
                 self.visit_block(&mut do_block.block);
-                return !(should_remove_dead_code
-                    && remove_dead_code::is_empty_block(&do_block.block));
+                return !(should_remove_dead_code && do_block.block.stmts.is_empty());
             }
             Statement::NumericFor(numeric_for) => {
                 if should_remove_dead_code
@@ -563,16 +542,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
-    }
-
-    /// Folds `expr` and marks the operands the fold drops.
-    fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
-        let allocator = self.allocator;
-        let scoping = &*self.scoping;
-        let dropped = &mut self.dropped;
-        fold_constants::fold(allocator, ResolvedNames(scoping), expr, &mut |operand| {
-            Dropper { scoping, dropped: &mut *dropped }.visit_expr(operand);
-        })
     }
 
     /// The dialect and the names as the scoping resolves them, for what

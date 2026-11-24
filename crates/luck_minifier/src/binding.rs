@@ -1,14 +1,22 @@
-//! What a pass reads of a binding beyond the scoping: how its declaration
-//! fixes it, and how `luck_value` tells a local's read from a global's.
+//! The scoping a phase reads its bindings from, and what a pass reads of a
+//! binding beyond it: how its declaration fixes it, and how `luck_value`
+//! tells a local's read from a global's.
 
-use luck_ast::{LocalAssignment, LocalAssignmentKind, LocalFunction, Name, NameIndex};
-use luck_semantic::Scoping;
+use luck_ast::{
+    Chunk, LocalAssignment, LocalAssignmentKind, LocalFunction, Name, NameIndex, TreeCounts,
+};
+use luck_semantic::{Scoping, SemanticBuilder};
 use luck_token::LuaVersion;
 use luck_value::ValueContext;
 
 pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
 
 pub(crate) const IMPLICIT_VARARG_TABLE_NAME: &str = "arg";
+
+/// `chunk`'s scoping, which a rewrite reads its bindings from.
+pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts) -> Scoping {
+    SemanticBuilder::new().with_counts(counts).build(chunk).semantic.into_scoping()
+}
 
 /// The names of a tree as its scoping resolves them, for `luck_value`: a
 /// name that resolves to no local reads a global, and so does one the
@@ -22,7 +30,7 @@ impl ValueContext for ResolvedNames<'_> {
     }
 
     fn is_global_reference(&self, name: &Name<'_>) -> bool {
-        self.0.reference_of(name).is_none_or(|id| self.0.reference(id).resolved.is_none())
+        !self.0.resolves_to_local(name)
     }
 }
 
@@ -45,34 +53,30 @@ impl NameIndexes {
     }
 }
 
-/// Whether this name is the `_ENV` upvalue every global read and write
-/// goes through. Outside 5.2+ the name binds an ordinary local, so
-/// pinning it would cost bytes for nothing.
-pub(crate) fn is_env_binding(name: &str, version: LuaVersion) -> bool {
-    version.has_env_upvalue() && name == "_ENV"
+/// Whether `name` declares the `_ENV` upvalue every global read and write
+/// goes through. Outside 5.2+ the name binds an ordinary local, so pinning
+/// it would cost bytes for nothing.
+pub(crate) fn declares_env(name: &Name<'_>, scoping: &Scoping) -> bool {
+    scoping.symbol_of(name).is_some_and(|symbol| scoping.is_env_binding(symbol))
 }
 
 /// Whether a `local` declaration binds a name with an attribute (`<close>`
 /// runs `__close` at scope exit and `<const>` affects validity) or a 5.2+
 /// `_ENV`, which redirects global lookup for everything after it.
-pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
+pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment<'_>, scoping: &Scoping) -> bool {
     local.attribute.is_some()
         || local.names.iter().any(|attributed| {
-            attributed.attribute.is_some() || is_env_binding(attributed.name.text.as_str(), version)
+            attributed.attribute.is_some() || declares_env(&attributed.name, scoping)
         })
 }
 
 /// Whether no transform may reshape, merge away, or move a `local`
 /// declaration: an export, a `const`, or one that
 /// [`has_attributed_or_env_name`].
-pub(crate) fn has_fixed_binding(local: &LocalAssignment<'_>, version: LuaVersion) -> bool {
-    local.kind != LocalAssignmentKind::Local || has_attributed_or_env_name(local, version)
+pub(crate) fn has_fixed_binding(local: &LocalAssignment<'_>, scoping: &Scoping) -> bool {
+    local.kind != LocalAssignmentKind::Local || has_attributed_or_env_name(local, scoping)
 }
 
-pub(crate) fn is_droppable_function(
-    local_function: &LocalFunction<'_>,
-    version: LuaVersion,
-) -> bool {
-    !local_function.kind.is_exported()
-        && !is_env_binding(local_function.name.text.as_str(), version)
+pub(crate) fn is_droppable_function(local_function: &LocalFunction<'_>, scoping: &Scoping) -> bool {
+    !local_function.kind.is_exported() && !declares_env(&local_function.name, scoping)
 }

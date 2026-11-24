@@ -491,6 +491,12 @@ impl Scoping {
         Some(id)
     }
 
+    /// The symbol the reference `name` makes resolves to: `None` for a name
+    /// that makes none, or that reads a global.
+    pub fn resolved_symbol_of(&self, name: &Name<'_>) -> Option<SymbolId> {
+        self.reference(self.reference_of(name)?).resolved
+    }
+
     /// The label `name` names: its own, or the one a `goto` with that name
     /// jumps to.
     pub fn label_of(&self, name: &Name<'_>) -> Option<LabelId> {
@@ -530,7 +536,7 @@ impl Scoping {
     /// `require(...)`, `error(...)`) must bail when the base name does, or it
     /// reports stdlib diagnostics on user values.
     pub fn resolves_to_local(&self, name: &Name<'_>) -> bool {
-        self.reference_of(name).is_some_and(|id| self.reference(id).resolved.is_some())
+        self.resolved_symbol_of(name).is_some()
     }
 
     /// True when `name` reads the host's global of that name, so a stdlib

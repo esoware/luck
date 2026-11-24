@@ -169,7 +169,7 @@ fn returned_local(scoping: &Scoping, expr: &Expression<'_>) -> Option<SymbolId> 
     let Expression::Name(name) = expr else {
         return None;
     };
-    let symbol = scoping.reference(scoping.reference_of(name)?).resolved?;
+    let symbol = scoping.resolved_symbol_of(name)?;
     (!scoping.symbol(symbol).is_modified).then_some(symbol)
 }
 
@@ -205,7 +205,7 @@ struct Collector<'ast> {
 impl<'ast> Collector<'ast> {
     /// The table whose member a field of `name` is.
     fn table_of(&self, name: &Name<'_>) -> Option<Table> {
-        let symbol = self.scoping.reference(self.scoping.reference_of(name)?).resolved?;
+        let symbol = self.scoping.resolved_symbol_of(name)?;
         if Some(symbol) == self.returned {
             return Some(Table::Returned);
         }

@@ -6,7 +6,7 @@ use luck_token::{CommentKind, LuaVersion, chunk_header, leading_hot_comments};
 
 use crate::binding::NameIndexes;
 use crate::compress::compress;
-use crate::rename_locals::rename;
+use crate::rename::rename;
 use crate::strip_types::strip_types;
 use crate::transform_config::TransformConfig;
 
@@ -91,12 +91,12 @@ fn minify_tree<'ast>(
     if config.strip_types && chunk.version.has_type_syntax() {
         strip_types(allocator, &mut chunk.block);
     }
-    let mut names = NameIndexes::new(counts.names);
+    let mut name_indexes = NameIndexes::new(counts.names);
     if config.compresses() {
-        compress(allocator, chunk, counts, *config, &mut names);
+        compress(allocator, chunk, counts, *config, &mut name_indexes);
     }
     if config.rename_locals {
-        rename(allocator, chunk, counts, config.rename_globals, &mut names);
+        rename(allocator, chunk, counts, config.rename_globals, &mut name_indexes);
     }
 }
 

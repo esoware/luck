@@ -14,30 +14,6 @@ pub(crate) fn fits_at_depth(depth: usize, added_levels: usize, expr: &Expression
     depth + added_levels + expr_nesting_depth(expr) <= MAX_NESTING_DEPTH
 }
 
-/// Whether `expr` evaluates into exactly one register with no temporaries.
-pub(crate) const fn is_single_register_value(expr: &Expression<'_>) -> bool {
-    match expr {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_) => true,
-        Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
-}
-
 pub(crate) fn parenthesize<'ast>(
     allocator: &'ast Allocator,
     expr: Expression<'ast>,
@@ -46,8 +22,8 @@ pub(crate) fn parenthesize<'ast>(
     Expression::new_parenthesized(span, expr, allocator)
 }
 
-/// Parenthesizes a call or `...` that replaces an `and`/`or`, which always
-/// yields one value.
+/// Parenthesizes a call or `...` that replaces an expression that always
+/// yields one value, an `and`/`or` or a Luau cast.
 pub(crate) fn truncate_multi_value<'ast>(
     allocator: &'ast Allocator,
     expr: Expression<'ast>,

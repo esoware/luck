@@ -80,9 +80,9 @@ fn logical<'ast>(
     allocator: &'ast Allocator,
     op: BinOp,
     first: Expression<'ast>,
-    rest: Vec<Expression<'ast>>,
+    rest: impl IntoIterator<Item = Expression<'ast>>,
 ) -> Expression<'ast> {
-    let span = rest.last().map_or_else(|| first.span(), |last| first.span().merge(last.span()));
+    let first_span = first.span();
     // An operand's own first operand and the links after it.
     let split = |operand: Expression<'ast>| {
         let is_joined = matches!(&operand, Expression::BinaryOp(run) if run.links.first().op == op);
@@ -94,11 +94,14 @@ fn logical<'ast>(
     };
     let (first_operand, first_tail) = split(first);
     let mut joined: Vec<BinaryLink<'ast>> = first_tail.into_iter().flatten().collect();
+    let mut last_span = None;
     for operand in rest {
+        last_span = Some(operand.span());
         let (head, tail) = split(operand);
         joined.push(BinaryLink { op, operand: head });
         joined.extend(tail.into_iter().flatten());
     }
+    let span = last_span.map_or(first_span, |last| first_span.merge(last));
     let Some(links) = OneOrMore::from_list(List::from_iter_in(joined, allocator)) else {
         return first_operand;
     };
@@ -240,7 +243,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 continue;
             };
             let value = guard_return.exprs[0].take();
-            let mut guard = logical(allocator, BinOp::And, if_stmt.condition.take(), vec![value]);
+            let mut guard = logical(allocator, BinOp::And, if_stmt.condition.take(), [value]);
             self.leave_expr(&mut guard, Place::OneValue);
             guards.push(guard);
         }
@@ -251,7 +254,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 allocator,
                 BinOp::Or,
                 first_guard,
-                chain_values.chain(iter::once(fallback_expr)).collect(),
+                chain_values.chain(iter::once(fallback_expr)),
             ),
             None => fallback_expr,
         };

@@ -77,7 +77,7 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use super::*;
-    use crate::compress::analyze;
+    use crate::binding::analyze;
 
     fn base53(index: usize) -> String {
         let mut name = String::new();

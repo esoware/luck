@@ -34,12 +34,10 @@ use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
 use rustc_hash::FxHashMap;
 
 use super::Compressor;
-use super::inline_locals::NOT_HELD;
 use super::merge_locals::{declared_count, is_bare_local};
 use super::simplify_statements::ends_in_block_end;
 use crate::binding::{
-    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, NameIndexes, has_fixed_binding,
-    is_env_binding,
+    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, NameIndexes, declares_env, has_fixed_binding,
 };
 use crate::limits::{
     GENERIC_FOR_STATE_REGISTERS, MAX_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals,
@@ -51,22 +49,18 @@ use crate::transform_config::TransformConfig;
 const LIFTED_DECLARATION_BYTES: usize = 6;
 const UNWRAPPED_DO_BYTES: usize = 6;
 
+/// A symbol's place among the hoisted locals while it joins none.
+const NOT_HOISTED: u32 = u32::MAX;
+
 impl<'ast> Compressor<'_, 'ast> {
-    /// Lifts each function body of `block`, naming the locals it hoists from
-    /// `names`, and says whether it lifted any.
-    pub(super) fn lift(&self, block: &mut Block<'ast>, names: &mut NameIndexes) -> bool {
-        let mut lifter =
-            Lifter::new(self.allocator, self.version, self.config, self.scoping, names);
+    /// Lifts each function body of `block`, indexing the names of the locals
+    /// it hoists from `name_indexes`, and says whether it lifted any.
+    pub(super) fn lift(&self, block: &mut Block<'ast>, name_indexes: &mut NameIndexes) -> bool {
+        let mut lifter = Lifter::new(self.allocator, self.config, self.scoping, name_indexes);
         lifter.read_references(&self.dropped);
         lifter.visit_block(block);
         lifter.has_lifted
     }
-}
-
-/// A local hoisted to the top of a body, standing for every binding lifted
-/// into it.
-struct Hoisted<'ast> {
-    text: &'ast str,
 }
 
 /// The lift of every function body of a tree.
@@ -75,7 +69,7 @@ struct Lifter<'walk, 'ast> {
     version: LuaVersion,
     config: TransformConfig,
     scoping: &'walk Scoping,
-    names: &'walk mut NameIndexes,
+    name_indexes: &'walk mut NameIndexes,
     /// The symbols a closure references.
     captured: BitSet,
     /// With names kept, the references to each name as a global outside
@@ -85,9 +79,11 @@ struct Lifter<'walk, 'ast> {
     /// Each `local` and `local function` of the body being lifted, in walk
     /// order, and whether it lifts.
     declarations: Vec<bool>,
-    hoisted: Vec<Hoisted<'ast>>,
-    /// With renaming on, each symbol's hoisted local, or [`NOT_HELD`], and
-    /// the symbols that have one.
+    /// The name of each local hoisted to the top of the body, which stands
+    /// for every binding lifted into it.
+    hoisted: Vec<&'ast str>,
+    /// With renaming on, each symbol's hoisted local, or [`NOT_HOISTED`],
+    /// and the symbols that have one.
     hoisted_of: Vec<u32>,
     joined: Vec<SymbolId>,
     /// Hoisted locals no binding in scope holds, and those held by the
@@ -111,10 +107,9 @@ struct Lifter<'walk, 'ast> {
 impl<'walk, 'ast> Lifter<'walk, 'ast> {
     fn new(
         allocator: &'ast Allocator,
-        version: LuaVersion,
         config: TransformConfig,
         scoping: &'walk Scoping,
-        names: &'walk mut NameIndexes,
+        name_indexes: &'walk mut NameIndexes,
     ) -> Self {
         let (name_count, symbol_count) = if config.rename_locals {
             (0, scoping.symbols().len())
@@ -123,16 +118,16 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         };
         Self {
             allocator,
-            version,
+            version: scoping.version(),
             config,
             scoping,
-            names,
+            name_indexes,
             captured: BitSet::new(scoping.symbols().len()),
             global_uses: vec![0; name_count],
             name_captures: vec![0; name_count],
             declarations: Vec::new(),
             hoisted: Vec::new(),
-            hoisted_of: vec![NOT_HELD; symbol_count],
+            hoisted_of: vec![NOT_HOISTED; symbol_count],
             joined: Vec::new(),
             free: Vec::new(),
             held: Vec::new(),
@@ -201,6 +196,28 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
             && self.name_captures[name_id] == 0
     }
 
+    /// Whether a `local` is a shape a lift can take: initialized names with
+    /// no attribute or annotation, all distinct where names are kept.
+    fn can_lift_assignment(&self, local: &LocalAssignment<'_>) -> bool {
+        // A bare `local x` resets x to nil, which a lifted one wouldn't once a
+        // sibling has used the shared slot. A type annotation would be lost,
+        // since the hoisted declaration is a bare `local x`.
+        !local.exprs.is_empty()
+            && !has_fixed_binding(local, self.scoping)
+            && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
+            && (!self.keeps_names() || self.has_distinct_names(&local.names))
+    }
+
+    /// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none
+    /// count as distinct.
+    fn has_distinct_names(&self, names: &[AttributedName<'_>]) -> bool {
+        names.len() <= MAX_ACTIVE_LOCALS
+            && names.iter().enumerate().all(|(i, attributed)| {
+                let name = self.name_of(&attributed.name);
+                names.iter().take(i).all(|earlier| self.name_of(&earlier.name) != name)
+            })
+    }
+
     /// A name no binding or global of the chunk wears, and no hoisted local
     /// the lift named before.
     fn fresh_name(&mut self) -> &'ast str {
@@ -227,7 +244,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         };
         let hoisted = existing.unwrap_or_else(|| {
             let text = if kept_name.is_some() { name.text.as_str() } else { self.fresh_name() };
-            self.hoisted.push(Hoisted { text });
+            self.hoisted.push(text);
             self.hoisted.len() - 1
         });
         if let Some(name_id) = kept_name {
@@ -264,7 +281,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         for stmt in &block.stmts {
             match stmt {
                 Statement::LocalAssignment(local) => {
-                    let can_lift = can_lift_assignment(local, self.version, self.keeps_names())
+                    let can_lift = self.can_lift_assignment(local)
                         && local
                             .names
                             .iter()
@@ -283,7 +300,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                     // A 5.2+ `_ENV` hoisted to the top would redirect every
                     // global read before it.
                     let can_lift = local_function.kind == LocalFunctionKind::Local
-                        && !is_env_binding(local_function.name.text.as_str(), self.version)
+                        && !declares_env(&local_function.name, self.scoping)
                         && self.can_lift_name(&local_function.name);
                     self.declarations.push(can_lift);
                     if can_lift {
@@ -394,7 +411,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         // Each name and its comma, and `local ` and a separator unless the
         // names join a bare `local` that opens the body.
         let joins_first = self.config.merge_locals
-            && body.block.stmts.first().is_some_and(|first| is_bare_local(first, self.version));
+            && body.block.stmts.first().is_some_and(|first| is_bare_local(first, self.scoping));
         let header = if joins_first { 0 } else { LIFTED_DECLARATION_BYTES };
         let cost = hoisted * 2 + header;
         (lifted_count > 0 && saved > cost).then_some(hoisted)
@@ -412,7 +429,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
             }
         }
         for symbol in self.joined.drain(..) {
-            self.hoisted_of[symbol.index()] = NOT_HELD;
+            self.hoisted_of[symbol.index()] = NOT_HOISTED;
         }
     }
 
@@ -432,8 +449,8 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         let allocator = self.allocator;
         let span = body.span;
         let mut names = List::with_capacity_in(self.hoisted.len(), allocator);
-        for hoisted in &self.hoisted {
-            let name = Name::new(hoisted.text.into(), Some(self.names.next()), span);
+        for &hoisted in &self.hoisted {
+            let name = Name::new(hoisted.into(), Some(self.name_indexes.next()), span);
             names.push(AttributedName::new(name, None, None), allocator);
         }
         let declaration = Statement::new_local_assignment(
@@ -504,15 +521,18 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
     /// becomes `f = function()`, each name its hoisted local's.
     fn rewrite_declaration(&self, stmt: &mut Statement<'ast>) {
         let allocator = self.allocator;
-        let (names, values, span): (Vec<Name<'ast>>, _, _) = match stmt.take() {
+        let target = |name| Var::Name(Box::new_in(name, allocator));
+        let (span, targets, values) = match stmt.take() {
             Statement::LocalAssignment(local) => {
                 let LocalAssignment { span, names, exprs, .. } = local.unbox();
-                (names.into_iter().map(|attributed| attributed.name).collect(), exprs, span)
+                let names = names.into_iter().map(|attributed| target(attributed.name));
+                (span, List::from_iter_in(names, allocator), exprs)
             }
             Statement::LocalFunction(local_function) => {
                 let LocalFunction { span, attributes, body, name, .. } = local_function.unbox();
                 let value = Expression::new_function_def(span, attributes, body, allocator);
-                (vec![name], List::from_array_in([value], allocator), span)
+                let values = List::from_array_in([value], allocator);
+                (span, List::from_array_in([target(name)], allocator), values)
             }
             kept @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -538,13 +558,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                 return;
             }
         };
-        let targets = names.into_iter().map(|name| Var::Name(Box::new_in(name, allocator)));
-        *stmt = Statement::new_assignment(
-            span,
-            List::from_iter_in(targets, allocator),
-            values,
-            allocator,
-        );
+        *stmt = Statement::new_assignment(span, targets, values, allocator);
     }
 }
 
@@ -559,22 +573,18 @@ impl<'ast> VisitMut<'ast> for Lifter<'_, 'ast> {
 struct Retexter<'lift, 'ast> {
     scoping: &'lift Scoping,
     hoisted_of: &'lift [u32],
-    hoisted: &'lift [Hoisted<'ast>],
+    hoisted: &'lift [&'ast str],
 }
 
 impl<'ast> VisitMut<'ast> for Retexter<'_, 'ast> {
     fn visit_name(&mut self, name: &mut Name<'ast>) {
         let scoping = self.scoping;
-        let resolved = || {
-            let reference = scoping.reference_of(name)?;
-            scoping.reference(reference).resolved
-        };
-        if let Some(hoisted) = scoping
+        if let Some(&hoisted) = scoping
             .symbol_of(name)
-            .or_else(resolved)
+            .or_else(|| scoping.resolved_symbol_of(name))
             .and_then(|symbol| self.hoisted.get(self.hoisted_of[symbol.index()] as usize))
         {
-            name.text = hoisted.text.into();
+            name.text = hoisted.into();
         }
     }
 }
@@ -606,7 +616,11 @@ impl Pressure {
         self.locals + hoisted <= MAX_ACTIVE_LOCALS && self.registers + hoisted <= MAX_REGISTERS
     }
 
-    fn evaluate(&mut self, active: Active, exprs: &[&Expression<'_>]) {
+    fn evaluate<'tree>(
+        &mut self,
+        active: Active,
+        exprs: impl IntoIterator<Item = &'tree Expression<'tree>>,
+    ) {
         let mut counter = ExprCounter(0);
         for expr in exprs {
             counter.visit_expr(expr);
@@ -636,18 +650,18 @@ impl Pressure {
                     self.measure(&do_block.block, active);
                 }
                 Statement::WhileLoop(while_loop) => {
-                    self.evaluate(active, &[&while_loop.condition]);
+                    self.evaluate(active, [&while_loop.condition]);
                     self.measure(&while_loop.block, active);
                 }
                 Statement::RepeatLoop(repeat_loop) => {
                     let inner = self.measure(&repeat_loop.block, active);
-                    self.evaluate(inner, &[&repeat_loop.condition]);
+                    self.evaluate(inner, [&repeat_loop.condition]);
                 }
                 Statement::IfStatement(if_stmt) => {
-                    self.evaluate(active, &[&if_stmt.condition]);
+                    self.evaluate(active, [&if_stmt.condition]);
                     self.measure(&if_stmt.block, active);
                     for clause in &if_stmt.elseif_clauses {
-                        self.evaluate(active, &[&clause.condition]);
+                        self.evaluate(active, [&clause.condition]);
                         self.measure(&clause.block, active);
                     }
                     if let Some(else_clause) = &if_stmt.else_clause {
@@ -655,9 +669,8 @@ impl Pressure {
                     }
                 }
                 Statement::NumericFor(numeric_for) => {
-                    let mut bounds = vec![&numeric_for.start, &numeric_for.limit];
-                    bounds.extend(&numeric_for.step);
-                    self.evaluate(active, &bounds);
+                    let bounds = [&numeric_for.start, &numeric_for.limit];
+                    self.evaluate(active, bounds.into_iter().chain(&numeric_for.step));
                     let state_locals = self.version.numeric_for_state_locals();
                     let loop_active = Active {
                         locals: active.locals + state_locals + 1,
@@ -667,8 +680,7 @@ impl Pressure {
                     self.measure(&numeric_for.block, loop_active);
                 }
                 Statement::GenericFor(generic_for) => {
-                    let exprs: Vec<&Expression<'_>> = generic_for.exprs.iter().collect();
-                    self.evaluate(active, &exprs);
+                    self.evaluate(active, &generic_for.exprs);
                     let names = generic_for.names.len();
                     let state_locals = self.version.generic_for_state_locals();
                     let loop_active = Active {
@@ -709,31 +721,6 @@ impl<'tree> Visit<'tree> for ExprCounter {
     fn visit_function_body(&mut self, _body: &'tree FunctionBody<'tree>) {}
 
     fn visit_type(&mut self, _ty: &'tree Type<'tree>) {}
-}
-
-/// Whether a `local` is a shape a lift can take: initialized names with no
-/// attribute or annotation, all distinct where names are kept.
-fn can_lift_assignment(
-    local: &LocalAssignment<'_>,
-    version: LuaVersion,
-    keeps_names: bool,
-) -> bool {
-    // A bare `local x` resets x to nil, which a lifted one wouldn't once a
-    // sibling has used the shared slot. A type annotation would be lost,
-    // since the hoisted declaration is a bare `local x`.
-    !local.exprs.is_empty()
-        && !has_fixed_binding(local, version)
-        && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
-        && (!keeps_names || has_distinct_names(&local.names))
-}
-
-/// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none count
-/// as distinct.
-fn has_distinct_names(names: &[AttributedName<'_>]) -> bool {
-    names.len() <= MAX_ACTIVE_LOCALS
-        && names.iter().enumerate().all(|(i, attributed)| {
-            names.iter().take(i).all(|earlier| earlier.name.text != attributed.name.text)
-        })
 }
 
 #[cfg(test)]

@@ -3,8 +3,8 @@ use luck_ast::Chunk;
 use luck_codegen::LiteralSpelling;
 use luck_token::LuaVersion;
 
-use crate::binding::NameIndexes;
-use crate::compress::{Compressor, analyze, compress};
+use crate::binding::{NameIndexes, analyze};
+use crate::compress::{Compressor, compress};
 use crate::transform_config::TransformConfig;
 
 /// Every pass off, for a test to turn on the ones it covers.
@@ -74,7 +74,7 @@ pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let result = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
     let mut chunk = result.chunk;
     let mut scoping = analyze(&chunk, result.counts);
-    Compressor::new(&allocator, chunk.version, config, &mut scoping).pass(&mut chunk.block);
+    Compressor::new(&allocator, config, &mut scoping).pass(&mut chunk.block);
     String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::Shortest)).unwrap()
 }
 
@@ -86,7 +86,7 @@ pub(crate) fn compressed<'ast>(
 ) -> Chunk<'ast> {
     let result = luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua54);
     let mut chunk = result.chunk;
-    let mut names = NameIndexes::new(result.counts.names);
-    compress(allocator, &mut chunk, result.counts, config, &mut names);
+    let mut name_indexes = NameIndexes::new(result.counts.names);
+    compress(allocator, &mut chunk, result.counts, config, &mut name_indexes);
     chunk
 }

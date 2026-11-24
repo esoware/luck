@@ -64,7 +64,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_>) -> Option<Finding> {
     }
     let tree = context.scoping();
     let callee = call.callee.as_name()?;
-    let symbol = tree.symbol(tree.reference(tree.reference_of(callee)?).resolved?);
+    let symbol = tree.symbol(tree.resolved_symbol_of(callee)?);
     if symbol.is_modified {
         return None;
     }

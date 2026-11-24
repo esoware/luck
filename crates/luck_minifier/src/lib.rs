@@ -52,8 +52,7 @@ mod expr;
 mod fixtures;
 mod limits;
 mod pipeline;
-mod rename_globals;
-mod rename_locals;
+mod rename;
 mod strip_types;
 mod transform_config;
 

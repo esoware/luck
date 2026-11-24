@@ -205,8 +205,7 @@ impl Limits {
     pub(super) fn is_constant(&self, expr: &Expression<'_>, scoping: &Scoping) -> bool {
         let is_constant_name = |name: &Name<'_>| {
             scoping
-                .reference_of(name)
-                .and_then(|reference| scoping.reference(reference).resolved)
+                .resolved_symbol_of(name)
                 .and_then(|symbol| self.symbols.get(symbol.index()).copied().flatten())
                 .is_some_and(|tracked| matches!(tracked, Tracked::Constant))
         };

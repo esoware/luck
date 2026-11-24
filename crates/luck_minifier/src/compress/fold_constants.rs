@@ -11,316 +11,292 @@ use luck_ast::{Expression, GetSpan as _, OneOrMore};
 use luck_token::{BinOp, LuaVersion, Span, UnOp, spell_number};
 use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _, ToBoolean as _};
 
-use crate::binding::ResolvedNames;
+use super::Compressor;
 use crate::expr::truncate_multi_value;
 
-/// Folds a run of binary operators or a unary operator, and says whether it
-/// did. Hands `drop` each operand it drops.
-pub(super) fn fold<'ast>(
-    allocator: &'ast Allocator,
-    context: ResolvedNames<'_>,
-    expr: &mut Expression<'ast>,
-    drop: &mut impl FnMut(&Expression<'ast>),
-) -> bool {
-    match expr {
-        Expression::BinaryOp(run) => match run.links.first().op {
-            BinOp::And | BinOp::Or => fold_logical_run(allocator, context, expr, drop),
-            BinOp::Concat => fold_concat_run(allocator, context, expr, drop),
-            BinOp::Pow => fold_power_run(allocator, context, expr, drop),
-            BinOp::Add
-            | BinOp::Sub
-            | BinOp::Mul
-            | BinOp::Div
-            | BinOp::FloorDiv
-            | BinOp::Mod
-            | BinOp::Eq
-            | BinOp::Ne
-            | BinOp::Lt
-            | BinOp::Le
-            | BinOp::Gt
-            | BinOp::Ge
-            | BinOp::BitAnd
-            | BinOp::BitOr
-            | BinOp::BitXor
-            | BinOp::Shl
-            | BinOp::Shr => fold_left_run(allocator, context, expr, drop),
-        },
-        Expression::UnaryOp(_) => fold_unary(allocator, context, expr, drop),
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
+impl<'ast> Compressor<'_, 'ast> {
+    /// Folds a run of binary operators or a unary operator, says whether it
+    /// did, and marks the operands it drops.
+    pub(super) fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
+        match expr {
+            Expression::BinaryOp(run) => match run.links.first().op {
+                BinOp::And | BinOp::Or => self.fold_logical_run(expr),
+                BinOp::Concat => self.fold_concat_run(expr),
+                BinOp::Pow => self.fold_power_run(expr),
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::FloorDiv
+                | BinOp::Mod
+                | BinOp::Eq
+                | BinOp::Ne
+                | BinOp::Lt
+                | BinOp::Le
+                | BinOp::Gt
+                | BinOp::Ge
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr => self.fold_left_run(expr),
+            },
+            Expression::UnaryOp(_) => self.fold_unary(expr),
+            Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::Number(_)
+            | Expression::Integer(_)
+            | Expression::StringLiteral(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::Name(_)
+            | Expression::Suffixed(_)
+            | Expression::Parenthesized(_)
+            | Expression::TableConstructor(_)
+            | Expression::IfExpression(_)
+            | Expression::InterpolatedString(_)
+            | Expression::TypeCast(_)
+            | Expression::Error(_) => false,
+        }
     }
-}
 
-/// Folds the run's operators from the left while their operands evaluate,
-/// as the pairs it groups into would, as far as the longest prefix whose
-/// value spells no longer.
-///
-/// An operator that doesn't fold leaves a run on its left, which no later one
-/// folds with either.
-fn fold_left_run<'ast>(
-    allocator: &'ast Allocator,
-    context: ResolvedNames<'_>,
-    expr: &mut Expression<'ast>,
-    drop: &mut impl FnMut(&Expression<'ast>),
-) -> bool {
-    let Expression::BinaryOp(boxed) = expr else {
-        return false;
-    };
-    let run = &mut **boxed;
-    let version = context.0.version();
-    let Some(mut value) = run.first.evaluate_value(&context) else {
-        return false;
-    };
-    let mut bound = printed_length_bound(&run.first, version);
-    // How many links fold, and into what.
-    let mut folded = None;
-    for (index, link) in run.links.iter().enumerate() {
-        let Some(next) = link
-            .operand
-            .evaluate_value(&context)
-            .and_then(|rhs| value.binary(link.op, rhs, version))
-        else {
-            break;
+    /// Folds the run's operators from the left while their operands
+    /// evaluate, as the pairs it groups into would, as far as the longest
+    /// prefix whose value spells no longer.
+    ///
+    /// An operator that doesn't fold leaves a run on its left, which no later
+    /// one folds with either.
+    fn fold_left_run(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let Expression::BinaryOp(boxed) = expr else {
+            return false;
         };
-        value = next;
-        bound = joined_bound(bound, link.op, &link.operand, version);
-        if is_short_enough(value, bound, version) {
-            folded = Some((index + 1, value));
-        }
-    }
-    let Some((folded_links, folded_value)) = folded else {
-        return false;
-    };
-    let folded_operands = &run.links[..folded_links];
-    let span =
-        folded_operands.iter().fold(run.first.span(), |span, link| span.merge(link.operand.span()));
-    let Some(literal) = value_to_expr(allocator, folded_value, span) else {
-        return false;
-    };
-    drop(&run.first);
-    for link in folded_operands {
-        drop(&link.operand);
-    }
-    match OneOrMore::from_list(run.links.split_off(folded_links)) {
-        Some(rest) => {
-            run.first = literal;
-            run.links = rest;
-        }
-        None => *expr = literal,
-    }
-    true
-}
-
-/// Folds the run's `^`s from the right while their operands evaluate, as the
-/// nested pairs it groups into would, as far as the longest suffix whose
-/// value spells no longer.
-fn fold_power_run<'ast>(
-    allocator: &'ast Allocator,
-    context: ResolvedNames<'_>,
-    expr: &mut Expression<'ast>,
-    drop: &mut impl FnMut(&Expression<'ast>),
-) -> bool {
-    let Expression::BinaryOp(boxed) = expr else {
-        return false;
-    };
-    let run = &mut **boxed;
-    let version = context.0.version();
-    let last = &run.links.last().operand;
-    let Some(mut value) = last.evaluate_value(&context) else {
-        return false;
-    };
-    let mut bound = printed_length_bound(last, version);
-    // The operand the folded value starts at, counting `run.first` as 0 and
-    // each link's as one past the link's index, and the value.
-    let mut folded = None;
-    for (index, link) in run.links.iter().enumerate().rev() {
-        let left_operand = if index == 0 { &run.first } else { &run.links[index - 1].operand };
-        let Some(next) = left_operand
-            .evaluate_value(&context)
-            .and_then(|lhs| lhs.binary(link.op, value, version))
-        else {
-            break;
+        let run = &mut **boxed;
+        let (version, names) = (self.version, self.names());
+        let Some(mut value) = run.first.evaluate_value(&names) else {
+            return false;
         };
-        value = next;
-        bound = joined_bound(bound, link.op, left_operand, version);
-        if is_short_enough(value, bound, version) {
-            folded = Some((index, value));
-        }
-    }
-    let Some((start, folded_value)) = folded else {
-        return false;
-    };
-    let first_operand = if start == 0 { &run.first } else { &run.links[start - 1].operand };
-    let span = first_operand.span().merge(last.span());
-    let Some(literal) = value_to_expr(allocator, folded_value, span) else {
-        return false;
-    };
-    if start == 0 {
-        drop(expr);
-        *expr = literal;
-        return true;
-    }
-    for link in &run.links[start - 1..] {
-        drop(&link.operand);
-    }
-    run.links.truncate(start);
-    run.links.last_mut().operand = literal;
-    true
-}
-
-/// Joins the string operands a run of `..` ends with into one.
-///
-/// `..` groups from the right, so those are the pairs it folds first, and
-/// they join in one copy however many there are. A string never joins a
-/// number, whose `tostring` is the target's.
-fn fold_concat_run<'ast>(
-    allocator: &'ast Allocator,
-    context: ResolvedNames<'_>,
-    expr: &mut Expression<'ast>,
-    drop: &mut impl FnMut(&Expression<'ast>),
-) -> bool {
-    let Expression::BinaryOp(boxed) = expr else {
-        return false;
-    };
-    let run = &mut **boxed;
-    let string = |operand: &Expression<'ast>| match operand.evaluate_value(&context)? {
-        ConstantValue::String(bytes) => Some(bytes),
-        ConstantValue::Nil
-        | ConstantValue::Boolean(_)
-        | ConstantValue::Number(_)
-        | ConstantValue::Integer(_) => None,
-    };
-    // Last first.
-    let mut strings: Vec<&[u8]> =
-        run.links.iter().rev().map_while(|link| string(&link.operand)).collect();
-    let first_link = run.links.len() - strings.len();
-    let first_string = if first_link == 0 { string(&run.first) } else { None };
-    let is_whole_run = first_string.is_some();
-    strings.extend(first_string);
-    if strings.len() < 2 {
-        return false;
-    }
-    let mut joined = Vec::with_capacity(strings.iter().map(|bytes| bytes.len()).sum());
-    for bytes in strings.iter().rev() {
-        joined.extend_from_slice(bytes);
-    }
-    let first_operand = if is_whole_run { &run.first } else { &run.links[first_link].operand };
-    let span = first_operand.span().merge(run.links.last().operand.span());
-    let value = ThinBytes::new(allocator.alloc_slice_copy(&joined));
-    let literal = Expression::new_string_literal(value, None, span, allocator);
-    if is_whole_run {
-        drop(expr);
-        *expr = literal;
-    } else {
-        for link in &run.links[first_link..] {
-            drop(&link.operand);
-        }
-        run.links.truncate(first_link + 1);
-        run.links.last_mut().operand = literal;
-    }
-    true
-}
-
-/// Folds a run of `and`s or of `or`s from the left while its first operand's
-/// truthiness decides, and drops the operands after one that decides it.
-///
-/// `false and x` and `true or x` are their first operand, and the rest of
-/// the run never runs. `true and x` and `false or x` are `x`, truncated to
-/// one value, once the first operand can go. In `x or true or y`, `y` never
-/// runs either.
-fn fold_logical_run<'ast>(
-    allocator: &'ast Allocator,
-    context: ResolvedNames<'_>,
-    expr: &mut Expression<'ast>,
-    drop: &mut impl FnMut(&Expression<'ast>),
-) -> bool {
-    let Expression::BinaryOp(boxed) = expr else {
-        return false;
-    };
-    let run = &mut **boxed;
-    let is_or = run.links.first().op == BinOp::Or;
-    let decider =
-        run.links.iter().position(|link| link.operand.to_boolean(&context) == Some(is_or));
-    if let Some(kept_links) = decider.map(|index| index + 1)
-        && kept_links < run.links.len()
-    {
-        for link in &run.links[kept_links..] {
-            drop(&link.operand);
-        }
-        run.links.truncate(kept_links);
-        return true;
-    }
-    let mut folded_links = 0;
-    while let Some(is_truthy) = run.first.to_boolean(&context) {
-        if is_truthy == is_or {
-            for link in &run.links[folded_links..] {
-                drop(&link.operand);
+        let mut bound = printed_length_bound(&run.first, version);
+        // How many links fold, and into what.
+        let mut folded = None;
+        for (index, link) in run.links.iter().enumerate() {
+            let Some(next) = link
+                .operand
+                .evaluate_value(&names)
+                .and_then(|rhs| value.binary(link.op, rhs, version))
+            else {
+                break;
+            };
+            value = next;
+            bound = joined_bound(bound, link.op, &link.operand, version);
+            if is_short_enough(value, bound, version) {
+                folded = Some((index + 1, value));
             }
-            *expr = run.first.take();
+        }
+        let Some((folded_links, folded_value)) = folded else {
+            return false;
+        };
+        let folded_operands = &run.links[..folded_links];
+        let span = folded_operands
+            .iter()
+            .fold(run.first.span(), |span, link| span.merge(link.operand.span()));
+        let Some(literal) = value_to_expr(self.allocator, folded_value, span) else {
+            return false;
+        };
+        self.drop_expr(&run.first);
+        for link in folded_operands {
+            self.drop_expr(&link.operand);
+        }
+        match OneOrMore::from_list(run.links.split_off(folded_links)) {
+            Some(rest) => {
+                run.first = literal;
+                run.links = rest;
+            }
+            None => *expr = literal,
+        }
+        true
+    }
+
+    /// Folds the run's `^`s from the right while their operands evaluate, as
+    /// the nested pairs it groups into would, as far as the longest suffix
+    /// whose value spells no longer.
+    fn fold_power_run(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let Expression::BinaryOp(boxed) = expr else {
+            return false;
+        };
+        let run = &mut **boxed;
+        let (version, names) = (self.version, self.names());
+        let last = &run.links.last().operand;
+        let Some(mut value) = last.evaluate_value(&names) else {
+            return false;
+        };
+        let mut bound = printed_length_bound(last, version);
+        // The operand the folded value starts at, counting `run.first` as 0
+        // and each link's as one past the link's index, and the value.
+        let mut folded = None;
+        for (index, link) in run.links.iter().enumerate().rev() {
+            let left_operand = if index == 0 { &run.first } else { &run.links[index - 1].operand };
+            let Some(next) = left_operand
+                .evaluate_value(&names)
+                .and_then(|lhs| lhs.binary(link.op, value, version))
+            else {
+                break;
+            };
+            value = next;
+            bound = joined_bound(bound, link.op, left_operand, version);
+            if is_short_enough(value, bound, version) {
+                folded = Some((index, value));
+            }
+        }
+        let Some((start, folded_value)) = folded else {
+            return false;
+        };
+        let first_operand = if start == 0 { &run.first } else { &run.links[start - 1].operand };
+        let span = first_operand.span().merge(last.span());
+        let Some(literal) = value_to_expr(self.allocator, folded_value, span) else {
+            return false;
+        };
+        if start == 0 {
+            self.drop_expr(expr);
+            *expr = literal;
             return true;
         }
-        if run.first.may_have_side_effects(&context) {
-            break;
+        for link in &run.links[start - 1..] {
+            self.drop_expr(&link.operand);
         }
-        let Some(link) = run.links.get_mut(folded_links) else {
-            break;
-        };
-        drop(&run.first);
-        run.first = truncate_multi_value(allocator, link.operand.take());
-        folded_links += 1;
+        run.links.truncate(start);
+        run.links.last_mut().operand = literal;
+        true
     }
-    if folded_links == 0 {
-        return false;
-    }
-    match OneOrMore::from_list(run.links.split_off(folded_links)) {
-        Some(rest) => run.links = rest,
-        None => *expr = run.first.take(),
-    }
-    true
-}
 
-fn fold_unary<'ast>(
-    allocator: &'ast Allocator,
-    context: ResolvedNames<'_>,
-    expr: &mut Expression<'ast>,
-    drop: &mut impl FnMut(&Expression<'ast>),
-) -> bool {
-    let Expression::UnaryOp(unary) = &*expr else {
-        return false;
-    };
-    // A negated numeral is how a negative number is spelled, so only the
-    // numeral's own spelling can get shorter.
-    if unary.op == UnOp::Neg && matches!(unary.operand, Expression::Number(_)) {
-        return false;
+    /// Joins the string operands a run of `..` ends with into one.
+    ///
+    /// `..` groups from the right, so those are the pairs it folds first, and
+    /// they join in one copy however many there are. A string never joins a
+    /// number, whose `tostring` is the target's.
+    fn fold_concat_run(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let Expression::BinaryOp(boxed) = expr else {
+            return false;
+        };
+        let run = &mut **boxed;
+        let names = self.names();
+        let string = |operand: &Expression<'ast>| match operand.evaluate_value(&names)? {
+            ConstantValue::String(bytes) => Some(bytes),
+            ConstantValue::Nil
+            | ConstantValue::Boolean(_)
+            | ConstantValue::Number(_)
+            | ConstantValue::Integer(_) => None,
+        };
+        // Last first.
+        let mut strings: Vec<&[u8]> =
+            run.links.iter().rev().map_while(|link| string(&link.operand)).collect();
+        let first_link = run.links.len() - strings.len();
+        let first_string = if first_link == 0 { string(&run.first) } else { None };
+        let is_whole_run = first_string.is_some();
+        strings.extend(first_string);
+        if strings.len() < 2 {
+            return false;
+        }
+        let mut joined = Vec::with_capacity(strings.iter().map(|bytes| bytes.len()).sum());
+        for bytes in strings.iter().rev() {
+            joined.extend_from_slice(bytes);
+        }
+        let first_operand = if is_whole_run { &run.first } else { &run.links[first_link].operand };
+        let span = first_operand.span().merge(run.links.last().operand.span());
+        let allocator = self.allocator;
+        let value = ThinBytes::new(allocator.alloc_slice_copy(&joined));
+        let literal = Expression::new_string_literal(value, None, span, allocator);
+        if is_whole_run {
+            self.drop_expr(expr);
+            *expr = literal;
+        } else {
+            for link in &run.links[first_link..] {
+                self.drop_expr(&link.operand);
+            }
+            run.links.truncate(first_link + 1);
+            run.links.last_mut().operand = literal;
+        }
+        true
     }
-    let version = context.0.version();
-    let span = unary.span;
-    let Some(value) = expr
-        .evaluate_value(&context)
-        .filter(|&value| is_short_enough(value, printed_length_bound(expr, version), version))
-    else {
-        return false;
-    };
-    let Some(literal) = value_to_expr(allocator, value, span) else {
-        return false;
-    };
-    drop(expr);
-    *expr = literal;
-    true
+
+    /// Folds a run of `and`s or of `or`s from the left while its first
+    /// operand's truthiness decides, and drops the operands after one that
+    /// decides it.
+    ///
+    /// `false and x` and `true or x` are their first operand, and the rest of
+    /// the run never runs. `true and x` and `false or x` are `x`, truncated
+    /// to one value, once the first operand can go. In `x or true or y`, `y`
+    /// never runs either.
+    fn fold_logical_run(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let Expression::BinaryOp(boxed) = expr else {
+            return false;
+        };
+        let run = &mut **boxed;
+        let is_or = run.links.first().op == BinOp::Or;
+        let decider =
+            run.links.iter().position(|link| link.operand.to_boolean(&self.names()) == Some(is_or));
+        if let Some(kept_links) = decider.map(|index| index + 1)
+            && kept_links < run.links.len()
+        {
+            for link in &run.links[kept_links..] {
+                self.drop_expr(&link.operand);
+            }
+            run.links.truncate(kept_links);
+            return true;
+        }
+        let mut folded_links = 0;
+        while let Some(is_truthy) = run.first.to_boolean(&self.names()) {
+            if is_truthy == is_or {
+                for link in &run.links[folded_links..] {
+                    self.drop_expr(&link.operand);
+                }
+                *expr = run.first.take();
+                return true;
+            }
+            if run.first.may_have_side_effects(&self.names()) {
+                break;
+            }
+            let Some(link) = run.links.get_mut(folded_links) else {
+                break;
+            };
+            self.drop_expr(&run.first);
+            run.first = truncate_multi_value(self.allocator, link.operand.take());
+            folded_links += 1;
+        }
+        if folded_links == 0 {
+            return false;
+        }
+        match OneOrMore::from_list(run.links.split_off(folded_links)) {
+            Some(rest) => run.links = rest,
+            None => *expr = run.first.take(),
+        }
+        true
+    }
+
+    fn fold_unary(&mut self, expr: &mut Expression<'ast>) -> bool {
+        let Expression::UnaryOp(unary) = &*expr else {
+            return false;
+        };
+        // A negated numeral is how a negative number is spelled, so only the
+        // numeral's own spelling can get shorter.
+        if unary.op == UnOp::Neg && matches!(unary.operand, Expression::Number(_)) {
+            return false;
+        }
+        let version = self.version;
+        let span = unary.span;
+        let Some(value) = expr
+            .evaluate_value(&self.names())
+            .filter(|&value| is_short_enough(value, printed_length_bound(expr, version), version))
+        else {
+            return false;
+        };
+        let Some(literal) = value_to_expr(self.allocator, value, span) else {
+            return false;
+        };
+        self.drop_expr(expr);
+        *expr = literal;
+        true
+    }
 }
 
 /// The bound on a run's length once `op` and `operand` join the operands

@@ -81,7 +81,7 @@ impl<'ast> Compressor<'_, 'ast> {
             self.has_changed = true;
         }
         if self.config.inline_locals
-            && !has_fixed_binding(local, self.version)
+            && !has_fixed_binding(local, self.scoping)
             && local.names.len() == local.exprs.len()
         {
             let LocalAssignment { names, exprs, .. } = &mut **local;
@@ -143,7 +143,7 @@ impl<'ast> Compressor<'_, 'ast> {
 
     /// The waiting value of the local `name` reads, if there is one.
     fn waiting_value(&mut self, name: &Name<'_>) -> Option<&mut Held<'ast>> {
-        let symbol = self.resolved(name)?;
+        let symbol = self.scoping.resolved_symbol_of(name)?;
         let index = self.held_index[symbol.index()] as usize;
         self.held.get_mut(index).filter(|held| held.state == HeldState::Waiting)
     }
@@ -160,7 +160,7 @@ impl<'ast> Compressor<'_, 'ast> {
         let value = fits.then(|| held.value.take());
         self.waiting -= 1;
         if value.is_some() {
-            self.mark_dropped(read);
+            self.dropped.insert(read.index());
             self.landed_locals += locals;
             self.has_changed = true;
         }

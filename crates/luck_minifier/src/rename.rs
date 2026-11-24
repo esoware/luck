@@ -1,5 +1,6 @@
-//! Renames every local to the shortest name its scopes allow, and every
-//! label to the shortest its function allows.
+//! Renames every local, and with `rename_globals` each global the chunk
+//! defines before reading it, to the shortest name its scopes allow, and
+//! every label to the shortest its function allows.
 //!
 //! It reads a fresh analysis of the tree, as `oxc_mangler` does. Bindings
 //! that are never live in the same scope share a slot, the slots spelled
@@ -11,6 +12,7 @@
 mod candidate_pool;
 mod choose_names;
 mod explicit_self;
+mod rename_globals;
 mod scope_claims;
 
 use std::mem;
@@ -23,10 +25,8 @@ use luck_data_structures::BitSet;
 use luck_semantic::{NameId, ScopeId, Scoping, SymbolId, SymbolKind};
 
 use self::candidate_pool::CandidatePool;
-use self::choose_names::Choice;
-use crate::binding::{METHOD_RECEIVER_NAME, NameIndexes};
-use crate::compress::analyze;
-use crate::rename_globals::renamable_globals;
+use self::rename_globals::renamable_globals;
+use crate::binding::{METHOD_RECEIVER_NAME, NameIndexes, analyze};
 
 struct Binding {
     scope: usize,
@@ -58,14 +58,14 @@ struct Candidate<'ast> {
     name_id: Option<NameId>,
 }
 
-/// No binding.
+/// No binding, or no scope.
 const UNRESOLVED: usize = usize::MAX;
 
 /// A global's place in [`Renamer::of_global`] when it keeps its name.
 const NOT_RENAMED: u32 = u32::MAX;
 
 /// What renaming learns of a tree from its scoping.
-struct Renamer<'walk, 'ast> {
+struct Renamer<'walk> {
     scoping: &'walk Scoping,
     scopes: Vec<Scope>,
     /// The renamed globals, then each symbol, in symbol order from
@@ -85,8 +85,6 @@ struct Renamer<'walk, 'ast> {
     /// Each name read as a global or held by a binding that keeps it, and
     /// a scope it's read in.
     global_reads: Vec<(usize, usize)>,
-    choice: Choice,
-    new_names: Vec<&'ast str>,
 }
 
 /// Renames the locals and labels of `chunk`, and with
@@ -94,19 +92,19 @@ struct Renamer<'walk, 'ast> {
 /// them.
 ///
 /// A method that reads `self` takes it as a parameter, so it's renamed too,
-/// under an index from `names`.
+/// under an index from `name_indexes`.
 pub(crate) fn rename<'ast>(
     allocator: &'ast Allocator,
     chunk: &mut Chunk<'ast>,
     counts: TreeCounts,
     should_rename_globals: bool,
-    names: &mut NameIndexes,
+    name_indexes: &mut NameIndexes,
 ) {
     let scoping = analyze(chunk, counts);
     let mut renamer = Renamer::new(&scoping);
     // Opt-in, since renamed globals end up under new `_G` keys.
     if should_rename_globals {
-        for name in renamable_globals(&chunk.block, chunk.version, &scoping) {
+        for name in renamable_globals(&chunk.block, &scoping) {
             // Its definitions are references, so no declaration spells it.
             let id = renamer.declare(0, false, 0);
             renamer.of_global[name.index()] =
@@ -115,12 +113,13 @@ pub(crate) fn rename<'ast>(
     }
     renamer.read_scoping();
     let mut pool = CandidatePool::new(allocator, &scoping);
-    renamer.choose_names(&mut pool);
+    let new_names = renamer.choose_names(&mut pool);
     Applier {
         renamer: &renamer,
+        new_names: &new_names,
         pool: &mut pool,
         allocator,
-        names,
+        name_indexes,
         methods: Vec::new(),
         labels: Vec::new(),
         function_labels: 0,
@@ -130,7 +129,7 @@ pub(crate) fn rename<'ast>(
     .visit_block(&mut chunk.block);
 }
 
-impl<'walk, 'ast> Renamer<'walk, 'ast> {
+impl<'walk> Renamer<'walk> {
     fn new(scoping: &'walk Scoping) -> Self {
         let mut scopes: Vec<Scope> = scoping
             .scopes()
@@ -158,8 +157,6 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
             last_global_read_scopes: vec![UNRESOLVED; name_count],
             reference_scopes: Vec::new(),
             global_reads: Vec::new(),
-            choice: Choice::default(),
-            new_names: Vec::new(),
         }
     }
 
@@ -266,22 +263,19 @@ impl<'walk, 'ast> Renamer<'walk, 'ast> {
         let global = self.of_global[reference.name.index()];
         (global != NOT_RENAMED).then_some(global as usize)
     }
-
-    /// The name renaming gives `id`, which is empty for one that keeps its
-    /// own.
-    fn new_name(&self, id: usize) -> &'ast str {
-        self.new_names[id]
-    }
 }
 
 /// Writes each binding's new name into its names, makes a method that takes
 /// its `self` as a parameter declare it so, and names each function's
 /// labels.
 struct Applier<'apply, 'walk, 'ast> {
-    renamer: &'apply Renamer<'walk, 'ast>,
+    renamer: &'apply Renamer<'walk>,
+    /// The name renaming gives each renamed binding, or none for one that
+    /// keeps its own.
+    new_names: &'apply [Option<&'ast str>],
     pool: &'apply mut CandidatePool<'walk, 'ast>,
     allocator: &'ast Allocator,
-    names: &'apply mut NameIndexes,
+    name_indexes: &'apply mut NameIndexes,
     /// For each method the walk is in, innermost last, the implicit `self`
     /// its body reads, once a read outside a type shows which.
     methods: Vec<Option<SymbolId>>,
@@ -349,9 +343,7 @@ impl<'ast> VisitMut<'ast> for Applier<'_, '_, 'ast> {
         {
             *receiver = Some(symbol);
         }
-        if let Some(new_name) = self.renamer.renamed_of(name).map(|id| self.renamer.new_name(id))
-            && !new_name.is_empty()
-        {
+        if let Some(new_name) = self.renamer.renamed_of(name).and_then(|id| self.new_names[id]) {
             name.text = new_name.into();
         }
     }
@@ -364,10 +356,9 @@ impl<'ast> VisitMut<'ast> for Applier<'_, '_, 'ast> {
         self.walk_function_decl(function_decl);
         if is_method && let Some(Some(receiver)) = self.methods.pop() {
             let renamed = self.renamer.symbol_base + receiver.index();
-            let new_name = self.renamer.new_name(renamed);
-            let text = if new_name.is_empty() { METHOD_RECEIVER_NAME } else { new_name };
+            let text = self.new_names[renamed].unwrap_or(METHOD_RECEIVER_NAME);
             let span = function_decl.name.method.map_or(function_decl.span, |method| method.span);
-            let name = Name::new(text.into(), Some(self.names.next()), span);
+            let name = Name::new(text.into(), Some(self.name_indexes.next()), span);
             explicit_self::take_receiver(self.allocator, function_decl, name);
         }
     }

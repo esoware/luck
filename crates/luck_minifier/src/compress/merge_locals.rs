@@ -12,8 +12,7 @@ use luck_token::LuaVersion;
 use luck_value::{MayHaveSideEffects as _, ValueContext};
 
 use super::Compressor;
-use crate::binding::{has_fixed_binding, is_env_binding};
-use crate::expr::is_single_register_value;
+use crate::binding::has_fixed_binding;
 use crate::limits::assignment_target_limit;
 
 /// A dialect in which no name's read counts as an effect, since a group
@@ -31,8 +30,32 @@ impl ValueContext for ReadsInOrder {
     }
 }
 
-pub(super) fn is_bare_local(stmt: &Statement<'_>, version: LuaVersion) -> bool {
-    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local, version))
+pub(super) fn is_bare_local(stmt: &Statement<'_>, scoping: &Scoping) -> bool {
+    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local, scoping))
+}
+
+/// Whether `expr` evaluates into exactly one register with no temporaries.
+const fn is_single_register_value(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_) => true,
+        Expression::Name(_)
+        | Expression::Suffixed(_)
+        | Expression::Parenthesized(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_) => false,
+    }
 }
 
 /// Finds a reference to any of a group's bindings, closure bodies and Luau
@@ -57,9 +80,10 @@ impl<'tree> Visit<'tree> for ReferenceFinder<'_> {
     }
 
     fn visit_name(&mut self, name: &'tree Name<'tree>) {
-        let resolved =
-            self.scoping.reference_of(name).and_then(|id| self.scoping.reference(id).resolved);
-        self.has_reference |= resolved.is_some_and(|symbol| self.group.contains(&symbol));
+        self.has_reference |= self
+            .scoping
+            .resolved_symbol_of(name)
+            .is_some_and(|symbol| self.group.contains(&symbol));
     }
 }
 
@@ -113,7 +137,7 @@ impl<'ast> Compressor<'_, 'ast> {
         };
         // Fixed bindings stay unmerged. Merging a `const` with plain locals,
         // for one, would extend or drop its const-ness.
-        if has_fixed_binding(local, self.version) {
+        if has_fixed_binding(local, self.scoping) {
             return None;
         }
         if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
@@ -152,8 +176,8 @@ impl<'ast> Compressor<'_, 'ast> {
                     })
                 })
                 .count()
-        } else if is_bare_local(first, self.version) {
-            followers.iter().take_while(|stmt| is_bare_local(stmt, self.version)).count()
+        } else if is_bare_local(first, self.scoping) {
+            followers.iter().take_while(|stmt| is_bare_local(stmt, self.scoping)).count()
         } else if let Statement::Assignment(assignment) = first
             && let Some((symbol, _)) = self.single_assignment(assignment)
         {
@@ -248,9 +272,9 @@ impl<'ast> Compressor<'_, 'ast> {
     ) -> Option<(SymbolId, &'tree Expression<'ast>)> {
         if let ([Var::Name(name)], [expr]) = (&*assignment.targets, &*assignment.values)
             && is_single_register_value(expr)
-            && !is_env_binding(name.text.as_str(), self.version)
         {
-            return self.resolved(name).map(|symbol| (symbol, expr));
+            let symbol = self.scoping.resolved_symbol_of(name)?;
+            return (!self.scoping.is_env_binding(symbol)).then_some((symbol, expr));
         }
         None
     }
@@ -268,12 +292,14 @@ impl<'ast> Compressor<'_, 'ast> {
         let mut has_fused = false;
         let mut kept = 0;
         let mut index = 0;
+        let mut declared = mem::take(&mut self.group);
         while index < stmts.len() {
             let stmt = &stmts[index];
             let can_fuse = if let Statement::LocalAssignment(local) = stmt
                 && let Some(Statement::Assignment(assignment)) = stmts.get(index + 1)
             {
-                is_bare_local(stmt, self.version) && self.can_fuse(&local.names, assignment)
+                is_bare_local(stmt, self.scoping)
+                    && self.can_fuse(&local.names, assignment, &mut declared)
             } else {
                 false
             };
@@ -297,21 +323,28 @@ impl<'ast> Compressor<'_, 'ast> {
             kept += 1;
             index += 1;
         }
+        self.group = declared;
         stmts.truncate(kept);
         self.has_changed |= has_fused;
         has_fused
     }
 
     /// Whether `assignment` assigns exactly the locals `names` declares, each
-    /// once, so the two can fuse into one initialized declaration.
-    fn can_fuse(&self, names: &[AttributedName<'_>], assignment: &Assignment<'_>) -> bool {
+    /// once, so the two can fuse into one initialized declaration. Those
+    /// locals go in `declared`.
+    fn can_fuse(
+        &self,
+        names: &[AttributedName<'_>],
+        assignment: &Assignment<'_>,
+        declared: &mut Vec<SymbolId>,
+    ) -> bool {
         // Every target must be the matching declared local, or a field store
         // like the `t.x` in `a, t.x = 1, 2` would be lost in the fused
         // `local`.
         if names.len() != assignment.targets.len() {
             return false;
         }
-        let mut declared = Vec::with_capacity(names.len());
+        declared.clear();
         for (attributed, target) in names.iter().zip(assignment.targets.iter()) {
             let (Some(symbol), Var::Name(name)) =
                 (self.scoping.symbol_of(&attributed.name), target)
@@ -320,7 +353,7 @@ impl<'ast> Compressor<'_, 'ast> {
             };
             // `local a, a; a, a = 1, 2` stores both values in the second `a`,
             // right to left, but `local a, a = 1, 2` gives it the last.
-            if self.resolved(name) != Some(symbol) || declared.contains(&symbol) {
+            if self.scoping.resolved_symbol_of(name) != Some(symbol) || declared.contains(&symbol) {
                 return false;
             }
             declared.push(symbol);
@@ -329,7 +362,7 @@ impl<'ast> Compressor<'_, 'ast> {
         // `local f; f = function() f() end` the body's `f` is the new local,
         // but fused into `local f = function() ... end` it would resolve to
         // an outer `f`.
-        !assignment.values.iter().any(|value| self.references_any(value, &declared))
+        !assignment.values.iter().any(|value| self.references_any(value, declared))
     }
 }
 

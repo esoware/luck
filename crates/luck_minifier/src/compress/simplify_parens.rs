@@ -95,21 +95,23 @@ mod tests {
     use luck_ast::{Statement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
-    use crate::fixtures::{NO_PASSES, compressed, minify_with};
+    use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with};
     use crate::transform_config::TransformConfig;
 
     const PARENS: TransformConfig = TransformConfig { simplify_parens: true, ..NO_PASSES };
 
-    fn assert_outputs(version: LuaVersion, cases: &[(&str, &str)]) {
-        for &(source, expected) in cases {
-            assert_eq!(minify_with(source, version, &PARENS), expected, "source: {source}");
-        }
+    fn apply(source: &str) -> String {
+        minify_with(source, LuaVersion::Lua54, &PARENS)
+    }
+
+    fn apply_luau(source: &str) -> String {
+        minify_with(source, LuaVersion::Luau, &PARENS)
     }
 
     #[test]
     fn strips_what_grouping_and_value_counts_allow() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("local x = (42)", "local x=42"),
                 ("local x = (y)", "local x=y"),
@@ -129,7 +131,7 @@ mod tests {
     #[test]
     fn strips_a_truncation_wherever_one_value_counts() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("if (f()) then g() end", "if f()then g()end"),
                 ("while (f()) do end repeat until (...)", "while f()do end repeat until..."),
@@ -148,7 +150,7 @@ mod tests {
             ],
         );
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("x += (f()) return `{(f())}`", "x+=f()return`{f()}`"),
                 ("return if (f()) then (g()) else (...)", "return if f()then g()else..."),
@@ -159,7 +161,7 @@ mod tests {
     #[test]
     fn strips_parens_where_nothing_groups_with_them() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("local x = (a + b)", "local x=a+b"),
                 ("if (a or b) then f() end", "if a or b then f()end"),
@@ -176,7 +178,7 @@ mod tests {
             ],
         );
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("local x = (a :: T)", "local x=a::T"),
                 ("return if (a) then (b) else (c or d)", "return if a then b else c or d"),
@@ -188,7 +190,7 @@ mod tests {
     #[test]
     fn strips_parens_a_chain_prefix_stands_without() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("return (x).y", "return x.y"),
                 ("(f)()", "f()"),
@@ -203,7 +205,7 @@ mod tests {
     #[test]
     fn keeps_what_grouping_and_value_counts_need() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 // Parens around a call truncate its values.
                 ("local x, y = (foo())", "local x,y=(foo())"),
@@ -220,7 +222,7 @@ mod tests {
         );
         // `-(1i)` negates an integer, which raises, and `-1i` is a literal.
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[("return -(1i), not (1i), (1i) + x, (1i) :: T", "return-(1i),not 1i,1i+x,1i::T")],
         );
     }
@@ -241,7 +243,7 @@ mod tests {
     #[test]
     fn keeps_parens_on_an_instantiated_literal_in_every_position() {
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("return ({})<<T>>\n", "return({})<<T>>"),
                 ("return (\"s\")<<T>>\n", "return(\"s\")<<T>>"),
@@ -276,7 +278,7 @@ mod tests {
     #[test]
     fn strips_parens_on_an_instantiated_var() {
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("return (x)<<T>>\n", "return x<<T>>"),
                 ("return (x.y)<<T>>\n", "return x.y<<T>>"),

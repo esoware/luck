@@ -26,8 +26,7 @@ pub(crate) fn name_at(document: &DocumentState, offset: u32) -> Option<(NodeId, 
 pub(crate) fn local_at(document: &DocumentState, offset: u32) -> Option<(SymbolId, Span)> {
     let (_, name) = name_at(document, offset)?;
     let tree = document.tree();
-    let symbol =
-        tree.symbol_of(name).or_else(|| tree.reference(tree.reference_of(name)?).resolved)?;
+    let symbol = tree.symbol_of(name).or_else(|| tree.resolved_symbol_of(name))?;
     Some((symbol, name.span))
 }
 

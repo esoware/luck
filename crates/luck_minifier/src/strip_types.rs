@@ -7,9 +7,11 @@
 
 use luck_allocator::Allocator;
 use luck_ast::{
-    AttributedName, Block, Expression, FunctionBody, GetSpan as _, MethodCall, NumericFor,
-    Parameter, Statement, Suffix, SuffixedExpression, Type, VarArgParam, VisitMut,
+    AttributedName, Block, Expression, FunctionBody, MethodCall, NumericFor, Parameter, Statement,
+    Suffix, SuffixedExpression, Type, VarArgParam, VisitMut,
 };
+
+use crate::expr::truncate_multi_value;
 
 pub(crate) fn strip_types<'ast>(allocator: &'ast Allocator, block: &mut Block<'ast>) {
     TypeStripper { allocator }.visit_block(block);
@@ -40,13 +42,7 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
         self.walk_expr(expr);
         match expr {
             Expression::TypeCast(cast) => {
-                let inner = cast.expr.take();
-                *expr = if inner.is_multi_value() {
-                    let span = inner.span();
-                    Expression::new_parenthesized(span, inner, self.allocator)
-                } else {
-                    inner
-                };
+                *expr = truncate_multi_value(self.allocator, cast.expr.take());
             }
             Expression::Suffixed(chain) if chain.suffixes.iter().all(is_instantiation) => {
                 let mut prefix = chain.prefix.take();

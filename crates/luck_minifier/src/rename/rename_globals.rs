@@ -6,34 +6,19 @@
 //! block that scopes nothing is unwrapped.
 
 use luck_ast::{Assignment, Block, Expression, FunctionBody, Name, Statement, Type, Var, Visit};
+use luck_data_structures::BitSet;
 use luck_semantic::{NameId, Scoping};
-use luck_token::LuaVersion;
-
-use crate::binding::is_env_binding;
 
 /// The globals to rename, in the order the renamer declares them as root
 /// bindings: each top-level `function g()` name, then each name a top-level
 /// assignment defines.
-pub(crate) fn renamable_globals(
-    block: &Block<'_>,
-    version: LuaVersion,
-    scoping: &Scoping,
-) -> Vec<NameId> {
+pub(super) fn renamable_globals(block: &Block<'_>, scoping: &Scoping) -> Vec<NameId> {
     let mut top_level = Vec::new();
     flatten(block, &mut top_level);
-    let is_excluded = |name: NameId| {
-        scoping.is_declared_global(name)
-            || scoping.name(name) == "_ENV" && is_env_binding("_ENV", version)
-    };
-    let global = |name: &Name<'_>| {
-        let reference = scoping.reference(scoping.reference_of(name)?);
-        reference.resolved.is_none().then_some(reference.name)
-    };
-    let name_count = scoping.names().len();
-    let function_globals = function_globals(&top_level, name_count, &global, &is_excluded);
+    let function_globals = function_globals(&top_level, scoping);
 
-    let mut reads = Reads::new(name_count, &global);
-    let mut is_assign_first = vec![false; name_count];
+    let mut reads = Reads::new(scoping);
+    let mut is_assign_first = BitSet::new(scoping.names().len());
     let mut assign_first = Vec::new();
     for &stmt in &top_level {
         let Statement::Assignment(assignment) = stmt else {
@@ -42,13 +27,13 @@ pub(crate) fn renamable_globals(
         };
         reads.read_assignment(assignment);
         for target in &assignment.targets {
-            if let Some(name) = target_global(target, &global)
+            if let Some(name) = target_global(target, scoping)
                 && !function_globals.contains(&name)
                 && !reads.has(name)
-                && !is_excluded(name)
-                && !is_assign_first[name.index()]
+                && !is_excluded(name, scoping)
+                && !is_assign_first.contains(name.index())
             {
-                is_assign_first[name.index()] = true;
+                is_assign_first.insert(name.index());
                 assign_first.push(name);
             }
         }
@@ -58,8 +43,18 @@ pub(crate) fn renamable_globals(
     renamable
 }
 
-/// The global a name reads or writes, by its scoping.
-type GlobalOf<'global> = dyn Fn(&Name<'_>) -> Option<NameId> + 'global;
+/// The global `name` reads or writes, by its scoping.
+fn global_of(name: &Name<'_>, scoping: &Scoping) -> Option<NameId> {
+    let reference = scoping.reference(scoping.reference_of(name)?);
+    reference.resolved.is_none().then_some(reference.name)
+}
+
+/// A global a Lua 5.5 `global` statement declares keeps its name, and so
+/// does a 5.2+ `_ENV`, which every global read goes through.
+fn is_excluded(name: NameId, scoping: &Scoping) -> bool {
+    scoping.is_declared_global(name)
+        || scoping.name(name) == "_ENV" && scoping.version().has_env_upvalue()
+}
 
 /// The top level's statements, with each top-level `do` block's in its
 /// place.
@@ -73,46 +68,45 @@ fn flatten<'tree, 'ast>(block: &'tree Block<'ast>, top_level: &mut Vec<&'tree St
     }
 }
 
-fn target_global(target: &Var<'_>, global: &GlobalOf<'_>) -> Option<NameId> {
-    if let Var::Name(name) = target { global(name) } else { None }
+fn target_global(target: &Var<'_>, scoping: &Scoping) -> Option<NameId> {
+    if let Var::Name(name) = target { global_of(name, scoping) } else { None }
 }
 
 /// The name of each top-level `function g()` nothing at the top level reads
 /// before it, unless an assignment to `g` came first, once each.
-fn function_globals(
-    top_level: &[&Statement<'_>],
-    name_count: usize,
-    global: &GlobalOf<'_>,
-    is_excluded: &impl Fn(NameId) -> bool,
-) -> Vec<NameId> {
-    let mut reads = Reads::new(name_count, global);
-    let mut is_assigned_first = vec![false; name_count];
-    let mut is_taken = vec![false; name_count];
+fn function_globals(top_level: &[&Statement<'_>], scoping: &Scoping) -> Vec<NameId> {
+    let name_count = scoping.names().len();
+    let mut reads = Reads::new(scoping);
+    let mut is_assigned_first = BitSet::new(name_count);
+    let mut is_taken = BitSet::new(name_count);
     let mut function_globals = Vec::new();
     for &stmt in top_level {
         match stmt {
             Statement::Assignment(assignment) => {
                 reads.read_assignment(assignment);
                 for target in &assignment.targets {
-                    if let Some(name) = target_global(target, global)
+                    if let Some(name) = target_global(target, scoping)
                         && !reads.has(name)
                     {
-                        is_assigned_first[name.index()] = true;
+                        is_assigned_first.insert(name.index());
                     }
                 }
             }
             Statement::FunctionDecl(function_declaration) => {
                 let defined = match &*function_declaration.name.names {
-                    [root] if function_declaration.name.method.is_none() => global(root),
+                    [root] if function_declaration.name.method.is_none() => {
+                        global_of(root, scoping)
+                    }
                     _ => None,
                 };
                 let Some(name) = defined else {
                     reads.visit_stmt(stmt);
                     continue;
                 };
-                let is_read_first = reads.has(name) && !is_assigned_first[name.index()];
-                if !is_read_first && !is_excluded(name) && !is_taken[name.index()] {
-                    is_taken[name.index()] = true;
+                let is_read_first = reads.has(name) && !is_assigned_first.contains(name.index());
+                if !is_read_first && !is_excluded(name, scoping) && !is_taken.contains(name.index())
+                {
+                    is_taken.insert(name.index());
                     function_globals.push(name);
                 }
             }
@@ -142,23 +136,23 @@ fn function_globals(
 }
 
 /// The globals statements read, outside function bodies and types.
-struct Reads<'global> {
-    global: &'global GlobalOf<'global>,
-    is_read: Vec<bool>,
+struct Reads<'scoping> {
+    scoping: &'scoping Scoping,
+    is_read: BitSet,
 }
 
-impl<'global> Reads<'global> {
-    fn new(name_count: usize, global: &'global GlobalOf<'global>) -> Self {
-        Self { global, is_read: vec![false; name_count] }
+impl<'scoping> Reads<'scoping> {
+    fn new(scoping: &'scoping Scoping) -> Self {
+        Self { scoping, is_read: BitSet::new(scoping.names().len()) }
     }
 
     fn has(&self, name: NameId) -> bool {
-        self.is_read[name.index()]
+        self.is_read.contains(name.index())
     }
 
     fn read(&mut self, name: &Name<'_>) {
-        if let Some(global) = (self.global)(name) {
-            self.is_read[global.index()] = true;
+        if let Some(global) = global_of(name, self.scoping) {
+            self.is_read.insert(global.index());
         }
     }
 

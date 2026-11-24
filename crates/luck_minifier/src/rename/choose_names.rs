@@ -9,15 +9,18 @@ use super::candidate_pool::CandidatePool;
 use super::scope_claims::ScopeClaims;
 use super::{Renamer, Scope, UNRESOLVED};
 
-/// What choosing names computes, kept for its allocations.
+/// What the steps of choosing names compute, each step from what the ones
+/// before it left.
 #[derive(Default)]
-pub(super) struct Choice {
+struct Choice {
     /// Each name's run of `read_scopes`, the scopes that read it as a
     /// global, ascending.
     read_ranges: Vec<(usize, usize)>,
     read_scopes: Vec<usize>,
     /// `reference_scopes` grouped by binding: binding `b`'s are
-    /// `grouped_scopes[group_starts[b]..group_starts[b + 1]]`.
+    /// `grouped_scopes[group_starts[b]..group_starts[b + 1]]`. Once the live
+    /// scopes are found, slots reuse `group_starts` to put each scope's
+    /// bindings in `order`.
     group_starts: Vec<usize>,
     grouped_scopes: Vec<usize>,
     /// Each renamable binding's live scopes: its own, its reference scopes,
@@ -41,29 +44,34 @@ pub(super) struct Choice {
     slot_candidates: Vec<usize>,
 }
 
-impl<'ast> Renamer<'_, 'ast> {
-    /// Gives every renamable binding its slot's name, and every other one
-    /// none, since it keeps its own.
-    pub(super) fn choose_names(&mut self, pool: &mut CandidatePool<'_, 'ast>) {
-        self.group_global_reads();
-        self.find_live_scopes();
-        let slot_count = self.assign_slots();
-        self.name_slots(slot_count, pool);
-        let Self { choice, new_names, .. } = self;
-        new_names.clear();
-        new_names.extend(choice.slot_of.iter().map(|binding_slot| {
-            binding_slot.map_or("", |slot| pool.get(choice.slot_candidates[slot]).name)
-        }));
+impl Renamer<'_> {
+    /// The name renaming gives each binding: its slot's, or none for one
+    /// that keeps its own.
+    pub(super) fn choose_names<'ast>(
+        &self,
+        pool: &mut CandidatePool<'_, 'ast>,
+    ) -> Vec<Option<&'ast str>> {
+        let mut choice = Choice::default();
+        self.group_global_reads(&mut choice);
+        self.find_live_scopes(&mut choice);
+        let slot_count = self.assign_slots(&mut choice);
+        self.name_slots(&mut choice, slot_count, pool);
+        choice
+            .slot_of
+            .iter()
+            .map(|binding_slot| {
+                binding_slot.map(|slot| pool.get(choice.slot_candidates[slot]).name)
+            })
+            .collect()
     }
 
     /// Groups the global reads by name, each name's scopes ascending and
     /// once each.
-    fn group_global_reads(&mut self) {
-        let Self { global_reads, choice, scoping, .. } = self;
+    fn group_global_reads(&self, choice: &mut Choice) {
+        let Self { global_reads, scoping, .. } = self;
         let ranges = &mut choice.read_ranges;
-        ranges.clear();
         ranges.resize(scoping.names().len(), (0, 0));
-        for &(name_id, _) in &*global_reads {
+        for &(name_id, _) in global_reads {
             ranges[name_id].1 += 1;
         }
         // Each range starts where the last ends, and its end moves up from
@@ -74,9 +82,8 @@ impl<'ast> Renamer<'_, 'ast> {
             *range = (total, total);
             total += count;
         }
-        choice.read_scopes.clear();
         choice.read_scopes.resize(total, 0);
-        for &(name_id, scope) in &*global_reads {
+        for &(name_id, scope) in global_reads {
             let range = &mut ranges[name_id];
             choice.read_scopes[range.1] = scope;
             range.1 += 1;
@@ -98,14 +105,13 @@ impl<'ast> Renamer<'_, 'ast> {
 
     /// Each renamable binding's live scopes: a scope is live for a binding
     /// on the path from each scope that reads it up to its own.
-    fn find_live_scopes(&mut self) {
-        let Self { renamed: bindings, scopes, reference_scopes, choice, .. } = self;
+    fn find_live_scopes(&self, choice: &mut Choice) {
+        let Self { renamed: bindings, scopes, reference_scopes, .. } = self;
         let binding_count = bindings.len();
         // Group the reference scopes by binding, keeping walk order.
         let starts = &mut choice.group_starts;
-        starts.clear();
         starts.resize(binding_count + 1, 0);
-        for &(binding, _) in &*reference_scopes {
+        for &(binding, _) in reference_scopes {
             starts[binding] += 1;
         }
         let mut end = 0;
@@ -113,17 +119,13 @@ impl<'ast> Renamer<'_, 'ast> {
             end += *start;
             *start = end;
         }
-        choice.grouped_scopes.clear();
         choice.grouped_scopes.resize(reference_scopes.len(), 0);
         for &(binding, scope) in reference_scopes.iter().rev() {
             let start = &mut starts[binding];
             *start -= 1;
             choice.grouped_scopes[*start] = scope;
         }
-        choice.marks.clear();
         choice.marks.resize(scopes.len(), UNRESOLVED);
-        choice.live_starts.clear();
-        choice.live_scopes.clear();
         for (id, binding) in bindings.iter().enumerate() {
             choice.live_starts.push(choice.live_scopes.len());
             if binding.is_fixed {
@@ -151,15 +153,15 @@ impl<'ast> Renamer<'_, 'ast> {
     /// A new slot opens only where every slot before it is live, so every
     /// two slots are live in some scope together, and no two can share a
     /// name.
-    fn assign_slots(&mut self) -> usize {
-        let Self { renamed: bindings, scopes, choice, .. } = self;
+    fn assign_slots(&self, choice: &mut Choice) -> usize {
+        let Self { renamed: bindings, scopes, .. } = self;
         // Scope ids come from one depth-first walk, so they're in preorder:
         // parents before their children. Within a scope, bindings stay in
         // declaration order.
         let starts = &mut choice.group_starts;
         starts.clear();
         starts.resize(scopes.len(), 0);
-        for binding in &*bindings {
+        for binding in bindings {
             starts[binding.scope] += 1;
         }
         let mut total = 0;
@@ -169,14 +171,12 @@ impl<'ast> Renamer<'_, 'ast> {
             total += count;
         }
         let order = &mut choice.order;
-        order.clear();
         order.resize(bindings.len(), 0);
         for (id, binding) in bindings.iter().enumerate() {
             let start = &mut starts[binding.scope];
             order[*start] = id;
             *start += 1;
         }
-        choice.slot_of.clear();
         choice.slot_of.resize(bindings.len(), None);
         choice.claims.reset(scopes.len());
         let mut slot_count = 0;
@@ -201,12 +201,10 @@ impl<'ast> Renamer<'_, 'ast> {
     ///
     /// `oxc_mangler` then hands each length's names out again in slot order,
     /// after Closure Compiler's `RenameVars`, which compresses worse on Lua.
-    fn name_slots(&mut self, slot_count: usize, pool: &mut CandidatePool<'_, '_>) {
-        let Self { renamed: bindings, scopes, choice, .. } = self;
+    fn name_slots(&self, choice: &mut Choice, slot_count: usize, pool: &mut CandidatePool<'_, '_>) {
+        let Self { renamed: bindings, scopes, .. } = self;
         let starts = &mut choice.declared_starts;
-        starts.clear();
         starts.resize(slot_count + 1, 0);
-        choice.occurrences.clear();
         choice.occurrences.resize(slot_count, 0);
         for (binding, &binding_slot) in bindings.iter().zip(&choice.slot_of) {
             let Some(slot) = binding_slot else {
@@ -220,7 +218,6 @@ impl<'ast> Renamer<'_, 'ast> {
             total += *start;
             *start = total;
         }
-        choice.declared_scopes.clear();
         choice.declared_scopes.resize(total, 0);
         for &id in choice.order.iter().rev() {
             if let Some(slot) = choice.slot_of[id] {
@@ -232,11 +229,9 @@ impl<'ast> Renamer<'_, 'ast> {
         let reads =
             Reads { ranges: &choice.read_ranges, scopes: &choice.read_scopes, tree: scopes };
         let by_occurrences = &mut choice.by_occurrences;
-        by_occurrences.clear();
         by_occurrences.extend(0..slot_count);
         let occurrences = &choice.occurrences;
         by_occurrences.sort_unstable_by_key(|&slot| (Reverse(occurrences[slot]), slot));
-        choice.slot_candidates.clear();
         choice.slot_candidates.resize(slot_count, 0);
         let mut picker = Picker::default();
         for &slot in &*by_occurrences {

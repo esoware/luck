@@ -63,10 +63,31 @@ mod tests {
 
     #[test]
     fn default_enables_passes_but_not_rename_globals() {
-        let config = TransformConfig::default();
-        assert!(config.strip_types);
-        assert!(config.fold_constants);
-        assert!(config.rename_locals);
-        assert!(!config.rename_globals);
+        let TransformConfig {
+            strip_types,
+            remove_dead_code,
+            simplify_statements,
+            fold_constants,
+            inline_locals,
+            merge_locals,
+            simplify_indexes,
+            simplify_parens,
+            rename_locals,
+            lift_locals,
+            rename_globals,
+        } = TransformConfig::default();
+        assert!(
+            strip_types
+                && remove_dead_code
+                && simplify_statements
+                && fold_constants
+                && inline_locals
+                && merge_locals
+                && simplify_indexes
+                && simplify_parens
+                && rename_locals
+                && lift_locals
+        );
+        assert!(!rename_globals);
     }
 }

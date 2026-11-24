@@ -17,7 +17,9 @@ use luck_ast::{
     IfStatement, LocalAssignment, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
 use luck_token::{BinOp, LuaNumber, UnOp};
-use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _};
+use luck_value::{
+    ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _, ValueContext as _,
+};
 
 use super::simplify_parens::Place;
 use super::simplify_statements::{has_no_else, holds_nested_if};
@@ -27,14 +29,10 @@ use crate::binding::{
 };
 use crate::expr::{fits_at_depth, truncate_multi_value};
 
-pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
-    block.stmts.is_empty()
-}
-
 /// A step of integer 1 is the default. On Lua 5.3+ a float step makes the
 /// loop a float one, so `1.0` isn't, but where every number is a float, it is.
 pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, names: ResolvedNames<'_>) -> bool {
-    let default = if names.0.version().has_integer_subtype() {
+    let default = if names.version().has_integer_subtype() {
         LuaNumber::Int(1)
     } else {
         LuaNumber::Float(1.0)
@@ -135,7 +133,7 @@ pub(super) fn unused_local_action(
     names: ResolvedNames<'_>,
 ) -> UnusedLocalAction {
     // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0.version()) {
+    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0) {
         return UnusedLocalAction::Keep;
     }
     let is_pure = |expr: &Expression<'_>| !expr.may_have_side_effects(&names);
@@ -218,7 +216,7 @@ impl<'ast> Compressor<'_, 'ast> {
     fn drop_unused_from(&mut self, stmt: &mut Statement<'ast>, index: usize) -> Dropped {
         match stmt {
             Statement::LocalFunction(local_function) => {
-                if is_droppable_function(local_function, self.version)
+                if is_droppable_function(local_function, self.scoping)
                     && !self.is_used(&local_function.name)
                 {
                     self.drop_stmt(stmt);
@@ -242,7 +240,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 }
                 // Dropping a name and its value keeps every other name's
                 // value only when each name has its own.
-                if has_fixed_binding(local, self.version) || local.names.len() != local.exprs.len()
+                if has_fixed_binding(local, self.scoping) || local.names.len() != local.exprs.len()
                 {
                     return Dropped::Nothing;
                 }
@@ -404,7 +402,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 self.drop_arms(elseif_clauses, else_clause.as_deref());
                 *stmt = do_block(self.allocator, block.take());
                 self.has_changed = true;
-                return !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block));
+                return !matches!(stmt, Statement::DoBlock(do_block) if do_block.block.stmts.is_empty());
             }
             Some(false) => {
                 self.drop_block(block);
@@ -461,7 +459,7 @@ impl<'ast> Compressor<'_, 'ast> {
             return match else_clause.take() {
                 Some(clause) => {
                     *stmt = do_block(self.allocator, clause.unbox().block);
-                    !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block))
+                    !matches!(stmt, Statement::DoBlock(do_block) if do_block.block.stmts.is_empty())
                 }
                 // `if false then ... end`.
                 None => false,
@@ -474,7 +472,7 @@ impl<'ast> Compressor<'_, 'ast> {
         // An empty-body `if` can only go when evaluating the condition is
         // side-effect free: `if f() then end` calls f.
         let is_dead = has_no_else(if_stmt)
-            && is_empty_block(&if_stmt.block)
+            && if_stmt.block.stmts.is_empty()
             && !if_stmt.condition.may_have_side_effects(&self.names());
         if is_dead {
             self.drop_stmt(stmt);
@@ -512,13 +510,13 @@ impl<'ast> Compressor<'_, 'ast> {
         let Some(else_clause) = &mut if_stmt.else_clause else {
             return;
         };
-        if is_empty_block(&else_clause.block) {
+        if else_clause.block.stmts.is_empty() {
             if_stmt.else_clause = None;
             self.has_changed = true;
             return;
         }
         // The `not` nests the condition a level deeper.
-        if is_empty_block(&if_stmt.block) && fits_at_depth(self.depth, 1, &if_stmt.condition) {
+        if if_stmt.block.stmts.is_empty() && fits_at_depth(self.depth, 1, &if_stmt.condition) {
             if_stmt.condition = negate(self.allocator, if_stmt.condition.take());
             if_stmt.block = else_clause.block.take();
             if_stmt.else_clause = None;
@@ -564,7 +562,7 @@ impl<'ast> Compressor<'_, 'ast> {
         self.drop_expr(&repeat_loop.condition);
         let block = repeat_loop.block.take();
         self.has_changed = true;
-        let is_empty = is_empty_block(&block);
+        let is_empty = block.stmts.is_empty();
         *stmt = do_block(self.allocator, block);
         !is_empty
     }
