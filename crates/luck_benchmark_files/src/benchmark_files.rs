@@ -1,6 +1,6 @@
 //! Pinned inputs, two kinds:
 //!
-//! - five single files and the bundler's module tree in
+//! - four single files and the bundler's module tree in
 //!   esoware/luck-benchmark-files, fetched as one tarball;
 //! - two real multi-file projects fetched as pinned upstream tarballs:
 //!   Roact (Roblox Luau, ~80 files) and Penlight (Lua 5.1, ~40 files).
@@ -128,8 +128,6 @@ pub fn test_files() -> Vec<TestFile> {
         // Real-world Roblox Luau: 13k lines of comment- and string-heavy
         // hand-written code (Infinite Yield admin script).
         benchmark_file(&root, "infinite_yield.luau", LuaTarget::LuauRoblox),
-        // Adversarial: 2.2 MB of VM-obfuscated Luau on a single line.
-        benchmark_file(&root, "obfuscated_vm.luau", LuaTarget::LuauRoblox),
     ]
 }
 

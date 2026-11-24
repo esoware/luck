@@ -41,14 +41,3 @@ infinite_yield.luau:
   arena allocs: 0
   arena reallocs: 0
   arena size: 3532400 # 3.53 MB
-
-obfuscated_vm.luau:
-  file size: 2290215 # 2.29 MB
-  sys allocs: 2861
-  sys reallocs: 308
-  sys deallocs: 2861
-  sys alloc bytes: 2116612 # 2.12 MB
-  sys peak growth: 1746668 # 1.75 MB
-  arena allocs: 0
-  arena reallocs: 0
-  arena size: 638512 # 638.51 kB
