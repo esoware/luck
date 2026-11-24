@@ -476,7 +476,7 @@ impl EscapeCounts {
             let valid = chunk.valid().as_bytes();
             let mut index = 0;
             loop {
-                index += run_before(&valid[index..], has_quoted_byte, is_quoted_byte);
+                index += run_before(&valid[index..], quoted_bytes, is_quoted_byte);
                 let Some(&byte) = valid.get(index) else {
                     break;
                 };
@@ -577,7 +577,7 @@ fn write_quoted(bytes: &[u8], quote: u8, output: &mut Vec<u8>) {
     output.reserve(bytes.len() + 2);
     output.push(quote);
     let needs_escape = |byte: u8| byte == quote || !matches!(byte, b'"' | b'\'');
-    write_escaped(bytes, has_quoted_byte, is_quoted_byte, needs_escape, output);
+    write_escaped(bytes, quoted_bytes, is_quoted_byte, needs_escape, output);
     output.push(quote);
 }
 
@@ -585,17 +585,17 @@ fn write_quoted(bytes: &[u8], quote: u8, output: &mut Vec<u8>) {
 /// escaping backslashes, backticks, `{`, control bytes, and bytes that aren't
 /// UTF-8.
 pub fn write_interpolated_text(bytes: &[u8], output: &mut Vec<u8>) {
-    write_escaped(bytes, has_interpolated_byte, is_interpolated_byte, |_| true, output);
+    write_escaped(bytes, interpolated_bytes, is_interpolated_byte, |_| true, output);
 }
 
 /// Appends `bytes` with some of them escaped.
 ///
 /// That's each byte that isn't UTF-8, and each that `is_candidate` picks out
-/// and `needs_escape` keeps. `word_has_candidate` finds candidates eight at
-/// a time.
+/// and `needs_escape` keeps. `candidate_bytes` finds candidates eight at a
+/// time, as [`run_before`] reads them.
 fn write_escaped(
     bytes: &[u8],
-    word_has_candidate: impl Fn(u64) -> bool,
+    candidate_bytes: impl Fn(u64) -> u64,
     is_candidate: impl Fn(u8) -> bool,
     needs_escape: impl Fn(u8) -> bool,
     output: &mut Vec<u8>,
@@ -605,7 +605,7 @@ fn write_escaped(
         let mut run_start = 0;
         loop {
             let index =
-                run_start + run_before(&valid[run_start..], &word_has_candidate, &is_candidate);
+                run_start + run_before(&valid[run_start..], &candidate_bytes, &is_candidate);
             output.extend_from_slice(&valid[run_start..index]);
             let Some(&byte) = valid.get(index) else {
                 break;
@@ -632,12 +632,13 @@ const fn is_quoted_byte(byte: u8) -> bool {
     matches!(byte, 0..=0x1F | 0x7F | b'"' | b'\'' | b'\\')
 }
 
-fn has_quoted_byte(word: u64) -> bool {
-    has_byte_below(word, 0x20)
-        || has_byte(word, 0x7F)
-        || has_byte(word, b'"')
-        || has_byte(word, b'\'')
-        || has_byte(word, b'\\')
+fn quoted_bytes(word: u64) -> u64 {
+    let flagged = word.wrapping_sub(splat(0x20))
+        | (word ^ splat(0x7F)).wrapping_sub(LOW_BITS)
+        | (word ^ splat(b'"')).wrapping_sub(LOW_BITS)
+        | (word ^ splat(b'\'')).wrapping_sub(LOW_BITS)
+        | (word ^ splat(b'\\')).wrapping_sub(LOW_BITS);
+    flagged & !word & HIGH_BITS
 }
 
 /// The bytes an interpolated string's text escapes: control bytes,
@@ -646,26 +647,33 @@ const fn is_interpolated_byte(byte: u8) -> bool {
     matches!(byte, 0..=0x1F | 0x7F | b'\\' | b'`' | b'{')
 }
 
-fn has_interpolated_byte(word: u64) -> bool {
-    has_byte_below(word, 0x20)
-        || has_byte(word, 0x7F)
-        || has_byte(word, b'\\')
-        || has_byte(word, b'`')
-        || has_byte(word, b'{')
+fn interpolated_bytes(word: u64) -> u64 {
+    let flagged = word.wrapping_sub(splat(0x20))
+        | (word ^ splat(0x7F)).wrapping_sub(LOW_BITS)
+        | (word ^ splat(b'\\')).wrapping_sub(LOW_BITS)
+        | (word ^ splat(b'`')).wrapping_sub(LOW_BITS)
+        | (word ^ splat(b'{')).wrapping_sub(LOW_BITS);
+    flagged & !word & HIGH_BITS
 }
 
 /// How many bytes `bytes` starts with before the first that `is_wanted`
-/// picks out, checking eight at a time while `word_has_wanted` finds none.
+/// picks out, checking eight at a time with `wanted_bytes`.
+///
+/// `wanted_bytes` answers for each ASCII byte of a word in its high bit, by
+/// subtractions that each set it for a byte below a limit, or for one that
+/// is zero once XOR-ed with the byte it looks for. A subtraction borrows
+/// across bytes only out of one that answers, so the lowest bit set marks
+/// the first wanted byte, though those above it can be wrong.
 fn run_before(
     bytes: &[u8],
-    word_has_wanted: impl Fn(u64) -> bool,
+    wanted_bytes: impl Fn(u64) -> u64,
     is_wanted: impl Fn(u8) -> bool,
 ) -> usize {
     let mut index = 0;
     while let Some(&chunk) = bytes[index..].first_chunk::<8>() {
-        let word = u64::from_le_bytes(chunk);
-        if word_has_wanted(word) {
-            break;
+        let wanted = wanted_bytes(u64::from_le_bytes(chunk));
+        if wanted != 0 {
+            return index + (wanted.trailing_zeros() / 8) as usize;
         }
         index += 8;
     }
@@ -676,13 +684,39 @@ fn run_before(
 const LOW_BITS: u64 = 0x0101_0101_0101_0101;
 const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
 
-/// Whether one of the eight bytes in `word` is `byte`.
-fn has_byte(word: u64, byte: u8) -> bool {
-    has_byte_below(word ^ LOW_BITS.wrapping_mul(u64::from(byte)), 1)
+fn splat(byte: u8) -> u64 {
+    LOW_BITS * u64::from(byte)
 }
 
-/// Whether one of the eight bytes in `word` is below `limit`, which is at
-/// most 128.
-fn has_byte_below(word: u64, limit: u8) -> bool {
-    word.wrapping_sub(LOW_BITS.wrapping_mul(u64::from(limit))) & !word & HIGH_BITS != 0
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A borrow between bytes could flag a byte for its neighbor below, so
+    /// every pair of bytes is tried side by side, at each place in a word.
+    #[test]
+    fn word_scans_find_the_first_wanted_byte_whatever_its_neighbor() {
+        for low in 0..=u8::MAX {
+            for high in 0..=u8::MAX {
+                for position in 0..8 {
+                    let mut bytes = [b'a'; 9];
+                    bytes[position] = low;
+                    bytes[position + 1] = high;
+                    let first = |is_wanted: fn(u8) -> bool| {
+                        bytes.iter().position(|&b| is_wanted(b)).unwrap_or(bytes.len())
+                    };
+                    assert_eq!(
+                        run_before(&bytes, quoted_bytes, is_quoted_byte),
+                        first(is_quoted_byte),
+                        "{bytes:?}"
+                    );
+                    assert_eq!(
+                        run_before(&bytes, interpolated_bytes, is_interpolated_byte),
+                        first(is_interpolated_byte),
+                        "{bytes:?}"
+                    );
+                }
+            }
+        }
+    }
 }
