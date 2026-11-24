@@ -332,6 +332,22 @@ print(y)",
 }
 
 #[test]
+fn free_name_in_nested_function_captures_local_env() {
+    let allocator = Allocator::new();
+    let scoping = scoping_of(
+        &allocator,
+        "\
+local _ENV = {}
+local function f() return missing end
+return f",
+    );
+    assert!(
+        symbol(&scoping, "_ENV").is_upvalue,
+        "a free name inside a nested function reads _ENV as an upvalue of that function"
+    );
+}
+
+#[test]
 fn local_env_is_an_ordinary_local_before_52() {
     for version in [LuaVersion::Lua51, LuaVersion::Luau] {
         let allocator = Allocator::new();
@@ -445,6 +461,78 @@ print(y)",
         LuaVersion::Lua55,
     );
     assert!(["x", "y", "print"].iter().all(|name| !is_assigned_global(&scoping, name)));
+}
+
+fn is_host_print(source: &str, version: LuaVersion) -> bool {
+    let allocator = Allocator::new();
+    let scoping = scoping_in(&allocator, source, version);
+    let print = *references(&scoping, "print").last().expect("the source references print");
+    scoping.is_host_global(print)
+}
+
+#[test]
+fn is_host_global_requires_a_global_the_chunk_leaves_alone() {
+    assert!(is_host_print("print(1)", LuaVersion::Lua54));
+    assert!(!is_host_print(
+        "\
+function print() end
+print(1)",
+        LuaVersion::Lua54
+    ));
+}
+
+#[test]
+fn is_host_global_is_false_for_a_local_or_a_field_of_env() {
+    assert!(!is_host_print(
+        "\
+local print = 1
+print(1)",
+        LuaVersion::Lua54
+    ));
+    assert!(!is_host_print(
+        "\
+local _ENV = {}
+print(1)",
+        LuaVersion::Lua54
+    ));
+    assert!(is_host_print(
+        "\
+local _ENV = {}
+print(1)",
+        LuaVersion::Lua51
+    ));
+}
+
+#[test]
+fn is_host_global_is_false_when_the_chunk_assigns_its_env() {
+    assert!(!is_host_print(
+        "\
+_ENV = {}
+print(1)",
+        LuaVersion::Lua54
+    ));
+    assert!(is_host_print(
+        "\
+_ENV = {}
+print(1)",
+        LuaVersion::Lua51
+    ));
+}
+
+#[test]
+fn is_host_global_is_true_for_a_declared_global_without_a_value() {
+    assert!(is_host_print(
+        "\
+global print
+print(1)",
+        LuaVersion::Lua55
+    ));
+    assert!(!is_host_print(
+        "\
+global print = 1
+print(1)",
+        LuaVersion::Lua55
+    ));
 }
 
 #[test]

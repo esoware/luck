@@ -49,21 +49,23 @@
 //! ```
 
 mod analysis;
-#[cfg(test)]
-mod fixtures;
+mod layering;
+mod replace_template;
 mod resolve;
 mod stdlib;
 mod stdlib_catalog;
 mod stdlib_definition;
+mod stdlib_map;
 mod stdlib_model;
 
 pub use analysis::{SemanticAnalysis, analyze};
+pub use replace_template::expand_replace_template;
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use stdlib::Stdlib;
 pub use stdlib_catalog::{is_preloaded_module, library_for};
 pub use stdlib_definition::StdlibDefinition;
+pub use stdlib_map::StdlibMap;
 pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
-    StdlibMap, StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature,
-    StdlibValue, expand_replace_template,
+    StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };

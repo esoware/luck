@@ -1,154 +1,6 @@
-use std::iter::Map;
-use std::slice;
-
-use luck_allocator::Allocator;
 use luck_token::LuaTarget;
 
-/// Library entries by name, in name order, with a hash table over them,
-/// built at compile time for a built-in library and in its arena for a
-/// layered one.
-#[derive(Debug, Clone, Copy)]
-pub struct StdlibMap<'lib, V> {
-    entries: &'lib [(&'lib str, V)],
-    /// Open addressing by [`name_hash`]: each slot holds an entry's index plus
-    /// one, or zero when it's empty, and at least half of them are.
-    slots: &'lib [u16],
-}
-
-type Entries<'lib, V> =
-    Map<slice::Iter<'lib, (&'lib str, V)>, fn(&'lib (&'lib str, V)) -> (&'lib str, &'lib V)>;
-
-/// A static [`StdlibMap`] of `$value`s from `(name, value)` entries sorted by
-/// name, with no name twice.
-///
-/// The entries are a `static`, since a value may point to another `static`,
-/// as a constant set does.
-macro_rules! stdlib_map {
-    ($value:ty, [$($entry:expr),* $(,)?]) => {{
-        const COUNT: usize = <[()]>::len(&[$($crate::stdlib_model::stdlib_map!(@unit $entry)),*]);
-        static ENTRIES: [(&str, $value); COUNT] = [$($entry),*];
-        static SLOTS: [u16; $crate::stdlib_model::slot_count(COUNT)] =
-            $crate::stdlib_model::hash_slots(&ENTRIES);
-        $crate::stdlib_model::StdlibMap::new(&ENTRIES, &SLOTS)
-    }};
-    (@unit $entry:expr) => {
-        ()
-    };
-}
-
-pub(crate) use stdlib_map;
-
-/// The most entries a [`StdlibMap`] holds, since a `u16` slot holds an
-/// entry's index plus one.
-pub(crate) const MAX_MAP_ENTRIES: usize = 0xFFFF;
-
-/// FNV-1a, which both compile-time table building and lookups run.
-const fn name_hash(name: &str) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    let mut remaining = name.as_bytes();
-    while let [b, rest @ ..] = remaining {
-        hash = (hash ^ *b as u32).wrapping_mul(0x0100_0193);
-        remaining = rest;
-    }
-    hash
-}
-
-pub(crate) const fn slot_count(entry_count: usize) -> usize {
-    (entry_count * 2).next_power_of_two()
-}
-
-pub(crate) const fn hash_slots<V, const SLOTS: usize>(entries: &[(&str, V)]) -> [u16; SLOTS] {
-    let mut slots = [0; SLOTS];
-    fill_slots(entries, &mut slots);
-    slots
-}
-
-/// Fills `slots`, [`slot_count`] of them, all zero, with the hash table over
-/// `entries`.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the assert keeps `index` within a `u16`, and `u16::try_from` isn't const"
-)]
-const fn fill_slots<V>(entries: &[(&str, V)], slots: &mut [u16]) {
-    assert!(entries.len() <= MAX_MAP_ENTRIES, "a stdlib table has too many entries for its slots");
-    let mask = slots.len() - 1;
-    let mut index = 0usize;
-    let mut remaining = entries;
-    while let [(name, _), rest @ ..] = remaining {
-        index += 1;
-        let mut slot = name_hash(name) as usize & mask;
-        while slots[slot] != 0 {
-            slot = (slot + 1) & mask;
-        }
-        slots[slot] = index as u16;
-        remaining = rest;
-    }
-}
-
-impl<'lib, V> StdlibMap<'lib, V> {
-    pub(crate) const EMPTY: Self = Self { entries: &[], slots: &[] };
-
-    /// `slots` is [`hash_slots`] of `entries`, which [`stdlib_map`] builds.
-    pub(crate) const fn new(entries: &'lib [(&'lib str, V)], slots: &'lib [u16]) -> Self {
-        Self { entries, slots }
-    }
-
-    /// The map of `entries`, sorted by name with no name twice and at most
-    /// [`MAX_MAP_ENTRIES`] of them, in `allocator`.
-    pub(crate) fn new_in(allocator: &'lib Allocator, sorted: &[(&'lib str, V)]) -> Self
-    where
-        V: Copy,
-    {
-        let entries = allocator.alloc_slice_copy(sorted);
-        let mut slots = vec![0; slot_count(entries.len())];
-        fill_slots(entries, &mut slots);
-        Self { entries, slots: allocator.alloc_slice_copy(&slots) }
-    }
-
-    pub fn get(&self, name: &str) -> Option<&'lib V> {
-        let mask = self.slots.len().checked_sub(1)?;
-        let mut slot = name_hash(name) as usize & mask;
-        // An empty slot ends every probe, since at least half are empty.
-        loop {
-            let entry = self.slots[slot].checked_sub(1)?;
-            let (entry_name, value) = &self.entries[usize::from(entry)];
-            if *entry_name == name {
-                return Some(value);
-            }
-            slot = (slot + 1) & mask;
-        }
-    }
-
-    pub fn contains_key(&self, name: &str) -> bool {
-        self.get(name).is_some()
-    }
-
-    pub fn iter(&self) -> Entries<'lib, V> {
-        let pair: fn(&'lib (&'lib str, V)) -> (&'lib str, &'lib V) = |(name, value)| (*name, value);
-        self.entries.iter().map(pair)
-    }
-
-    pub fn keys(&self) -> impl Iterator<Item = &'lib str> {
-        self.entries.iter().map(|(name, _)| *name)
-    }
-
-    pub const fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-impl<'lib, V> IntoIterator for &StdlibMap<'lib, V> {
-    type Item = (&'lib str, &'lib V);
-    type IntoIter = Entries<'lib, V>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
+use crate::stdlib_map::StdlibMap;
 
 /// Each variant holds a reference, so an entry is two words, and a table of
 /// them stays dense for the lookups that scan it.
@@ -227,7 +79,7 @@ impl<'lib> StdlibFunction<'lib> {
     pub fn matching_signatures(
         &self,
         count: usize,
-    ) -> impl Iterator<Item = &'lib StdlibSignature<'lib>> {
+    ) -> impl Iterator<Item = &'lib StdlibSignature<'lib>> + Clone {
         self.signatures.iter().filter(move |signature| signature.accepts(count))
     }
 
@@ -243,15 +95,12 @@ impl<'lib> StdlibFunction<'lib> {
         index: usize,
         count: usize,
     ) -> Option<impl Iterator<Item = &'lib [StdlibConstant<'lib>]> + Clone> {
-        let signatures: &'lib [StdlibSignature<'lib>] = self.signatures;
-        let sets = signatures.iter().filter(move |signature| signature.accepts(count)).map(
-            move |signature| {
-                let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
-                    return None;
-                };
-                Some(values)
-            },
-        );
+        let sets = self.matching_signatures(count).map(move |signature| {
+            let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
+                return None;
+            };
+            Some(values)
+        });
         let mut checked = sets.clone();
         let is_constrained =
             checked.next().is_some_and(|set| set.is_some()) && checked.all(|set| set.is_some());
@@ -362,7 +211,7 @@ pub struct StdlibDeprecation<'lib> {
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibReplacement<'lib> {
     /// The new call, with placeholders for the old call's arguments, as
-    /// [`expand_replace_template`] reads them.
+    /// [`expand_replace_template`](crate::expand_replace_template) reads them.
     pub template: &'lib str,
     /// Whether the new call returns what the old one did for every argument
     /// the old one accepts. Only then can a fix make it without asking.
@@ -491,98 +340,10 @@ impl<'lib> StdlibLibrary<'lib> {
     }
 }
 
-/// `%1` through `%9` stand for `args[0]` through `args[8]`, and `%%` is a
-/// literal percent.
-///
-/// A placeholder in a call's argument list expands verbatim,
-/// and one before that list's `)` also forwards every later argument, so a
-/// fix keeps the arguments the template doesn't spell out. Any other
-/// placeholder is an operand, which gets parentheses unless it's a bare
-/// operand, so the template's operator applies to the whole argument.
-///
-/// A missing argument expands to nothing; the caller decides whether the fix
-/// is still useful.
-///
-/// Each argument is source as written, bytes that need not be UTF-8, and so
-/// is the expansion.
-pub fn expand_replace_template(template: &str, args: &[&[u8]]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(template.len());
-    let mut remaining = template.as_bytes();
-    while let Some(percent) = remaining.iter().position(|&b| b == b'%') {
-        let (literal, from_percent) = remaining.split_at(percent);
-        output.extend_from_slice(literal);
-        let after_percent = &from_percent[1..];
-        match after_percent.split_first() {
-            Some((b'%', after_escape)) => {
-                output.push(b'%');
-                remaining = after_escape;
-            }
-            Some((&digit, after_digit)) if digit.is_ascii_digit() => {
-                remaining = after_digit;
-                let Some(from_argument) =
-                    usize::from(digit - b'0').checked_sub(1).and_then(|i| args.get(i..))
-                else {
-                    continue;
-                };
-                let Some(&arg) = from_argument.first() else {
-                    continue;
-                };
-                let after_placeholder = remaining.trim_ascii_start().first();
-                let is_in_argument_list =
-                    matches!(output.trim_ascii_end().last(), Some(b'(' | b','))
-                        && matches!(after_placeholder, Some(b')' | b','));
-                if is_in_argument_list && after_placeholder == Some(&b')') {
-                    output.extend_from_slice(&from_argument.join(&b", "[..]));
-                } else if is_in_argument_list || is_bare_operand(arg) {
-                    output.extend_from_slice(arg);
-                } else {
-                    output.push(b'(');
-                    output.extend_from_slice(arg);
-                    output.push(b')');
-                }
-            }
-            _ => {
-                output.push(b'%');
-                remaining = after_percent;
-            }
-        }
-    }
-    output.extend_from_slice(remaining);
-    output
-}
-
-/// No operator can split one. Anything else gets grouped, which is harmless:
-/// a parenthesized call only keeps its first value, and an operand takes one
-/// value anyway.
-fn is_bare_operand(arg: &[u8]) -> bool {
-    !arg.windows(2).any(|pair| pair == b"..")
-        && arg.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::stdlib_catalog::{FUNCTION, optional, required};
-
-    #[test]
-    fn a_map_finds_exactly_its_names() {
-        static MAP: StdlibMap<'static, u8> = stdlib_map!(u8, [("b", 1), ("d", 2), ("f", 3)]);
-        assert_eq!(MAP.get("d"), Some(&2));
-        for absent in ["", "a", "c", "e", "g"] {
-            assert_eq!(MAP.get(absent), None, "{absent}");
-        }
-        assert_eq!(MAP.iter().collect::<Vec<_>>(), [("b", &1), ("d", &2), ("f", &3)]);
-    }
-
-    #[test]
-    fn a_map_built_in_an_arena_finds_exactly_its_names() {
-        let allocator = Allocator::new();
-        let map = StdlibMap::new_in(&allocator, &[("b", 1u8), ("d", 2), ("f", 3)]);
-        assert_eq!(map.get("f"), Some(&3));
-        assert_eq!(map.get("c"), None);
-        let empty: StdlibMap<'_, u8> = StdlibMap::EMPTY;
-        assert_eq!(empty.get("b"), None);
-    }
 
     #[test]
     fn a_signature_counts_its_required_params_and_a_vararg() {
@@ -621,49 +382,5 @@ mod tests {
         assert!(!OVERLOADED.accepts_arg_count(4));
         assert_eq!(OVERLOADED.matching_signatures(2).count(), 1);
         assert_eq!(OVERLOADED.signature_index_for_active_param(1), 1);
-    }
-
-    /// `template` expanded with `args`, which the tests spell as text.
-    fn expand(template: &str, args: &[&str]) -> String {
-        let arg_bytes: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
-        String::from_utf8(expand_replace_template(template, &arg_bytes)).unwrap()
-    }
-
-    #[test]
-    fn replace_template_substitutes_numbered_args() {
-        assert_eq!(expand("#%1", &["t"]), "#t");
-        assert_eq!(expand("%1 ^ %2", &["a", "b"]), "a ^ b");
-        assert_eq!(expand("load(%1)", &["x"]), "load(x)");
-    }
-
-    #[test]
-    fn replace_template_unescapes_double_percent() {
-        assert_eq!(expand("100%% %1", &["x"]), "100% x");
-    }
-
-    #[test]
-    fn replace_template_expands_missing_arg_to_nothing() {
-        assert_eq!(expand("%1 + %2", &["a"]), "a + ");
-    }
-
-    #[test]
-    fn replace_template_groups_compound_operands() {
-        assert_eq!(expand("(%1 ^ %2)", &["a + 1", "b"]), "((a + 1) ^ b)");
-        assert_eq!(expand("#%1", &["a or b"]), "#(a or b)");
-        assert_eq!(expand("#%1", &["..."]), "#(...)");
-        assert_eq!(expand("#%1", &["a.b.c"]), "#a.b.c");
-        assert_eq!(expand("(%1 ^ %2)", &["a", "-1"]), "(a ^ (-1))");
-    }
-
-    #[test]
-    fn replace_template_keeps_call_arguments_verbatim() {
-        assert_eq!(expand("math.log(%1, 10)", &["a + 1"]), "math.log(a + 1, 10)");
-        assert_eq!(expand("string.gmatch(%1, %2)", &["s", "p .. q"]), "string.gmatch(s, p .. q)");
-    }
-
-    #[test]
-    fn replace_template_forwards_trailing_arguments() {
-        assert_eq!(expand("table.unpack(%1)", &["t", "2", "#t"]), "table.unpack(t, 2, #t)");
-        assert_eq!(expand("task.wait(%1)", &[]), "task.wait()");
     }
 }

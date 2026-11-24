@@ -4,7 +4,9 @@
 
 mod common;
 
+mod analysis;
 mod drift;
+mod replace_template;
 mod roblox_api;
-mod stdlib;
+mod stdlib_catalog;
 mod stdlib_definition;

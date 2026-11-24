@@ -9,7 +9,7 @@
 //! reads, or what any of its calls calls, costs one pass over it.
 
 use luck_ast::{AstKind, Call, ChainHead, Expression, Name, Suffix, SuffixedExpression};
-use luck_semantic::{Scoping, Semantic, SymbolId};
+use luck_semantic::{Scoping, Semantic};
 
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
@@ -20,13 +20,6 @@ struct HeadState<'lib> {
     /// The stdlib entry the head names while it's a dotted path from the
     /// host's global.
     global: Option<&'lib StdlibEntry<'lib>>,
-}
-
-impl HeadState<'_> {
-    /// No suffix after an unknown head is known either.
-    const fn is_unknown(self) -> bool {
-        self.shape.is_none() && self.global.is_none()
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,10 +39,6 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
         Self { tree, library, symbol_shapes }
     }
 
-    const fn symbol_shape(self, symbol: SymbolId) -> Option<&'lib str> {
-        self.symbol_shapes[symbol.index()]
-    }
-
     /// The shape of `expr`, when statically known. See the module docs for
     /// what "known" means.
     fn expr_shape(self, expr: &Expression<'_>) -> Option<&'lib str> {
@@ -58,9 +47,10 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
             Expression::Suffixed(_) => self.head_state(ChainHead::from(expr)).shape,
             Expression::Parenthesized(parenthesized) => self.expr_shape(&parenthesized.expr),
             // Literal strings carry the derived `string` receiver shape, so
-            // `("x"):upper()` and `local s = "x" ... s:upper()` resolve.
+            // `("x"):upper()` and `local s = "x" ... s:upper()` resolve. A
+            // library has it whenever it has a `string` namespace.
             Expression::StringLiteral(_) | Expression::InterpolatedString(_) => {
-                string_shape(self.library)
+                self.library.shapes.contains_key("string").then_some("string")
             }
             Expression::Nil(_)
             | Expression::False(_)
@@ -85,7 +75,7 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
             return HeadState::default();
         };
         match reference.resolved {
-            Some(symbol) => HeadState { shape: self.symbol_shape(symbol), global: None },
+            Some(symbol) => HeadState { shape: self.symbol_shapes[symbol.index()], global: None },
             None if self.tree.is_host_global(reference) => {
                 let global = self.library.globals.get(name.text.as_str());
                 HeadState { shape: global.and_then(StdlibEntry::shape), global }
@@ -109,7 +99,8 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
     /// What a head that reads `state` reads once `suffixes` apply to it.
     fn read(self, mut state: HeadState<'lib>, suffixes: &[Suffix<'_>]) -> HeadState<'lib> {
         for suffix in suffixes {
-            if state.is_unknown() {
+            // No suffix after an unknown head is known either.
+            if state.shape.is_none() && state.global.is_none() {
                 break;
             }
             state = self.after_suffix(suffix, state);
@@ -184,12 +175,6 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
     {
         self.callee(call.callee, self.head_state(call.callee), call.method)
     }
-}
-
-/// The derived `string` shape, when the library has one (it does whenever a
-/// `string` namespace exists).
-fn string_shape<'lib>(library: &StdlibLibrary<'lib>) -> Option<&'lib str> {
-    library.shapes.contains_key("string").then_some("string")
 }
 
 /// Each symbol's shape, by symbol index.
@@ -309,8 +294,7 @@ mod tests {
     use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
-    use crate::fixtures::parse;
-    use crate::stdlib::layer;
+    use crate::layering::layer;
     use crate::stdlib_definition::StdlibDefinition;
 
     const SHAPED_LIBRARY: &str = r#"
@@ -358,7 +342,9 @@ params = [{ kind = "vararg" }]
         let definition = StdlibDefinition::parse(SHAPED_LIBRARY).expect("the library parses");
         let library = layer(&allocator, &StdlibLibrary::empty(LuaTarget::Lua54), &definition)
             .expect("the library layers");
-        let chunk = parse(&allocator, source, LuaVersion::Lua54);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+        let chunk = allocator.alloc(parsed.chunk);
         let semantic = SemanticBuilder::new().with_nodes(true).build(chunk).semantic;
         let shapes = symbol_shapes(&semantic, &library);
         let tree = semantic.scoping();
@@ -415,7 +401,7 @@ local g = game";
     }
 
     #[test]
-    fn misaligned_multi_assignment_ignored() {
+    fn locals_without_one_value_each_have_no_shape() {
         let source = "local a, b = io.open('x')";
         assert_eq!(shape_of(source, "a"), None);
         assert_eq!(shape_of(source, "b"), None);

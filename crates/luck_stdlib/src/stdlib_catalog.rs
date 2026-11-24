@@ -7,10 +7,10 @@
 
 use luck_token::{LuaTarget, LuaVersion};
 
+use crate::stdlib_map::stdlib_map;
 use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
-    stdlib_map,
 };
 
 static LUA51: StdlibLibrary<'static> = include!("stdlib_catalog/lua51.rs");
@@ -57,7 +57,7 @@ pub(crate) const FUNCTION: StdlibFunction<'static> = StdlibFunction {
     returns_shape: None,
 };
 
-pub(crate) const VALUE: StdlibValue<'static> =
+const VALUE: StdlibValue<'static> =
     StdlibValue { is_read_only: true, deprecated: None, shape: None };
 
 const ENUM_ITEM: StdlibEntry<'static> =
@@ -84,9 +84,9 @@ mod tests {
     use luck_allocator::Allocator;
 
     use super::*;
-    use crate::stdlib::layer;
+    use crate::layering::layer;
     use crate::stdlib_definition::StdlibDefinition;
-    use crate::stdlib_model::StdlibMap;
+    use crate::stdlib_map::StdlibMap;
 
     struct LibrarySpec {
         module: &'static str,
@@ -273,23 +273,21 @@ stdlib_map!(StdlibShape<'static>, [
                 .collect();
             format!("stdlib_map!(&'static [StdlibConstant<'static>], [{}])", entries.join(", "))
         }
+    }
 
-        fn set_static(name: &str, values: &[StdlibConstant<'_>]) -> String {
-            let lines: Vec<String> = values
-                .iter()
-                .map(|value| format!("{INDENT}{},\n", constant_literal(value)))
-                .collect();
-            format!(
-                "\
+    fn set_static(name: &str, values: &[StdlibConstant<'_>]) -> String {
+        let lines: Vec<String> =
+            values.iter().map(|value| format!("{INDENT}{},\n", constant_literal(value))).collect();
+        format!(
+            "\
 static {}: [StdlibConstant<'static>; {}] = [
 {}];
 
 ",
-                name.to_ascii_uppercase(),
-                values.len(),
-                lines.concat()
-            )
-        }
+            name.to_ascii_uppercase(),
+            values.len(),
+            lines.concat()
+        )
     }
 
     /// The struct literal setting `fields` on top of the catalog's `default`,
@@ -359,7 +357,7 @@ static {}: [StdlibConstant<'static>; {}] = [
             sets: library.constant_sets.iter().map(|(name, set)| (name, *set)).collect(),
         };
         let statics: Vec<String> =
-            emitter.sets.iter().map(|(name, values)| Emitter::set_static(name, values)).collect();
+            emitter.sets.iter().map(|(name, values)| set_static(name, values)).collect();
         let catalog = format!(
             "\
 StdlibLibrary {{

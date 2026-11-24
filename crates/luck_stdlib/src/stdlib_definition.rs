@@ -24,9 +24,9 @@ use toml::Spanned;
 /// that takes a string first.
 #[derive(Debug, Clone)]
 pub struct StdlibDefinition {
-    globals: BTreeMap<String, Entry>,
-    shapes: BTreeMap<String, Shape>,
-    constant_sets: BTreeMap<String, Vec<Constant>>,
+    pub(crate) globals: BTreeMap<String, Entry>,
+    pub(crate) shapes: BTreeMap<String, Shape>,
+    pub(crate) constant_sets: BTreeMap<String, Vec<Constant>>,
 }
 
 impl StdlibDefinition {
@@ -45,26 +45,14 @@ impl StdlibDefinition {
         let constant_sets = sets.into_iter().map(|(name, set)| (name, set.values.0)).collect();
         Ok(Self { globals, shapes, constant_sets })
     }
-
-    pub(crate) const fn globals(&self) -> &BTreeMap<String, Entry> {
-        &self.globals
-    }
-
-    pub(crate) const fn shapes(&self) -> &BTreeMap<String, Shape> {
-        &self.shapes
-    }
-
-    pub(crate) const fn constant_sets(&self) -> &BTreeMap<String, Vec<Constant>> {
-        &self.constant_sets
-    }
 }
 
 /// The name of a shape or a constant set, where the definition gives it.
 pub(crate) type Reference = Spanned<String>;
 
-/// Where `reference` is in its file.
-pub(crate) fn place(reference: &Reference) -> Span {
-    let range = reference.span();
+/// Where `spanned` is in its file.
+pub(crate) fn place<T>(spanned: &Spanned<T>) -> Span {
+    let range = spanned.span();
     Span::from_indices(range.start, range.end)
 }
 
@@ -157,8 +145,8 @@ impl TryFrom<RawEntry> for Entry {
     fn try_from(raw: RawEntry) -> Result<Self, Self::Error> {
         let RawEntry {
             kind,
-            params: flat,
-            overloads: forms,
+            params,
+            overloads,
             is_pure,
             is_must_use,
             is_method,
@@ -169,8 +157,8 @@ impl TryFrom<RawEntry> for Entry {
             deprecated,
         } = raw;
         let function_key = [
-            ("params", flat.is_some()),
-            ("overloads", forms.is_some()),
+            ("params", params.is_some()),
+            ("overloads", overloads.is_some()),
             ("is_pure", is_pure.is_some()),
             ("is_must_use", is_must_use.is_some()),
             ("is_method", is_method.is_some()),
@@ -194,7 +182,7 @@ impl TryFrom<RawEntry> for Entry {
                     );
                 }
                 Self::Function(Function {
-                    signatures: signatures(flat, forms)?,
+                    signatures: signatures(params, overloads)?,
                     is_pure: is_pure.unwrap_or(false),
                     is_must_use: is_must_use.unwrap_or(false),
                     deprecated,
@@ -229,16 +217,16 @@ impl TryFrom<RawEntry> for Entry {
 
 /// A function's signatures, from its flat `params` or its `overloads`.
 fn signatures(
-    flat: Option<Vec<Param>>,
-    forms: Option<NonEmpty<Overload>>,
+    params: Option<Vec<Param>>,
+    overloads: Option<NonEmpty<Overload>>,
 ) -> Result<Vec<Vec<Param>>, String> {
-    let signatures: Vec<Vec<Param>> = match (flat, forms) {
+    let signatures: Vec<Vec<Param>> = match (params, overloads) {
         (Some(_), Some(_)) => {
             return Err("a function takes `params` or `overloads`, not both".to_owned());
         }
-        (params, None) => vec![params.unwrap_or_default()],
-        (None, Some(NonEmpty(overloads))) => {
-            overloads.into_iter().map(|overload| overload.params).collect()
+        (flat, None) => vec![flat.unwrap_or_default()],
+        (None, Some(NonEmpty(listed))) => {
+            listed.into_iter().map(|overload| overload.params).collect()
         }
     };
     for signature in &signatures {
@@ -448,13 +436,13 @@ fn splice_enums(
         return Err(Diagnostic::e014(None, "`enums` need the `Enum` global to be a namespace"));
     };
     for (type_name, spanned) in enums {
-        let range = spanned.span();
         if enum_global.members.contains_key(&type_name) {
             return Err(Diagnostic::e014(
-                Some(Span::from_indices(range.start, range.end)),
+                Some(place(&spanned)),
                 &format!("the enum type `{type_name}` is also a member of the `Enum` global"),
             ));
         }
+        let range = spanned.span();
         let shape_named = |name: &str| Some(Spanned::new(range.clone(), name.to_owned()));
         let enum_type = spanned.into_inner();
         let members = enum_type
@@ -508,7 +496,15 @@ fn derive_string_methods(globals: &BTreeMap<String, Entry>, shapes: &mut BTreeMa
             message: deprecation.message.clone(),
             replacement: None,
         });
-        let method = Function { signatures, deprecated, is_method: true, ..function.clone() };
+        let method = Function {
+            signatures,
+            is_pure: function.is_pure,
+            is_must_use: function.is_must_use,
+            deprecated,
+            is_read_only: function.is_read_only,
+            is_method: true,
+            returns_shape: function.returns_shape.clone(),
+        };
         shape.members.entry(name.clone()).or_insert(Entry::Function(method));
     }
 }

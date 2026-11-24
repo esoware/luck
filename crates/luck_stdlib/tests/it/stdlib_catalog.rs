@@ -1,14 +1,15 @@
 use std::ptr;
 
 use luck_allocator::Allocator;
-use luck_ast::{Expression, Statement, TreeCounts};
+use luck_ast::{Expression, Statement};
 use luck_stdlib::{
-    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, analyze,
-    expand_replace_template, library_for,
+    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, library_for,
 };
 use luck_token::{BinOp, LuaTarget, LuaVersion};
 
-use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, parse, roblox, standalone_library};
+use crate::common::{
+    NUMBERED_VERSIONS, all_libraries, expand, luau, parse, roblox, standalone_library,
+};
 
 #[test]
 #[cfg(target_pointer_width = "64")]
@@ -27,7 +28,7 @@ fn function_at<'library>(
 }
 
 #[test]
-fn every_library_loads() {
+fn every_library_declares_print_and_type() {
     for (file, library) in all_libraries() {
         assert!(library.globals.contains_key("print"), "{file} stdlib should expose print");
         assert!(library.globals.contains_key("type"), "{file} stdlib should expose type");
@@ -116,7 +117,7 @@ fn loadstring_deprecated_in_52_fixes_to_load() {
 }
 
 #[test]
-fn must_use_markers_present() {
+fn lua54_marks_its_value_returning_functions_must_use() {
     let lua54 = standalone_library(LuaVersion::Lua54);
     for path in [
         &["pcall"][..],
@@ -279,7 +280,7 @@ fn luau_table_clone_present_in_luau_only() {
 }
 
 #[test]
-fn string_constant_arg_set_for_io_open_mode() {
+fn io_open_mode_is_a_constant_set() {
     let second = function_at(standalone_library(LuaVersion::Lua54), &["io", "open"])
         .primary_signature()
         .params
@@ -293,7 +294,7 @@ fn string_constant_arg_set_for_io_open_mode() {
 }
 
 #[test]
-fn pure_markers_present() {
+fn lua54_math_abs_is_pure_and_print_is_not() {
     let lua54 = standalone_library(LuaVersion::Lua54);
     assert!(function_at(lua54, &["math", "abs"]).is_pure);
     assert!(!function_at(lua54, &["print"]).is_pure);
@@ -994,7 +995,7 @@ fn datamodel_and_workspace_extend_instance() {
 }
 
 #[test]
-fn service_set_sentinels() {
+fn get_service_takes_every_service_game_can_reach() {
     let services = constant_set(roblox(), &["game", "GetService"], 0)
         .expect("game:GetService takes a constant set");
     assert!(services.len() > 300, "{}", services.len());
@@ -1011,7 +1012,7 @@ fn service_set_sentinels() {
 }
 
 #[test]
-fn class_set_sentinels() {
+fn instance_new_takes_creatable_classes_and_is_a_every_class() {
     let creatable =
         constant_set(roblox(), &["Instance", "new"], 0).expect("Instance.new takes a constant set");
     assert!(find(creatable, "Folder").is_some());
@@ -1032,7 +1033,7 @@ fn class_set_sentinels() {
 }
 
 #[test]
-fn brickcolor_name_set() {
+fn brickcolor_new_takes_the_204_brickcolor_names() {
     let function = function_at(roblox(), &["BrickColor", "new"]);
     let StdlibArgKind::Constant(names) = &function.signatures[0].params[0].kind else {
         panic!("BrickColor.new arg 0 should be the name set");
@@ -1043,7 +1044,7 @@ fn brickcolor_name_set() {
 }
 
 #[test]
-fn settings_provider_shapes() {
+fn settings_providers_get_service_takes_their_own_services() {
     let function = shape_function(roblox(), "GlobalSettings", "GetService");
     let StdlibArgKind::Constant(values) = &function.primary_signature().params[0].kind else {
         panic!("expected constant set");
@@ -1058,148 +1059,8 @@ fn settings_provider_shapes() {
     assert!(find(user_values, "UserGameSettings").is_some());
 }
 
-/// Resolves the callee of the last statement's call, either a call
-/// statement or the last initializer of a local assignment. Yields the
-/// display path.
-fn resolve_last_call(source: &str) -> Option<String> {
-    let allocator = Allocator::new();
-    let chunk = parse(&allocator, source, LuaVersion::Luau);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::LuauRoblox));
-    let last_stmt = chunk.block.stmts.last()?;
-    let chain = if let Statement::FunctionCall(chain) = last_stmt {
-        chain
-    } else if let Statement::LocalAssignment(local) = last_stmt
-        && let Some(Expression::Suffixed(chain)) = local.exprs.last()
-    {
-        chain
-    } else {
-        return None;
-    };
-    Some(analysis.resolve_callee(chain.last_call()?)?.name())
-}
-
-/// The callee of each call in the last statement's chain, from one
-/// `chain_callees`. Each must match what `resolve_callee` gives the call
-/// alone.
-fn chain_callee_names(source: &str) -> Vec<Option<String>> {
-    let allocator = Allocator::new();
-    let chunk = parse(&allocator, source, LuaVersion::Lua54);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(LuaTarget::Lua54));
-    let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
-        panic!("the last statement must be a call");
-    };
-    let mut callees = analysis.chain_callees(chain);
-    let mut names = Vec::new();
-    for (index, call) in chain.calls() {
-        let name = callees.callee(index).map(|callee| callee.name());
-        assert_eq!(name, analysis.resolve_callee(call).map(|callee| callee.name()));
-        names.push(name);
-    }
-    names
-}
-
 #[test]
-fn chain_callees_resolve_each_call_of_a_chain() {
-    for (source, expected) in [
-        (
-            "string.rep('x', 2):upper():len()\n",
-            &[Some("string.rep"), Some("string:upper"), Some("string:len")][..],
-        ),
-        ("('x'):rep(2).x:upper()\n", &[Some("string:rep"), None]),
-        ("math.floor(1.5):upper()\n", &[Some("math.floor"), None]),
-        (
-            "('x'):rep(2):upper():len()\n",
-            &[Some("string:rep"), Some("string:upper"), Some("string:len")],
-        ),
-    ] {
-        let names: Vec<Option<String>> =
-            expected.iter().map(|name| name.map(str::to_owned)).collect();
-        assert_eq!(chain_callee_names(source), names, "{source}");
-    }
-}
-
-#[test]
-fn chain_callees_resolve_a_long_method_chain() {
-    let source = format!("('x'){}:len()\n", ":upper()".repeat(2000));
-    let names = chain_callee_names(&source);
-    assert_eq!(names.len(), 2001);
-    assert!(names.iter().take(2000).all(|name| name.as_deref() == Some("string:upper")));
-    assert_eq!(names.last().cloned().flatten().as_deref(), Some("string:len"));
-}
-
-#[test]
-fn get_service_call_resolves() {
-    let name = resolve_last_call("game:GetService('Players')").expect("game:GetService resolves");
-    assert_eq!(name, "game:GetService");
-}
-
-#[test]
-fn get_service_chain_resolves() {
-    let name = resolve_last_call(
-        "\
-local players = game:GetService('Players')
-local x = players:FindFirstChild('x')",
-    )
-    .expect("chained FindFirstChild resolves");
-    assert_eq!(name, "players:FindFirstChild");
-}
-
-#[test]
-fn script_parent_chain_resolves() {
-    let name = resolve_last_call(
-        "\
-local container = script.Parent
-local x = container:WaitForChild('Config')",
-    )
-    .expect("script.Parent chain resolves");
-    assert_eq!(name, "container:WaitForChild");
-}
-
-#[test]
-fn user_settings_call_chain_resolves() {
-    let name = resolve_last_call("UserSettings():GetService('UserGameSettings')")
-        .expect("UserSettings():GetService resolves");
-    assert_eq!(name, "UserSettings:GetService");
-}
-
-#[test]
-fn workspace_raycast_resolves() {
-    let name = resolve_last_call("workspace:Raycast(origin, direction)")
-        .expect("workspace:Raycast resolves");
-    assert_eq!(name, "workspace:Raycast");
-}
-
-#[test]
-fn enum_get_enum_items_resolves() {
-    let name = resolve_last_call("local items = Enum.Material:GetEnumItems()")
-        .expect("Enum.Material:GetEnumItems resolves");
-    assert_eq!(name, "Enum:GetEnumItems");
-}
-
-#[test]
-fn enum_from_name_resolves() {
-    let name = resolve_last_call("local item = Enum.Material:FromName('Grass')")
-        .expect("Enum.Material:FromName resolves");
-    assert_eq!(name, "Enum:FromName");
-}
-
-#[test]
-fn enum_global_get_enums_resolves() {
-    let name = resolve_last_call("local all = Enum:GetEnums()").expect("Enum:GetEnums resolves");
-    assert_eq!(name, "Enum:GetEnums");
-}
-
-#[test]
-fn enum_item_name_is_string_shaped() {
-    // EnumItem.Name carries the string shape, so string methods
-    // chain off it.
-    let name = resolve_last_call("local upper = Enum.Material.Grass.Name:upper()")
-        .expect("Name:upper() resolves through the string shape");
-    assert_eq!(name, "string:upper");
-}
-
-#[test]
-fn enum_tree_is_populated() {
+fn enum_global_holds_every_enum_type() {
     let StdlibEntry::Namespace(enum_global) =
         roblox().lookup(&["Enum"]).expect("Enum global on Roblox")
     else {
@@ -1214,7 +1075,7 @@ fn enum_tree_is_populated() {
 }
 
 #[test]
-fn representative_items_resolve() {
+fn enum_items_are_read_only_enum_item_constants() {
     for path in [
         &["Enum", "Material", "Grass"][..],
         &["Enum", "KeyCode", "A"][..],
@@ -1241,14 +1102,14 @@ fn enum_types_are_enum_shaped() {
 }
 
 #[test]
-fn deprecated_item_carries_marker() {
+fn deprecated_enum_items_carry_a_deprecation() {
     let entry =
         roblox().lookup(&["Enum", "AlignType", "Parallel"]).expect("Enum.AlignType.Parallel");
     assert!(entry.deprecation().is_some(), "AlignType.Parallel is tagged Deprecated in the dump");
 }
 
 #[test]
-fn item_properties_reachable_through_shape() {
+fn enum_item_properties_resolve_through_its_shape() {
     for member in ["Name", "Value", "EnumType"] {
         assert!(
             roblox().lookup(&["Enum", "Material", "Grass", member]).is_some(),
@@ -1487,12 +1348,6 @@ fn fix_template<'library>(
     path: &[&str],
 ) -> Option<&'library str> {
     Some(function_at(library, path).deprecated.as_ref()?.replacement?.template)
-}
-
-/// `template` expanded with `args`, which the tests spell as text.
-fn expand(template: &str, args: &[&str]) -> String {
-    let arg_bytes: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
-    String::from_utf8_lossy(&expand_replace_template(template, &arg_bytes)).into_owned()
 }
 
 /// Whether `text`, read as a returned value, is what `is_expected` says.
