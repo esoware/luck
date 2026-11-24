@@ -192,6 +192,10 @@ pub struct LocalFunction<'ast> {
     pub attributes: List<'ast, FunctionAttribute<'ast>>,
     pub name: Name<'ast>,
     pub body: FunctionBody<'ast>,
+    /// Where the `local`, `const`, or `export` keyword `kind` names starts,
+    /// which is where `span` does unless an attribute comes first.
+    #[content_eq(skip)]
+    pub keyword_start: u32,
     pub kind: LocalFunctionKind,
 }
 

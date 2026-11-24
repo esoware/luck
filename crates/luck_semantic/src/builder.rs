@@ -7,8 +7,8 @@ use luck_ast::{
     FunctionArgs, FunctionBody, FunctionDecl, GenericFor, GetSpan as _, GlobalDeclaration,
     GlobalFunction, GlobalStar, GotoStatement, IfStatement, LabelStatement, LocalAssignment,
     LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement, StringLiteral,
-    SuffixedExpression, TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, Var, Visit,
-    WhileLoop,
+    Suffix, SuffixedExpression, TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, Var,
+    Visit, WhileLoop,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span, offset_to_index};
@@ -257,6 +257,42 @@ fn is_read_only_attribute(attribute: &Attribute<'_>) -> bool {
     matches!(attribute.name.text.as_str(), "const" | "close")
 }
 
+/// The non-method call `chain` opens with when it calls a name `require`, or
+/// reads `require` from the global table `prefix` names and calls it, as
+/// `_G.require(path)` or Lua 5.2+'s `_ENV.require(path)`.
+fn require_call<'ast>(
+    chain: &'ast SuffixedExpression<'ast>,
+    prefix: &Name<'_>,
+    version: LuaVersion,
+) -> Option<Call<'ast>> {
+    let callee_suffixes = if prefix.text == "require" {
+        0
+    } else if (prefix.text == "_G" || (prefix.text == "_ENV" && version.has_env_upvalue()))
+        && is_key(chain.suffixes.first(), "require")
+    {
+        1
+    } else {
+        return None;
+    };
+    let call = Call::new(chain.head(callee_suffixes), chain.suffixes.get(callee_suffixes)?)?;
+    call.method.is_none().then_some(call)
+}
+
+/// Whether `suffix` reads the field `key`, as `.key` or `["key"]`, however
+/// the string is spelled.
+fn is_key(suffix: &Suffix<'_>, key: &str) -> bool {
+    match suffix {
+        Suffix::Field(name) => name.text == key,
+        Suffix::Index { index: Expression::StringLiteral(literal), .. } => {
+            literal.value == key.as_bytes()
+        }
+        Suffix::Index { .. }
+        | Suffix::Call(_)
+        | Suffix::MethodCall(_)
+        | Suffix::TypeInstantiation { .. } => false,
+    }
+}
+
 /// The module path of a `require` call that passes one string literal and
 /// nothing else.
 fn require_path<'ast>(
@@ -277,12 +313,18 @@ fn require_path<'ast>(
 impl<'ast> Builder<'ast> {
     fn finish(mut self) -> SemanticBuilderReturn<'ast> {
         self.scoping.finish();
+        let scoping = &self.scoping;
+        // `_G.require` is the global `require` only while the chunk leaves
+        // that global alone too.
+        let is_require_assigned =
+            scoping.name_id("require").is_some_and(|require| scoping.is_assigned_global(require));
         let requires = self
             .require_calls
             .unwrap_or_default()
             .into_iter()
-            .filter(|&(_, reference)| {
-                self.scoping.is_host_global(self.scoping.reference(reference))
+            .filter(|&(call, reference)| {
+                scoping.is_host_global(scoping.reference(reference))
+                    && (call.callee.suffixes.is_empty() || !is_require_assigned)
             })
             .map(|(call, _)| RequireSite { call, path: require_path(call.args) })
             .collect();
@@ -348,7 +390,13 @@ impl<'ast> Builder<'ast> {
     fn push_scope(&mut self, kind: ScopeKind, node: NodeId) {
         let id = ScopeId::from_index(self.scoping.scopes().len());
         let function = if kind == ScopeKind::Function { id } else { self.current_function };
-        self.scoping.add_scope(Scope { parent: Some(self.current_scope), kind, function, node });
+        self.scoping.add_scope(Scope {
+            parent: Some(self.current_scope),
+            kind,
+            function,
+            node,
+            has_vararg_read: false,
+        });
         let gotos = if self.version.has_goto() {
             self.gotos.open_block(self.active_vars)
         } else {
@@ -804,6 +852,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             kind: ScopeKind::Module,
             function: module,
             node,
+            has_vararg_read: false,
         });
         let start =
             if self.version.has_goto() { self.gotos.open_block(0) } else { BlockStart::default() };
@@ -835,6 +884,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         if let Expression::Name(name) = expr {
             self.reference_name(name, ReferenceKind::Read);
+        } else if let Expression::VarArg(_) = expr {
+            self.scoping.mark_vararg_read(self.current_function);
         } else {
             self.walk_expr(expr);
         }
@@ -842,19 +893,15 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
 
     fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
         self.enter(AstKind::SuffixedExpression(suffixed_expr));
-        let callee = if let Expression::Name(name) = &suffixed_expr.prefix {
-            self.reference_name(name, ReferenceKind::Read).filter(|_| name.text == "require")
+        if let Expression::Name(name) = &suffixed_expr.prefix {
+            if let Some(reference) = self.reference_name(name, ReferenceKind::Read)
+                && let Some(calls) = &mut self.require_calls
+                && let Some(call) = require_call(suffixed_expr, name, self.version)
+            {
+                calls.push((call, reference));
+            }
         } else {
             self.visit_expr(&suffixed_expr.prefix);
-            None
-        };
-        // Only the first call's callee can be a bare name.
-        if let Some(reference) = callee
-            && let Some(calls) = &mut self.require_calls
-            && let Some(call) = Call::new(suffixed_expr.head(0), suffixed_expr.suffixes.first())
-            && call.method.is_none()
-        {
-            calls.push((call, reference));
         }
         for suffix in &suffixed_expr.suffixes {
             self.visit_suffix(suffix);
@@ -2214,6 +2261,10 @@ do
     local require = print
     require(\"e\")
 end
+_G.require(\"g\")
+_ENV[\"require\"] \"h\"
+_G:require(\"i\")
+_G.require.j(\"k\")
 return require(require(\"f\").g)";
         let semantic = semantic_for(&allocator, source, LuaVersion::Lua54);
         let sites: Vec<(&str, Option<&[u8]>)> = semantic
@@ -2231,18 +2282,38 @@ return require(require(\"f\").g)";
                 ("require \"b\"", Some(&b"b"[..])),
                 ("require(x)", None),
                 ("require(\"c\", 2)", None),
+                ("_G.require(\"g\")", Some(&b"g"[..])),
+                ("_ENV[\"require\"] \"h\"", Some(&b"h"[..])),
                 ("require(require(\"f\").g)", None),
                 ("require(\"f\")", Some(&b"f"[..])),
             ]
         );
         for shadowing in ["require = nil", "local _ENV = {}", "_ENV = {}"] {
-            let shadowed = format!("{shadowing}\nrequire(\"a\")");
-            let found = semantic_for(&allocator, &shadowed, LuaVersion::Lua54);
-            assert!(found.requires().is_empty(), "{shadowing}");
+            for call in ["require(\"a\")", "_G.require(\"a\")"] {
+                let shadowed = format!("{shadowing}\n{call}");
+                let found = semantic_for(&allocator, &shadowed, LuaVersion::Lua54);
+                assert!(found.requires().is_empty(), "{shadowed}");
+            }
         }
+        let in_lua51 = semantic_for(&allocator, "_ENV.require(\"a\")", LuaVersion::Lua51);
+        assert!(in_lua51.requires().is_empty(), "Lua 5.1's `_ENV` is a plain global");
         let unasked =
             SemanticBuilder::new().build(parse(&allocator, "require(\"a\")", LuaVersion::Lua54));
         assert!(unasked.semantic.requires().is_empty());
+    }
+
+    #[test]
+    fn a_function_records_whether_its_own_code_reads_its_varargs() {
+        let allocator = Allocator::new();
+        let tree = scoping_of(
+            &allocator,
+            "\
+local function f(...) return function(...) return ... end end
+local function g(...) if ... then end end
+print(...)",
+        );
+        let reads: Vec<bool> = tree.scopes().iter().map(|scope| scope.has_vararg_read).collect();
+        assert_eq!(reads, [true, false, true, true, false], "the chunk, f, its closure, g, g's if");
     }
 
     #[test]

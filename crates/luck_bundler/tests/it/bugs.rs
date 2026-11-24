@@ -15,7 +15,7 @@ use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tempfile::TempDir;
 
-use crate::common::{bundle_both, codes, text};
+use crate::common::{bundle_both, text};
 
 const LUA_REQUIRE_UTIL: &[u8] = b"\
 local util = require(\"util\")
@@ -416,15 +416,16 @@ end
 }
 
 #[test]
-fn flags_w005_for_a_call_through_g_require() {
+fn rewrites_a_call_through_g_require() {
     let result = bundle_files(
         &[
             (
                 "main.lua",
                 b"\
 local util = _G.require(\"util\")
-local other = require(\"other\")
-print(util, other)
+local other = (require)(\"other\")
+local name = \"util\"
+print(util, other, _ENV.require(name))
 ",
             ),
             ("util.lua", RETURN_ONE),
@@ -433,11 +434,39 @@ print(util, other)
         "main.lua",
         LuaVersion::Lua54,
     );
-    let is_warned = codes(&result.warnings).contains(&"W005");
-    assert!(
-        is_warned || !text(&result.output).contains("_G.require"),
-        "`_G.require` escapes bundling, so it must be rewritten or get W005: {:?}",
-        result.warnings
+    let output = text(&result.output);
+    for rewritten in [
+        "local util = __luck_require(\"util\")",
+        "local other = __luck_require(\"other\")",
+        "__luck_dynamic(name)",
+    ] {
+        assert!(output.contains(rewritten), "`{rewritten}` must be bundled:\n{output}");
+    }
+}
+
+#[test]
+fn a_call_through_the_global_table_across_lines_keeps_lines_one_to_one() {
+    let main = b"\
+local name = \"util\"
+local dynamic = _G
+    .require(name)
+local static = _G
+    .require(\"util\")
+local marker = 1
+print(dynamic, static, marker)
+";
+    let result = bundle_files(
+        &[("main.lua", main), ("util.lua", RETURN_ONE)],
+        "main.lua",
+        LuaVersion::Lua54,
+    );
+    let entry = line_map_entry(&result, "main.lua");
+    let lines: Vec<&str> = text(&result.output).lines().collect();
+    assert_eq!(
+        lines[entry.bundle_start_line + 4],
+        "local marker = 1",
+        "source line 6 must stay 1:1:\n{}",
+        text(&result.output)
     );
 }
 

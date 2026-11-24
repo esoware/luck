@@ -97,11 +97,11 @@ impl<'ast> Parser<'ast> {
 
     fn parse_local_function(
         &mut self,
-        local_span: Span,
+        keyword: Span,
         attributes: List<'ast, FunctionAttribute<'ast>>,
         kind: LocalFunctionKind,
     ) -> Statement<'ast> {
-        let start_span = attributes.first().map_or(local_span, |attribute| attribute.span);
+        let start_span = attributes.first().map_or(keyword, |attribute| attribute.span);
         let function_span = self.advance();
         let name = self.expect_identifier_recover();
         self.counts.declarations = self.counts.declarations.wrapping_add(1);
@@ -109,7 +109,15 @@ impl<'ast> Parser<'ast> {
             return Statement::Error(start_span);
         };
         let span = start_span.merge(body.span);
-        Statement::new_local_function(span, attributes, name, body, kind, self.allocator)
+        Statement::new_local_function(
+            span,
+            attributes,
+            name,
+            body,
+            keyword.start,
+            kind,
+            self.allocator,
+        )
     }
 
     fn parse_local_assignment(

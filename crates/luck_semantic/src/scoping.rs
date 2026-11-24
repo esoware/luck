@@ -72,6 +72,10 @@ pub struct Scope {
     /// What opens it: the chunk, a function body, the block of a `do`, a
     /// `while`, or an `if` clause, or a `repeat` or `for` loop.
     pub node: NodeId,
+    /// For the chunk's scope or a function's, whether its own code, not a
+    /// nested function's, reads `...`. Lua 5.1 builds a vararg function's
+    /// `arg` table only when it doesn't.
+    pub has_vararg_read: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +243,12 @@ impl Scoping {
         let id = ScopeId::from_index(self.scopes.len());
         self.scopes.push(scope);
         id
+    }
+
+    pub(crate) fn mark_vararg_read(&mut self, function: ScopeId) {
+        if let Some(scope) = self.scopes.get_mut(function.index()) {
+            scope.has_vararg_read = true;
+        }
     }
 
     pub(crate) fn add_symbol(

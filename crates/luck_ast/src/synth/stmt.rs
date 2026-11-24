@@ -148,11 +148,13 @@ impl<'ast> Synth<'ast> {
         Attributes: IntoIterator<Item = FunctionAttribute<'ast>>,
         Attributes::IntoIter: ExactSizeIterator,
     {
+        let span = self.next_span();
         Statement::new_local_function(
-            self.next_span(),
+            span,
             self.list(attributes),
             self.name(name),
             self.function_body(signature, body),
+            span.start,
             kind,
             self.allocator,
         )

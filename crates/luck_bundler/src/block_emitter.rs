@@ -194,33 +194,57 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
         self.sites.get(first).is_some_and(|&start| start < span.end)
     }
 
-    /// `require("name")` becomes a call of the loader with the module's key.
+    /// A call of the global `require`, by its name or through the global
+    /// table, becomes one of the loader with the module's key, or of the
+    /// loader's dynamic entry point when its argument isn't a string literal.
     fn retarget_require(&self, chain: &mut SuffixedExpression<'ast>) {
-        let (Expression::Name(callee), Some(Suffix::Call(args))) =
-            (&mut chain.prefix, chain.suffixes.first_mut())
-        else {
+        let Expression::Name(prefix) = &chain.prefix else {
             return;
         };
-        let args_span = args.span();
-        let call_span = callee.span.merge(args_span);
+        // `require(path)` calls with its first suffix, and `_G.require(path)`
+        // with its second.
+        let callee_suffixes = usize::from(prefix.text != "require");
+        let callee_span = chain.head(callee_suffixes).span();
+        let Some(Suffix::Call(written_args)) = chain.suffixes.get(callee_suffixes) else {
+            return;
+        };
+        let args_span = written_args.span();
+        let call_span = Span::new(chain.span.start, args_span.end);
         let dependencies = &self.module.dependencies;
-        let Some(dependency) = dependencies
+        let (entry_point, key) = match dependencies
             .binary_search_by_key(&call_span.start, |dependency| dependency.call_span.start)
             .ok()
             .and_then(|i| dependencies.get(i))
             .filter(|dependency| dependency.call_span == call_span)
-        else {
-            return;
+        {
+            Some(dependency) => {
+                let Some(module_key) = self.plan.key(dependency) else {
+                    return;
+                };
+                (self.names.require, Some(module_key))
+            }
+            None if contains_span(&self.module.dynamic_callees, callee_span) => {
+                (self.names.dynamic, None)
+            }
+            None => return,
         };
-        let Some(key) = self.plan.key(dependency) else {
-            return;
-        };
-        callee.text = self.names.require.into();
-        let key_expr = self.key_expr(key);
-        *args = FunctionArgs::Parenthesized {
-            span: args_span,
-            args: List::from_array_in([key_expr], self.allocator),
-        };
+        if let Some(module_key) = key
+            && let Some(Suffix::Call(args)) = chain.suffixes.get_mut(callee_suffixes)
+        {
+            let key_expr = self.key_expr(module_key);
+            *args = FunctionArgs::Parenthesized {
+                span: args_span,
+                args: List::from_array_in([key_expr], self.allocator),
+            };
+        }
+        if let Expression::Name(callee) = &mut chain.prefix {
+            callee.text = entry_point.into();
+        }
+        if callee_suffixes > 0
+            && let Some(suffixes) = OneOrMore::from_list(chain.suffixes.split_off_rest())
+        {
+            chain.suffixes = suffixes;
+        }
     }
 
     fn key_expr(&self, key: Key<'ast>) -> Expression<'ast> {
@@ -357,10 +381,6 @@ impl<'ast> VisitMut<'ast> for ModuleRewriter<'_, 'ast> {
         if let Expression::Name(name) = expr {
             if let Some(field) = self.export_field(name) {
                 *expr = Expression::Suffixed(field);
-                return;
-            }
-            if contains_span(&self.module.dynamic_callees, name.span) {
-                name.text = self.names.dynamic.into();
             }
             return;
         }

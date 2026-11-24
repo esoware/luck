@@ -3,7 +3,7 @@
 //! symbols, and references that point into it.
 
 use luck_allocator::Allocator;
-use luck_ast::{AstKind, GetSpan as _};
+use luck_ast::{AstKind, Expression, GetSpan as _};
 use luck_semantic::SemanticBuilder;
 use luck_token::LuaVersion;
 
@@ -55,8 +55,10 @@ fn assert_tables_agree(source: &str, version: LuaVersion) {
         assert!(scope.node.index() < nodes.len(), "{scope:?}\n{source}");
     }
     for site in semantic.requires() {
-        let callee = site.call.callee.as_name().expect("a require site calls a name");
-        assert!(tree.reaches_host_global(callee), "{source}");
+        let Expression::Name(root) = site.call.callee.prefix else {
+            panic!("a require site's callee starts with a name\n{source}");
+        };
+        assert!(tree.reaches_host_global(root), "{source}");
     }
 }
 

@@ -43,6 +43,7 @@
     )
 )]
 
+mod analysis;
 mod block_emitter;
 mod bundle;
 mod discovery;
@@ -53,7 +54,6 @@ mod graph;
 mod loader;
 mod module;
 mod relative_path;
-mod require_extraction;
 
 pub use bundle::{BundleResult, MinifiedBundle, bundle, bundle_minified};
 pub use dynamic_require::DynamicRequire;

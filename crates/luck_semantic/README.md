@@ -10,14 +10,14 @@ Every name in the tree finds what it declares, refers to, or labels by its `Name
 
 - `with_check` reports the errors Lua's compiler and Luau's parser make beyond the grammar, each an E008 `luck_diagnostics::Diagnostic`: a write to a `<const>`, `<close>`, or other read-only binding, a free name no Lua 5.5 `global` declaration covers, a `goto` no label takes or one that jumps into the scope of a local, a duplicate label, a Luau type function that reads a local from outside it, and a Luau `until` that reads a local a `continue` skips.
 - `with_nodes` builds `AstNodes`, every node of the tree that has an `AstKind`, in source preorder, with its parent and the scope it's in. Symbols, references, labels, and scopes point into it by `NodeId`, which every build numbers the same way whether or not it builds the table.
-- `with_requires` finds every `RequireSite`, a call of the host's `require`, with its module path when it's a string literal.
+- `with_requires` finds every `RequireSite`, a call of the host's `require`, by its name or through the global table as `_G.require`, with its module path when it's a string literal.
 
 Nothing here knows a target's standard library. `luck_stdlib` reads a chunk's semantic against one.
 
 ## Usage
 
 - `SemanticBuilder::new()`, then `with_counts`, the parse's `TreeCounts`, which sizes every table, and the parts wanted, then `build(chunk)`, which returns a `SemanticBuilderReturn` of the `Semantic` and the checker's diagnostics in source order.
-- `Scoping`: `scopes()`, `symbols()`, `references()`, and `labels()`, with `Scope`, `Symbol`, `Reference`, and `Label` and their ids. `symbol_of`, `reference_of`, and `label_of` take a tree's `Name` to what it is, `Reference::resolved` holds the symbol a reference reaches, and `resolved_references` lists a symbol's references. `reference_at` and `references_within` find references by position.
+- `Scoping`: `scopes()`, `symbols()`, `references()`, and `labels()`, with `Scope`, `Symbol`, `Reference`, and `Label` and their ids. A function's or the chunk's `Scope` says whether its own code reads `...`. `symbol_of`, `reference_of`, and `label_of` take a tree's `Name` to what it is, `Reference::resolved` holds the symbol a reference reaches, and `resolved_references` lists a symbol's references. `reference_at` and `references_within` find references by position.
 - `AstNodes`: `iter()`, `kind(id)`, `parent_id(id)`, and `ancestor_ids(id)`.
 
 ```rust

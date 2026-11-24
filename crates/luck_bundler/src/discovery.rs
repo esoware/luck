@@ -14,12 +14,12 @@ use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
 use memchr::memmem;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::{Analysis, StaticRequire, analyze};
 use crate::dynamic_require::DynamicRequire;
 use crate::graph::{BundleOptions, MAX_MODULE_COUNT};
 use crate::loader::PREFIX_STEM;
 use crate::module::ModuleInfo;
 use crate::relative_path::make_relative;
-use crate::require_extraction::{ExtractedRequires, RequireSite, extract_requires};
 
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
@@ -38,7 +38,7 @@ pub(crate) struct ResolvedModuleInfo<'ast> {
     pub info: ModuleInfo<'ast>,
     /// Each require and the path it resolves to, in source order. `None`
     /// when it doesn't resolve.
-    pub requires: Vec<(RequireSite<'ast>, Option<PathBuf>)>,
+    pub requires: Vec<(StaticRequire<'ast>, Option<PathBuf>)>,
 }
 
 /// A module parsed and analyzed, before its requires resolve.
@@ -46,15 +46,15 @@ pub(crate) struct ParsedModule<'ast> {
     /// Every field but the dependencies.
     pub info: ModuleInfo<'ast>,
     /// In source order.
-    pub sites: Vec<RequireSite<'ast>>,
+    pub requires: Vec<StaticRequire<'ast>>,
     /// Parse errors, then the analysis's.
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
 }
 
-/// What reports `error`, which stopped `site` from resolving.
-fn resolve_error_diagnostic(site: &RequireSite<'_>, error: &ResolveError) -> Diagnostic {
-    let (span, module) = (site.call_span, site.require_string);
+/// What reports `error`, which stopped `require` from resolving.
+fn resolve_error_diagnostic(require: &StaticRequire<'_>, error: &ResolveError) -> Diagnostic {
+    let (span, module) = (require.call_span, require.require_string);
     match error {
         ResolveError::NotFound(searched) => {
             let tried_paths: Vec<String> =
@@ -96,9 +96,8 @@ pub(crate) fn parse_module<'ast>(
 ) -> ParsedModule<'ast> {
     let parsed = luck_parser::parse(allocator, source, version);
     let mut errors = parsed.errors;
-    let mut warnings = Vec::new();
-    let ExtractedRequires {
-        sites,
+    let Analysis {
+        requires,
         dynamic_callees,
         diags,
         has_vararg_read,
@@ -106,14 +105,10 @@ pub(crate) fn parse_module<'ast>(
         has_env_rebinding,
         max_function_upvalues,
         exports,
-    } = extract_requires(allocator, &parsed.chunk, parsed.counts, source, dynamic_require);
-    for diag in diags {
-        if diag.is_error() {
-            errors.push(diag);
-        } else {
-            warnings.push(diag);
-        }
-    }
+    } = analyze(allocator, &parsed.chunk, parsed.counts, source, dynamic_require);
+    let (analysis_errors, warnings): (Vec<Diagnostic>, Vec<Diagnostic>) =
+        diags.into_iter().partition(Diagnostic::is_error);
+    errors.extend(analysis_errors);
     let hot_comments = leading_hot_comments(&parsed.comments, parsed.chunk.block.span.start)
         .map(|comment| comment.span)
         .collect();
@@ -139,7 +134,7 @@ pub(crate) fn parse_module<'ast>(
         has_prefix_stem: memmem::find(source, PREFIX_STEM.as_bytes()).is_some(),
         exports,
     };
-    ParsedModule { info, sites, errors, warnings }
+    ParsedModule { info, requires, errors, warnings }
 }
 
 /// What reading and resolving modules takes, which every task shares.
@@ -201,29 +196,33 @@ impl<'input> Reader<'input> {
         allocator: &'ast Allocator,
         path: &Path,
     ) -> Discovered<'ast> {
-        let ParsedModule { info, sites, mut errors, mut warnings } =
+        let ParsedModule { info, requires, mut errors, mut warnings } =
             match self.read(allocator, path) {
                 Ok(module) => module,
                 Err(error) => {
                     return Discovered { errors: vec![error], warnings: Vec::new(), module: None };
                 }
             };
-        let requires = sites
+        let resolved = requires
             .into_iter()
-            .map(|site| match self.resolver.resolve(path, site.require_string) {
+            .map(|require| match self.resolver.resolve(path, require.require_string) {
                 Ok(Resolution { path: target, is_self_alias_shadowed }) => {
                     if is_self_alias_shadowed {
-                        warnings.push(Diagnostic::w004(site.call_span));
+                        warnings.push(Diagnostic::w004(require.call_span));
                     }
-                    (site, Some(target))
+                    (require, Some(target))
                 }
                 Err(error) => {
-                    errors.push(resolve_error_diagnostic(&site, &error));
-                    (site, None)
+                    errors.push(resolve_error_diagnostic(&require, &error));
+                    (require, None)
                 }
             })
             .collect();
-        Discovered { errors, warnings, module: Some(ResolvedModuleInfo { info, requires }) }
+        Discovered {
+            errors,
+            warnings,
+            module: Some(ResolvedModuleInfo { info, requires: resolved }),
+        }
     }
 }
 

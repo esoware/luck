@@ -1,5 +1,5 @@
-//! E001, E003, E005, E011, and W002 are never emitted, and their numbers stay
-//! reserved.
+//! E001, E003, E005, E006, E011, and W002 are never emitted, and their
+//! numbers stay reserved.
 
 use alloc::borrow::Cow;
 
@@ -81,14 +81,6 @@ impl Diagnostic {
 
     pub fn e004_bare_self_alias(span: Span) -> Self {
         Self::error_at("E004", Some(span), "`@self` can't be used alone, so use `@self/subpath`")
-    }
-
-    pub fn e006(span: Span) -> Self {
-        Self::error_at("E006", Some(span), "`package.loaded` manipulation is not allowed")
-            .with_help(
-                "Luau has no `package.loaded`, and the bundle's module cache is private, so \
-                 remove the write",
-            )
     }
 
     pub fn e007_both_extensions(span: Span, luau_path: &str, lua_path: &str) -> Self {
@@ -186,18 +178,17 @@ impl Diagnostic {
         )
     }
 
-    /// A call that doesn't reach the global `require`, through a local binding
-    /// named `require`, a local `_ENV`, or a global the file replaced; left
-    /// untouched.
+    /// A read of a name `require` that isn't the global one: a local, a field
+    /// of a local `_ENV`, or a global the file replaces.
     pub fn w005_shadowed(span: Span) -> Self {
         Self::warning_at(
             "W005",
             span,
-            "call does not reach the global `require` and is not bundled",
+            "this `require` is not the global `require`, so calls through it are not bundled",
         )
         .with_help(
-            "the call is left exactly as written and will invoke whatever `require` \
-                 resolves to at runtime",
+            "a call through it is left exactly as written and runs whatever `require` holds \
+             at runtime",
         )
     }
 

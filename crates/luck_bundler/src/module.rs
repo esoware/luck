@@ -41,9 +41,10 @@ pub struct ModuleInfo<'ast> {
     pub nesting_depth: usize,
     /// In source order.
     pub dependencies: Vec<Dependency<'ast>>,
-    /// The `require` identifier in each of this module's `require(expr)`
-    /// calls, which the emitter retargets at the loader's dynamic entry
-    /// point, in source order. Always empty on Luau targets.
+    /// The callee, `require` or `_G.require`, of each of this module's calls
+    /// of the global `require` whose argument isn't a string literal, which
+    /// the emitter retargets at the loader's dynamic entry point, in source
+    /// order. Always empty on Luau targets.
     pub dynamic_callees: Vec<Span>,
     /// This module's leading `--!` hot comments. Empty except on Luau targets.
     pub hot_comments: Vec<Span>,

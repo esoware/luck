@@ -406,8 +406,11 @@ pub(crate) enum Edit<'ast> {
         key: Key<'ast>,
         line_breaks: usize,
     },
-    /// A `require(expr)` callee becomes the loader's dynamic entry point.
-    Dynamic,
+    /// A `require(expr)` callee becomes the loader's dynamic entry point,
+    /// after the line breaks the callee spans.
+    Dynamic {
+        line_breaks: usize,
+    },
     Text(String),
 }
 
@@ -432,15 +435,13 @@ fn module_edits<'ast>(
             Edit::Require { key, line_breaks: line_breaks(call, version).count() },
         ))
     }));
-    // Only the callee token is retargeted, so a static require inside the
-    // argument still gets its own splice.
-    edits.extend(
-        module
-            .dynamic_callees
-            .iter()
-            .filter(|callee| !callee.text(source).is_empty())
-            .map(|callee| (*callee, Edit::Dynamic)),
-    );
+    // Only the callee is retargeted, so a static require inside the argument
+    // still gets its own splice.
+    edits.extend(module.dynamic_callees.iter().filter_map(|&callee| {
+        let text = callee.text(source);
+        (!text.is_empty())
+            .then(|| (callee, Edit::Dynamic { line_breaks: line_breaks(text, version).count() }))
+    }));
     if version.has_value_exports() {
         module.exports.text_edits(&module.block, source, version, &plan.prefix, &mut edits);
     }
@@ -701,7 +702,10 @@ impl BundleWriter<'_, '_> {
                 output.extend(iter::repeat_n('\n', line_breaks));
                 output.push(')');
             }),
-            Edit::Dynamic => self.generate(|output| output.extend([prefix, "dynamic"])),
+            &Edit::Dynamic { line_breaks } => self.generate(|output| {
+                output.extend(iter::repeat_n('\n', line_breaks));
+                output.extend([prefix, "dynamic"]);
+            }),
             Edit::Text(text) => self.push(text.as_bytes()),
         }
     }
@@ -813,7 +817,7 @@ mod tests {
         resolutions: &[(&str, &str)],
         version: LuaVersion,
     ) -> ModuleFixture<'ast> {
-        let ParsedModule { mut info, sites, errors, .. } = parse_module(
+        let ParsedModule { mut info, requires, errors, .. } = parse_module(
             allocator,
             PathBuf::from(path),
             path.to_owned(),
@@ -823,18 +827,18 @@ mod tests {
         );
         assert!(errors.is_empty(), "fixture must parse: {errors:?}");
         let mut resolved_paths = Vec::new();
-        info.dependencies = sites
+        info.dependencies = requires
             .into_iter()
-            .map(|site| {
+            .map(|require| {
                 let resolved = resolutions
                     .iter()
-                    .find(|(require_string, _)| *require_string == site.require_string)
-                    .unwrap_or_else(|| panic!("no resolution for {:?}", site.require_string));
+                    .find(|(require_string, _)| *require_string == require.require_string)
+                    .unwrap_or_else(|| panic!("no resolution for {:?}", require.require_string));
                 resolved_paths.push(PathBuf::from(resolved.1));
                 Dependency {
-                    require_string: site.require_string,
+                    require_string: require.require_string,
                     target: ModuleId(usize::MAX),
-                    call_span: site.call_span,
+                    call_span: require.call_span,
                 }
             })
             .collect();

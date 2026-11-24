@@ -56,14 +56,16 @@ impl<'ast> Semantic<'ast> {
     }
 }
 
-/// A call of the host's global `require`, as `require(path)` or
-/// `require "path"`, which loads a module.
+/// A call of the host's global `require`, which loads a module.
 ///
-/// A method call, a call of a local or of a global the chunk writes, and a
-/// call under a local `_ENV` or one the chunk assigns load nothing the chunk
-/// can know of, so they're no site.
+/// It calls the name, as `require(path)` or `require "path"`, or the field
+/// the global table holds it in, as `_G.require(path)` or Lua 5.2+'s
+/// `_ENV.require(path)`. A method call, a call of a local or of a global the
+/// chunk writes, and a call under a local `_ENV` or one the chunk assigns
+/// load nothing the chunk can know of, so they're no site.
 #[derive(Debug, Clone, Copy)]
 pub struct RequireSite<'ast> {
+    /// Its callee is the name, or the global table and the field.
     pub call: Call<'ast>,
     /// The module path, when the call passes one string literal and nothing
     /// else, and `None` for a path only the running program knows.

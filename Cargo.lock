@@ -913,7 +913,6 @@ dependencies = [
  "luck_allocator",
  "luck_ast",
  "luck_diagnostics",
- "luck_lexer",
  "luck_minifier",
  "luck_parser",
  "luck_resolver",

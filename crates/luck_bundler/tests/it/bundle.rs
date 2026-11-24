@@ -241,17 +241,19 @@ fn require_after_code_bundles() {
 #[test]
 fn package_loaded_write_bundles_on_lua_targets() {
     // On Lua targets the bundle cache is package.loaded itself, so
-    // preseeding an entry behaves as in real Lua and needs no E006.
+    // preseeding an entry behaves as in real Lua.
     let output = run_bundle("lua54", "errors/package_loaded_manip", LuaVersion::Lua54, "main.lua")
         .expect("package.loaded writes bundle fine on Lua targets");
     assert!(output.contains("package.loaded[\"x\"] = {}"), "{output}");
 }
 
 #[test]
-fn package_loaded_write_flags_e006_on_luau() {
-    let errors = run_bundle("luau", "errors/package_loaded_manip", LuaVersion::Luau, "main.luau")
-        .expect_err("a package.loaded write must not bundle on Luau");
-    assert!(codes(&errors).contains(&"E006"), "Expected E006, got: {:?}", codes(&errors));
+fn package_loaded_write_bundles_on_luau() {
+    // Luau's `require` never reads `package.loaded`, so the write means in
+    // the bundle what it means without one.
+    let output = run_bundle("luau", "errors/package_loaded_manip", LuaVersion::Luau, "main.luau")
+        .expect("package.loaded writes bundle fine on Luau");
+    assert!(output.contains("package.loaded[\"x\"] = {}"), "{output}");
 }
 
 #[test]

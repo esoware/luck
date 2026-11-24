@@ -783,10 +783,19 @@ impl<'ast> Statement<'ast> {
         attributes: List<'ast, FunctionAttribute<'ast>>,
         name: Name<'ast>,
         body: FunctionBody<'ast>,
+        keyword_start: u32,
         kind: LocalFunctionKind,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::LocalFunction(LocalFunction::boxed(span, attributes, name, body, kind, allocator))
+        Self::LocalFunction(LocalFunction::boxed(
+            span,
+            attributes,
+            name,
+            body,
+            keyword_start,
+            kind,
+            allocator,
+        ))
     }
 
     #[must_use]
@@ -1114,9 +1123,10 @@ impl<'ast> LocalFunction<'ast> {
         attributes: List<'ast, FunctionAttribute<'ast>>,
         name: Name<'ast>,
         body: FunctionBody<'ast>,
+        keyword_start: u32,
         kind: LocalFunctionKind,
     ) -> Self {
-        Self { span, attributes, name, body, kind }
+        Self { span, attributes, name, body, keyword_start, kind }
     }
 
     #[must_use]
@@ -1126,10 +1136,11 @@ impl<'ast> LocalFunction<'ast> {
         attributes: List<'ast, FunctionAttribute<'ast>>,
         name: Name<'ast>,
         body: FunctionBody<'ast>,
+        keyword_start: u32,
         kind: LocalFunctionKind,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, attributes, name, body, kind), allocator)
+        Box::new_in(Self::new(span, attributes, name, body, keyword_start, kind), allocator)
     }
 }
 

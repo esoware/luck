@@ -114,16 +114,16 @@ fn number_modules<'ast>(
             module_warnings.push(found_warnings);
             info.dependencies = requires
                 .into_iter()
-                .filter_map(|(site, resolved)| {
+                .filter_map(|(require, resolved)| {
                     let next_id = ModuleId(paths.len());
                     let id = *ids.entry(resolved?.into_os_string()).or_insert_with_key(|target| {
                         paths.push(PathBuf::from(target));
                         next_id
                     });
                     Some(Dependency {
-                        require_string: site.require_string,
+                        require_string: require.require_string,
                         target: id,
-                        call_span: site.call_span,
+                        call_span: require.call_span,
                     })
                 })
                 .collect();
