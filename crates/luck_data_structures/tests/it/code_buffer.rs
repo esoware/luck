@@ -33,6 +33,20 @@ fn pieces_of_every_short_length_append_whole_with_or_without_spare_capacity() {
 }
 
 #[test]
+fn repeats_of_every_count_append_whole_with_or_without_spare_capacity() {
+    for count in 0..=40 {
+        for capacity in [0, 1, 8, 32, 33, 64] {
+            let mut buffer = CodeBuffer::with_capacity(capacity);
+            buffer.print_byte(b'x');
+            buffer.print_repeat(b'\t', count);
+            buffer.print_byte(b'y');
+            let expected = [&b"x"[..], &vec![b'\t'; count], b"y"].concat();
+            assert_eq!(buffer.into_bytes(), expected, "count {count}, capacity {capacity}");
+        }
+    }
+}
+
+#[test]
 fn truncate_drops_trailing_bytes_at_any_offset() {
     let bytes = b"a\xE9\xC3\xA9z";
     for offset in 0..=bytes.len() + 1 {

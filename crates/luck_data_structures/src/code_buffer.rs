@@ -44,9 +44,37 @@ impl CodeBuffer {
         }
     }
 
+    /// At most 32 bytes, as nearly every indentation is, are written as one
+    /// 32-byte store into spare capacity, of which only `count` bytes join the
+    /// buffer. Any more take a cold path out of line.
     #[inline]
+    #[expect(
+        unsafe_code,
+        reason = "a fixed-size store past the length writes an indentation without a variable-length fill"
+    )]
     pub fn print_repeat(&mut self, byte: u8, count: usize) {
-        self.bytes.extend(iter::repeat_n(byte, count));
+        const STORE_BYTES: usize = 32;
+
+        #[cold]
+        #[inline(never)]
+        fn print_slow(bytes: &mut Vec<u8>, byte: u8, count: usize) {
+            bytes.extend(iter::repeat_n(byte, count));
+        }
+
+        let length = self.bytes.len();
+        if count <= STORE_BYTES
+            && let Some(window) = self.bytes.spare_capacity_mut().first_chunk_mut::<STORE_BYTES>()
+        {
+            *window = [MaybeUninit::new(byte); STORE_BYTES];
+            // SAFETY: The 32 bytes past `length` were spare capacity and now
+            // hold `byte`, and `count` is at most 32, so the first `count` of
+            // them are within it and initialized.
+            unsafe {
+                self.bytes.set_len(length + count);
+            }
+        } else {
+            print_slow(&mut self.bytes, byte, count);
+        }
     }
 
     /// At most 16 bytes, as nearly every piece of code is, are copied as two
