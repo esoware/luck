@@ -1,8 +1,7 @@
 use std::fs;
-use std::path::Path;
 
 use luck_lexer::{Lexer, lex};
-use luck_testgen::collect_fixture_files;
+use luck_testgen::fixture_files;
 use luck_token::{LuaVersion, TokenKind};
 
 #[test]
@@ -17,9 +16,6 @@ fn a_lexer_is_send_and_sync() {
 
 #[test]
 fn next_token_streams_exactly_what_lex_materializes() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-    let fixtures = collect_fixture_files(&root).expect("fixture tree is readable");
-    assert!(!fixtures.is_empty(), "no fixtures under {}", root.display());
     let mut sources = [
         "",
         "\
@@ -38,7 +34,7 @@ y = 0x --[[ open",
     ]
     .map(String::from)
     .to_vec();
-    for path in &fixtures {
+    for path in fixture_files() {
         sources.push(fs::read_to_string(path).expect("fixture is readable"));
     }
 

@@ -4,7 +4,7 @@ use luck_allocator::Allocator;
 use luck_ast::{Chunk, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_codegen::LiteralSpelling;
 use luck_minifier::TransformConfig;
-use luck_testgen::with_the_smallest_stack;
+use luck_testgen::{nested, with_the_smallest_stack};
 use luck_token::{LuaVersion, UnOp};
 
 use crate::common::{minify_bytes, minify_lua54, reparses};
@@ -240,10 +240,6 @@ fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
     output
-}
-
-fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
-    format!("{}{innermost}{}", open.repeat(count), close.repeat(count))
 }
 
 #[test]

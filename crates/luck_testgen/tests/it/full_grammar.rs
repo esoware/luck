@@ -1,7 +1,7 @@
-//! Regressions for `generate_full`: each pinned program breaks the promise to
-//! parse under the official compiler or to reach the whole grammar.
+//! Regressions for `generate_full_grammar`: each pinned program breaks the
+//! promise to parse under the official compiler or to reach the whole grammar.
 
-use luck_testgen::generate_full;
+use luck_testgen::generate_full_grammar;
 use luck_token::LuaVersion;
 
 fn module_declarations(line: &str) -> Vec<&str> {
@@ -18,8 +18,8 @@ fn module_declarations(line: &str) -> Vec<&str> {
 }
 
 #[test]
-fn full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
-    let program = generate_full(42, LuaVersion::Lua55, 30);
+fn lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
+    let program = generate_full_grammar(42, LuaVersion::Lua55, 30);
     if !program.lines().any(|line| line == "global <const> *") {
         return;
     }
@@ -42,8 +42,8 @@ fn full_lua55_assigns_no_name_the_const_wildcard_makes_read_only() {
 }
 
 #[test]
-fn full_lua54_reaches_the_close_attribute() {
-    let program = generate_full(42, LuaVersion::Lua54, 200);
+fn lua54_reaches_the_close_attribute() {
+    let program = generate_full_grammar(42, LuaVersion::Lua54, 200);
     assert!(
         program.contains("<close>"),
         "the full-grammar profile promises the whole grammar and attributes, so a 5.4 program \

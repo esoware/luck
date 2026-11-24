@@ -39,7 +39,7 @@ fn shadow_depth(stmt: &str, name: &str, depth: usize) -> Option<usize> {
 }
 
 #[test]
-fn runtime_final_prints_take_the_length_of_tables_only() {
+fn final_prints_take_the_length_of_tables_only() {
     let program = generate_runtime_safe(42, LuaVersion::Luau, 30);
     for line in program.lines() {
         let Some((name, value)) = final_print(line) else {
@@ -59,7 +59,7 @@ fn runtime_final_prints_take_the_length_of_tables_only() {
 }
 
 #[test]
-fn runtime_print_statements_never_print_a_table() {
+fn print_statements_never_print_a_table() {
     let program = generate_runtime_safe(42, LuaVersion::Lua54, 30);
     let printed_table = program.lines().find(|line| line.trim_start().starts_with("print({"));
     assert_eq!(
@@ -70,7 +70,7 @@ fn runtime_print_statements_never_print_a_table() {
 }
 
 #[test]
-fn runtime_final_prints_never_report_a_local_function() {
+fn final_prints_never_report_a_local_function() {
     let program = generate_runtime_safe(42, LuaVersion::Lua55, 30);
     for line in program.lines() {
         let Some((name, value)) = final_print(line) else {
@@ -89,7 +89,7 @@ fn runtime_final_prints_never_report_a_local_function() {
 }
 
 #[test]
-fn runtime_while_bodies_never_write_their_counter() {
+fn while_bodies_never_write_their_counter() {
     let program = generate_runtime_safe(7, LuaVersion::Lua54, 120);
     let lines: Vec<&str> = program.lines().collect();
     for (header_index, header) in lines.iter().enumerate() {
@@ -125,7 +125,7 @@ fn runtime_while_bodies_never_write_their_counter() {
 }
 
 #[test]
-fn runtime_until_conditions_read_their_counter_not_a_body_local() {
+fn until_conditions_read_their_counter_not_a_body_local() {
     let program = generate_runtime_safe(7, LuaVersion::Lua54, 120);
     let lines: Vec<&str> = program.lines().collect();
     for (header_index, header) in lines.iter().enumerate() {
@@ -159,7 +159,7 @@ fn runtime_until_conditions_read_their_counter_not_a_body_local() {
 }
 
 #[test]
-fn runtime_function_returns_add_a_number_not_a_shadowing_string() {
+fn function_returns_add_a_number_not_a_shadowing_string() {
     let program = generate_runtime_safe(7, LuaVersion::Lua54, 120);
     let lines: Vec<&str> = program.lines().collect();
     for (header_index, header) in lines.iter().enumerate() {
@@ -188,7 +188,7 @@ fn runtime_function_returns_add_a_number_not_a_shadowing_string() {
 }
 
 #[test]
-fn runtime_module_scope_stays_within_the_local_limit() {
+fn module_scope_stays_within_the_local_limit() {
     let program = generate_runtime_safe(42, LuaVersion::Lua54, 500);
     let module_locals = program.lines().filter(|line| line.starts_with("local ")).count();
     assert!(

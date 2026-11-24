@@ -2,7 +2,7 @@ use luck_allocator::Allocator;
 use luck_formatter::{Comments, FormatOptions, format, format_chunk};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
-use luck_testgen::{generate_full, generate_runtime_safe, tree_shape};
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, tree_shape};
 use luck_token::LuaVersion;
 
 const SEED_COUNT: u64 = 60;
@@ -27,7 +27,7 @@ fn programs() -> impl Iterator<Item = Program> {
                     label: format!("runtime seed {seed} {version:?}"),
                 },
                 Program {
-                    source: generate_full(seed, version, STATEMENT_BUDGET),
+                    source: generate_full_grammar(seed, version, STATEMENT_BUDGET),
                     version,
                     label: format!("full seed {seed} {version:?}"),
                 },

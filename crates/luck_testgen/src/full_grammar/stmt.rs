@@ -37,7 +37,7 @@ impl FullGenerator {
         let value = self.expr(MAX_EXPR_DEPTH);
         let semicolon = if self.rng.chance(15) { ";" } else { "" };
         if self.version.has_attributes() && self.rng.chance(10) {
-            self.readonly_names.push(name.clone());
+            self.read_only_names.push(name.clone());
             let attribute = self.rng.pick(&["const", "close"]);
             if self.version.has_leading_attributes() && self.rng.chance(50) {
                 // Lua 5.5
@@ -48,7 +48,7 @@ impl FullGenerator {
             }
         } else if self.version.is_luau() && self.rng.chance(10) {
             // Luau const binding
-            self.readonly_names.push(name.clone());
+            self.read_only_names.push(name.clone());
             self.line(&format!("const {name} = {value}{semicolon}"));
         } else if self.version.is_luau() && self.rng.chance(35) {
             let annotation = self.type_expr(2);
@@ -81,7 +81,7 @@ impl FullGenerator {
     }
 
     fn assign_target(&mut self) -> String {
-        let base = self.known_writable_name();
+        let base = self.known_assignable_name();
         match self.rng.below(4) {
             0 => base,
             1 => format!("{base}.field"),
@@ -149,7 +149,7 @@ impl FullGenerator {
         let loop_variable = self.fresh_name();
         // 5.5 makes for control variables read-only.
         if self.version.has_const_for_variables() {
-            self.readonly_names.push(loop_variable.clone());
+            self.read_only_names.push(loop_variable.clone());
         }
         let stop = self.expr(1);
         let header = if self.rng.chance(40) {
@@ -166,8 +166,8 @@ impl FullGenerator {
         let key = self.fresh_name();
         let value = self.fresh_name();
         if self.version.has_const_for_variables() {
-            self.readonly_names.push(key.clone());
-            self.readonly_names.push(value.clone());
+            self.read_only_names.push(key.clone());
+            self.read_only_names.push(value.clone());
         }
         let subject = self.known_name();
         let iterator = match self.rng.below(3) {

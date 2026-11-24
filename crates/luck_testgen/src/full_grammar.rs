@@ -1,12 +1,3 @@
-//! Programs are shaped like real code (module prelude, OOP class table,
-//! call- and table-heavy bodies) rather than statement soup.
-//!
-//! Unlike [`crate::generate_runtime_safe`], output isn't runtime-safe: programs are for
-//! the parse -> analyze -> transform -> emit pipeline, never for execution,
-//! so expressions may index nil, divide strings, or call numbers. Every
-//! program must parse with zero errors, and the roundtrip suite checks that
-//! across seeds and versions.
-
 mod expr;
 mod stmt;
 mod types;
@@ -56,7 +47,7 @@ struct FullGenerator {
     /// Names the validator treats as read-only: const bindings, exported
     /// functions, and 5.5 `for` control variables. They never appear as
     /// assignment targets.
-    readonly_names: Vec<String>,
+    read_only_names: Vec<String>,
     callables: Vec<String>,
     /// Type expressions naming a declared alias, generic ones instantiated.
     alias_types: Vec<String>,
@@ -78,7 +69,7 @@ impl FullGenerator {
             // The chunk itself is a vararg function in every version.
             function_varargs: vec![Varargs::Allowed],
             names: Vec::new(),
-            readonly_names: Vec::new(),
+            read_only_names: Vec::new(),
             callables: BUILTIN_CALLEES.iter().map(|callee| (*callee).to_owned()).collect(),
             alias_types: Vec::new(),
             next_id: 0,
@@ -124,14 +115,14 @@ impl FullGenerator {
     }
 
     /// A declared name that isn't read-only. The prelude's never are.
-    fn known_writable_name(&mut self) -> String {
-        let writable: Vec<&str> = self
+    fn known_assignable_name(&mut self) -> String {
+        let assignable: Vec<&str> = self
             .names
             .iter()
-            .filter(|name| !self.readonly_names.contains(name))
+            .filter(|name| !self.read_only_names.contains(name))
             .map(String::as_str)
             .collect();
-        self.rng.pick(&writable).to_owned()
+        self.rng.pick(&assignable).to_owned()
     }
 
     fn known_callable(&mut self) -> String {
@@ -232,7 +223,7 @@ impl FullGenerator {
             let value = self.expr(1);
             self.line(&format!("export local {local} = {value}"));
             let function = self.fresh_name();
-            self.readonly_names.push(function.clone());
+            self.read_only_names.push(function.clone());
             let param = self.fresh_name();
             self.line(&format!("export function {function}({param}: number)"));
             self.function_body(Varargs::Forbidden);
@@ -257,13 +248,13 @@ impl FullGenerator {
             }
             1 => {
                 let name = self.fresh_name();
-                self.readonly_names.push(name.clone());
+                self.read_only_names.push(name.clone());
                 let value = self.expr(2);
                 self.line(&format!("export const {name} = {value}"));
             }
             _ => {
                 let name = self.fresh_name();
-                self.readonly_names.push(name.clone());
+                self.read_only_names.push(name.clone());
                 let param = self.fresh_name();
                 if self.rng.chance(30) {
                     self.line("@native");
@@ -276,7 +267,15 @@ impl FullGenerator {
     }
 }
 
-pub fn generate_full(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
+/// A program in `version` that reaches all of its grammar, with
+/// `statement_budget` random statements at module scope.
+///
+/// The same arguments always give the same program. It's shaped like real
+/// code, a module prelude, a class table, and call- and table-heavy bodies,
+/// rather than statement soup. It parses with no errors, but it's for the
+/// stages, never for running, so it may index `nil`, divide strings, or call
+/// numbers.
+pub fn generate_full_grammar(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     FullGenerator::new(seed, version).program(statement_budget)
 }
 
@@ -286,15 +285,15 @@ mod tests {
 
     #[test]
     fn same_seed_generates_the_same_program() {
-        let first = generate_full(7, LuaVersion::Luau, 30);
-        let second = generate_full(7, LuaVersion::Luau, 30);
+        let first = generate_full_grammar(7, LuaVersion::Luau, 30);
+        let second = generate_full_grammar(7, LuaVersion::Luau, 30);
         assert_eq!(first, second);
     }
 
     #[test]
     fn lua51_programs_contain_no_later_syntax() {
         for seed in 0..8 {
-            let lua51 = generate_full(seed, LuaVersion::Lua51, 60);
+            let lua51 = generate_full_grammar(seed, LuaVersion::Lua51, 60);
             assert!(!lua51.contains("goto"), "5.1 must not emit goto");
             assert!(!lua51.contains("::"), "5.1 must not emit labels");
             assert!(!lua51.contains("<const>"), "5.1 must not emit attributes");
@@ -312,7 +311,7 @@ mod tests {
     fn luau_programs_reach_merged_rfc_syntax() {
         let mut all_programs = String::new();
         for seed in 0..16 {
-            all_programs.push_str(&generate_full(seed, LuaVersion::Luau, 60));
+            all_programs.push_str(&generate_full_grammar(seed, LuaVersion::Luau, 60));
         }
         for needle in ["export local", "export const", "export function", "1_000_000i", "<<"] {
             assert!(all_programs.contains(needle), "expected generated {needle}");

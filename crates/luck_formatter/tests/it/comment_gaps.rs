@@ -1,20 +1,13 @@
 //! A comment can sit in any gap between two tokens, and formatting has to
 //! keep it there, near enough, without changing the tree or losing it.
 
-use std::ffi::OsStr;
-use std::fs;
-use std::path::Path;
-
 use luck_allocator::Allocator;
 use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, SpaceAfterFunction,
     format,
 };
 use luck_parser::ParseResult;
-use luck_testgen::{
-    collect_fixture_files, detect_version, generate_full, generate_runtime_safe, is_error_fixture,
-    tree_shape,
-};
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, lua_fixtures, tree_shape};
 use luck_token::{LuaVersion, Span, TokenKind, index_to_offset};
 
 const SEED_COUNT: u64 = 8;
@@ -190,19 +183,11 @@ fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion)
 
 #[test]
 fn a_comment_in_any_gap_of_a_fixture_keeps_its_tree() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-    let fixtures = collect_fixture_files(&root).expect("fixture tree is readable");
-    let sources: Vec<_> = fixtures
-        .iter()
-        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
-        .map(|path| (path, path.strip_prefix(&root).expect("fixture is under the root")))
-        .filter(|(_, relative)| !is_error_fixture(relative))
-        .collect();
-    assert!(!sources.is_empty(), "no fixtures under {}", root.display());
-    for (path, relative) in sources {
-        let source = fs::read_to_string(path).expect("fixture is readable");
-        let label = relative.display().to_string();
-        assert_comments_keep_the_tree(&label, &source, detect_version(relative));
+    let fixtures: Vec<_> = lua_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
+    assert!(!fixtures.is_empty(), "no fixture outside `errors/`");
+    for fixture in fixtures {
+        let label = fixture.relative_path.display().to_string();
+        assert_comments_keep_the_tree(&label, &fixture.source, fixture.version);
     }
 }
 
@@ -210,7 +195,7 @@ fn a_comment_in_any_gap_of_a_fixture_keeps_its_tree() {
 fn a_comment_in_any_gap_of_a_generated_program_keeps_its_tree() {
     for version in LuaVersion::ALL {
         for seed in 0..SEED_COUNT {
-            let full = generate_full(seed, version, STATEMENT_BUDGET);
+            let full = generate_full_grammar(seed, version, STATEMENT_BUDGET);
             assert_comments_keep_the_tree(&format!("full seed {seed} {version:?}"), &full, version);
             let runtime = generate_runtime_safe(seed, version, STATEMENT_BUDGET);
             let label = format!("runtime seed {seed} {version:?}");

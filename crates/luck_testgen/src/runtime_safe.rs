@@ -211,7 +211,7 @@ impl RuntimeGenerator {
             0 => "\"plain\"",
             1 => "'single'",
             2 => "\"esc\\ttab\\n\"",
-            3 => "\"d\\101c\"", // decimal escape
+            3 => "\"d\\101c\"",
             4 => "[[long bracket]]",
             _ => "\"uni-h\u{e9}llo\"",
         };
@@ -428,6 +428,14 @@ impl RuntimeGenerator {
     }
 }
 
+/// A program in `version` that runs without error, with `statement_budget`
+/// random statements at module scope.
+///
+/// The same arguments always give the same program. Every variable is set
+/// before it's read, arithmetic takes only numbers, every loop is bounded,
+/// and nothing calls a library function whose result varies, such as the
+/// order of `pairs`, the time, or the collector. It prints what it computes,
+/// so a program and what a stage made of it can be compared by their output.
 pub fn generate_runtime_safe(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
     RuntimeGenerator::new(seed, version).program(statement_budget)
 }

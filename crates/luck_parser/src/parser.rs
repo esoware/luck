@@ -737,15 +737,8 @@ impl<'ast> Parser<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-    use std::fs;
-    use std::path::Path;
-
     use luck_ast::block_nesting_depth;
-    use luck_testgen::{
-        collect_fixture_files, detect_version, generate_full, generate_runtime_safe,
-        is_error_fixture,
-    };
+    use luck_testgen::{generate_full_grammar, generate_runtime_safe, lua_fixtures};
 
     use super::*;
 
@@ -801,9 +794,10 @@ mod tests {
     fn counts_the_depth_of_generated_programs_as_the_tree_measures_it() {
         for version in LuaVersion::ALL {
             for seed in 0..40 {
-                for source in
-                    [generate_full(seed, version, 25), generate_runtime_safe(seed, version, 25)]
-                {
+                for source in [
+                    generate_full_grammar(seed, version, 25),
+                    generate_runtime_safe(seed, version, 25),
+                ] {
                     let (counted, built) = counted_and_built(&source, version);
                     assert_eq!(counted, built, "seed {seed} {version:?}\n{source}");
                 }
@@ -813,21 +807,15 @@ mod tests {
 
     #[test]
     fn counts_the_depth_of_fixtures_as_the_tree_measures_it() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-        let files = collect_fixture_files(&root).expect("fixture tree is readable");
         let mut checked = 0;
-        for path in files {
-            let relative = path.strip_prefix(&root).expect("fixture is under the root");
-            let is_source =
-                matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau"));
-            if !is_source || is_error_fixture(relative) {
+        for fixture in lua_fixtures() {
+            if fixture.is_error {
                 continue;
             }
-            let source = fs::read_to_string(&path).expect("fixture is readable");
-            let (counted, built) = counted_and_built(&source, detect_version(relative));
-            assert_eq!(counted, built, "{}", path.display());
+            let (counted, built) = counted_and_built(&fixture.source, fixture.version);
+            assert_eq!(counted, built, "{}", fixture.path.display());
             checked += 1;
         }
-        assert!(checked > 0, "no fixtures found under {}", root.display());
+        assert!(checked > 0, "no fixture outside `errors/`");
     }
 }

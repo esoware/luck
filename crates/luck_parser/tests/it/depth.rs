@@ -3,7 +3,7 @@ use std::ops::Range;
 use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, Statement, Visit, block_nesting_depth};
 use luck_parser::parse;
-use luck_testgen::with_the_smallest_stack;
+use luck_testgen::{nested, with_the_smallest_stack};
 use luck_token::LuaVersion;
 
 #[test]
@@ -362,16 +362,13 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
 #[test]
 fn each_construct_nests_as_deep_as_luau_reads_it() {
     with_the_smallest_stack(|| {
-        let nested = |open: &str, count: usize, close: &str| {
-            format!("{}{}", open.repeat(count), close.repeat(count))
-        };
         let mut deepest = 0;
         for source in [
-            nested("local function f() ", 1000, " end"),
-            nested("function f() ", 1000, " end"),
-            nested("f{function() ", 500, " end}"),
-            nested("(function() ", 500, " end)()"),
-            format!("local v = {}", nested("f{", 999, "}")),
+            nested("local function f() ", 1000, "", " end"),
+            nested("function f() ", 1000, "", " end"),
+            nested("f{function() ", 500, "", " end}"),
+            nested("(function() ", 500, "", " end)()"),
+            format!("local v = {}", nested("f{", 999, "", "}")),
             format!("local v = {}x{}", "(".repeat(997), " + 1)".repeat(997)),
             format!("local v = {}x{}", "(".repeat(997), " :: T)".repeat(997)),
             format!("local v = {}f{}", "(".repeat(998), ")()".repeat(998)),

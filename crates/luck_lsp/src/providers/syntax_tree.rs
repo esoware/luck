@@ -132,14 +132,8 @@ impl fmt::Write for PrettyDump {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-    use std::fs;
-    use std::path::Path;
-
     use luck_ast::MAX_NESTING_DEPTH;
-    use luck_testgen::{
-        collect_fixture_files, detect_version, generate_full, on_the_smallest_stack,
-    };
+    use luck_testgen::{generate_full_grammar, lua_fixtures, on_the_smallest_stack};
     use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
@@ -147,18 +141,10 @@ mod tests {
 
     #[test]
     fn a_dump_lays_the_tree_out_as_pretty_debug_does() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-        let mut sources = Vec::new();
-        for path in collect_fixture_files(&root).expect("fixture tree is readable") {
-            if matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")) {
-                let relative = path.strip_prefix(&root).expect("fixture is under the root");
-                let text = fs::read_to_string(&path).expect("fixture is readable");
-                sources.push((detect_version(relative), text));
-            }
-        }
-        assert!(!sources.is_empty(), "no fixtures found under {}", root.display());
+        let mut sources: Vec<(LuaVersion, String)> =
+            lua_fixtures().into_iter().map(|fixture| (fixture.version, fixture.source)).collect();
         for version in LuaVersion::ALL {
-            sources.extend((0..20).map(|seed| (version, generate_full(seed, version, 25))));
+            sources.extend((0..20).map(|seed| (version, generate_full_grammar(seed, version, 25))));
         }
         for (version, text) in sources {
             let document = document(&text, version.into());

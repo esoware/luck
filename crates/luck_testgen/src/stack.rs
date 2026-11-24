@@ -8,8 +8,22 @@ use std::{panic, thread};
 use luck_ast::{MAX_NESTING_DEPTH, MIN_STACK_BYTES};
 use luck_token::LuaVersion;
 
-fn wrapped(open: &str, count: usize, innermost: &str, close: &str) -> String {
+const LEVELS: usize = 100_000;
+
+/// `innermost` inside `count` of `open`, each closed by a `close`.
+pub fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
     format!("{}{innermost}{}", open.repeat(count), close.repeat(count))
+}
+
+fn by_dialect<Lua, Luau>(lua: Lua, luau: Luau) -> Vec<(LuaVersion, String)>
+where
+    Lua: IntoIterator<Item = String>,
+    Luau: IntoIterator<Item = String>,
+{
+    lua.into_iter()
+        .map(|source| (LuaVersion::Lua54, source))
+        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
+        .collect()
 }
 
 /// One source per construct, each nested as deep as the parser accepts.
@@ -21,53 +35,50 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
     let (two, three, four) = (one / 2, one / 3, one / 4);
     let groups = MAX_NESTING_DEPTH;
     let lua = [
-        format!("return {}", wrapped("(", groups, "x", ")")),
-        format!("return {}", wrapped("(", groups, &wrapped("{", one, "1", "}"), ")")),
-        format!("return {}", wrapped("f(", one, "x", ")")),
-        format!("return {}", wrapped("a:m(", one, "x", ")")),
-        format!("return {}", wrapped("a[", one, "x", "]")),
-        format!("return {}", wrapped("{", one, "1", "}")),
-        format!("return {}", wrapped("{a=", one, "1", "}")),
-        format!("return {}", wrapped("{[1]=", one, "1", "}")),
-        format!("return {}", wrapped("f{", two, "", "}")),
+        format!("return {}", nested("(", groups, "x", ")")),
+        format!("return {}", nested("(", groups, &nested("{", one, "1", "}"), ")")),
+        format!("return {}", nested("f(", one, "x", ")")),
+        format!("return {}", nested("a:m(", one, "x", ")")),
+        format!("return {}", nested("a[", one, "x", "]")),
+        format!("return {}", nested("{", one, "1", "}")),
+        format!("return {}", nested("{a=", one, "1", "}")),
+        format!("return {}", nested("{[1]=", one, "1", "}")),
+        format!("return {}", nested("f{", two, "", "}")),
         format!("return {}x", "not ".repeat(one)),
         format!("return {}x{}", "(".repeat(one), "+x)".repeat(one)),
-        format!("return {}", wrapped("x..(", one, "x", ")")),
-        format!("return {}", wrapped("x^-", two, "x", "")),
+        format!("return {}", nested("x..(", one, "x", ")")),
+        format!("return {}", nested("x^-", two, "x", "")),
         format!("return {}a{}", "(".repeat(groups), ").b".repeat(groups)),
         format!("return {}f{}", "(".repeat(two), ")()".repeat(two)),
-        format!("return {}", wrapped("function() return ", two, "1", " end")),
-        wrapped("x = function() ", two, "x = 1", " end"),
-        wrapped("local function f() ", two, "local x = 1", " end"),
-        wrapped("f(function() ", three, "x = 1", " end)"),
-        wrapped("a:m(function() ", three, "x = 1", " end)"),
-        wrapped("f{function() ", four, "x = 1", " end}"),
-        wrapped("(function() ", three, "x = 1", " end)()"),
-        wrapped("do ", one, "x = 1", " end"),
-        wrapped("if a then ", one, "x = 1", " end"),
-        wrapped("if a then else ", one, "x = 1", " end"),
-        wrapped("if a then elseif b then ", one, "x = 1", " end"),
-        wrapped("while a do ", one, "x = 1", " end"),
-        wrapped("for i = 1, 2 do ", one, "x = 1", " end"),
-        wrapped("for k, v in p do ", one, "x = 1", " end"),
-        wrapped("repeat ", one, "x = 1", " until a"),
+        format!("return {}", nested("function() return ", two, "1", " end")),
+        nested("x = function() ", two, "x = 1", " end"),
+        nested("local function f() ", two, "local x = 1", " end"),
+        nested("f(function() ", three, "x = 1", " end)"),
+        nested("a:m(function() ", three, "x = 1", " end)"),
+        nested("f{function() ", four, "x = 1", " end}"),
+        nested("(function() ", three, "x = 1", " end)()"),
+        nested("do ", one, "x = 1", " end"),
+        nested("if a then ", one, "x = 1", " end"),
+        nested("if a then else ", one, "x = 1", " end"),
+        nested("if a then elseif b then ", one, "x = 1", " end"),
+        nested("while a do ", one, "x = 1", " end"),
+        nested("for i = 1, 2 do ", one, "x = 1", " end"),
+        nested("for k, v in p do ", one, "x = 1", " end"),
+        nested("repeat ", one, "x = 1", " until a"),
     ];
     let luau = [
         format!("return {}x", "if a then b else ".repeat(one)),
-        format!("return {}", wrapped("`{", one, "x", "}`")),
-        format!("return {}", wrapped("(", one, "x", " :: T)")),
-        format!("type X = {}", wrapped("{", one, "T", "}")),
-        format!("type X = {}", wrapped("(", one, "T", ")")),
-        format!("type X = {}", wrapped("A<", one, "T", " >")),
+        format!("return {}", nested("`{", one, "x", "}`")),
+        format!("return {}", nested("(", one, "x", " :: T)")),
+        format!("type X = {}", nested("{", one, "T", "}")),
+        format!("type X = {}", nested("(", one, "T", ")")),
+        format!("type X = {}", nested("A<", one, "T", " >")),
         format!("type X = {}T", "() -> ".repeat(one)),
-        format!("type X = {}", wrapped("(A | ", two, "T", ")")),
-        format!("type X = {}", wrapped("typeof(x :: ", two, "x", ")")),
-        format!("local x: {} = 1", wrapped("{", one, "T", "}")),
+        format!("type X = {}", nested("(A | ", two, "T", ")")),
+        format!("type X = {}", nested("typeof(x :: ", two, "x", ")")),
+        format!("local x: {} = 1", nested("{", one, "T", "}")),
     ];
-    lua.into_iter()
-        .map(|source| (LuaVersion::Lua54, source))
-        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-        .collect()
+    by_dialect(lua, luau)
 }
 
 /// One source per kind of run, each one level of nesting however long.
@@ -92,10 +103,7 @@ fn long_runs() -> Vec<(LuaVersion, String)> {
         format!("a{} += 1", ".b".repeat(LINKS)),
         format!("type X = T{}", "?".repeat(LINKS)),
     ];
-    lua.into_iter()
-        .map(|source| (LuaVersion::Lua54, source))
-        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-        .collect()
+    by_dialect(lua, luau)
 }
 
 /// One source per kind of sibling list, each one level of nesting however
@@ -156,52 +164,44 @@ fn long_lists() -> Vec<(LuaVersion, String)> {
         format!("type X = (T{}) -> T", ",T".repeat(ITEMS)),
         format!("type X<{}> = T0", numbered("T#", ",")),
     ];
-    lua.into_iter()
-        .map(|source| (LuaVersion::Lua54, source))
-        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-        .collect()
+    by_dialect(lua, luau)
 }
 
 /// One source per construct, each nested far past the cap, where the parser
 /// stops.
 pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
-    const LEVELS: usize = 100_000;
     let lua = [
-        format!("return {}", wrapped("(", LEVELS, "x", ")")),
-        format!("return {}", wrapped("f(", LEVELS, "x", ")")),
-        format!("return {}", wrapped("a[", LEVELS, "x", "]")),
-        format!("return {}", wrapped("{", LEVELS, "1", "}")),
-        format!("return {}", wrapped("f{", LEVELS, "", "}")),
+        format!("return {}", nested("(", LEVELS, "x", ")")),
+        format!("return {}", nested("f(", LEVELS, "x", ")")),
+        format!("return {}", nested("a[", LEVELS, "x", "]")),
+        format!("return {}", nested("{", LEVELS, "1", "}")),
+        format!("return {}", nested("f{", LEVELS, "", "}")),
         format!("return {}x", "- ".repeat(LEVELS)),
-        format!("return {}", wrapped("x^-", LEVELS, "x", "")),
-        format!("return {}", wrapped("function() return ", LEVELS, "1", " end")),
-        wrapped("do ", LEVELS, "x = 1", " end"),
-        wrapped("if a then ", LEVELS, "x = 1", " end"),
-        wrapped("while a do ", LEVELS, "x = 1", " end"),
-        wrapped("repeat ", LEVELS, "x = 1", " until a"),
-        wrapped("local function f() ", LEVELS, "local x = 1", " end"),
+        format!("return {}", nested("x^-", LEVELS, "x", "")),
+        format!("return {}", nested("function() return ", LEVELS, "1", " end")),
+        nested("do ", LEVELS, "x = 1", " end"),
+        nested("if a then ", LEVELS, "x = 1", " end"),
+        nested("while a do ", LEVELS, "x = 1", " end"),
+        nested("repeat ", LEVELS, "x = 1", " until a"),
+        nested("local function f() ", LEVELS, "local x = 1", " end"),
     ];
     let luau = [
         format!("return {}x", "if a then b else ".repeat(LEVELS)),
         format!("return {}a{}", "if ".repeat(LEVELS), " then b else c".repeat(LEVELS)),
-        format!("return {}", wrapped("`{", LEVELS, "x", "}`")),
-        format!("return {}", wrapped("(", LEVELS, "x", " :: T)")),
-        format!("type X = {}", wrapped("{", LEVELS, "T", "}")),
-        format!("type X = {}", wrapped("A<", LEVELS, "T", ">")),
+        format!("return {}", nested("`{", LEVELS, "x", "}`")),
+        format!("return {}", nested("(", LEVELS, "x", " :: T)")),
+        format!("type X = {}", nested("{", LEVELS, "T", "}")),
+        format!("type X = {}", nested("A<", LEVELS, "T", ">")),
         format!("type X = {}T", "() -> ".repeat(LEVELS)),
         format!("type X = {}T", "() -> ...".repeat(LEVELS)),
-        format!("type X = {}", wrapped("typeof(", LEVELS, "x", ")")),
+        format!("type X = {}", nested("typeof(", LEVELS, "x", ")")),
     ];
-    lua.into_iter()
-        .map(|source| (LuaVersion::Lua54, source))
-        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-        .collect()
+    by_dialect(lua, luau)
 }
 
 /// One source per way of breaking input at every level, far past the cap,
 /// which parse recovery reads in loops, in time linear in its length.
 pub fn broken_sources() -> Vec<(LuaVersion, String)> {
-    const LEVELS: usize = 100_000;
     let lua = [
         format!("return {}x", "(".repeat(LEVELS)),
         format!("return {}x{}", "(".repeat(LEVELS), "]".repeat(LEVELS)),
@@ -230,10 +230,7 @@ x()
 "
         .repeat(LEVELS),
     ];
-    lua.into_iter()
-        .map(|source| (LuaVersion::Lua54, source))
-        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-        .collect()
+    by_dialect(lua, luau)
 }
 
 /// Every source at the cap, every long run, and every long list.
