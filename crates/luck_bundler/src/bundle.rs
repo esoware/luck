@@ -1,16 +1,15 @@
-use std::mem;
 use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
 use luck_diagnostics::FileDiagnostics;
 use luck_minifier::TransformConfig;
 
-use crate::block_emitter;
-use crate::emitter::{self, LineMapEntry};
 use crate::graph::{BundleOptions, DependencyGraph};
+use crate::text_emitter::{self, LineMapEntry};
+use crate::tree_emitter;
 
 #[derive(Debug)]
-pub struct BundleResult {
+pub struct Bundle {
     /// Parses for the target, so every luck tool can read it back. Bytes,
     /// as the modules' sources are, which it copies as written.
     pub output: Vec<u8>,
@@ -46,10 +45,10 @@ pub fn bundle(
     arenas: &ThreadAllocators,
     entry_path: &Path,
     options: &BundleOptions<'_>,
-) -> Result<BundleResult, Vec<FileDiagnostics>> {
+) -> Result<Bundle, Vec<FileDiagnostics>> {
     let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
-    let (output, line_map) = emitter::emit(arenas.get(), &mut graph, options.version)?;
-    Ok(BundleResult {
+    let (output, line_map) = text_emitter::emit(arenas.get(), &mut graph, options.version)?;
+    Ok(Bundle {
         output,
         warnings: graph.warnings,
         source_files: graph.modules.into_iter().map(|module| module.path).collect(),
@@ -73,11 +72,13 @@ pub fn bundle_minified(
 ) -> Result<MinifiedBundle, Vec<FileDiagnostics>> {
     let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
     let allocator = arenas.get();
-    let warnings = mem::take(&mut graph.warnings);
-    let source_files = graph.modules.iter().map(|module| module.path.clone()).collect();
-    let source_byte_count = graph.modules.iter().map(|module| module.source.len()).sum();
-    let (mut chunk, header) = block_emitter::emit_chunk(allocator, graph, options.version)?;
+    let (mut chunk, header) = tree_emitter::emit(allocator, &mut graph, options.version)?;
     let output = luck_minifier::minify_chunk(allocator, &mut chunk, transforms, header)
         .expect("a bundle nests within the cap");
-    Ok(MinifiedBundle { output, warnings, source_files, source_byte_count })
+    Ok(MinifiedBundle {
+        output,
+        warnings: graph.warnings,
+        source_byte_count: graph.modules.iter().map(|module| module.source.len()).sum(),
+        source_files: graph.modules.into_iter().map(|module| module.path).collect(),
+    })
 }

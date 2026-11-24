@@ -36,20 +36,21 @@
 //! ```
 
 mod analysis;
-mod block_emitter;
 mod bundle;
 mod discovery;
 mod dynamic_require;
-mod emitter;
 mod exports;
 mod graph;
 mod loader;
 mod module;
+mod plan;
 mod relative_path;
+mod rewrite;
+mod text_emitter;
+mod tree_emitter;
 
-pub use bundle::{BundleResult, MinifiedBundle, bundle, bundle_minified};
+pub use bundle::{Bundle, MinifiedBundle, bundle, bundle_minified};
 pub use dynamic_require::DynamicRequire;
-pub use emitter::LineMapEntry;
-pub use exports::Exports;
 pub use graph::{BundleOptions, DependencyGraph};
 pub use module::{Dependency, ModuleId, ModuleInfo};
+pub use text_emitter::LineMapEntry;

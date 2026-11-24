@@ -15,8 +15,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{Analysis, StaticRequire, analyze};
 use crate::dynamic_require::DynamicRequire;
 use crate::graph::{BundleOptions, MAX_MODULE_COUNT};
-use crate::loader::PREFIX_STEM;
 use crate::module::ModuleInfo;
+use crate::plan::PREFIX_STEM;
 use crate::relative_path::make_relative;
 
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;

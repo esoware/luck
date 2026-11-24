@@ -1,52 +1,15 @@
-use std::fs;
-use std::path::Path;
-
 use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_bundler::{BundleOptions, BundleResult, DynamicRequire};
+use luck_bundler::Bundle;
 use luck_diagnostics::FileDiagnostics;
 use luck_testgen::with_the_smallest_stack;
 use luck_token::LuaVersion;
-use tempfile::TempDir;
 
-use crate::common::{bundle_both, located};
+use crate::common::{assert_reparses, bundle_files, located, text};
 
 /// `1` inside `count` table constructors.
 fn in_tables(count: usize) -> String {
     format!("{}1{}", "{".repeat(count), "}".repeat(count))
-}
-
-fn write_project(files: &[(&str, &str)]) -> TempDir {
-    let directory = tempfile::tempdir().expect("tempdir");
-    for (name, contents) in files {
-        fs::write(directory.path().join(name), contents).expect("write project file");
-    }
-    directory
-}
-
-fn bundle_project(
-    directory: &Path,
-    entry: &str,
-    version: LuaVersion,
-) -> Result<BundleResult, Vec<FileDiagnostics>> {
-    let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
-    bundle_both(
-        &directory.join(entry),
-        &BundleOptions {
-            version,
-            search_paths: &search_paths,
-            project_root: directory,
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-}
-
-fn bundle_files(
-    entry: &str,
-    files: &[(&str, &str)],
-    version: LuaVersion,
-) -> Result<BundleResult, Vec<FileDiagnostics>> {
-    bundle_project(write_project(files).path(), entry, version)
 }
 
 /// A project whose deepest construct is a run of nested tables after
@@ -57,7 +20,7 @@ struct Shape {
     entry: &'static str,
     deep_file: &'static str,
     prefix: &'static str,
-    other_files: &'static [(&'static str, &'static str)],
+    other_files: &'static [(&'static str, &'static [u8])],
     wrapper_levels: usize,
 }
 
@@ -71,7 +34,7 @@ const SHAPES: &[Shape] = &[
 local name = ...
 print(name, arg)
 return ",
-        other_files: &[("main.lua", "return require(\"m\")\n")],
+        other_files: &[("main.lua", b"return require(\"m\")\n")],
         wrapper_levels: 2,
     },
     Shape {
@@ -80,7 +43,7 @@ return ",
         entry: "main.lua",
         deep_file: "m.lua",
         prefix: "return ",
-        other_files: &[("main.lua", "return require(\"m\")\n")],
+        other_files: &[("main.lua", b"return require(\"m\")\n")],
         wrapper_levels: 2,
     },
     Shape {
@@ -91,7 +54,7 @@ return ",
         prefix: "\
 require(\"m\")
 return ",
-        other_files: &[("m.lua", "return 1\n")],
+        other_files: &[("m.lua", b"return 1\n")],
         wrapper_levels: 2,
     },
     Shape {
@@ -102,7 +65,7 @@ return ",
         prefix: "\
 _ENV = setmetatable({}, { __index = _ENV })
 return ",
-        other_files: &[("main.lua", "return require(\"m\")\n")],
+        other_files: &[("main.lua", b"return require(\"m\")\n")],
         wrapper_levels: 3,
     },
     Shape {
@@ -114,7 +77,7 @@ return ",
 require(\"m\")
 module(\"main\")
 return ",
-        other_files: &[("m.lua", "return 1\n")],
+        other_files: &[("m.lua", b"return 1\n")],
         wrapper_levels: 3,
     },
     Shape {
@@ -123,18 +86,18 @@ return ",
         entry: "main.luau",
         deep_file: "m.luau",
         prefix: "return ",
-        other_files: &[("main.luau", "return require(\"./m\")\n")],
+        other_files: &[("main.luau", b"return require(\"./m\")\n")],
         wrapper_levels: 2,
     },
 ];
 
 impl Shape {
     /// The deep file's source and the bundle's result.
-    fn bundle(&self, tables: usize) -> (String, Result<BundleResult, Vec<FileDiagnostics>>) {
+    fn bundle(&self, tables: usize) -> (String, Result<Bundle, Vec<FileDiagnostics>>) {
         let deep_source = format!("{}{}\n", self.prefix, in_tables(tables));
         let mut files = self.other_files.to_vec();
-        files.push((self.deep_file, &deep_source));
-        let result = bundle_files(self.entry, &files, self.version);
+        files.push((self.deep_file, deep_source.as_bytes()));
+        let result = bundle_files(&files, self.entry, self.version);
         (deep_source, result)
     }
 }
@@ -195,18 +158,18 @@ fn flags_e013_in_every_module_past_the_cap() {
     with_the_smallest_stack(|| {
         let deep = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
         let errors = bundle_files(
-            "main.lua",
             &[
                 (
                     "main.lua",
-                    "\
+                    b"\
 require(\"a\")
 require(\"b\")
 ",
                 ),
-                ("a.lua", &deep),
-                ("b.lua", &deep),
+                ("a.lua", deep.as_bytes()),
+                ("b.lua", deep.as_bytes()),
             ],
+            "main.lua",
             LuaVersion::Lua54,
         )
         .expect_err("neither module fits");
@@ -225,9 +188,10 @@ require(\"b\")
 fn lone_module_at_the_cap_bundles_verbatim() {
     with_the_smallest_stack(|| {
         let source = format!("return {}\n", in_tables(MAX_NESTING_DEPTH - 1));
-        let output = bundle_files("main.lua", &[("main.lua", &source)], LuaVersion::Lua54)
-            .expect("a lone module needs no wrapper")
-            .output;
+        let output =
+            bundle_files(&[("main.lua", source.as_bytes())], "main.lua", LuaVersion::Lua54)
+                .expect("a lone module needs no wrapper")
+                .output;
         assert_eq!(output, source.as_bytes());
     });
 }
@@ -254,30 +218,25 @@ fn luau_export_reads_are_measured_as_lowered() {
     with_the_smallest_stack(|| {
         let bundle_export_module = |source: &str| {
             bundle_files(
-                "main.luau",
                 &[
                     (
                         "main.luau",
-                        "\
+                        b"\
 local x = require(\"./x\")
 print(x)
 ",
                     ),
-                    ("x.luau", source),
+                    ("x.luau", source.as_bytes()),
                 ],
+                "main.luau",
                 LuaVersion::Luau,
             )
         };
 
         let literal = luau_table_export_module(MAX_NESTING_DEPTH - 3, "1");
-        let output = String::from_utf8(
-            bundle_export_module(&literal).expect("a literal at the cap fits").output,
-        )
-        .unwrap();
-        assert!(output.contains("__luck_exports.value"), "{output}");
-        let allocator = Allocator::new();
-        let reparsed = luck_parser::parse(&allocator, output.as_bytes(), LuaVersion::Luau);
-        assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
+        let output = bundle_export_module(&literal).expect("a literal at the cap fits").output;
+        assert!(text(&output).contains("__luck_exports.value"), "{}", text(&output));
+        assert_reparses(&output, LuaVersion::Luau);
 
         // Lowering reads `value` as a field of the export table, one level deeper.
         let export_read = luau_table_export_module(MAX_NESTING_DEPTH - 3, "value");

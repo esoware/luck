@@ -17,7 +17,7 @@ The bundle opens with a small loader, and each module registers as a function th
 
 ## Usage
 
-- `bundle(&arenas, entry, &options)` returns a `BundleResult`: the output, the warnings, the bundled files, and the line map. The result borrows no arena, so `arenas.reset()` can empty them right after.
+- `bundle(&arenas, entry, &options)` returns a `Bundle`: the output, the warnings, the bundled files, and the line map. The result borrows no arena, so `arenas.reset()` can empty them right after.
 - `bundle_minified(&arenas, entry, &options, &transforms)` returns a `MinifiedBundle`.
 - `BundleOptions` holds the target version, the Lua search paths, the project root, and the `DynamicRequire` mode.
 - `DependencyGraph::build` builds the graph alone.

@@ -72,19 +72,20 @@ impl<'ast> DependencyGraph<'ast> {
         let entry =
             FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
         let found = discover_reachable(arenas, reader, &entry);
-        number_modules(entry, found, |path| reader.discover(arenas.get(), path))
+        number_modules(arenas, reader, entry, found)
     }
 }
 
 /// Numbers the modules breadth-first from `entry`, in require order.
 ///
 /// The diagnostics are gathered in that order too, so neither depends on how
-/// discovery was scheduled. A module that discovery skipped is discovered
-/// now. Stops with E009 at the module limit.
+/// discovery was scheduled. A module that discovery skipped is read now, into
+/// this thread's arena. Stops with E009 at the module limit.
 fn number_modules<'ast>(
+    arenas: &'ast ThreadAllocators,
+    reader: Reader<'_>,
     entry: PathBuf,
     mut found: FxHashMap<OsString, Discovered<'ast>>,
-    mut discover: impl FnMut(&Path) -> Discovered<'ast>,
 ) -> Result<DependencyGraph<'ast>, Vec<FileDiagnostics>> {
     // By canonical path, as text, as `discover_reachable` keys it.
     let mut ids: FxHashMap<OsString, ModuleId> = FxHashMap::default();
@@ -102,7 +103,7 @@ fn number_modules<'ast>(
             break;
         }
         let Discovered { errors: found_errors, warnings: found_warnings, module } =
-            found.remove(path.as_os_str()).unwrap_or_else(|| discover(path));
+            found.remove(path.as_os_str()).unwrap_or_else(|| reader.discover(arenas.get(), path));
         if !found_errors.is_empty() {
             errors.push(FileDiagnostics { path: path.clone(), diags: found_errors });
         }

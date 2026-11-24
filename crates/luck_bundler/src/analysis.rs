@@ -6,7 +6,7 @@ use luck_token::{LuaVersion, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::dynamic_require::DynamicRequire;
-use crate::exports::{Exports, has_value_exports};
+use crate::exports::Exports;
 
 /// A call of the global `require` with one string literal, whose module the
 /// bundle holds.
@@ -67,7 +67,7 @@ pub(crate) fn analyze<'ast>(
     let version = chunk.version;
     let semantic =
         SemanticBuilder::new().with_counts(counts).with_requires(true).build(chunk).semantic;
-    let tree = semantic.scoping();
+    let scoping = semantic.scoping();
     let mut requires = Vec::new();
     let mut dynamic_callees = Vec::new();
     let mut diags = Vec::new();
@@ -120,13 +120,13 @@ pub(crate) fn analyze<'ast>(
         .filter_map(|site| site.call.callee.as_name())
         .map(|callee| callee.span.start)
         .collect();
-    let [require, arg, module] = ["require", "arg", "module"].map(|name| tree.name_id(name));
+    let [require, arg, module] = ["require", "arg", "module"].map(|name| scoping.name_id(name));
     let (mut has_global_arg_read, mut has_global_module_read) = (false, false);
-    for reference in tree.references() {
+    for reference in scoping.references() {
         let name = Some(reference.name);
         if name == require {
             if reference.kind.is_read() && called.binary_search(&reference.span.start).is_err() {
-                diags.push(if tree.is_host_global(reference) {
+                diags.push(if scoping.is_host_global(reference) {
                     Diagnostic::w005_aliased(reference.span)
                 } else {
                     Diagnostic::w005_shadowed(reference.span)
@@ -134,7 +134,7 @@ pub(crate) fn analyze<'ast>(
             }
             continue;
         }
-        if tree.is_global(reference) {
+        if scoping.is_global(reference) {
             has_global_arg_read |= name == arg;
             has_global_module_read |= name == module;
         }
@@ -145,22 +145,18 @@ pub(crate) fn analyze<'ast>(
         requires,
         dynamic_callees,
         diags,
-        has_vararg_read: tree.scopes().first().is_some_and(|scope| scope.has_vararg_read),
+        has_vararg_read: scoping.scopes().first().is_some_and(|scope| scope.has_vararg_read),
         // Lua 5.1 binds `arg` in every vararg function, so a free one is the
         // chunk's own.
         has_global_arg_read: version.has_implicit_vararg_table() && has_global_arg_read,
         has_env_rebinding: version.has_env_upvalue()
-            && (tree.is_env_assigned() || has_global_module_read),
+            && (scoping.is_env_assigned() || has_global_module_read),
         max_function_upvalues: if counts_upvalues(version) {
-            max_function_upvalues(tree)
+            max_function_upvalues(scoping)
         } else {
             0
         },
-        exports: if version.has_value_exports() && has_value_exports(&chunk.block) {
-            Exports::new(&chunk.block, tree, source)
-        } else {
-            Exports::default()
-        },
+        exports: Exports::new(chunk, scoping, source),
     }
 }
 
@@ -172,24 +168,24 @@ const fn counts_upvalues(version: LuaVersion) -> bool {
 /// The most distinct outer locals any one function captures. A capture counts
 /// on every function between the use and the declaring scope, as Lua's
 /// compiler counts it.
-fn max_function_upvalues(tree: &Scoping) -> usize {
+fn max_function_upvalues(scoping: &Scoping) -> usize {
     let mut captures: FxHashSet<(SymbolId, ScopeId)> = FxHashSet::default();
-    let mut counts = vec![0; tree.scopes().len()];
-    for reference in tree.references() {
+    let mut counts = vec![0; scoping.scopes().len()];
+    for reference in scoping.references() {
         let Some(symbol) = reference.resolved else {
             continue;
         };
-        let home = tree.scope(tree.symbol(symbol).scope).function;
-        let mut function = tree.scope(reference.scope).function;
+        let home = scoping.scope(scoping.symbol(symbol).scope).function;
+        let mut function = scoping.scope(reference.scope).function;
         while function != home {
-            let scope = tree.scope(function);
+            let scope = scoping.scope(function);
             if scope.kind == ScopeKind::Function && captures.insert((symbol, function)) {
                 counts[function.index()] += 1;
             }
             let Some(parent) = scope.parent else {
                 break;
             };
-            function = tree.scope(parent).function;
+            function = scoping.scope(parent).function;
         }
     }
     counts.into_iter().max().unwrap_or(0)
@@ -210,20 +206,8 @@ mod tests {
         analyze(allocator, &parsed.chunk, parsed.counts, source.as_bytes(), dynamic_require)
     }
 
-    fn analyze_with<'ast>(
-        allocator: &'ast Allocator,
-        source: &'ast str,
-        dynamic_require: DynamicRequire,
-    ) -> Analysis<'ast> {
-        analyze_in(allocator, source, LuaVersion::Lua54, dynamic_require)
-    }
-
     fn analyze_lua54<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Analysis<'ast> {
-        analyze_with(allocator, source, DynamicRequire::default())
-    }
-
-    fn analyze_luau<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Analysis<'ast> {
-        analyze_in(allocator, source, LuaVersion::Luau, DynamicRequire::default())
+        analyze_in(allocator, source, LuaVersion::Lua54, DynamicRequire::default())
     }
 
     fn require_strings<'ast>(analysis: &Analysis<'ast>) -> Vec<&'ast str> {
@@ -295,8 +279,8 @@ local x = require(\"x\")
     #[test]
     fn non_literal_require_flags_e002_in_error_mode() {
         let allocator = Allocator::new();
-        let analysis =
-            analyze_with(&allocator, "local x = require(varname)\n", DynamicRequire::Error);
+        let source = "local x = require(varname)\n";
+        let analysis = analyze_in(&allocator, source, LuaVersion::Lua54, DynamicRequire::Error);
         assert!(analysis.requires.is_empty());
         assert_eq!(analysis.dynamic_callees, Vec::<Span>::new());
         assert_eq!(with_code(&analysis, "E002").len(), 1, "{:?}", analysis.diags);
@@ -317,8 +301,8 @@ local x = require(\"x\")
     #[test]
     fn allow_mode_keeps_the_call_without_warning() {
         let allocator = Allocator::new();
-        let analysis =
-            analyze_with(&allocator, "local x = require(varname)\n", DynamicRequire::Allow);
+        let source = "local x = require(varname)\n";
+        let analysis = analyze_in(&allocator, source, LuaVersion::Lua54, DynamicRequire::Allow);
         assert!(analysis.diags.is_empty(), "{:?}", analysis.diags);
         assert_eq!(analysis.dynamic_callees, [Span::new(10, 17)]);
     }
@@ -329,7 +313,8 @@ local x = require(\"x\")
     #[test]
     fn luau_dynamic_require_is_warned_but_not_retargeted() {
         let allocator = Allocator::new();
-        let analysis = analyze_luau(&allocator, "local x = require(varname)\n");
+        let source = "local x = require(varname)\n";
+        let analysis = analyze_in(&allocator, source, LuaVersion::Luau, DynamicRequire::default());
         assert_eq!(with_code(&analysis, "W007").len(), 1, "{:?}", analysis.diags);
         assert_eq!(analysis.dynamic_callees, Vec::<Span>::new());
     }

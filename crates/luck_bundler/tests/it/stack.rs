@@ -4,41 +4,27 @@
 //! so a module nested to the parser's cap, or holding long runs and lists,
 //! gets through all of that.
 
-use std::fs;
-
-use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
-use tempfile::TempDir;
 
-use crate::common::{bundle_both, codes};
+use crate::common::{bundle_files, codes};
 
 #[test]
 fn bundling_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
-        let directory = TempDir::new().expect("directory");
         let (entry_name, module_name, require) = if version.is_luau() {
             ("main.luau", "m.luau", "require(\"./m\")")
         } else {
             ("main.lua", "m.lua", "require(\"m\")")
         };
-        fs::write(directory.path().join(module_name), source).expect("write the module");
-        let entry = directory.path().join(entry_name);
         let entry_source = format!(
             "\
 local m = {require}
 print(m)
 "
         );
-        fs::write(&entry, entry_source).expect("write the entry");
-        let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
-        let options = BundleOptions {
-            version,
-            search_paths: &search_paths,
-            project_root: directory.path(),
-            dynamic_require: DynamicRequire::default(),
-        };
+        let files = [(module_name, source.as_bytes()), (entry_name, entry_source.as_bytes())];
         // A module nested to the cap passes it inside its wrapper.
-        if let Err(errors) = bundle_both(&entry, &options) {
+        if let Err(errors) = bundle_files(&files, entry_name, version) {
             assert!(codes(&errors).iter().all(|&code| code == "E013"), "{errors:?}");
         }
     });

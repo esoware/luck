@@ -1,56 +1,13 @@
-use std::fs;
-use std::path::Path;
-
 use luck_allocator::Allocator;
 use luck_ast::{SuffixedExpression, Visit};
-use luck_bundler::{BundleOptions, BundleResult, DynamicRequire, LineMapEntry};
-use luck_diagnostics::FileDiagnostics;
+use luck_bundler::{Bundle, LineMapEntry};
 use luck_semantic::{ScopeId, ScopeKind, Scoping, SemanticBuilder, SymbolId};
 use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
-use tempfile::TempDir;
 
-use crate::common::{bundle_both, text};
-
-const LUA_REQUIRE_UTIL: &[u8] = b"\
-local util = require(\"util\")
-print(util)
-";
-const LUAU_REQUIRE_UTIL: &[u8] = b"\
-local util = require(\"./util\")
-print(util)
-";
-const RETURN_ONE: &[u8] = b"return 1\n";
-
-fn write_project(files: &[(&str, &[u8])]) -> TempDir {
-    let directory = tempfile::tempdir().expect("tempdir");
-    for (name, contents) in files {
-        fs::write(directory.path().join(name), contents).expect("write project file");
-    }
-    directory
-}
-
-fn bundle_project(
-    directory: &Path,
-    entry: &str,
-    version: LuaVersion,
-) -> Result<BundleResult, Vec<FileDiagnostics>> {
-    let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
-    bundle_both(
-        &directory.join(entry),
-        &BundleOptions {
-            version,
-            search_paths: &search_paths,
-            project_root: directory,
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-}
-
-fn bundle_files(files: &[(&str, &[u8])], entry: &str, version: LuaVersion) -> BundleResult {
-    let directory = write_project(files);
-    bundle_project(directory.path(), entry, version).expect("bundle failed")
-}
+use crate::common::{
+    LUA_REQUIRE_UTIL, LUAU_REQUIRE_UTIL, RETURN_ONE, assert_reparses, bundle_files, text,
+};
 
 fn scoping_of(allocator: &Allocator, output: &str, version: LuaVersion) -> Scoping {
     let parsed = luck_parser::parse(allocator, output.as_bytes(), version);
@@ -59,13 +16,7 @@ fn scoping_of(allocator: &Allocator, output: &str, version: LuaVersion) -> Scopi
     SemanticBuilder::new().with_counts(parsed.counts).build(chunk).semantic.into_scoping()
 }
 
-fn assert_reparses(output: &str, version: LuaVersion) {
-    let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, output.as_bytes(), version);
-    assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-}
-
-fn line_map_entry<'map>(result: &'map BundleResult, file_name: &str) -> &'map LineMapEntry {
+fn line_map_entry<'map>(result: &'map Bundle, file_name: &str) -> &'map LineMapEntry {
     result
         .line_map
         .iter()
@@ -73,23 +24,23 @@ fn line_map_entry<'map>(result: &'map BundleResult, file_name: &str) -> &'map Li
         .unwrap_or_else(|| panic!("no line map entry for {file_name}"))
 }
 
-// The most upvalues any function in `output` captures, counting a capture on
-// every function between the use and the declaring scope, as Lua's compiler
-// does.
+/// The most upvalues any function in `output` captures, counting a capture on
+/// every function between the use and the declaring scope, as Lua's compiler
+/// does.
 fn max_function_upvalues(output: &str, version: LuaVersion) -> usize {
     let allocator = Allocator::new();
-    let tree = scoping_of(&allocator, output, version);
+    let scoping = scoping_of(&allocator, output, version);
     let mut upvalues: FxHashMap<ScopeId, FxHashSet<SymbolId>> = FxHashMap::default();
-    for reference in tree.references() {
+    for reference in scoping.references() {
         let Some(symbol) = reference.resolved else {
             continue;
         };
-        let home = tree.symbol(symbol).scope;
+        let home = scoping.symbol(symbol).scope;
         let mut current = Some(reference.scope);
         while let Some(scope_id) = current
             && scope_id != home
         {
-            let scope = tree.scope(scope_id);
+            let scope = scoping.scope(scope_id);
             if scope.kind == ScopeKind::Function {
                 upvalues.entry(scope_id).or_default().insert(symbol);
             }
@@ -120,7 +71,8 @@ name = \"A\"
         ],
         "main.lua",
         LuaVersion::Lua51,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         !text(&result.output).contains("__luck_loading={}"),
         "the 5.1 in-progress sentinel must not be a table, or module() adopts it:\n{}",
@@ -143,7 +95,8 @@ print(arg[0], util)
         ],
         "main.lua",
         LuaVersion::Lua51,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         !text(&result.output).contains(
             "\
@@ -170,7 +123,8 @@ print(d)
             &[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)],
             "main.lua",
             version,
-        );
+        )
+        .expect("bundle failed");
         assert!(
             !text(&result.output).contains(
                 "\
@@ -201,7 +155,8 @@ print(f())
         &[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)],
         "main.lua",
         LuaVersion::Lua51,
-    );
+    )
+    .expect("bundle failed");
     let upvalues = max_function_upvalues(text(&result.output), LuaVersion::Lua51);
     assert!(upvalues <= limit, "Lua 5.1 allows {limit} upvalues per function, not {upvalues}");
 }
@@ -210,7 +165,7 @@ print(f())
 fn module_assigning_env_rebinds_only_its_own_env() {
     let result = bundle_files(
         &[
-            ("main.lua", LUA_REQUIRE_UTIL),
+            ("main.lua", LUA_REQUIRE_UTIL.as_bytes()),
             (
                 "util.lua",
                 b"\
@@ -221,13 +176,14 @@ return 1
         ],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
-    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Lua54);
-    let shared_writes = tree
+    let scoping = scoping_of(&allocator, text(&result.output), LuaVersion::Lua54);
+    let shared_writes = scoping
         .references()
         .iter()
-        .filter(|reference| tree.name(reference.name) == "_ENV" && reference.kind.is_write())
+        .filter(|reference| scoping.name(reference.name) == "_ENV" && reference.kind.is_write())
         .filter(|reference| reference.resolved.is_none())
         .count();
     assert_eq!(
@@ -241,10 +197,11 @@ return 1
 #[test]
 fn lua51_arg_restore_ends_before_a_body_opening_with_a_parenthesis() {
     let result = bundle_files(
-        &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"(print)(..., arg)\n")],
+        &[("main.lua", LUA_REQUIRE_UTIL.as_bytes()), ("util.lua", b"(print)(..., arg)\n")],
         "main.lua",
         LuaVersion::Lua51,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
     let parsed = luck_parser::parse(&allocator, &result.output, LuaVersion::Lua51);
     assert!(
@@ -274,7 +231,7 @@ impl<'ast> Visit<'ast> for EnvCalls {
 fn private_env_ends_before_a_body_opening_with_a_parenthesis() {
     let result = bundle_files(
         &[
-            ("main.lua", LUA_REQUIRE_UTIL),
+            ("main.lua", LUA_REQUIRE_UTIL.as_bytes()),
             (
                 "util.lua",
                 b"\
@@ -285,7 +242,8 @@ _ENV = {}
         ],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
     let parsed = luck_parser::parse(&allocator, &result.output, LuaVersion::Lua54);
     assert!(parsed.errors.is_empty(), "{:?}\n{}", parsed.errors, text(&result.output));
@@ -322,29 +280,30 @@ name = \"B\"
         ],
         "main.lua",
         LuaVersion::Lua52,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
-    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Lua52);
-    let wrapper = tree
+    let scoping = scoping_of(&allocator, text(&result.output), LuaVersion::Lua52);
+    let wrapper = scoping
         .references()
         .iter()
-        .find(|reference| tree.name(reference.name) == "module")
+        .find(|reference| scoping.name(reference.name) == "module")
         .expect("module() stays in the bundle")
         .scope;
-    let mut captures: Vec<_> = tree
+    let mut captures: Vec<_> = scoping
         .references()
         .iter()
         .filter(|reference| reference.scope == wrapper)
         .filter(|reference| {
-            reference.resolved.is_none_or(|symbol| tree.symbol(symbol).scope != wrapper)
+            reference.resolved.is_none_or(|symbol| scoping.symbol(symbol).scope != wrapper)
         })
         .collect();
     captures.sort_by_key(|reference| reference.span.start);
     let first = captures.first().expect("the wrapper captures something");
     assert!(
-        !tree.name(first.name).starts_with("__luck"),
+        !scoping.name(first.name).starts_with("__luck"),
         "upvalue 1 of a wrapper calling module() must not be `{}`:\n{}",
-        tree.name(first.name),
+        scoping.name(first.name),
         text(&result.output)
     );
 }
@@ -359,7 +318,8 @@ print(require(\"util\"))
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         !text(&result.output).contains("__luck_require(\"util\")"),
         "a call through a local _ENV must keep its meaning:\n{}",
@@ -377,7 +337,8 @@ print(require(\"util\"))
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         !text(&result.output).contains("__luck_require(\"util\")"),
         "a call to the file's own global `require` must not be rewritten:\n{}",
@@ -399,7 +360,8 @@ end
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
         "main.lua",
         LuaVersion::Lua55,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         text(&result.output).contains("__luck_require(\"util\")"),
         "a name declared `global` reaches the global `require`:\n{}",
@@ -425,7 +387,8 @@ print(util, other, _ENV.require(name))
         ],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     let output = text(&result.output);
     for rewritten in [
         "local util = __luck_require(\"util\")",
@@ -451,7 +414,8 @@ print(dynamic, static, marker)
         &[("main.lua", main), ("util.lua", RETURN_ONE)],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     let entry = line_map_entry(&result, "main.lua");
     let lines: Vec<&str> = text(&result.output).lines().collect();
     assert_eq!(
@@ -468,8 +432,7 @@ fn standard_library_require_is_not_an_unresolved_module() {
 local text = require(\"string\")
 print(text.upper(\"x\"))
 ";
-    let directory = write_project(&[("main.lua", main)]);
-    let result = bundle_project(directory.path(), "main.lua", LuaVersion::Lua54);
+    let result = bundle_files(&[("main.lua", main)], "main.lua", LuaVersion::Lua54);
     assert!(
         result.is_ok(),
         "require(\"string\") must bundle, as the real require serves it: {result:?}"
@@ -480,10 +443,11 @@ print(text.upper(\"x\"))
 fn lua52_preload_loader_receives_two_arguments() {
     for version in [LuaVersion::Lua52, LuaVersion::Lua53] {
         let result = bundle_files(
-            &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", RETURN_ONE)],
+            &[("main.lua", LUA_REQUIRE_UTIL.as_bytes()), ("util.lua", RETURN_ONE)],
             "main.lua",
             version,
-        );
+        )
+        .expect("bundle failed");
         assert!(
             !text(&result.output).contains("value=preloader(name)\n"),
             "{version:?}: a preload loader must be called with (name, nil):\n{}",
@@ -521,7 +485,8 @@ export function fb() return a.name() end
         ],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         !text(&result.output).contains("require cycle hit"),
         "a cycle of value-export modules must load:\n{}",
@@ -532,10 +497,11 @@ export function fb() return a.name() end
 #[test]
 fn luau_failed_load_does_not_leave_the_cycle_marker() {
     let result = bundle_files(
-        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", b"error(\"boom\")\n")],
+        &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", b"error(\"boom\")\n")],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     let has_in_progress_marker = text(&result.output).contains("__luck_loaded[id]=__luck_loading");
     assert!(
         !has_in_progress_marker || text(&result.output).contains("pcall("),
@@ -547,10 +513,11 @@ fn luau_failed_load_does_not_leave_the_cycle_marker() {
 #[test]
 fn luau_module_returning_nil_is_accepted() {
     let result = bundle_files(
-        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", b"return nil\n")],
+        &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", b"return nil\n")],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         !text(&result.output).contains("(...)==nil"),
         "`return nil` is exactly one result and must load:\n{}",
@@ -566,21 +533,22 @@ local animal = \"cat\"
 animal = \"bird\"
 ";
     let result = bundle_files(
-        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
+        &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", util)],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
-    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
+    let scoping = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
     let shadow_start =
         text(&result.output).find("\"cat\"").expect("the shadow stays in the bundle");
-    let has_shadow_read = tree
+    let has_shadow_read = scoping
         .references()
         .iter()
-        .filter(|reference| tree.name(reference.name) == "animal" && reference.kind.is_read())
+        .filter(|reference| scoping.name(reference.name) == "animal" && reference.kind.is_read())
         .filter_map(|reference| reference.resolved)
         .any(|symbol| {
-            tree.symbol(symbol).definition_span.start as usize
+            scoping.symbol(symbol).definition_span.start as usize
                 > shadow_start - "local animal = ".len()
         });
     assert!(
@@ -597,20 +565,21 @@ local table = 5
 export local value = table
 ";
     let result = bundle_files(
-        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
+        &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", util)],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
-    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
+    let scoping = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
     let freeze_start =
         text(&result.output).find("table.freeze").expect("the bundle reads `table.freeze`");
-    let freeze_read = tree
+    let freeze_read = scoping
         .references()
         .iter()
         .find(|reference| reference.span.start as usize == freeze_start)
         .expect("a name is read where `table.freeze` starts");
-    assert_eq!(tree.name(freeze_read.name), "table");
+    assert_eq!(scoping.name(freeze_read.name), "table");
     assert!(
         freeze_read.resolved.is_none(),
         "freeze must reach the library table:\n{}",
@@ -625,14 +594,15 @@ export local count = 0
 export function increment() count += 1 end
 ";
     let result = bundle_files(
-        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
+        &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", util)],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     let allocator = Allocator::new();
-    let tree = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
-    let has_local_write = tree.references().iter().any(|reference| {
-        tree.name(reference.name) == "count"
+    let scoping = scoping_of(&allocator, text(&result.output), LuaVersion::Luau);
+    let has_local_write = scoping.references().iter().any(|reference| {
+        scoping.name(reference.name) == "count"
             && reference.kind.is_write()
             && reference.resolved.is_some()
     });
@@ -647,13 +617,14 @@ export function increment() count += 1 end
 fn luau_bracketed_attribute_on_an_export_function_survives_lowering() {
     let result = bundle_files(
         &[
-            ("main.luau", LUAU_REQUIRE_UTIL),
+            ("main.luau", LUAU_REQUIRE_UTIL.as_bytes()),
             ("util.luau", b"@[native] export function f() return 1 end\n"),
         ],
         "main.luau",
         LuaVersion::Luau,
-    );
-    assert_reparses(text(&result.output), LuaVersion::Luau);
+    )
+    .expect("bundle failed");
+    assert_reparses(&result.output, LuaVersion::Luau);
 }
 
 #[test]
@@ -678,10 +649,11 @@ local marker = 1
         ),
     ] {
         let result = bundle_files(
-            &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util.as_bytes())],
+            &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", util.as_bytes())],
             "main.luau",
             LuaVersion::Luau,
-        );
+        )
+        .expect("bundle failed");
         let entry = line_map_entry(&result, "util.luau");
         let lines: Vec<&str> = text(&result.output).lines().collect();
         assert_eq!(
@@ -706,12 +678,13 @@ local keep = 5
 print(keep, b)
 ";
     let result = bundle_files(
-        &[("main.luau", LUAU_REQUIRE_UTIL), ("util.luau", util)],
+        &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", util)],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     let output = text(&result.output);
-    assert_reparses(output, LuaVersion::Luau);
+    assert_reparses(&result.output, LuaVersion::Luau);
     for needle in [
         "__luck_exports.a,__luck_exports.b = 1, 2\n",
         "__luck_exports.blank = nil;\n",
@@ -734,10 +707,14 @@ function __luck_exports.keep() return __luck_exports.a end
 #[test]
 fn line_map_counts_lone_cr_line_breaks_in_a_wrapped_module() {
     let result = bundle_files(
-        &[("main.lua", LUA_REQUIRE_UTIL), ("util.lua", b"local x = 1\rlocal y = 2\rreturn y\r")],
+        &[
+            ("main.lua", LUA_REQUIRE_UTIL.as_bytes()),
+            ("util.lua", b"local x = 1\rlocal y = 2\rreturn y\r"),
+        ],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     let entry = line_map_entry(&result, "util.lua");
     assert_eq!(
         entry.bundle_end_line - entry.bundle_start_line + 1,
@@ -749,7 +726,8 @@ fn line_map_counts_lone_cr_line_breaks_in_a_wrapped_module() {
 #[test]
 fn line_map_counts_lone_cr_line_breaks_in_a_lone_module() {
     let result =
-        bundle_files(&[("main.lua", b"print(1)\rprint(2)\r")], "main.lua", LuaVersion::Lua54);
+        bundle_files(&[("main.lua", b"print(1)\rprint(2)\r")], "main.lua", LuaVersion::Lua54)
+            .expect("bundle failed");
     let entry = line_map_entry(&result, "main.lua");
     assert_eq!(entry.bundle_end_line, 2, "a two-line CR file must map two lines: {entry:?}");
 }
@@ -760,7 +738,8 @@ fn multiline_require_keeps_its_lone_cr_line_breaks() {
         &[("main.lua", b"local d = require(\r\"util\"\r)\rprint(d)\r"), ("util.lua", RETURN_ONE)],
         "main.lua",
         LuaVersion::Lua54,
-    );
+    )
+    .expect("bundle failed");
     let (_, after_callee) =
         text(&result.output).split_once("__luck_require(\"util\"").expect("rewritten call");
     let (call_tail, _) = after_callee.split_once(')').expect("closing parenthesis");
@@ -791,7 +770,8 @@ print(__luck_require, util, require(name))
         ],
         "main.lua",
         LuaVersion::Lua51,
-    );
+    )
+    .expect("bundle failed");
     for loader_function in ["require", "dynamic"] {
         let declaration = format!("local function __luck1_{loader_function}(name)");
         assert!(text(&lua.output).contains(&declaration), "{}", text(&lua.output));
@@ -811,7 +791,8 @@ print(__luck_modules, util.value)
         ],
         "main.luau",
         LuaVersion::Luau,
-    );
+    )
+    .expect("bundle failed");
     assert!(
         text(&luau.output).contains("local function __luck1_exporting(id,body)"),
         "{}",

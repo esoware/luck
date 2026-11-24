@@ -2,10 +2,6 @@ use std::fmt::Write as _;
 
 use luck_token::LuaVersion;
 
-/// What every generated name's prefix starts with: `__luck_`, unless a
-/// module's source holds that, then `__luck1_`, `__luck2_`, and so on.
-pub(crate) const PREFIX_STEM: &str = "__luck";
-
 /// What decides the code a bundle opens with, apart from its prefix.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoaderShape {

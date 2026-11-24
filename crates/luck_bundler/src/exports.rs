@@ -1,9 +1,10 @@
-use luck_ast::{Block, GetSpan as _, LocalAssignment, LocalFunction, Statement};
+use luck_ast::{Block, Chunk, GetSpan as _, LocalAssignment, LocalFunction, Statement};
 use luck_semantic::{ScopeKind, Scoping, SymbolId};
 use luck_token::{LuaVersion, Span, line_breaks};
 use rustc_hash::FxHashSet;
 
-use crate::emitter::Edit;
+use crate::module::contains_span;
+use crate::text_emitter::Edit;
 
 /// How one module's top-level `export` declarations lower.
 ///
@@ -17,7 +18,7 @@ use crate::emitter::Edit;
 ///
 /// Empty on a target without value exports.
 #[derive(Debug, Default)]
-pub struct Exports<'ast> {
+pub(crate) struct Exports<'ast> {
     /// Exports that stay locals, in declaration order.
     pub local_names: Vec<&'ast str>,
     /// Where each statement whose exports live in the table starts, in
@@ -33,21 +34,25 @@ pub struct Exports<'ast> {
 }
 
 impl<'ast> Exports<'ast> {
-    /// The plan for `block`, whose names `source` holds and `tree` resolves,
-    /// when it exports a value.
-    pub(crate) fn new(block: &Block<'_>, tree: &Scoping, source: &'ast [u8]) -> Self {
+    /// The plan for `chunk`, whose names `source` holds and `scoping`
+    /// resolves, which is empty unless it exports a value.
+    pub(crate) fn new(chunk: &Chunk<'_>, scoping: &Scoping, source: &'ast [u8]) -> Self {
+        let block = &chunk.block;
+        if !chunk.version.has_value_exports() || !has_value_exports(block) {
+            return Self::default();
+        }
         // A later local of the export's own scope hides it from the module's
         // end.
-        let shadowed: FxHashSet<SymbolId> = tree
+        let shadowed: FxHashSet<SymbolId> = scoping
             .symbols()
             .iter()
             .filter_map(|symbol| {
-                let hidden = tree.symbol(symbol.shadows?);
+                let hidden = scoping.symbol(symbol.shadows?);
                 (hidden.is_exported && hidden.scope == symbol.scope).then_some(hidden.id)
             })
             .collect();
         let needs_table = |symbol: SymbolId| {
-            shadowed.contains(&symbol) || is_written_from_a_closure(tree, symbol)
+            shadowed.contains(&symbol) || is_written_from_a_closure(scoping, symbol)
         };
         let mut exports = Self { has_values: true, ..Self::default() };
         let mut table_symbols: Vec<SymbolId> = Vec::new();
@@ -58,11 +63,11 @@ impl<'ast> Exports<'ast> {
                     local
                         .names
                         .iter()
-                        .filter_map(|binding| tree.symbol_of(&binding.name))
+                        .filter_map(|binding| scoping.symbol_of(&binding.name))
                         .collect(),
                 ),
                 Statement::LocalFunction(function) if function.kind.is_exported() => {
-                    (function.span, tree.symbol_of(&function.name).into_iter().collect())
+                    (function.span, scoping.symbol_of(&function.name).into_iter().collect())
                 }
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
@@ -92,15 +97,15 @@ impl<'ast> Exports<'ast> {
                 table_symbols.extend(statement_symbols);
             } else {
                 exports.local_names.extend(statement_symbols.into_iter().map(|symbol| {
-                    let name = tree.symbol(symbol).definition_span.text(source);
+                    let name = scoping.symbol(symbol).definition_span.text(source);
                     str::from_utf8(name).expect("the lexer reads only ASCII names")
                 }));
             }
         }
         exports.field_references = table_symbols
             .into_iter()
-            .flat_map(|symbol| tree.resolved_references(symbol))
-            .map(|&id| tree.reference(id).span)
+            .flat_map(|symbol| scoping.resolved_references(symbol))
+            .map(|&id| scoping.reference(id).span)
             .collect();
         exports.field_references.sort_unstable_by_key(|span| span.start);
         exports
@@ -205,17 +210,9 @@ impl<'ast> Exports<'ast> {
     }
 }
 
-/// Whether `spans`, sorted by start and none starting where another does,
-/// holds `span`.
-pub(crate) fn contains_span(spans: &[Span], span: Span) -> bool {
-    spans
-        .binary_search_by_key(&span.start, |candidate| candidate.start)
-        .is_ok_and(|i| spans[i] == span)
-}
-
 /// Whether the module exports a value, so its bundled wrapper returns the
 /// export table.
-pub(crate) fn has_value_exports(block: &Block<'_>) -> bool {
+fn has_value_exports(block: &Block<'_>) -> bool {
     block.stmts.iter().any(|stmt| match stmt {
         Statement::LocalAssignment(local) => local.kind.is_exported(),
         Statement::LocalFunction(function) => function.kind.is_exported(),
@@ -243,11 +240,11 @@ pub(crate) fn has_value_exports(block: &Block<'_>) -> bool {
 }
 
 /// A closure can write such an export after the module returns.
-fn is_written_from_a_closure(tree: &Scoping, symbol: SymbolId) -> bool {
-    tree.resolved_references(symbol).iter().any(|&id| {
-        let reference = tree.reference(id);
+fn is_written_from_a_closure(scoping: &Scoping, symbol: SymbolId) -> bool {
+    scoping.resolved_references(symbol).iter().any(|&id| {
+        let reference = scoping.reference(id);
         reference.kind.is_write()
-            && tree.scope(tree.scope(reference.scope).function).kind == ScopeKind::Function
+            && scoping.scope(scoping.scope(reference.scope).function).kind == ScopeKind::Function
     })
 }
 

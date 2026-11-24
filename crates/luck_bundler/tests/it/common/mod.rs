@@ -1,12 +1,25 @@
+use std::fs;
 use std::path::Path;
 
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_ast::MIN_STACK_BYTES;
-use luck_bundler::{BundleOptions, BundleResult, bundle, bundle_minified};
+use luck_bundler::{Bundle, BundleOptions, DynamicRequire, bundle, bundle_minified};
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_minifier::TransformConfig;
 use luck_resolver::to_slash_lossy;
+use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
+use tempfile::TempDir;
+
+pub(crate) const LUA_REQUIRE_UTIL: &str = "\
+local util = require(\"util\")
+print(util)
+";
+pub(crate) const LUAU_REQUIRE_UTIL: &str = "\
+local util = require(\"./util\")
+print(util)
+";
+pub(crate) const RETURN_ONE: &[u8] = b"return 1\n";
 
 /// A bundle of sources that are UTF-8, which is UTF-8 too.
 pub(crate) fn text(output: &[u8]) -> &str {
@@ -44,7 +57,7 @@ pub(crate) fn off_pool<T>(work: impl FnOnce() -> T) -> T {
 pub(crate) fn bundle_both(
     entry: &Path,
     options: &BundleOptions<'_>,
-) -> Result<BundleResult, Vec<FileDiagnostics>> {
+) -> Result<Bundle, Vec<FileDiagnostics>> {
     let transforms = TransformConfig::default();
     let text_result = on_pool(1, || bundle(&ThreadAllocators::new(), entry, options));
     let threaded_result = off_pool(|| bundle(&ThreadAllocators::new(), entry, options));
@@ -77,6 +90,50 @@ pub(crate) fn bundle_both(
         }
     }
     text_result
+}
+
+pub(crate) fn write_project(files: &[(&str, &[u8])]) -> TempDir {
+    let directory = tempfile::tempdir().expect("tempdir");
+    for (name, contents) in files {
+        fs::write(directory.path().join(name), contents).expect("write project file");
+    }
+    directory
+}
+
+pub(crate) fn bundle_project(
+    directory: &Path,
+    entry: &str,
+    version: LuaVersion,
+) -> Result<Bundle, Vec<FileDiagnostics>> {
+    let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
+    bundle_both(
+        &directory.join(entry),
+        &BundleOptions {
+            version,
+            search_paths: &search_paths,
+            project_root: directory,
+            dynamic_require: DynamicRequire::default(),
+        },
+    )
+}
+
+pub(crate) fn bundle_files(
+    files: &[(&str, &[u8])],
+    entry: &str,
+    version: LuaVersion,
+) -> Result<Bundle, Vec<FileDiagnostics>> {
+    bundle_project(write_project(files).path(), entry, version)
+}
+
+pub(crate) fn assert_reparses(output: &[u8], version: LuaVersion) {
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, output, version);
+    assert!(
+        parsed.errors.is_empty(),
+        "bundle must reparse: {:?}\n{}",
+        parsed.errors,
+        String::from_utf8_lossy(output)
+    );
 }
 
 /// Each diagnostic in `files`, with the slash form of its file's path.

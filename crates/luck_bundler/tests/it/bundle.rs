@@ -1,14 +1,17 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::{fs, io};
 
-use luck_allocator::{Allocator, ThreadAllocators};
-use luck_bundler::{BundleOptions, BundleResult, DependencyGraph, DynamicRequire};
+use luck_allocator::ThreadAllocators;
+use luck_bundler::{Bundle, BundleOptions, DependencyGraph, DynamicRequire};
 use luck_diagnostics::FileDiagnostics;
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use luck_token::LuaVersion;
 use tempfile::TempDir;
 
-use crate::common::{bundle_both, codes, located, off_pool, on_pool, text};
+use crate::common::{
+    LUA_REQUIRE_UTIL, LUAU_REQUIRE_UTIL, RETURN_ONE, assert_reparses, bundle_both, bundle_files,
+    bundle_project, codes, located, off_pool, on_pool, text, write_project,
+};
 
 fn fixture_directory(dialect: &str, name: &str) -> PathBuf {
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
@@ -35,7 +38,7 @@ fn run_bundle_with(
     version: LuaVersion,
     entry_name: &str,
     dynamic_require: DynamicRequire,
-) -> Result<BundleResult, Vec<FileDiagnostics>> {
+) -> Result<Bundle, Vec<FileDiagnostics>> {
     let input_directory = fixture_directory(dialect, name);
     let entry = input_directory.join(entry_name);
     let search_paths =
@@ -142,17 +145,8 @@ fn circular_dependency_bundles_with_w003() {
 
 #[test]
 fn missing_entry_flags_e010() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let errors = bundle_both(
-        &directory.path().join("main.lua"),
-        &BundleOptions {
-            version: LuaVersion::Lua54,
-            search_paths: &[],
-            project_root: directory.path(),
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-    .expect_err("a missing entry must not bundle");
+    let errors = bundle_files(&[], "main.lua", LuaVersion::Lua54)
+        .expect_err("a missing entry must not bundle");
     assert_eq!(codes(&errors), ["E010"], "{errors:?}");
 }
 
@@ -368,7 +362,7 @@ fn luau_export_type_is_stripped_inside_module_wrappers() {
         "export must be stripped inside module wrappers:\n{output}"
     );
     assert!(output.contains("type Adder"), "the alias itself must survive:\n{output}");
-    assert_reparses(&output, LuaVersion::Luau);
+    assert_reparses(output.as_bytes(), LuaVersion::Luau);
 }
 
 /// The bundle must name no directory on the build host. Provenance comments
@@ -414,54 +408,6 @@ return util.value
     assert!(output.contains("../shared/util.lua"), "{output}");
 }
 
-fn temp_project(files: &[(&str, &[u8])]) -> io::Result<TempDir> {
-    let directory = tempfile::tempdir()?;
-    for (name, contents) in files {
-        fs::write(directory.path().join(name), contents)?;
-    }
-    Ok(directory)
-}
-
-fn bundle_luau_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnostics>> {
-    bundle_both(
-        &directory.join("main.luau"),
-        &BundleOptions {
-            version: LuaVersion::Luau,
-            search_paths: &[],
-            project_root: directory,
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-}
-
-fn bundle_lua_project(directory: &Path) -> Result<BundleResult, Vec<FileDiagnostics>> {
-    bundle_both(
-        &directory.join("main.lua"),
-        &BundleOptions {
-            version: LuaVersion::Lua54,
-            search_paths: &["?.lua".to_owned()],
-            project_root: directory,
-            dynamic_require: DynamicRequire::default(),
-        },
-    )
-}
-
-const REQUIRE_UTIL: &str = "\
-local util = require(\"./util\")
-print(util)
-";
-const LUA_REQUIRE_UTIL: &str = "\
-local util = require(\"util\")
-print(util)
-";
-const RETURN_ONE: &[u8] = b"return 1\n";
-
-fn assert_reparses(output: &str, version: LuaVersion) {
-    let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, output.as_bytes(), version);
-    assert!(parsed.errors.is_empty(), "bundle must reparse: {:?}\n{output}", parsed.errors);
-}
-
 #[test]
 fn entry_shebang_moves_to_the_first_line_of_a_lua_bundle() {
     let main = format!(
@@ -469,11 +415,13 @@ fn entry_shebang_moves_to_the_first_line_of_a_lua_bundle() {
 #!/usr/bin/env lua
 {LUA_REQUIRE_UTIL}"
     );
-    let directory =
-        temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
-    let output =
-        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(
         output.starts_with(
             "\
@@ -484,7 +432,7 @@ local __luck_modules={}
         "{output}"
     );
     assert_eq!(output.matches("#!").count(), 1, "{output}");
-    assert_reparses(&output, LuaVersion::Lua54);
+    assert_reparses(&bundled.output, LuaVersion::Lua54);
 }
 
 #[test]
@@ -492,13 +440,15 @@ fn entry_shebang_moves_to_the_first_line_of_a_luau_bundle() {
     let main = format!(
         "\
 #!/usr/bin/env luau
-{REQUIRE_UTIL}"
+{LUAU_REQUIRE_UTIL}"
     );
-    let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
-        .expect("project");
-    let output =
-        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)],
+        "main.luau",
+        LuaVersion::Luau,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(
         output.starts_with(
             "\
@@ -509,7 +459,7 @@ local __luck_modules={}
         "{output}"
     );
     assert_eq!(output.matches("#!").count(), 1, "{output}");
-    assert_reparses(&output, LuaVersion::Luau);
+    assert_reparses(&bundled.output, LuaVersion::Luau);
 }
 
 #[test]
@@ -519,11 +469,13 @@ fn first_line_comment_without_a_bang_moves_up_like_a_shebang() {
 # not a shebang
 {LUA_REQUIRE_UTIL}"
     );
-    let directory =
-        temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
-    let output =
-        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(
         output.starts_with(
             "\
@@ -533,28 +485,30 @@ local __luck_modules={}
         ),
         "{output}"
     );
-    assert_reparses(&output, LuaVersion::Lua54);
+    assert_reparses(&bundled.output, LuaVersion::Lua54);
 }
 
 #[test]
 fn dependency_shebang_is_dropped() {
-    let directory = temp_project(&[
-        ("main.lua", LUA_REQUIRE_UTIL.as_bytes()),
-        (
-            "util.lua",
-            b"\
+    let bundled = bundle_files(
+        &[
+            ("main.lua", LUA_REQUIRE_UTIL.as_bytes()),
+            (
+                "util.lua",
+                b"\
 #!/usr/bin/env lua
 return 1
 ",
-        ),
-    ])
-    .expect("project");
-    let output =
-        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+            ),
+        ],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
     assert!(!output.contains("#!"), "{output}");
-    assert_reparses(&output, LuaVersion::Lua54);
+    assert_reparses(&bundled.output, LuaVersion::Lua54);
 }
 
 #[test]
@@ -564,11 +518,13 @@ fn bom_before_an_entry_shebang_is_dropped() {
 \u{FEFF}#!/usr/bin/env lua
 {LUA_REQUIRE_UTIL}"
     );
-    let directory =
-        temp_project(&[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)]).expect("project");
-    let output =
-        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.lua", main.as_bytes()), ("util.lua", RETURN_ONE)],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(
         output.starts_with(
             "\
@@ -579,22 +535,21 @@ local __luck_modules={}
         "{output}"
     );
     assert!(!output.contains('\u{FEFF}'), "{output}");
-    assert_reparses(&output, LuaVersion::Lua54);
+    assert_reparses(&bundled.output, LuaVersion::Lua54);
 }
 
 #[test]
 fn bom_is_dropped_from_every_module_body() {
     let main = format!("\u{FEFF}{LUA_REQUIRE_UTIL}");
-    let directory = temp_project(&[
-        ("main.lua", main.as_bytes()),
-        ("util.lua", "\u{FEFF}return 1\n".as_bytes()),
-    ])
-    .expect("project");
-    let output =
-        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.lua", main.as_bytes()), ("util.lua", "\u{FEFF}return 1\n".as_bytes())],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(!output.contains('\u{FEFF}'), "{output}");
-    assert_reparses(&output, LuaVersion::Lua54);
+    assert_reparses(&bundled.output, LuaVersion::Lua54);
 }
 
 #[test]
@@ -603,11 +558,9 @@ fn lone_module_with_a_shebang_stays_verbatim() {
 #!/usr/bin/env lua
 print(1)
 ";
-    let directory = temp_project(&[("main.lua", main)]).expect("project");
-    let output =
-        String::from_utf8(bundle_lua_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
-    assert_eq!(output.as_bytes(), main);
+    let bundled =
+        bundle_files(&[("main.lua", main)], "main.lua", LuaVersion::Lua54).expect("bundle failed");
+    assert_eq!(bundled.output, main);
 }
 
 #[test]
@@ -643,15 +596,17 @@ local __luck_modules={}
         let main = format!(
             "\
 {header}--!strict
-{REQUIRE_UTIL}"
+{LUAU_REQUIRE_UTIL}"
         );
-        let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
-            .expect("project");
-        let output =
-            String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
-                .unwrap();
+        let bundled = bundle_files(
+            &[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)],
+            "main.luau",
+            LuaVersion::Luau,
+        )
+        .expect("bundle failed");
+        let output = text(&bundled.output);
         assert!(output.starts_with(opening), "header {header:?}:\n{output}");
-        assert_reparses(&output, LuaVersion::Luau);
+        assert_reparses(&bundled.output, LuaVersion::Luau);
     }
 }
 
@@ -662,13 +617,15 @@ fn luau_hot_comment_line_inside_a_block_comment_is_not_hoisted() {
 --[[
 --!strict
 ]]
-{REQUIRE_UTIL}"
+{LUAU_REQUIRE_UTIL}"
     );
-    let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
-        .expect("project");
-    let output =
-        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)],
+        "main.luau",
+        LuaVersion::Luau,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
 }
 
@@ -678,24 +635,28 @@ fn luau_hot_comment_after_code_on_a_comment_line_is_not_hoisted() {
         "\
 --[[x]] local y = 1
 --!strict
-{REQUIRE_UTIL}"
+{LUAU_REQUIRE_UTIL}"
     );
-    let directory = temp_project(&[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)])
-        .expect("project");
-    let output =
-        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.luau", main.as_bytes()), ("util.luau", RETURN_ONE)],
+        "main.luau",
+        LuaVersion::Luau,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(output.starts_with("local __luck_modules={}\n"), "{output}");
 }
 
 #[test]
 fn luau_hoisted_hot_comment_drops_the_carriage_return() {
     let main = b"--!strict\r\nlocal util = require(\"./util\")\r\nprint(util)\r\n";
-    let directory =
-        temp_project(&[("main.luau", main), ("util.luau", RETURN_ONE)]).expect("project");
-    let output =
-        String::from_utf8(bundle_luau_project(directory.path()).expect("bundle failed").output)
-            .unwrap();
+    let bundled = bundle_files(
+        &[("main.luau", main), ("util.luau", RETURN_ONE)],
+        "main.luau",
+        LuaVersion::Luau,
+    )
+    .expect("bundle failed");
+    let output = text(&bundled.output);
     assert!(output.starts_with("--!strict\nlocal __luck_modules={}\n"), "{output}");
 }
 
@@ -730,10 +691,12 @@ return 1
             1,
         ),
     ] {
-        let directory =
-            temp_project(&[("main.luau", REQUIRE_UTIL.as_bytes()), ("util.luau", util.as_bytes())])
-                .expect("project");
-        let result = bundle_luau_project(directory.path()).expect("bundle failed");
+        let result = bundle_files(
+            &[("main.luau", LUAU_REQUIRE_UTIL.as_bytes()), ("util.luau", util.as_bytes())],
+            "main.luau",
+            LuaVersion::Luau,
+        )
+        .expect("bundle failed");
         let w006_count = codes(&result.warnings).iter().filter(|&&code| code == "W006").count();
         assert_eq!(w006_count, expected_warnings, "util {util:?}: {:?}", result.warnings);
     }
@@ -743,37 +706,43 @@ return 1
 /// reads it, which the module reports once however many modules require it.
 #[test]
 fn broken_dependency_reports_its_error_once_for_its_requirers() {
-    let directory = temp_project(&[
-        (
-            "main.lua",
-            b"\
+    let errors = bundle_files(
+        &[
+            (
+                "main.lua",
+                b"\
 require(\"a\")
 require(\"b\")
 ",
-        ),
-        ("a.lua", b"require(\"bad\")\n"),
-        ("b.lua", b"require(\"bad\")\n"),
-        ("bad.lua", &[0xFF]),
-    ])
-    .expect("project");
-    let errors = bundle_lua_project(directory.path()).expect_err("a parse error must not bundle");
+            ),
+            ("a.lua", b"require(\"bad\")\n"),
+            ("b.lua", b"require(\"bad\")\n"),
+            ("bad.lua", &[0xFF]),
+        ],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect_err("a parse error must not bundle");
     assert_eq!(codes(&errors), ["E008"], "{errors:?}");
 }
 
 #[test]
 fn broken_dependency_required_twice_by_one_file_reports_its_error_once() {
-    let directory = temp_project(&[
-        (
-            "main.lua",
-            b"\
+    let errors = bundle_files(
+        &[
+            (
+                "main.lua",
+                b"\
 require(\"bad\")
 require(\"bad\")
 ",
-        ),
-        ("bad.lua", &[0xFF]),
-    ])
-    .expect("project");
-    let errors = bundle_lua_project(directory.path()).expect_err("a parse error must not bundle");
+            ),
+            ("bad.lua", &[0xFF]),
+        ],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect_err("a parse error must not bundle");
     assert_eq!(codes(&errors), ["E008"], "{errors:?}");
 }
 
@@ -781,12 +750,16 @@ require(\"bad\")
 /// that isn't UTF-8 included.
 #[test]
 fn bytes_that_are_not_utf8_reach_the_bundle_as_written() {
-    let directory = temp_project(&[
-        ("main.lua", b"-- caf\xE9\nreturn require(\"util\")\n"),
-        ("util.lua", b"return '\xFF\xE9'\n"),
-    ])
-    .expect("project");
-    let output = bundle_lua_project(directory.path()).expect("bundle").output;
+    let output = bundle_files(
+        &[
+            ("main.lua", b"-- caf\xE9\nreturn require(\"util\")\n"),
+            ("util.lua", b"return '\xFF\xE9'\n"),
+        ],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect("bundle")
+    .output;
     for written in [&b"-- caf\xE9\n"[..], b"return '\xFF\xE9'\n"] {
         assert!(output.windows(written.len()).any(|window| window == written), "{written:?}");
     }
@@ -794,19 +767,21 @@ fn bytes_that_are_not_utf8_reach_the_bundle_as_written() {
 
 #[test]
 fn require_that_resolves_nowhere_flags_e004_in_each_module_making_it() {
-    let directory = temp_project(&[
-        (
-            "main.lua",
-            b"require(\"a\")
+    let errors = bundle_files(
+        &[
+            (
+                "main.lua",
+                b"require(\"a\")
 require(\"b\")
 ",
-        ),
-        ("a.lua", b"require(\"missing\")\n"),
-        ("b.lua", b"require(\"missing\")\n"),
-    ])
-    .expect("project");
-    let errors =
-        bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
+            ),
+            ("a.lua", b"require(\"missing\")\n"),
+            ("b.lua", b"require(\"missing\")\n"),
+        ],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect_err("an unresolved module must not bundle");
     assert_eq!(codes(&errors), ["E004", "E004"], "{errors:?}");
     let files: Vec<&str> =
         errors.iter().filter_map(|file| file.path.file_name()?.to_str()).collect();
@@ -821,9 +796,9 @@ fn slashed_root(directory: &TempDir) -> String {
 
 #[test]
 fn unresolved_lua_require_lists_the_paths_it_searched() {
-    let directory = temp_project(&[("main.lua", b"require(\"missing.mod\")\n")]).expect("project");
-    let errors =
-        bundle_lua_project(directory.path()).expect_err("an unresolved module must not bundle");
+    let directory = write_project(&[("main.lua", b"require(\"missing.mod\")\n")]);
+    let errors = bundle_project(directory.path(), "main.lua", LuaVersion::Lua54)
+        .expect_err("an unresolved module must not bundle");
     let located = located(&errors);
     let [(path, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
@@ -843,9 +818,9 @@ searched paths:
 
 #[test]
 fn unresolved_luau_require_lists_the_four_files_it_could_be() {
-    let directory = temp_project(&[("main.luau", b"require(\"./missing\")\n")]).expect("project");
-    let errors =
-        bundle_luau_project(directory.path()).expect_err("an unresolved module must not bundle");
+    let directory = write_project(&[("main.luau", b"require(\"./missing\")\n")]);
+    let errors = bundle_project(directory.path(), "main.luau", LuaVersion::Luau)
+        .expect_err("an unresolved module must not bundle");
     let located = located(&errors);
     let [(_, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
@@ -867,14 +842,13 @@ searched paths:
 
 #[test]
 fn ambiguous_luau_require_names_both_files() {
-    let directory = temp_project(&[
+    let directory = write_project(&[
         ("main.luau", b"require(\"./util\")\n"),
         ("util.luau", RETURN_ONE),
         ("util.lua", RETURN_ONE),
-    ])
-    .expect("project");
-    let errors =
-        bundle_luau_project(directory.path()).expect_err("an ambiguous module must not bundle");
+    ]);
+    let errors = bundle_project(directory.path(), "main.luau", LuaVersion::Luau)
+        .expect_err("an ambiguous module must not bundle");
     let located = located(&errors);
     let [(_, error)] = located.as_slice() else {
         panic!("expected one error: {errors:?}");
@@ -893,16 +867,17 @@ fn ambiguous_luau_require_names_both_files() {
 
 #[test]
 fn luaurc_alias_named_self_warns_w004_where_self_is_required() {
-    let directory = temp_project(&[
+    let directory = write_project(&[
         ("main.luau", b"return require(\"./pkg\")\n"),
         (".luaurc", br#"{"aliases":{"self":"./elsewhere"}}"#),
-    ])
-    .expect("project");
+    ]);
     let package = directory.path().join("pkg");
     fs::create_dir_all(&package).expect("mkdir pkg");
     fs::write(package.join("init.luau"), "return require(\"@self/x\")\n").expect("write init");
     fs::write(package.join("x.luau"), RETURN_ONE).expect("write x");
-    let warnings = bundle_luau_project(directory.path()).expect("bundle failed").warnings;
+    let warnings = bundle_project(directory.path(), "main.luau", LuaVersion::Luau)
+        .expect("bundle failed")
+        .warnings;
     let located = located(&warnings);
     let [(path, warning)] = located.as_slice() else {
         panic!("expected one warning: {warnings:?}");
@@ -914,21 +889,23 @@ fn luaurc_alias_named_self_warns_w004_where_self_is_required() {
 #[test]
 fn oversized_dependency_reports_e012_once_for_its_requirers() {
     let oversized = vec![b'-'; 10 * 1024 * 1024 + 1];
-    let directory = temp_project(&[
-        (
-            "main.lua",
-            b"\
+    let errors = bundle_files(
+        &[
+            (
+                "main.lua",
+                b"\
 require(\"a\")
 require(\"b\")
 ",
-        ),
-        ("a.lua", b"require(\"huge\")\n"),
-        ("b.lua", b"require(\"huge\")\n"),
-        ("huge.lua", &oversized),
-    ])
-    .expect("project");
-    let errors =
-        bundle_lua_project(directory.path()).expect_err("an oversized file must not bundle");
+            ),
+            ("a.lua", b"require(\"huge\")\n"),
+            ("b.lua", b"require(\"huge\")\n"),
+            ("huge.lua", &oversized),
+        ],
+        "main.lua",
+        LuaVersion::Lua54,
+    )
+    .expect_err("an oversized file must not bundle");
     assert_eq!(codes(&errors), ["E012"], "{errors:?}");
 }
 
@@ -1001,7 +978,7 @@ fn threads_sharing_one_resolver_find_what_one_thread_does() {
 
 #[test]
 fn dependency_targets_index_the_modules_they_resolve_to() {
-    let directory = temp_project(&[
+    let directory = write_project(&[
         ("main.lua", b"require(\"a\")\n"),
         (
             "a.lua",
@@ -1011,8 +988,7 @@ require(\"b\")
 ",
         ),
         ("b.lua", RETURN_ONE),
-    ])
-    .expect("project");
+    ]);
     let arenas = ThreadAllocators::new();
     let search_paths = ["?.lua".to_owned()];
     let options = BundleOptions {
