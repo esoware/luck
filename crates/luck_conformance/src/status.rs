@@ -80,6 +80,7 @@ const KNOWN_DIFFERENCES: &[KnownDifference] = &[
     KnownDifference { file: "basic.luau", rewrites: BOTH, reason: LINES },
     KnownDifference { file: "closure.luau", rewrites: BOTH, reason: LINES },
     KnownDifference { file: "debug.luau", rewrites: MINIFIED, reason: NAMES },
+    KnownDifference { file: "lazyload.luau", rewrites: BOTH, reason: LINES },
     KnownDifference { file: "tmerror.luau", rewrites: BOTH, reason: LINES },
 ];
 

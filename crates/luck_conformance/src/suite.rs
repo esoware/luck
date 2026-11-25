@@ -7,18 +7,24 @@ use std::{fs, io};
 use luck_benchmark_files::{extract_once, fetch_bytes};
 
 /// The `_VERSION` of the interpreter the suite is pinned for.
-const INTERPRETER: &str = "Luau 0.740";
-/// luau-lang/luau at the 0.740 tag.
+const INTERPRETER: &str = "Luau 0.748";
+/// luau-lang/luau at the 0.748 tag.
 const URL: &str =
-    "https://codeload.github.com/luau-lang/luau/tar.gz/c0e346edd89066b44dca174c9f54ce84c746a540";
+    "https://codeload.github.com/luau-lang/luau/tar.gz/3d91c9d5c280c95bfc4be63aac46012cf861d394";
 /// Where the tests sit in the tarball.
-const TARBALL_DIRECTORY: &str = "luau-c0e346edd89066b44dca174c9f54ce84c746a540/tests/conformance";
+const TARBALL_DIRECTORY: &str = "luau-3d91c9d5c280c95bfc4be63aac46012cf861d394/tests/conformance";
 /// The cache directory the tests unpack into.
-const DIRECTORY: &str = "luau-0.740";
+const DIRECTORY: &str = "luau-0.748";
 
-/// The Luau flags for what luck reads ahead of the pinned release: exported
-/// values and conditional bindings.
-pub(crate) const FAST_FLAGS: &[&str] = &["LuauExportValueSyntax", "LuauExperimentalIfLocalSyntax"];
+/// The Luau flags for what luck reads ahead of the pinned release, exported
+/// values and conditional bindings, and for the `buffer` vector functions
+/// `buffers.luau` calls, which Luau's runner turns on for it.
+pub(crate) const FAST_FLAGS: &[&str] = &[
+    "LuauExportValueSyntax",
+    "LuauExperimentalIfLocalSyntax",
+    "LuauExperimentalWhileLocalSyntax",
+    "DebugLuauBufferVectorLibrary",
+];
 
 /// A test file of the suite, as bytes, which luck parses.
 #[derive(Debug)]
