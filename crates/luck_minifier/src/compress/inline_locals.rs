@@ -11,7 +11,7 @@ use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    Expression, LocalAssignment, MAX_NESTING_DEPTH, Name, Statement, VisitMut as _,
+    Expression, LocalAssignment, MAX_NESTING_DEPTH, Name, Statement, Visit as _, VisitMut as _,
     expr_nesting_depth,
 };
 use luck_semantic::{ReferenceId, SymbolId};
@@ -20,7 +20,7 @@ use luck_value::IsLiteralValue as _;
 
 use super::remove_dead_code::is_nil_initialized;
 use super::simplify_parens::Place;
-use super::{Compressor, remove_stmts};
+use super::{Compressor, Dropper, remove_stmts};
 use crate::binding::has_fixed_binding;
 use crate::expr::MAX_ADDED_DEPTH;
 
@@ -222,6 +222,8 @@ impl<'ast> Compressor<'_, 'ast> {
             if held.state == HeldState::Waiting {
                 debug_assert!(self.dropped.contains(held.read.index()), "the walk missed a read");
                 self.waiting -= 1;
+                Dropper { scoping: self.scoping, dropped: &mut self.dropped }
+                    .visit_expr(&held.value);
             }
         }
     }
@@ -357,6 +359,17 @@ mod tests {
             ("local a = 5 local b: typeof(a) = 1 if false then print(b) end print(a, b)", both),
         ] {
             assert_eq!(minify_with(source, &config), "print(5,1)", "{source}");
+        }
+    }
+
+    #[test]
+    fn drops_the_types_of_a_value_whose_read_goes() {
+        let both = TransformConfig { remove_dead_code: true, ..INLINING };
+        for source in [
+            "local a = ... local v = 1 :: typeof(a) if false then print(v) end",
+            "local a = ... local v = if local x: typeof(a) = 1 then 2 else 3 if false then print(v) end",
+        ] {
+            assert_eq!(minify_with(source, &both), "", "{source}");
         }
     }
 
