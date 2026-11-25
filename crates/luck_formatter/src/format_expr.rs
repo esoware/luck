@@ -231,7 +231,7 @@ impl<'ast> Formatter<'ast> {
         let text = if let Some(raw) = literal.raw {
             raw.as_bytes()
         } else {
-            &*self.allocator().alloc_slice_copy(spell_number(literal.value).as_str().as_bytes())
+            &*self.allocator().alloc_slice_copy(spell_number(literal.value, None).as_bytes())
         };
         self.write_numeral(text);
     }

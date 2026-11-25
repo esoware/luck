@@ -1,6 +1,6 @@
 use std::iter;
 
-use crate::{index_to_offset, line_breaks};
+use crate::index_to_offset;
 
 /// Where each line of a source starts, with lines broken as Luau breaks them.
 #[derive(Debug, Clone)]
@@ -9,9 +9,11 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
+    /// A line starts past each LF, which ends every line break, a CRLF's
+    /// included.
     pub fn new(source: &[u8]) -> Self {
         let line_starts = iter::once(0)
-            .chain(line_breaks(source).map(|line_break| index_to_offset(line_break.end)))
+            .chain(memchr::memchr_iter(b'\n', source).map(|lf| index_to_offset(lf + 1)))
             .collect();
         Self { line_starts }
     }

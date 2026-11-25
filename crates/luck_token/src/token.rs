@@ -226,10 +226,9 @@ impl TokenKind {
     /// at once.
     #[inline]
     pub fn of_name(first_eight: u64, length: usize) -> Self {
-        let spelled = u64::MAX >> (64 - 8 * length.clamp(1, 8));
-        let packed = first_eight & spelled;
+        let packed = first_eight & SPELLED_BYTES[length.min(SPELLED_BYTES.len() - 1)];
         let (keyword, kind) = KEYWORDS[keyword_slot(packed)];
-        if keyword == packed && length <= 8 { kind } else { Self::Identifier }
+        if keyword == packed { kind } else { Self::Identifier }
     }
 
     /// Whether code luck writes can't name a variable `text`: a keyword, but
@@ -371,7 +370,9 @@ const KEYWORD_KINDS: [TokenKind; 28] = [
 const KEYWORD_HASH_MULTIPLIER: u64 = 0xE043_5658_D461_2E0B;
 
 /// A perfect hash table of the keywords, each beside its little-endian
-/// spelling, zero-padded. A free slot holds 0, which no name packs to.
+/// spelling, zero-padded. A free slot holds 0 beside `Identifier`, so any
+/// name that lands there reads as one, as one that packs to 0 does wherever
+/// it lands.
 static KEYWORDS: [(u64, TokenKind); 32] = {
     let mut table = [(0, TokenKind::Identifier); 32];
     let mut i = 0;
@@ -391,6 +392,19 @@ static KEYWORDS: [(u64, TokenKind); 32] = {
         i += 1;
     }
     table
+};
+
+/// The bytes of a name's first eight that it spells, by its length. A name
+/// longer than every keyword spells none, and packs to 0, which matches no
+/// keyword, so its length needs no check of its own.
+const SPELLED_BYTES: [u64; 10] = {
+    let mut masks = [0; 10];
+    let mut length = 1;
+    while length <= 8 {
+        masks[length] = u64::MAX >> (64 - 8 * length);
+        length += 1;
+    }
+    masks
 };
 
 #[inline]

@@ -11,7 +11,7 @@ fn is_exact(text: &str) -> bool {
 }
 
 fn written(number: f64) -> String {
-    spell_number(number).as_str().to_owned()
+    spell_number(number, None).as_str().to_owned()
 }
 
 /// A run of 64-bit values that covers every bit position, for the property

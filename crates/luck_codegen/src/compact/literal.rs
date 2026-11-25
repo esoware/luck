@@ -11,13 +11,14 @@ impl Printer {
     /// value, as written on a tie.
     pub(super) fn print_number(&mut self, literal: &NumberLiteral<'_>) {
         if let Some(raw) = literal.raw
-            && (!self.is_shortest || is_shortest_numeral(raw.as_str()))
+            && (!self.is_shortest || is_shortest_numeral(raw.as_bytes()))
         {
-            self.number(raw.as_str());
+            self.number(raw.as_bytes());
             return;
         }
-        let spelling = spell_number(literal.value);
-        self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
+        let raw = literal.raw.as_deref();
+        let spelling = spell_number(literal.value, raw);
+        self.number(shorter(raw.map(str::as_bytes), spelling.as_bytes()));
     }
 
     /// As [`Self::print_number`] prints a number. A quoted string with no
@@ -61,10 +62,10 @@ impl Printer {
     /// or a suffix ends as a name does.
     #[expect(clippy::inline_always, reason = "see `emit`")]
     #[inline(always)]
-    fn number(&mut self, text: &str) {
-        let merges = if text.starts_with('.') { NUMBER | DOT_DOT } else { WORD | NUMBER };
-        let class = if text.bytes().any(|b| b.is_ascii_alphabetic()) { WORD } else { NUMBER };
-        self.emit(text.as_bytes(), merges, class);
+    fn number(&mut self, text: &[u8]) {
+        let merges = if text.first() == Some(&b'.') { NUMBER | DOT_DOT } else { WORD | NUMBER };
+        let class = if text.iter().any(u8::is_ascii_alphabetic) { WORD } else { NUMBER };
+        self.emit(text, merges, class);
     }
 
     /// Starts with a quote or a long bracket's `[`, and ends with nothing
@@ -90,15 +91,14 @@ impl Printer {
 ///
 /// That's twelve digits at most, which hex can't shorten, no leading zero,
 /// and too few trailing zeros for an exponent to pay off.
-fn is_shortest_numeral(raw: &str) -> bool {
-    let bytes = raw.as_bytes();
-    bytes.len() <= 12
-        && bytes.iter().all(u8::is_ascii_digit)
-        && (bytes.len() == 1 || bytes.first() != Some(&b'0'))
-        && bytes.iter().rev().take_while(|&&b| b == b'0').count() < 3
+fn is_shortest_numeral(raw: &[u8]) -> bool {
+    raw.len() <= 12
+        && raw.iter().all(u8::is_ascii_digit)
+        && (raw.len() == 1 || raw.first() != Some(&b'0'))
+        && raw.iter().rev().take_while(|&&b| b == b'0').count() < 3
 }
 
 /// `raw` when it's no longer than `spelling`.
-fn shorter<'text>(raw: Option<&'text str>, spelling: &'text str) -> &'text str {
+fn shorter<'text>(raw: Option<&'text [u8]>, spelling: &'text [u8]) -> &'text [u8] {
     raw.filter(|written| written.len() <= spelling.len()).unwrap_or(spelling)
 }
