@@ -27,6 +27,9 @@ use crate::AllocationCounts;
 /// chunks stay where they are, so a reference into one stays valid, as a reference into a `Vec`
 /// doesn't when it grows.
 ///
+/// Every allocation starts at a multiple of 8, so a value aligned to less, such as a slice of
+/// bytes, takes its size rounded up to the next multiple.
+///
 /// `reset` keeps only the newest chunk, which is the biggest, and returns the rest to the global
 /// allocator. So an allocator reused for similar work settles on a single chunk that holds all of
 /// it, which a uniform workload reaches on its third round. From then on no allocation needs a new
@@ -80,7 +83,9 @@ pub struct Allocator {
     ///
     /// INVARIANT: With a chunk, it lies between `start` and the footer, both included, and
     /// without one, it's [`NO_CHUNK`]. It's the current chunk's cursor, whose copy in the footer
-    /// is written only when the chunk retires.
+    /// is written only when the chunk retires. It's always a multiple of [`MIN_ALIGN`]: a footer
+    /// and `NO_CHUNK` are aligned to `CHUNK_ALIGN`, a multiple of it, and an allocation rounds it
+    /// down to one.
     cursor: Cell<NonNull<u8>>,
     /// The current chunk's footer, or `None` when the allocator owns no chunk.
     ///
@@ -97,6 +102,16 @@ pub struct Allocator {
 /// [`chunks::CHUNK_ALIGN`], for a chunk with no room, so an allocation of a byte or more fails the
 /// fast path's bounds check and makes the first chunk on the slow path, with no branch of its own.
 const NO_CHUNK: NonNull<u8> = NonNull::<ChunkFooter>::dangling().cast::<u8>();
+
+/// The least alignment of every allocation. A node of luck's tree is aligned to 8 or 4 and sized
+/// in multiples of 8, so with the cursor always a multiple of 8 its allocation needs no rounding,
+/// and a byte slice, which is rare beside the nodes, takes up to 7 bytes of padding instead.
+const MIN_ALIGN: usize = 8;
+
+const _: () = assert!(
+    chunks::CHUNK_ALIGN.is_multiple_of(MIN_ALIGN),
+    "a chunk's footer, where its cursor starts, is a multiple of `MIN_ALIGN`"
+);
 
 // SAFETY: Nothing aliases the chunks an allocator owns until it allocates from them, and every
 // reference to an allocation borrows the allocator, which keeps it from moving to another thread

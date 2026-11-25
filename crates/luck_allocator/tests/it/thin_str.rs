@@ -1,6 +1,6 @@
 use std::ptr;
 
-use luck_allocator::{Allocator, AsciiBytes, ThinStr};
+use luck_allocator::{Allocator, TextBytes, ThinStr};
 
 use crate::common::AutoTraits;
 
@@ -45,12 +45,37 @@ fn takes_bytes_of_every_short_length_only_when_each_is_ascii() {
 }
 
 #[test]
-fn ascii_bytes_give_the_text_of_any_range_in_them() {
-    assert!(AsciiBytes::new(b"caf\xE9").is_none());
-    let bytes = AsciiBytes::new(b"local name").expect("ASCII");
-    assert_eq!(bytes.text(6..10), "name");
-    assert_eq!(bytes.text(0..0), "");
-    assert_eq!(bytes.text(8..20), "");
+fn ascii_text_bytes_give_the_text_of_any_range_in_them() {
+    let bytes = TextBytes::new(b"local name");
+    assert_eq!(bytes.text(6..10).map(ThinStr::as_str), Some("name"));
+    assert_eq!(bytes.text(0..0).map(ThinStr::as_str), Some(""));
+    assert_eq!(bytes.text(8..20), None);
+}
+
+/// A range that starts and ends with an ASCII byte holds whole characters of UTF-8, whatever lies
+/// between, and one that doesn't may start or end inside one.
+#[test]
+fn utf8_text_bytes_give_the_text_of_a_range_with_ascii_ends() {
+    let source = "x = \"caf\u{e9}\" .. y";
+    let bytes = TextBytes::new(source.as_bytes());
+    assert_eq!(bytes.text(0..1).map(ThinStr::as_str), Some("x"));
+    assert_eq!(bytes.text(4..11).map(ThinStr::as_str), Some("\"caf\u{e9}\""));
+    assert_eq!(bytes.text(15..16).map(ThinStr::as_str), Some("y"));
+    assert_eq!(bytes.text(3..3).map(ThinStr::as_str), Some(""));
+    for range in [5..9, 8..10, 9..11, 9..10] {
+        assert_eq!(bytes.text(range.clone()), None, "{range:?}");
+    }
+}
+
+/// In bytes that aren't UTF-8, a range is text only when each of its bytes is ASCII.
+#[test]
+fn other_text_bytes_give_the_text_of_an_ascii_range() {
+    let bytes = TextBytes::new(b"local s = 'caf\xE9' .. \xC3\xA9");
+    assert_eq!(bytes.text(6..7).map(ThinStr::as_str), Some("s"));
+    assert_eq!(bytes.text(11..14).map(ThinStr::as_str), Some("caf"));
+    for range in [10..16, 14..15, 20..22, 17..24] {
+        assert_eq!(bytes.text(range.clone()), None, "{range:?}");
+    }
 }
 
 #[test]

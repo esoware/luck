@@ -338,6 +338,7 @@ mod tests {
         iter, ptr,
     };
 
+    use super::super::MIN_ALIGN;
     use super::{DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER, OVERHEAD, TYPICAL_PAGE_SIZE};
     use crate::Allocator;
 
@@ -391,9 +392,10 @@ mod tests {
         assert_eq!(allocator.used_bytes(), 0);
         assert_eq!(chunk_count(&allocator), 0);
 
+        // A byte takes `MIN_ALIGN` bytes, since the cursor stays a multiple of it.
         allocator.alloc(0_u8);
         assert_eq!(allocator.capacity(), DEFAULT_CHUNK_SIZE_WITHOUT_FOOTER);
-        assert_eq!(allocator.used_bytes(), 1);
+        assert_eq!(allocator.used_bytes(), MIN_ALIGN);
         assert_eq!(chunk_count(&allocator), 1);
 
         // A reset keeps the only chunk, and empties it.
