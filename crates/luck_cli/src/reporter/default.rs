@@ -97,17 +97,21 @@ fn report<'label>(
         Severity::Error => ReportKind::Error,
         Severity::Warning => ReportKind::Warning,
     };
-    let primary = (label, Range::<usize>::from(span));
-    let mut builder = Report::build(kind, primary.clone())
+    let mut places: Vec<(Span, &str)> = iter::once((span, &*diag.message))
+        .chain(diag.labels.iter().map(|other| (other.span, &*other.message)))
+        .collect();
+    // ariadne starts a new snippet at a label that ends on an earlier line
+    // than the one before it, and heads each snippet in the file with the
+    // primary location, so a label that ends first goes in first.
+    places.sort_by_key(|(place, _)| place.end.saturating_sub(1).max(place.start));
+    let labels = places.into_iter().map(|(place, message)| {
+        Label::new((label, Range::<usize>::from(place))).with_message(message)
+    });
+    let mut builder = Report::build(kind, (label, Range::<usize>::from(span)))
         .with_code(diag.code)
         .with_message(&diag.message)
         .with_config(Config::default().with_index_type(IndexType::Byte))
-        .with_label(Label::new(primary).with_message(&diag.message));
-    for (order, other) in (1..).zip(&diag.labels) {
-        let place = (label, Range::<usize>::from(other.span));
-        builder =
-            builder.with_label(Label::new(place).with_message(&other.message).with_order(order));
-    }
+        .with_labels(labels);
     if let Some(help) = &diag.help {
         builder = builder.with_help(help);
     }
@@ -160,6 +164,25 @@ mod tests {
         assert!(text.contains("E008"), "{text}");
         assert!(text.contains("expected `end` to close `function`"), "{text}");
         assert!(text.contains("unclosed `function`"), "{text}");
+    }
+
+    #[test]
+    fn a_label_before_the_problem_shares_its_snippet() {
+        let source = "\
+local a = require(\"./x\")
+local b = require(\"./x\")
+";
+        let diag = Diagnostic::w001(Span::new(35, 49), "./x", Span::new(10, 24));
+        let text = rendered("twice.luau", Some(source.as_bytes()), &[diag]);
+        let headers: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once("twice.luau:"))
+            .filter_map(|(_, place)| place.split_whitespace().next())
+            .collect();
+        assert_eq!(headers, ["2:11"], "{text}");
+        let first = text.find("first required here");
+        let again = text.rfind("required multiple times");
+        assert!(first.is_some_and(|first| again.is_some_and(|again| first < again)), "{text}");
     }
 
     #[test]
