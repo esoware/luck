@@ -1,6 +1,6 @@
 //! `AstKind`, a reference to any node, `AstType`, which kind it is, one
-//! variant for each struct that derives `Ast`, and `AST_TYPE_MAX`. Ported
-//! from oxc's `generators/ast_kind.rs`.
+//! variant for each struct that derives `Ast` and has a kind, and
+//! `AST_TYPE_MAX`. Ported from oxc's `generators/ast_kind.rs`.
 
 use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
@@ -9,7 +9,11 @@ use crate::output::{doc, line_break};
 use crate::schema::Schema;
 
 pub(crate) fn generate(schema: &Schema) -> TokenStream {
-    let nodes: Vec<_> = schema.structs().map(|(type_def, _)| type_def).collect();
+    let nodes: Vec<_> = schema
+        .structs()
+        .map(|(type_def, _)| type_def)
+        .filter(|type_def| type_def.has_kind)
+        .collect();
     let idents: Vec<_> = nodes.iter().map(|type_def| type_def.ident()).collect();
     let types: Vec<_> = nodes.iter().map(|type_def| type_def.ty()).collect();
     let bindings: Vec<_> = nodes.iter().map(|type_def| type_def.binding()).collect();
@@ -31,8 +35,8 @@ pub(crate) fn generate(schema: &Schema) -> TokenStream {
     );
     let max_doc = doc("The largest discriminant of an [`AstType`].");
     let type_doc = doc("Which kind of node an [`AstKind`] refers to.");
-    let kind_doc = doc("A reference to a node: a value of a struct that derives `Ast`, which \
-         [`Visit::enter_node`](crate::Visit::enter_node) is handed.");
+    let kind_doc = doc("A reference to a node: a value of a struct that derives `Ast` without \
+         `#[visit(no_kind)]`, which [`Visit::enter_node`](crate::Visit::enter_node) is handed.");
     quote! {
         #imports
         #max_doc

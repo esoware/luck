@@ -98,12 +98,6 @@ fn needs_parentheses(node: &AstNode<'_>, unary: &UnaryOp<'_>, context: &ContextH
     if let AstKind::BinaryOp(run) = kind {
         return binds_tighter_than_and_or(run);
     }
-    if let AstKind::BinaryLink(_) = kind {
-        return nodes
-            .parent_kind(parent.id())
-            .and_then(AstKind::as_binary_op)
-            .is_some_and(binds_tighter_than_and_or);
-    }
     if let AstKind::SuffixedExpression(chain) = kind {
         return matches!(
             &chain.prefix,

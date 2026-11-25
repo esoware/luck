@@ -17,9 +17,10 @@ just ast
 
 The tool parses `luck_ast`'s source with `syn` rather than depending on it, so it runs however broken the tree's definitions leave the crate. It formats what it writes with `rustfmt` and the workspace's `rustfmt.toml`, so `cargo fmt` leaves the files as they are, and the `generated_code_is_up_to_date` test fails while one is stale.
 
-A type that derives `Ast` takes two of the tool's attributes:
+A type that derives `Ast` takes three of the tool's attributes:
 
 - `#[visit(level)]` on a struct makes its walk a level of nesting, and on a field makes visiting that field one. The levels are the ones `luck_parser` counts against `MAX_NESTING_DEPTH`.
+- `#[visit(no_kind)]` on a struct makes it no node: it gets no `AstKind`, and its walk visits what it holds without entering or leaving it, for a struct that spans exactly what it holds.
 - `#[content_eq(skip)]` on a field leaves it out of `ContentEq`, which also leaves out every `Span`.
 
 A node with no `span` field spans its fields, so it needs one that's always there and no list.

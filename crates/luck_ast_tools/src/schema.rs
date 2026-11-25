@@ -34,6 +34,9 @@ pub(crate) struct TypeDef {
     pub has_lifetime: bool,
     /// `#[visit(level)]`: walking it is a level of nesting.
     pub is_level: bool,
+    /// A struct without `#[visit(no_kind)]`, which is a node: an `AstKind`
+    /// refers to it, and its walk enters and leaves it.
+    pub has_kind: bool,
     pub shape: Shape,
 }
 
@@ -307,8 +310,15 @@ impl TypeDef {
             Shape::Struct(_) => Site::Struct,
             Shape::Enum(_) => Site::Other,
         };
-        let is_level = check_helpers(attrs, site)?.is_level;
-        Ok(Some(Self { name: name.to_string(), has_lifetime, is_level, shape }))
+        let helpers = check_helpers(attrs, site)?;
+        let has_kind = matches!(shape, Shape::Struct(_)) && !helpers.has_no_kind;
+        Ok(Some(Self {
+            name: name.to_string(),
+            has_lifetime,
+            is_level: helpers.is_level,
+            has_kind,
+            shape,
+        }))
     }
 
     pub(crate) fn ident(&self) -> Ident {
@@ -542,6 +552,14 @@ impl Site {
         }
     }
 
+    /// Whether `#[visit(no_kind)]` applies.
+    const fn takes_no_kind(self) -> bool {
+        match self {
+            Self::Struct => true,
+            Self::StructField | Self::VariantField | Self::Other => false,
+        }
+    }
+
     /// Whether `#[content_eq(skip)]` applies.
     const fn takes_skip(self) -> bool {
         match self {
@@ -553,28 +571,35 @@ impl Site {
 
 struct Helpers {
     is_level: bool,
+    has_no_kind: bool,
     skips_content_eq: bool,
 }
 
 /// The tool's attributes in `attrs`, written on `site`.
 fn check_helpers(attrs: &[Attribute], site: Site) -> io::Result<Helpers> {
-    let mut helpers = Helpers { is_level: false, skips_content_eq: false };
+    let mut helpers = Helpers { is_level: false, has_no_kind: false, skips_content_eq: false };
     for attr in attrs {
-        let (expected, is_allowed, flag) = if attr.path().is_ident("visit") {
-            ("level", site.takes_level(), &mut helpers.is_level)
-        } else if attr.path().is_ident("content_eq") {
-            ("skip", site.takes_skip(), &mut helpers.skips_content_eq)
-        } else {
+        let is_visit = attr.path().is_ident("visit");
+        if !is_visit && !attr.path().is_ident("content_eq") {
             continue;
-        };
+        }
         let arguments = attr
             .parse_args_with(Punctuated::<Ident, Token![,]>::parse_terminated)
             .map_err(|e| invalid(&e.to_string()))?;
-        let is_expected = arguments.len() == 1 && arguments.iter().all(|ident| ident == expected);
-        if !is_expected || !is_allowed {
+        let argument = match (arguments.len(), arguments.first()) {
+            (1, Some(ident)) => ident.to_string(),
+            _ => String::new(),
+        };
+        let applies = match (is_visit, argument.as_str()) {
+            (true, "level") => site.takes_level().then_some(&mut helpers.is_level),
+            (true, "no_kind") => site.takes_no_kind().then_some(&mut helpers.has_no_kind),
+            (false, "skip") => site.takes_skip().then_some(&mut helpers.skips_content_eq),
+            _ => None,
+        };
+        let Some(flag) = applies else {
             let attribute = attr.to_token_stream();
             return Err(invalid(&format!("`{attribute}` doesn't apply here")));
-        }
+        };
         *flag = true;
     }
     Ok(helpers)

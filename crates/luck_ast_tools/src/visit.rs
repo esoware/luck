@@ -40,11 +40,11 @@ pub(crate) fn generate_visit(schema: &Schema) -> TokenStream {
     let description = "\
 A walk over a tree that borrows it.
 
-Each `visit_*` hook defaults to its `walk_*`, which enters the node, visits
-what it holds in source order, and leaves it. Override the hooks you need and
-call `self.walk_*` from them to keep recursing. The `walk_*` methods are the
-default recursion, so overriding one instead of its hook would leave nothing
-to fall back on.
+Each `visit_*` hook defaults to its `walk_*`, which visits what the value
+holds in source order, after entering it and before leaving it when it's a
+node. Override the hooks you need and call `self.walk_*` from them to keep
+recursing. The `walk_*` methods are the default recursion, so overriding one
+instead of its hook would leave nothing to fall back on.
 
 Every node comes with the tree's own lifetime, so a visitor can keep the
 references it's handed. A tree lent for less than its arena's lifetime reads
@@ -198,15 +198,24 @@ fn walk_struct(
     } else {
         quote!(#(#visits)*)
     };
-    let kind = match access {
-        Access::Shared => quote!(AstKind::#ident(#binding)),
-        Access::Mutable => quote!(AstType::#ident),
-    };
     let is_unused = access == Access::Mutable && visits.is_empty();
     let unused = is_unused
         .then(|| quote!(#[expect(unused_variables, reason = "nothing it holds is a node")]));
     let inline = (visits.len() <= INLINE_LIMIT).then(|| quote!(#[inline]));
     let reference = access.reference();
+    if !type_def.has_kind {
+        return quote! {
+            #inline
+            #unused
+            fn #walk(&mut self, #binding: #reference #ty) {
+                #body
+            }
+        };
+    }
+    let kind = match access {
+        Access::Shared => quote!(AstKind::#ident(#binding)),
+        Access::Mutable => quote!(AstType::#ident),
+    };
     quote! {
         #inline
         #unused

@@ -257,6 +257,28 @@ fn enters_and_leaves_each_node_around_what_it_holds() {
 }
 
 #[test]
+fn a_run_enters_each_operand_itself_and_no_node_for_a_link() {
+    // return a + b - c
+    let fixture = Fixture::default();
+    let synth = fixture.synth();
+    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.name_expr("b"));
+    let run = synth.binary_op(sum, BinOp::Sub, synth.name_expr("c"));
+    let block = synth.block([synth.return_([run])]);
+    let mut nodes = Nodes::default();
+    nodes.visit_block(&block);
+    let name = [(AstType::Name, true), (AstType::Name, false)];
+    let mut expected =
+        vec![(AstType::Block, true), (AstType::ReturnStatement, true), (AstType::BinaryOp, true)];
+    expected.extend(name.repeat(3));
+    expected.extend([
+        (AstType::BinaryOp, false),
+        (AstType::ReturnStatement, false),
+        (AstType::Block, false),
+    ]);
+    assert_eq!(nodes.0, expected);
+}
+
+#[test]
 fn a_kind_spans_the_node_it_refers_to() {
     struct Spans(Vec<bool>);
 

@@ -33,7 +33,9 @@
 //!
 //! A run of suffixes (`a.b[c]:d()`) is one [`SuffixedExpression`], and a
 //! run of binary operators at one precedence level (`a + b - c`) is one
-//! [`BinaryOp`], so however long a run gets, it nests one level.
+//! [`BinaryOp`], so however long a run gets, it nests one level. Each of a
+//! run's [`BinaryLink`]s spans exactly its operand, so it's no node of its
+//! own, and every operand is the run's child.
 //!
 //! The tree keeps parentheses only where they change what they hold, as a
 //! [`ParenthesizedExpression`]. A printer derives every other pair from

@@ -4,19 +4,19 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
-    ElseClause, ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl,
-    FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor, GenericPackType,
-    GenericTypeList, GenericTypeParam, GetSpan, IfExpression, IfStatement, InterpolatedSegment,
-    InterpolatedString, IntersectionType, LocalAssignment, LocalFunction, MethodCall, Name,
-    NamedType, NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
-    RepeatLoop, ReturnStatement, StringLiteral, SuffixedExpression, TableConstructor, TableType,
-    TypeArgs, TypeCast, TypeDeclaration, TypePack, TypedName, TypeofType, UnaryOp, UnionType,
-    VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef,
+    FunctionName, FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
+    GenericTypeParam, GetSpan, IfExpression, IfStatement, InterpolatedSegment, InterpolatedString,
+    IntersectionType, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral,
+    NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
+    ReturnStatement, StringLiteral, SuffixedExpression, TableConstructor, TableType, TypeArgs,
+    TypeCast, TypeDeclaration, TypePack, TypedName, TypeofType, UnaryOp, UnionType, VarArgParam,
+    VariadicType, WhileLoop,
 };
 
 /// The largest discriminant of an [`AstType`].
-pub const AST_TYPE_MAX: u8 = 52;
+pub const AST_TYPE_MAX: u8 = 51;
 
 /// Which kind of node an [`AstKind`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,7 +25,6 @@ pub enum AstType {
     SuffixedExpression,
     MethodCall,
     BinaryOp,
-    BinaryLink,
     UnaryOp,
     ParenthesizedExpression,
     TableConstructor,
@@ -77,14 +76,14 @@ pub enum AstType {
     GenericTypeParam,
 }
 
-/// A reference to a node: a value of a struct that derives `Ast`, which
+/// A reference to a node: a value of a struct that derives `Ast` without
+/// `#[visit(no_kind)]`, which
 /// [`Visit::enter_node`](crate::Visit::enter_node) is handed.
 #[derive(Debug, Clone, Copy)]
 pub enum AstKind<'ast> {
     SuffixedExpression(&'ast SuffixedExpression<'ast>),
     MethodCall(&'ast MethodCall<'ast>),
     BinaryOp(&'ast BinaryOp<'ast>),
-    BinaryLink(&'ast BinaryLink<'ast>),
     UnaryOp(&'ast UnaryOp<'ast>),
     ParenthesizedExpression(&'ast ParenthesizedExpression<'ast>),
     TableConstructor(&'ast TableConstructor<'ast>),
@@ -143,7 +142,6 @@ impl<'ast> AstKind<'ast> {
             Self::SuffixedExpression(_) => AstType::SuffixedExpression,
             Self::MethodCall(_) => AstType::MethodCall,
             Self::BinaryOp(_) => AstType::BinaryOp,
-            Self::BinaryLink(_) => AstType::BinaryLink,
             Self::UnaryOp(_) => AstType::UnaryOp,
             Self::ParenthesizedExpression(_) => AstType::ParenthesizedExpression,
             Self::TableConstructor(_) => AstType::TableConstructor,
@@ -209,11 +207,6 @@ impl<'ast> AstKind<'ast> {
     #[inline]
     pub const fn as_binary_op(self) -> Option<&'ast BinaryOp<'ast>> {
         if let Self::BinaryOp(binary_op) = self { Some(binary_op) } else { None }
-    }
-
-    #[inline]
-    pub const fn as_binary_link(self) -> Option<&'ast BinaryLink<'ast>> {
-        if let Self::BinaryLink(binary_link) = self { Some(binary_link) } else { None }
     }
 
     #[inline]
@@ -532,7 +525,6 @@ impl GetSpan for AstKind<'_> {
             Self::SuffixedExpression(suffixed_expr) => suffixed_expr.span(),
             Self::MethodCall(method_call) => method_call.span(),
             Self::BinaryOp(binary_op) => binary_op.span(),
-            Self::BinaryLink(binary_link) => binary_link.span(),
             Self::UnaryOp(unary_op) => unary_op.span(),
             Self::ParenthesizedExpression(parenthesized_expr) => parenthesized_expr.span(),
             Self::TableConstructor(table_constructor) => table_constructor.span(),

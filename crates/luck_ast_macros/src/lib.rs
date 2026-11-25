@@ -8,6 +8,8 @@
 //!
 //! - `#[visit(level)]` on a type makes its walk one level of nesting, and on
 //!   a field makes visiting that field one, as `Visit::descend` counts them.
+//! - `#[visit(no_kind)]` on a struct makes it no node of its own, with no
+//!   `AstKind`, for a struct that spans exactly what it holds.
 //! - `#[content_eq(skip)]` on a field leaves it out of `ContentEq`, for a
 //!   field that records only how the source was written.
 //!
