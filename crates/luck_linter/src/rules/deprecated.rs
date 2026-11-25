@@ -215,7 +215,7 @@ fn fit_to_position(
         return None;
     }
     let is_unary = matches!(
-        &*parse.chunk.block.stmts,
+        &*parse.chunk.stmts,
         [Statement::Return(returned)]
             if matches!(returned.exprs.first(), Some(Expression::UnaryOp(_)))
     );

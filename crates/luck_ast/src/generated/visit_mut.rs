@@ -2,16 +2,16 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, AstType, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock,
-    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    Assignment, AstType, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
     GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
     IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
-    LocalFunction, LocalName, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
-    Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
+    LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
+    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
     StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
-    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp,
-    UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType,
+    UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// [`Visit`](crate::Visit)'s walk through `&mut`, in the same order and
@@ -158,11 +158,6 @@ pub trait VisitMut<'ast> {
     }
 
     #[inline]
-    fn visit_param(&mut self, param: &mut Parameter<'ast>) {
-        self.walk_param(param);
-    }
-
-    #[inline]
     fn visit_var_arg_param(&mut self, var_arg_param: &mut VarArgParam<'ast>) {
         self.walk_var_arg_param(var_arg_param);
     }
@@ -190,11 +185,6 @@ pub trait VisitMut<'ast> {
     #[inline]
     fn visit_string_literal(&mut self, string_literal: &mut StringLiteral<'ast>) {
         self.walk_string_literal(string_literal);
-    }
-
-    #[inline]
-    fn visit_chunk(&mut self, chunk: &mut Chunk<'ast>) {
-        self.walk_chunk(chunk);
     }
 
     #[inline]
@@ -268,8 +258,8 @@ pub trait VisitMut<'ast> {
     }
 
     #[inline]
-    fn visit_local_name(&mut self, local_name: &mut LocalName<'ast>) {
-        self.walk_local_name(local_name);
+    fn visit_typed_name(&mut self, typed_name: &mut TypedName<'ast>) {
+        self.walk_typed_name(typed_name);
     }
 
     #[inline]
@@ -624,8 +614,8 @@ pub trait VisitMut<'ast> {
             if let Some(generics) = &mut function_body.generics {
                 self.visit_generic_type_list(generics);
             }
-            for param in &mut function_body.params {
-                self.visit_param(param);
+            for typed_name in &mut function_body.params {
+                self.visit_typed_name(typed_name);
             }
             if let Some(vararg) = &mut function_body.vararg {
                 self.visit_var_arg_param(vararg);
@@ -636,17 +626,6 @@ pub trait VisitMut<'ast> {
             self.visit_block(&mut function_body.block);
         }
         self.ascend();
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_param(&mut self, param: &mut Parameter<'ast>) {
-        let kind = AstType::Parameter;
-        self.enter_node(kind);
-        self.visit_name(&mut param.name);
-        if let Some(type_annotation) = &mut param.type_annotation {
-            self.visit_type(type_annotation);
-        }
         self.leave_node(kind);
     }
 
@@ -705,14 +684,6 @@ pub trait VisitMut<'ast> {
     fn walk_string_literal(&mut self, string_literal: &mut StringLiteral<'ast>) {
         let kind = AstType::StringLiteral;
         self.enter_node(kind);
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_chunk(&mut self, chunk: &mut Chunk<'ast>) {
-        let kind = AstType::Chunk;
-        self.enter_node(kind);
-        self.visit_block(&mut chunk.block);
         self.leave_node(kind);
     }
 
@@ -826,13 +797,11 @@ pub trait VisitMut<'ast> {
         self.leave_node(kind);
     }
 
+    #[inline]
     fn walk_numeric_for(&mut self, numeric_for: &mut NumericFor<'ast>) {
         let kind = AstType::NumericFor;
         self.enter_node(kind);
-        self.visit_name(&mut numeric_for.name);
-        if let Some(type_annotation) = &mut numeric_for.type_annotation {
-            self.visit_type(type_annotation);
-        }
+        self.visit_typed_name(&mut numeric_for.variable);
         self.visit_expr(&mut numeric_for.start);
         self.visit_expr(&mut numeric_for.limit);
         if let Some(step) = &mut numeric_for.step {
@@ -846,8 +815,8 @@ pub trait VisitMut<'ast> {
     fn walk_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
         let kind = AstType::GenericFor;
         self.enter_node(kind);
-        for param in &mut generic_for.names {
-            self.visit_param(param);
+        for typed_name in &mut generic_for.names {
+            self.visit_typed_name(typed_name);
         }
         for expr in &mut generic_for.exprs {
             self.visit_expr(expr);
@@ -894,11 +863,11 @@ pub trait VisitMut<'ast> {
     }
 
     #[inline]
-    fn walk_local_name(&mut self, local_name: &mut LocalName<'ast>) {
-        let kind = AstType::LocalName;
+    fn walk_typed_name(&mut self, typed_name: &mut TypedName<'ast>) {
+        let kind = AstType::TypedName;
         self.enter_node(kind);
-        self.visit_name(&mut local_name.name);
-        if let Some(type_annotation) = &mut local_name.type_annotation {
+        self.visit_name(&mut typed_name.name);
+        if let Some(type_annotation) = &mut typed_name.type_annotation {
             self.visit_type(type_annotation);
         }
         self.leave_node(kind);
@@ -908,8 +877,8 @@ pub trait VisitMut<'ast> {
     fn walk_local_assignment(&mut self, local_assignment: &mut LocalAssignment<'ast>) {
         let kind = AstType::LocalAssignment;
         self.enter_node(kind);
-        for local_name in &mut local_assignment.names {
-            self.visit_local_name(local_name);
+        for typed_name in &mut local_assignment.names {
+            self.visit_typed_name(typed_name);
         }
         for expr in &mut local_assignment.exprs {
             self.visit_expr(expr);

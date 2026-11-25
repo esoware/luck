@@ -10,4 +10,3 @@ mod output;
 mod passes;
 mod renaming;
 mod stack;
-mod syntax;

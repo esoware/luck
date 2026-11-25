@@ -1,10 +1,10 @@
-use luck_ast::{Call, Chunk, SuffixedExpression, TreeCounts};
+use luck_ast::{Block, Call, SuffixedExpression, TreeCounts};
 use luck_diagnostics::Diagnostic;
 use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder, SymbolId};
-use luck_token::Variant;
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
+use crate::variant::Variant;
 
 /// A chunk's [`Semantic`], read against the stdlib of one variant.
 #[derive(Debug)]
@@ -33,7 +33,7 @@ struct HostGlobal {
 /// `counts`, the parse's or the default. It's the same whether or not the
 /// variant is Roblox, which only adds the Roblox runtime's stdlib.
 pub fn analyze<'ast>(
-    chunk: &'ast Chunk<'ast>,
+    chunk: &'ast Block<'ast>,
     counts: TreeCounts,
     stdlib: &'ast StdlibLibrary<'ast>,
 ) -> (SemanticAnalysis<'ast>, Vec<Diagnostic>) {
@@ -74,7 +74,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     /// Marks `names` as globals the host defines beyond the stdlib, such as
-    /// `vim`, from the `extra_globals` config. Only the chunk's own names
+    /// `app`, from the `extra_globals` config. Only the chunk's own names
     /// are kept, since no other name can reach a query.
     pub fn add_extra_globals<'name, Names>(&mut self, names: Names)
     where

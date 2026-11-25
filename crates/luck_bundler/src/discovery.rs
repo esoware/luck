@@ -67,7 +67,7 @@ pub(crate) fn parse_module<'ast>(
     let (analysis_errors, warnings): (Vec<Diagnostic>, Vec<Diagnostic>) =
         diags.into_iter().partition(Diagnostic::is_error);
     errors.extend(analysis_errors);
-    let hot_comments = leading_hot_comments(&parsed.comments, parsed.chunk.block.span.start)
+    let hot_comments = leading_hot_comments(&parsed.comments, parsed.chunk.span.start)
         .map(|comment| comment.span)
         .collect();
     let shebang = parsed
@@ -79,7 +79,7 @@ pub(crate) fn parse_module<'ast>(
         path,
         relative_path,
         source,
-        block: parsed.chunk.block,
+        block: parsed.chunk,
         nesting_depth: parsed.nesting_depth,
         dependencies: Vec::new(),
         hot_comments,

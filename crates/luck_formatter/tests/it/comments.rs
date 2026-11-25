@@ -983,11 +983,11 @@ local x = 1
 fn shebang_preserved() {
     assert_format(
         "\
-#!/usr/bin/env lua
+#!/usr/bin/env luau
 local x = 1
 ",
         "\
-#!/usr/bin/env lua
+#!/usr/bin/env luau
 local x = 1
 ",
     );

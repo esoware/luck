@@ -37,8 +37,8 @@ use similar::TextDiff;
 use crate::snapshot::{CoverageResult, LintLine, Snapshot, TestResult};
 use crate::stages::FileReport;
 
-/// With `--filter` and part of a path, checks only the files whose path holds
-/// it, prints each failure in full, and writes no snapshot.
+/// With `--filter` and part of a file name, checks only the files whose name
+/// holds it, prints each failure in full, and writes no snapshot.
 fn main() -> io::Result<()> {
     execute::start()?;
     match env::args().skip(1).collect::<Vec<_>>().as_slice() {
@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
         [flag, filter] if flag == "--filter" => run(Some(filter)),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "expected no arguments, or `--filter` and part of a file's path",
+            "expected no arguments, or `--filter` and part of a file's name",
         )),
     }
 }
@@ -80,7 +80,7 @@ fn run(filter: Option<&str>) -> io::Result<()> {
             .iter()
             .zip(&reports)
             .filter_map(|(file, report)| {
-                result_of(report).map(|result| CoverageResult { path: &file.path, result })
+                result_of(report).map(|result| CoverageResult { name: &file.name, result })
             })
             .collect();
         let snapshot = snapshot::coverage(stage, &results);
@@ -90,7 +90,7 @@ fn run(filter: Option<&str>) -> io::Result<()> {
     let linted: Vec<(&str, &Result<Vec<LintLine>, TestResult>)> = files
         .iter()
         .zip(&reports)
-        .filter_map(|(file, report)| report.linter.as_ref().map(|lint| (file.path.as_str(), lint)))
+        .filter_map(|(file, report)| report.linter.as_ref().map(|lint| (file.name.as_str(), lint)))
         .collect();
     let snapshot = snapshot::lint("linter", &linted);
     report(&snapshot, filter.is_some().then_some(&[]))
@@ -106,10 +106,10 @@ fn report(snapshot: &Snapshot, filtered: Option<&[CoverageResult<'_>]>) -> io::R
         return snapshot.save();
     };
     println!("{snapshot}");
-    for &CoverageResult { path, result } in results {
+    for &CoverageResult { name, result } in results {
         if let TestResult::Mismatch { check, actual, expected } = result {
             let diff = TextDiff::from_lines(expected, actual);
-            println!("{check}: {path}\n{}", diff.unified_diff().header("expected", "actual"));
+            println!("{check}: {name}\n{}", diff.unified_diff().header("expected", "actual"));
         }
     }
     Ok(())

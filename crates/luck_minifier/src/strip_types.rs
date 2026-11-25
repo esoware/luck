@@ -7,8 +7,8 @@
 
 use luck_allocator::Allocator;
 use luck_ast::{
-    Block, Expression, FunctionBody, LocalName, MethodCall, NumericFor, Parameter, Statement,
-    Suffix, SuffixedExpression, Type, VarArgParam, VisitMut,
+    Block, Expression, FunctionBody, MethodCall, Statement, Suffix, SuffixedExpression, Type,
+    TypedName, VarArgParam, VisitMut,
 };
 
 use crate::expr::truncate_multi_value;
@@ -101,21 +101,12 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
         self.walk_function_body(function_body);
     }
 
-    fn visit_param(&mut self, param: &mut Parameter<'ast>) {
-        param.type_annotation = None;
+    fn visit_typed_name(&mut self, typed_name: &mut TypedName<'ast>) {
+        typed_name.type_annotation = None;
     }
 
     fn visit_var_arg_param(&mut self, var_arg_param: &mut VarArgParam<'ast>) {
         var_arg_param.type_annotation = None;
-    }
-
-    fn visit_local_name(&mut self, local_name: &mut LocalName<'ast>) {
-        local_name.type_annotation = None;
-    }
-
-    fn visit_numeric_for(&mut self, numeric_for: &mut NumericFor<'ast>) {
-        numeric_for.type_annotation = None;
-        self.walk_numeric_for(numeric_for);
     }
 
     fn visit_type(&mut self, _ty: &mut Type<'ast>) {}

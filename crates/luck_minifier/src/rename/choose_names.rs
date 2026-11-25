@@ -266,12 +266,12 @@ impl Reads<'_> {
     }
 }
 
-/// Gives each slot that asks the first candidate it can wear: no keyword,
-/// no other slot's, and none the chunk reads as a global in or below a
-/// scope one of the slot's bindings is declared in.
+/// Gives each slot that asks the first candidate it can wear: no other
+/// slot's, and none the chunk reads as a global in or below a scope one of
+/// the slot's bindings is declared in.
 #[derive(Default)]
 struct Picker {
-    /// Every candidate below it is a keyword, another slot's, or passed over.
+    /// Every candidate below it is another slot's or passed over.
     next: usize,
     /// The candidates below `next` a slot passed over for a global it would
     /// capture, which a later slot may still wear, ascending.
@@ -296,9 +296,6 @@ impl Picker {
             let index = self.next;
             self.next = index + 1;
             let candidate = pool.get(index);
-            if candidate.is_reserved {
-                continue;
-            }
             if reads.is_read_below(candidate.name_id, declared_scopes) {
                 self.passed_over.push((index, candidate.name_id));
                 continue;

@@ -7,8 +7,8 @@ use crate::call::{CallArg, CallArgs, dotted_callee};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::format_pattern::{
-    PatternError, validate_format, validate_gsub_replacement, validate_luau_pattern,
-    validate_os_date, validate_pack_format,
+    PatternError, validate_format, validate_gsub_replacement, validate_os_date,
+    validate_pack_format, validate_pattern,
 };
 use crate::rule::{Rule, declare_lint_rule};
 
@@ -135,7 +135,7 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, context: &dyn ValueContext) -
     let (noun, expected_arg_count) = match dsl {
         DslKind::Format => ("format", validate_format(body).map(Some)),
         DslKind::Match | DslKind::Find | DslKind::Gsub => {
-            ("pattern", validate_luau_pattern(body).map(|_| None))
+            ("pattern", validate_pattern(body).map(|_| None))
         }
         DslKind::Pack => ("pack format", validate_pack_format(body, false).map(Some)),
         DslKind::PackSize => ("pack format", validate_pack_format(body, true).map(|_| None)),
@@ -190,7 +190,7 @@ fn check_gsub_replacement(call: Call<'_>) -> Option<Finding> {
     let replacement = args.next()?.string_literal()?;
     let replacement_body = replacement.as_str()?;
     let capture_count =
-        pattern.and_then(StringLiteral::as_str).and_then(|body| validate_luau_pattern(body).ok());
+        pattern.and_then(StringLiteral::as_str).and_then(|body| validate_pattern(body).ok());
     validate_gsub_replacement(replacement_body, capture_count)
         .err()
         .map(|e| literal_error(e, replacement, replacement_body, "replacement"))

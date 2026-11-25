@@ -13,8 +13,7 @@ const URL: &str =
     "https://codeload.github.com/luau-lang/luau/tar.gz/c0e346edd89066b44dca174c9f54ce84c746a540";
 /// Where the tests sit in the tarball.
 const TARBALL_DIRECTORY: &str = "luau-c0e346edd89066b44dca174c9f54ce84c746a540/tests/conformance";
-/// The cache directory the tests unpack into, which the snapshots name each
-/// file under.
+/// The cache directory the tests unpack into.
 const DIRECTORY: &str = "luau-0.740";
 
 /// The Luau flags for what luck reads ahead of the pinned release: integer
@@ -25,10 +24,9 @@ pub(crate) const FAST_FLAGS: &[&str] =
 /// A test file of the suite, as bytes, which luck parses.
 #[derive(Debug)]
 pub(crate) struct SuiteFile {
-    /// The file's name in the suite's directory, such as `strings.luau`.
+    /// The file's name in the suite's directory, such as `strings.luau`, as
+    /// the snapshots name it.
     pub name: String,
-    /// The suite directory and the name, as the snapshots name the file.
-    pub path: String,
     pub source: Vec<u8>,
 }
 
@@ -48,8 +46,8 @@ pub(crate) fn fetch() -> io::Result<PathBuf> {
     extract_once(&cache, DIRECTORY, URL, TARBALL_DIRECTORY, fetch_bytes)
 }
 
-/// The suite's test files in `root`, or only those whose path contains
-/// `filter`, in path order, which every snapshot lists them in.
+/// The suite's test files in `root`, or only those whose name contains
+/// `filter`, in name order, which every snapshot lists them in.
 pub(crate) fn files(root: &Path, filter: Option<&str>) -> io::Result<Vec<SuiteFile>> {
     let mut files = Vec::new();
     for entry in fs::read_dir(root)? {
@@ -60,12 +58,11 @@ pub(crate) fn files(root: &Path, filter: Option<&str>) -> io::Result<Vec<SuiteFi
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let suite_path = format!("{DIRECTORY}/{name}");
-        if filter.is_some_and(|part| !suite_path.contains(part)) {
+        if filter.is_some_and(|part| !name.contains(part)) {
             continue;
         }
-        files.push(SuiteFile { name: name.to_owned(), path: suite_path, source: fs::read(&path)? });
+        files.push(SuiteFile { name: name.to_owned(), source: fs::read(&path)? });
     }
-    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(files)
 }

@@ -43,7 +43,8 @@ pub struct LintConfig {
     /// wins over the rule's category.
     #[cfg_attr(feature = "serde", serde(default))]
     pub rules: RuleSettings,
-    /// Extra global names to treat as defined, such as `vim` or `love`.
+    /// Extra global names to treat as defined, such as a test framework's
+    /// `describe` and `expect`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub extra_globals: Vec<String>,
 }
@@ -457,10 +458,10 @@ mod tests {
                     "cyclomatic_complexity": ["warn", { "max": 15 }],
                     "restricted_module_paths": ["error", { "paths": ["secret.path"] }]
                 },
-                "extra_globals": ["vim", "roblox"]
+                "extra_globals": ["app", "roblox"]
             }"#,
         );
-        assert_eq!(lint.extra_globals, vec!["vim".to_owned(), "roblox".to_owned()]);
+        assert_eq!(lint.extra_globals, vec!["app".to_owned(), "roblox".to_owned()]);
         assert_eq!(
             lint.categories,
             CategoryLevels {
@@ -489,13 +490,13 @@ mod tests {
                     "cyclomatic_complexity": ["warn", { "max": 15 }],
                     "restricted_module_paths": "error"
                 },
-                "extra_globals": ["vim"]
+                "extra_globals": ["app"]
             }"#,
         );
         let json = serde_json::to_string(&lint).expect("serialize");
         assert_eq!(
             json,
-            r#"{"categories":{"performance":"warn"},"rules":{"unused_variable":"off","restricted_module_paths":"error","cyclomatic_complexity":["warn",{"max":15}]},"extra_globals":["vim"]}"#
+            r#"{"categories":{"performance":"warn"},"rules":{"unused_variable":"off","restricted_module_paths":"error","cyclomatic_complexity":["warn",{"max":15}]},"extra_globals":["app"]}"#
         );
         assert_eq!(lint_config(&json), lint);
     }

@@ -6,10 +6,10 @@ mod common;
 
 mod depth;
 mod errors;
-mod features;
+mod exprs;
 mod fixtures;
-mod grammar;
+mod functions;
 mod parse_result;
-mod restrictions;
 mod stack;
+mod stmts;
 mod types;

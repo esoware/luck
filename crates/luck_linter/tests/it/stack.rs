@@ -1,8 +1,7 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter};
-use luck_stdlib::library_for;
+use luck_stdlib::{Variant, library_for};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
-use luck_token::Variant;
 
 fn every_rule() -> LintConfig {
     serde_json::from_str(

@@ -291,11 +291,11 @@ impl<'chain> ChainCallees<'chain> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_semantic::SemanticBuilder;
-    use luck_token::Variant;
 
     use super::*;
     use crate::layering::layer;
     use crate::stdlib_definition::StdlibDefinition;
+    use crate::variant::Variant;
 
     const SHAPED_LIBRARY: &str = r#"
 [globals.game]

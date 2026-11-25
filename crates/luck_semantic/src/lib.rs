@@ -3,10 +3,10 @@
 //! Semantic analysis of Luau, in one walk over a tree, as `oxc_semantic` does
 //! it.
 //!
-//! [`SemanticBuilder::build`] walks a [`Chunk`](luck_ast::Chunk) once, in
-//! source order, into a [`Semantic`]. That always holds its [`Scoping`]: flat
-//! tables of scopes, symbols, and references, indexed by typed ids, and the
-//! chunk's distinct names, which it owns, so a pass that rewrites the tree
+//! [`SemanticBuilder::build`] walks a chunk's [`Block`](luck_ast::Block) once,
+//! in source order, into a [`Semantic`]. That always holds its [`Scoping`]:
+//! flat tables of scopes, symbols, and references, indexed by typed ids, and
+//! the chunk's distinct names, which it owns, so a pass that rewrites the tree
 //! can keep it. A name in the tree finds what it declares or refers to by its
 //! [`NameIndex`](luck_ast::NameIndex), with [`Scoping::symbol_of`] and
 //! [`Scoping::reference_of`], a reference its symbol with

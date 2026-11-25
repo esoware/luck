@@ -51,8 +51,8 @@ mod tests {
         // Contextual keywords are names.
         assert!(is_valid_identifier("type"));
         assert!(is_valid_identifier("continue"));
-        assert!(is_valid_identifier("goto"));
-        assert!(is_valid_identifier("global"));
+        assert!(is_valid_identifier("export"));
+        assert!(is_valid_identifier("const"));
         assert!(!is_valid_identifier(""));
         assert!(!is_valid_identifier("1st"));
         assert!(!is_valid_identifier("has space"));
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn sanitizing_borrows_a_valid_name_and_is_idempotent() {
-        for name in ["x", "_private", "snake_case2", "type", "continue", "goto"] {
+        for name in ["x", "_private", "snake_case2", "type", "continue", "export"] {
             assert!(matches!(sanitize_identifier(name), Cow::Borrowed(kept) if kept == name));
         }
         for name in ["", "1st", "a b", "end", "\u{dc}nicode"] {
@@ -98,14 +98,14 @@ mod tests {
         assert_eq!(sanitize_identifier("1st"), "_1st");
         assert_eq!(sanitize_identifier("a b"), "a_b");
         assert_eq!(sanitize_identifier("end"), "_end");
-        assert_eq!(sanitize_identifier("goto"), "goto");
+        assert_eq!(sanitize_identifier("export"), "export");
     }
 
     #[test]
     fn a_sanitized_name_feeds_synth_name() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        assert_eq!(synth.name(&sanitize_identifier("goto")).text, "goto");
+        assert_eq!(synth.name(&sanitize_identifier("export")).text, "export");
         assert_eq!(synth.name(&sanitize_identifier("end")).text, "_end");
     }
 }

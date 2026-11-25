@@ -333,7 +333,7 @@ fn scan_format_conversion(
     }
 }
 
-pub(crate) fn validate_luau_pattern(pattern: &str) -> Result<usize, PatternError> {
+pub(crate) fn validate_pattern(pattern: &str) -> Result<usize, PatternError> {
     let mut cursor = Cursor::new(pattern);
     // One entry per capture so far, true once its `)` has been read.
     let mut captures: Vec<bool> = Vec::new();
@@ -681,61 +681,61 @@ mod tests {
 
     #[test]
     fn pattern_no_captures() {
-        assert_eq!(validate_luau_pattern("abc").unwrap(), 0);
+        assert_eq!(validate_pattern("abc").unwrap(), 0);
     }
 
     #[test]
     fn pattern_one_capture() {
-        assert_eq!(validate_luau_pattern("(%a+)").unwrap(), 1);
+        assert_eq!(validate_pattern("(%a+)").unwrap(), 1);
     }
 
     #[test]
     fn pattern_two_captures() {
-        assert_eq!(validate_luau_pattern("(%d)(%a)").unwrap(), 2);
+        assert_eq!(validate_pattern("(%d)(%a)").unwrap(), 2);
     }
 
     #[test]
     fn pattern_simple_set() {
-        assert_eq!(validate_luau_pattern("[a-z]").unwrap(), 0);
+        assert_eq!(validate_pattern("[a-z]").unwrap(), 0);
     }
 
     #[test]
     fn pattern_unterminated_set() {
-        assert!(matches!(validate_luau_pattern("[a-"), Err(PatternError::UnterminatedSet { .. })));
+        assert!(matches!(validate_pattern("[a-"), Err(PatternError::UnterminatedSet { .. })));
     }
 
     #[test]
     fn pattern_empty_set() {
-        assert!(matches!(validate_luau_pattern("[]"), Err(PatternError::EmptySet { .. })));
+        assert!(matches!(validate_pattern("[]"), Err(PatternError::EmptySet { .. })));
     }
 
     #[test]
     fn pattern_word_class() {
-        assert_eq!(validate_luau_pattern("%w").unwrap(), 0);
+        assert_eq!(validate_pattern("%w").unwrap(), 0);
     }
 
     #[test]
     fn pattern_back_reference() {
         assert!(matches!(
-            validate_luau_pattern("%9"),
+            validate_pattern("%9"),
             Err(PatternError::BadBackReference { offset: 1 })
         ));
     }
 
     #[test]
     fn pattern_balanced_match() {
-        assert_eq!(validate_luau_pattern("%bab").unwrap(), 0);
+        assert_eq!(validate_pattern("%bab").unwrap(), 0);
     }
 
     #[test]
     fn pattern_frontier() {
-        assert_eq!(validate_luau_pattern("%f[%a]").unwrap(), 0);
+        assert_eq!(validate_pattern("%f[%a]").unwrap(), 0);
     }
 
     #[test]
     fn pattern_frontier_truncated() {
         assert!(matches!(
-            validate_luau_pattern("%f"),
+            validate_pattern("%f"),
             Err(PatternError::TruncatedSpecifier { .. }
                 | PatternError::BadEscape { character: 'f', .. })
         ));
@@ -744,13 +744,13 @@ mod tests {
     #[test]
     fn pattern_reads_a_quantifier_with_nothing_to_repeat_as_a_literal() {
         for pattern in ["*", "+a", "-", "?", "^-?%d+$", "(*)", "(a)%1*", "%f[a]*", "a**"] {
-            validate_luau_pattern(pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+            validate_pattern(pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
         }
     }
 
     #[test]
     fn pattern_back_reference_without_quantifier() {
-        assert_eq!(validate_luau_pattern("(a)%1").unwrap(), 1);
+        assert_eq!(validate_pattern("(a)%1").unwrap(), 1);
     }
 
     #[test]
@@ -836,35 +836,32 @@ mod tests {
     fn pattern_rejects_bad_back_references() {
         for pattern in ["%0", "%1", "(a)%2", "(%1)"] {
             assert!(
-                matches!(
-                    validate_luau_pattern(pattern),
-                    Err(PatternError::BadBackReference { .. })
-                ),
+                matches!(validate_pattern(pattern), Err(PatternError::BadBackReference { .. })),
                 "{pattern}"
             );
         }
-        assert_eq!(validate_luau_pattern("(a)(b)%2").unwrap(), 2);
+        assert_eq!(validate_pattern("(a)(b)%2").unwrap(), 2);
     }
 
     #[test]
     fn pattern_limits_captures() {
-        assert_eq!(validate_luau_pattern(&"()".repeat(32)).unwrap(), 32);
+        assert_eq!(validate_pattern(&"()".repeat(32)).unwrap(), 32);
         assert!(matches!(
-            validate_luau_pattern(&"()".repeat(33)),
+            validate_pattern(&"()".repeat(33)),
             Err(PatternError::TooManyCaptures { .. })
         ));
     }
 
     #[test]
     fn pattern_reads_unknown_letter_as_itself() {
-        assert_eq!(validate_luau_pattern("%y%Q").unwrap(), 0);
+        assert_eq!(validate_pattern("%y%Q").unwrap(), 0);
     }
 
     #[test]
     fn pattern_keeps_leading_close_bracket_as_member() {
-        assert_eq!(validate_luau_pattern("[]]").unwrap(), 0);
-        assert_eq!(validate_luau_pattern("[^]a]").unwrap(), 0);
-        assert!(matches!(validate_luau_pattern("[]a"), Err(PatternError::UnterminatedSet { .. })));
+        assert_eq!(validate_pattern("[]]").unwrap(), 0);
+        assert_eq!(validate_pattern("[^]a]").unwrap(), 0);
+        assert!(matches!(validate_pattern("[]a"), Err(PatternError::UnterminatedSet { .. })));
     }
 
     #[test]

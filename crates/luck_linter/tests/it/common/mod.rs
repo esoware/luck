@@ -1,7 +1,6 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::library_for;
-use luck_token::Variant;
+use luck_stdlib::{Variant, library_for};
 
 /// `source`'s messages against Luau's standard library, with no fixes.
 pub(crate) fn lint(source: &str, config: &LintConfig) -> Vec<Message> {

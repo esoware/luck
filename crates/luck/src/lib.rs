@@ -9,8 +9,7 @@
 //!
 //! - `allocator` - The arena syntax trees live in, and arenas for threads
 //!   (always on)
-//! - `token` - Spans, `Variant`, tokens, literal value semantics (always
-//!   on)
+//! - `token` - Spans, tokens, literal value semantics (always on)
 //! - `lexer` - Tokenizer (always on)
 //! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
 //!   `GetSpan`, `ContentEq` (always on)
@@ -26,9 +25,9 @@
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
 //! - `semantic` - Scoping, compile-time checks, the node table, and `require`
 //!   sites, in one pass (feature `semantic`)
-//! - `stdlib` - The Luau and Roblox standard libraries, the std definitions
-//!   that layer a host's library over one, and what a chunk reaches in it
-//!   (feature `stdlib`, enables `semantic`)
+//! - `stdlib` - `Variant`, the Luau and Roblox standard libraries, the std
+//!   definitions that layer a host's library over one, and what a chunk
+//!   reaches in it (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `stdlib`)
 //! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
@@ -120,7 +119,7 @@
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
 //! use luck::linter::{FixKind, LintConfig, Linter};
-//! use luck::token::Variant;
+//! use luck::stdlib::Variant;
 //!
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());

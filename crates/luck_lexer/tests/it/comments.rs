@@ -90,13 +90,13 @@ fn terminated_block_comment_leaves_the_end_whole() {
 #[test]
 fn shebang_leads_the_first_token() {
     let result = lex(b"\
-#!/usr/bin/env lua
+#!/usr/bin/env luau
 local x");
     assert_eq!(
         result.comments,
         vec![Comment {
-            span: Span::new(0, 18),
-            attached_to: 19,
+            span: Span::new(0, 19),
+            attached_to: 20,
             kind: CommentKind::Shebang,
             position: CommentPosition::Leading,
             is_followed_by_newline: true,

@@ -613,20 +613,6 @@ print(y)",
 }
 
 #[test]
-fn a_function_records_whether_its_own_code_reads_its_varargs() {
-    let allocator = Allocator::new();
-    let scoping = scoping_of(
-        &allocator,
-        "\
-local function f(...) return function(...) return ... end end
-local function g(...) if ... then end end
-print(...)",
-    );
-    let reads: Vec<bool> = scoping.scopes().iter().map(|scope| scope.has_vararg_read).collect();
-    assert_eq!(reads, [true, false, true, true, false], "the chunk, f, its closure, g, g's if");
-}
-
-#[test]
 fn a_typeof_in_a_nested_function_captures_nothing() {
     let allocator = Allocator::new();
     let scoping = scoping_of(

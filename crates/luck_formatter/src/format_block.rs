@@ -434,7 +434,7 @@ pub(crate) fn format_selection<'ast>(
     range: Span,
 ) -> Option<(Span, Vec<u8>)> {
     let groupings = |expr| parse.groupings.around(expr);
-    let block = &parse.chunk.block;
+    let block = &parse.chunk;
     let mut finder = InnermostBlock { range, groupings: &parse.groupings, found: block };
     finder.visit_block(block);
 

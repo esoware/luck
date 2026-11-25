@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_parser::{parse, parse_with_tokens};
-use luck_testgen::luau_fixtures;
+use luck_testgen::source_fixtures;
 
 #[test]
 fn fixtures_outside_errors_parse_cleanly() {
@@ -10,7 +10,7 @@ fn fixtures_outside_errors_parse_cleanly() {
     let mut failures = Vec::new();
     let mut success_count = 0;
 
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         let result = parse(&allocator, fixture.source.as_bytes());
 
         if fixture.is_error {
@@ -41,7 +41,7 @@ fn fixtures_outside_errors_parse_cleanly() {
 
 #[test]
 fn every_fixture_parses_with_the_tokens_it_lexes_to() {
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         let source = fixture.source.as_bytes();
         let allocator = Allocator::new();
         let tokens = parse_with_tokens(&allocator, source).tokens;

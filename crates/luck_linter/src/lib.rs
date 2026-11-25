@@ -14,8 +14,7 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_linter::{FixKind, LintConfig, Linter};
-//! use luck_stdlib::library_for;
-//! use luck_token::Variant;
+//! use luck_stdlib::{library_for, Variant};
 //!
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());

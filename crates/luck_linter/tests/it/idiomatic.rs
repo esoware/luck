@@ -2,14 +2,14 @@
 //! is a false positive.
 
 use luck_linter::LintConfig;
-use luck_testgen::luau_fixtures;
+use luck_testgen::source_fixtures;
 
 use crate::common::lint;
 
 #[test]
 fn default_lint_is_silent_on_idiomatic_fixtures() {
     let mut fixture_count = 0;
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         if !fixture.relative_path.starts_with("idiomatic") {
             continue;
         }

@@ -2,7 +2,7 @@
 //! output that reparses and minifies to itself.
 
 use luck_minifier::TransformConfig;
-use luck_testgen::{generate_full_grammar, generate_runtime_safe, luau_fixtures};
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, source_fixtures};
 
 use crate::common::minify_with;
 
@@ -57,7 +57,7 @@ fn generated_programs_minify_to_a_fixpoint_with_each_pass_alone() {
 #[test]
 fn fixtures_minify_to_a_fixpoint() {
     let config = TransformConfig::default();
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         if fixture.is_error {
             continue;
         }

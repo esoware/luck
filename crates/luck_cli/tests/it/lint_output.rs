@@ -193,7 +193,7 @@ fn print_config_output_pastes_back_into_luck_json() {
 
     let with_flags = printed_config(
         project.path(),
-        &["-D", "style", "-A", "unused_variable", "--global", "vim"],
+        &["-D", "style", "-A", "unused_variable", "--global", "app"],
     );
     assert!(with_flags.contains(r#""style": "error""#), "{with_flags}");
     assert!(with_flags.contains(r#""unused_variable": "off""#), "{with_flags}");

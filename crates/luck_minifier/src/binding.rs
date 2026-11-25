@@ -2,7 +2,7 @@
 //! binding beyond it: how its declaration fixes it, and how `luck_value`
 //! tells a local's read from a global's.
 
-use luck_ast::{Chunk, LocalAssignment, LocalAssignmentKind, Name, NameIndex, TreeCounts};
+use luck_ast::{Block, LocalAssignment, LocalAssignmentKind, Name, NameIndex, TreeCounts};
 use luck_semantic::{Scoping, SemanticBuilder};
 use luck_value::ValueContext;
 
@@ -10,7 +10,7 @@ pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
 
 /// `chunk`'s scoping, which a rewrite reads its bindings from, in the tables
 /// of `reused`, an earlier analysis', when there is one.
-pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts, reused: Option<Scoping>) -> Scoping {
+pub(crate) fn analyze(chunk: &Block<'_>, counts: TreeCounts, reused: Option<Scoping>) -> Scoping {
     let builder = SemanticBuilder::new().with_counts(counts);
     let built = match reused {
         Some(scoping) => builder.rebuild(chunk, scoping),

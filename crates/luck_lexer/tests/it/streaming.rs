@@ -23,7 +23,7 @@ fn next_token_streams_exactly_what_lex_materializes() {
 local x = 1 -- trailing
 -- leading
 return x",
-        "#!/usr/bin/env lua\r\n--[==[ block\r\n ]==] print'a' --[[ tail ]]",
+        "#!/usr/bin/env luau\r\n--[==[ block\r\n ]==] print'a' --[[ tail ]]",
         "\
 x = [[long
 string]] .. \"esc\\n\" -- end",

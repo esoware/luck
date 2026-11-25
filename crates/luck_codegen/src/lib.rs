@@ -23,7 +23,7 @@
 //!
 //! ```
 //! use luck_allocator::Allocator;
-//! use luck_ast::{Chunk, SpanCounter, Synth};
+//! use luck_ast::{Block, SpanCounter, Synth};
 //! use luck_codegen::LiteralSpelling;
 //! use luck_token::BinOp;
 //!
@@ -32,7 +32,7 @@
 //! let synth = Synth::new(&allocator, &spans);
 //! let sum = synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number_f64(0.5));
 //! let block = synth.block([synth.local(&["x"], [sum]), synth.return_([synth.name_expr("x")])]);
-//! let chunk = Chunk::new(block);
+//! let chunk = block;
 //! let output = luck_codegen::compact(&chunk, LiteralSpelling::AsWritten);
 //! assert_eq!(output, b"local x=a-.5 return x");
 //! ```

@@ -5,7 +5,7 @@ use crate::common::Fixture;
 
 /// `local x = a + 1`.
 fn local_sum(synth: Synth<'_>) -> Statement<'_> {
-    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_i64(1));
+    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_f64(1.0));
     synth.local(&["x"], [sum])
 }
 
@@ -40,12 +40,12 @@ fn a_literal_compares_by_value_and_not_by_spelling() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     assert!(synth.long_string("a\nb").content_eq(&synth.string("a\nb")));
-    let Expression::Number(mut spelled) = synth.number_i64(16) else {
+    let Expression::Number(mut spelled) = synth.number_f64(16.0) else {
         panic!("expected a number");
     };
     spelled.raw = Some("0x10".into());
     spelled.is_exact = false;
-    let Expression::Number(plain) = synth.number_i64(16) else {
+    let Expression::Number(plain) = synth.number_f64(16.0) else {
         panic!("expected a number");
     };
     assert!(spelled.content_eq(&plain));
@@ -57,8 +57,8 @@ fn trees_that_differ_anywhere_else_differ() {
     let synth = fixture.synth();
     let pairs = [
         (
-            synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_i64(1)),
-            synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number_i64(1)),
+            synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_f64(1.0)),
+            synth.binary_op(synth.name_expr("a"), BinOp::Sub, synth.number_f64(1.0)),
         ),
         (synth.name_expr("a"), synth.name_expr("b")),
         (synth.nil(), synth.boolean(false)),

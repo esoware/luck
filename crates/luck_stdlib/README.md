@@ -6,27 +6,27 @@ The standard library of each variant luck reads, Luau and Roblox, the std defini
 
 A `StdlibLibrary` is a library's globals, the shapes of its values, and its named constant sets, with signatures, overloads, and deprecations. Each variant has a static one built into the crate, which `library_for` returns. `just stdlib` generates them from `stdlib_data/`, whose files are std definitions, by layering each variant's files over an empty library and printing the result, so nothing is parsed or checked at runtime. Luau's is `luau.toml`, and Roblox's layers `roblox_api.toml`, `roblox.toml`, and `roblox_enums.toml` over it. `just roblox-api` refreshes the Roblox services, classes, and enums from the live API dump first.
 
-A `StdlibDefinition` is one std definition file, in the format below, which describes a library such as LOVE's, Neovim's, or a test framework's. `Stdlib::layer` layers it over a library into one of the same type, in an arena of its own, sharing every entry it leaves alone with the library below. A `Stdlib` is a built-in library, or one with definitions layered over it, which a clone shares across threads.
+A `StdlibDefinition` is one std definition file, in the format below, which describes a library such as a host application's or a test framework's. `Stdlib::layer` layers it over a library into one of the same type, in an arena of its own, sharing every entry it leaves alone with the library below. A `Stdlib` is a built-in library, or one with definitions layered over it, which a clone shares across threads.
 
 `analyze` builds a chunk's `luck_semantic::Semantic`, with its node table and `require` sites, and reads it against a library, built in or layered, so a caller can ask whether a name is a known global or which function a call reaches. A local initialized from a value of known shape, such as `local s = string.rep(...)`, has that shape, so `s:upper()` resolves too. It lives apart from `luck_semantic`, so a pass that needs only scoping, such as the minifier's, builds no library.
 
 ## Usage
 
+- `Variant`: the Luau a user names, standalone or on Roblox, which decides the standard library a name resolves against, since both read the same syntax. It parses from `standalone` or `roblox`, and `is_roblox()` says whether its standard library is Roblox's. It derives `Deserialize` for those lowercase names, which `luck.json` takes, and the `schemars` feature derives `JsonSchema` too.
 - `library_for(variant)` returns the built-in library, a `StdlibLibrary`.
 - `StdlibDefinition::parse(text)` reads a std definition, and `Stdlib::new(variant).layer(&definition)` layers it over the built-in library.
 - `analyze(chunk, counts, library)` returns a `SemanticAnalysis` of a tree, and beside it the semantic checker's errors. `SemanticAnalysis` answers `is_known_global`, `resolve_callee`, and `resolve_stdlib_path`, takes the configured extra globals with `add_extra_globals`, and holds the `Semantic`.
 
 ```rust
 use luck_allocator::Allocator;
-use luck_stdlib::{Stdlib, StdlibDefinition};
-use luck_token::Variant;
+use luck_stdlib::{Stdlib, StdlibDefinition, Variant};
 
 let definition = StdlibDefinition::parse(
     r#"
-[globals.love]
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.load]
+[globals.app.members.load]
 kind = "function"
 is_read_only = false
 "#,
@@ -35,13 +35,13 @@ is_read_only = false
 let stdlib = Stdlib::new(Variant::Standalone).layer(&definition).expect("it layers");
 
 let allocator = Allocator::new();
-let source = b"local greeting = 1 print(greeting, love)";
+let source = b"local greeting = 1 print(greeting, app)";
 let parsed = luck_parser::parse(&allocator, source);
 let chunk = allocator.alloc(parsed.chunk);
 let (analysis, errors) = luck_stdlib::analyze(chunk, parsed.counts, stdlib.library());
 assert!(errors.is_empty());
 assert!(analysis.is_known_global("print"));
-assert!(analysis.is_known_global("love"));
+assert!(analysis.is_known_global("app"));
 ```
 
 ## Std definitions
@@ -49,25 +49,25 @@ assert!(analysis.is_known_global("love"));
 A std definition is a TOML file. A project names its own in `luck.json`'s `std`, and they layer, in order, over the library of the project's variant.
 
 ```toml
-[globals.love]
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.graphics]
+[globals.app.members.graphics]
 kind = "namespace"
 
 # A function's params, required ones first, then optional ones, then at most one vararg.
-[globals.love.members.graphics.members.newImage]
+[globals.app.members.graphics.members.newImage]
 kind = "function"
 is_must_use = true
 params = [{ kind = "string" }, { kind = "table", is_required = false }]
 returns = "Image"
 
 # A callback the code defines, which is why it isn't read-only.
-[globals.love.members.draw]
+[globals.app.members.draw]
 kind = "function"
 is_read_only = false
 
-[globals.love.members.graphics.members.setColor]
+[globals.app.members.graphics.members.setColor]
 kind = "function"
 overloads = [
   { params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }, { kind = "number", is_required = false }] },
@@ -82,7 +82,7 @@ is_must_use = true
 [constant_sets.draw_modes]
 values = ["fill", { value = "line", is_common = true }]
 
-[globals.love.members.graphics.members.rectangle]
+[globals.app.members.graphics.members.rectangle]
 kind = "function"
 params = [{ kind = "constant", set = "draw_modes" }, { kind = "number" }, { kind = "number" }, { kind = "number" }, { kind = "number" }]
 ```

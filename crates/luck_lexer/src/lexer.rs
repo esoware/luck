@@ -411,7 +411,10 @@ impl<'source> Lexer<'source> {
             b'>' => self.either(next, b'=', TokenKind::GreaterEqual, TokenKind::Greater),
             b'~' => {
                 if next != b'=' {
-                    self.reject(start, "standalone `~` is not supported (use `~=` for not-equal)");
+                    let span = self.cursor.span_since(start);
+                    let error = Diagnostic::e008(span, "unexpected character `~`")
+                        .with_help("use `~=` for not-equal");
+                    self.errors.push(error);
                     return None;
                 }
                 self.cursor.bump();

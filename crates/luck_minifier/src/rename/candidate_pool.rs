@@ -26,8 +26,7 @@ const REST_CHARS: usize = 63;
 ///
 /// The first character is `index` in base 53, and the rest are what's left
 /// in bijective base 63, so 53 names have one character, the next 53 * 63
-/// have two, and so on. Keywords are among them, and skipping those is the
-/// renamer's job.
+/// have two, and so on. Keywords are among them, which the pool skips.
 fn push_base53(index: usize, name: &mut String) {
     let alphabet = ALPHABET.as_bytes();
     name.push(char::from(alphabet[index % FIRST_CHARS]));
@@ -38,34 +37,37 @@ fn push_base53(index: usize, name: &mut String) {
     }
 }
 
-/// Each name in turn, computed once and shared by every slot.
+/// Each name but a keyword in turn, computed once and shared by every slot.
 pub(super) struct CandidatePool<'walk, 'ast> {
     allocator: &'ast Allocator,
     scoping: &'walk Scoping,
     candidates: Vec<Candidate<'ast>>,
+    /// The index of the next name [`push_base53`] writes.
+    next_name: usize,
     scratch: String,
 }
 
 impl<'walk, 'ast> CandidatePool<'walk, 'ast> {
     pub(super) const fn new(allocator: &'ast Allocator, scoping: &'walk Scoping) -> Self {
-        Self { allocator, scoping, candidates: Vec::new(), scratch: String::new() }
+        Self { allocator, scoping, candidates: Vec::new(), next_name: 0, scratch: String::new() }
     }
 
     pub(super) fn get(&mut self, index: usize) -> Candidate<'ast> {
         while self.candidates.len() <= index {
-            let next = self.candidates.len();
+            let next = self.next_name;
+            self.next_name += 1;
+            // No keyword is one character long.
             let name = if next < FIRST_CHARS {
                 &ALPHABET[next..=next]
             } else {
                 self.scratch.clear();
                 push_base53(next, &mut self.scratch);
+                if TokenKind::is_reserved(&self.scratch) {
+                    continue;
+                }
                 self.allocator.alloc_str(&self.scratch)
             };
-            self.candidates.push(Candidate {
-                name,
-                is_reserved: TokenKind::is_reserved(name),
-                name_id: self.scoping.name_id(name),
-            });
+            self.candidates.push(Candidate { name, name_id: self.scoping.name_id(name) });
         }
         self.candidates[index]
     }
@@ -115,19 +117,23 @@ mod tests {
     }
 
     #[test]
-    fn the_pool_marks_every_two_letter_keyword_reserved() {
+    fn the_pool_skips_every_keyword() {
         let allocator = Allocator::new();
         let result = luck_parser::parse(&allocator, b"");
         let scoping = analyze(&result.chunk, result.counts, None);
         let mut pool = CandidatePool::new(&allocator, &scoping);
-        let reserved: Vec<&str> = (0..FIRST_CHARS * (REST_CHARS + 1))
-            .map(|index| pool.get(index))
-            .filter(|candidate| candidate.is_reserved)
-            .map(|candidate| candidate.name)
+        let two_letter_keywords = ["do", "if", "in", "or"];
+        let up_to_two_letters = FIRST_CHARS * (REST_CHARS + 1);
+        let names: Vec<&str> = (0..up_to_two_letters - two_letter_keywords.len())
+            .map(|index| pool.get(index).name)
             .collect();
-        for keyword in ["do", "if", "in", "or"] {
-            assert!(reserved.contains(&keyword), "{keyword}");
-        }
-        assert_eq!(reserved.len(), 4, "{reserved:?}");
+        assert!(names.iter().all(|name| !TokenKind::is_reserved(name)), "{names:?}");
+        assert_eq!(names.last().copied(), Some(base53(up_to_two_letters - 1).as_str()));
+        let mut skipped: Vec<String> = (0..up_to_two_letters)
+            .map(base53)
+            .filter(|name| !names.contains(&name.as_str()))
+            .collect();
+        skipped.sort_unstable();
+        assert_eq!(skipped, two_letter_keywords);
     }
 }

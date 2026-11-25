@@ -5,7 +5,7 @@ use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    Assignment, Expression, LocalAssignmentKind, LocalName, Name, Statement, Var, Visit,
+    Assignment, Expression, LocalAssignmentKind, Name, Statement, TypedName, Var, Visit,
 };
 use luck_semantic::{Scoping, SymbolId};
 use luck_value::{MayHaveSideEffects as _, ValueContext};
@@ -325,7 +325,7 @@ impl<'ast> Compressor<'_, 'ast> {
     /// locals go in `declared`.
     fn can_fuse(
         &self,
-        names: &[LocalName<'_>],
+        names: &[TypedName<'_>],
         assignment: &Assignment<'_>,
         declared: &mut Vec<SymbolId>,
     ) -> bool {
@@ -476,7 +476,6 @@ mod tests {
     fn largest_assignment_target_count(output: &str) -> usize {
         let allocator = Allocator::new();
         parse(&allocator, output)
-            .block
             .stmts
             .iter()
             .filter_map(|stmt| {

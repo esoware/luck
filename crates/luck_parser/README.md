@@ -12,7 +12,7 @@ An error doesn't stop the parse. The parser recovers and reports every error in 
 
 ## Usage
 
-- `parse(allocator, source)` returns a `ParseResult`: the source, the `Chunk`, which holds the tree, the comments, the `Groupings`, the errors, the lenient escapes the lexer noted, the nesting depth, and the `TreeCounts`.
+- `parse(allocator, source)` returns a `ParseResult`: the source, the `chunk`, the `Block` at the root of the tree, the comments, the `Groupings`, the errors, the lenient escapes the lexer noted, the nesting depth, and the `TreeCounts`.
 - `parse_with_tokens` also keeps every token it read in the result's `tokens`, which `parse` leaves empty, so a host that needs both, such as the formatter or the language server, lexes the source once.
 
 A `break`, a `continue`, or a `return` is a statement like any other, and a `;` is no node. A statement the grammar takes only at the end of its block but that has others after it is an error, and stays where it was written.
@@ -23,5 +23,5 @@ use luck_allocator::Allocator;
 let allocator = Allocator::new();
 let result = luck_parser::parse(&allocator, b"local x = 1 + 2");
 assert!(result.errors.is_empty());
-assert_eq!(result.chunk.block.stmts.len(), 1);
+assert_eq!(result.chunk.stmts.len(), 1);
 ```

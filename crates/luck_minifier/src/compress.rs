@@ -34,9 +34,9 @@ use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    Assignment, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs, FunctionBody, GenericFor,
-    LocalName, Name, ReturnStatement, Statement, Suffix, SuffixedExpression, TableConstructor,
-    TreeCounts, Type, Visit, VisitMut,
+    Assignment, BinaryOp, Block, Expression, Field, FunctionArgs, FunctionBody, GenericFor, Name,
+    ReturnStatement, Statement, Suffix, SuffixedExpression, TableConstructor, TreeCounts, Type,
+    TypedName, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{Scoping, SymbolId};
@@ -64,7 +64,7 @@ const MAX_ROUNDS: usize = 4;
 /// Returns the last scoping, whose tables a later analysis can reuse.
 pub(crate) fn compress<'ast>(
     allocator: &'ast Allocator,
-    chunk: &mut Chunk<'ast>,
+    chunk: &mut Block<'ast>,
     counts: TreeCounts,
     config: TransformConfig,
     name_indexes: &mut NameIndexes,
@@ -72,10 +72,10 @@ pub(crate) fn compress<'ast>(
     let mut scoping = analyze(chunk, counts, None);
     for round in 1..=MAX_ROUNDS {
         let mut compressor = Compressor::new(allocator, config, &mut scoping);
-        compressor.run(&mut chunk.block);
+        compressor.run(chunk);
         #[cfg(debug_assertions)]
         compressor.assert_references_match(chunk, counts);
-        if !(config.lift_locals && compressor.lift(&mut chunk.block, name_indexes)) {
+        if !(config.lift_locals && compressor.lift(chunk, name_indexes)) {
             break;
         }
         debug_assert!(round < MAX_ROUNDS, "lifting a lifted tree lifted more");
@@ -222,7 +222,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     /// name that refers to a symbol is live and in its list, and no list
     /// holds a reference whose name left the tree.
     #[cfg(debug_assertions)]
-    fn assert_references_match(&self, chunk: &Chunk<'_>, counts: TreeCounts) {
+    fn assert_references_match(&self, chunk: &Block<'_>, counts: TreeCounts) {
         let fresh = analyze(chunk, counts, None);
         let mut check = FreshCheck {
             scoping: self.scoping,
@@ -230,7 +230,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             fresh: &fresh,
             pairs: vec![None; self.scoping.symbols().len()],
         };
-        check.visit_block(&chunk.block);
+        check.visit_block(chunk);
         for (symbol, pair) in self.scoping.symbols().iter().zip(&check.pairs) {
             let kept = self.scoping.resolved_references(symbol.id).len();
             let found =
@@ -258,7 +258,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
 
     /// Marks the references in the annotation of a name the walk drops from
     /// its `local`.
-    fn drop_annotation(&mut self, local_name: &LocalName<'ast>) {
+    fn drop_annotation(&mut self, local_name: &TypedName<'ast>) {
         if let Some(ty) = &local_name.type_annotation {
             self.dropper().visit_type(ty);
         }
@@ -658,7 +658,7 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     /// value, so the last may spread.
     fn visit_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
         for param in &mut generic_for.names {
-            self.visit_param(param);
+            self.visit_typed_name(param);
         }
         self.visit_values(&mut generic_for.exprs, usize::MAX);
         self.visit_block(&mut generic_for.block);

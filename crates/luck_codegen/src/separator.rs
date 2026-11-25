@@ -3,9 +3,9 @@
 //! goes in only where the two meet.
 //!
 //! The classes cover the merges a tree can print. Only a type prints a `<`
-//! or `>` before another, and there's no shift operator, so those stay
-//! glued. Every other merge, such as `/` into `//` or `=` into `==`, takes a
-//! pair no tree prints.
+//! or `>` before another, and Luau lexes `<<` and `>>` as two tokens each,
+//! so those stay glued. Every other merge, such as `/` into `//` or `=` into
+//! `==`, takes a pair no tree prints.
 
 use std::ops::BitOr;
 

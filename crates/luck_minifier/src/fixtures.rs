@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::Chunk;
+use luck_ast::Block;
 use luck_codegen::LiteralSpelling;
 
 use crate::binding::{NameIndexes, analyze};
@@ -24,7 +24,7 @@ pub(crate) const NO_PASSES: TransformConfig = TransformConfig {
 pub(crate) const RENAMING: TransformConfig =
     TransformConfig { rename_locals: true, rename_globals: true, ..NO_PASSES };
 
-pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Chunk<'ast> {
+pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Block<'ast> {
     let result = luck_parser::parse(allocator, source.as_bytes());
     assert!(result.errors.is_empty(), "parse failed: {:?}\n{source}", result.errors);
     result.chunk
@@ -62,7 +62,7 @@ pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let result = luck_parser::parse(&allocator, source.as_bytes());
     let mut chunk = result.chunk;
     let mut scoping = analyze(&chunk, result.counts, None);
-    Compressor::new(&allocator, config, &mut scoping).pass(&mut chunk.block);
+    Compressor::new(&allocator, config, &mut scoping).pass(&mut chunk);
     String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::Shortest)).unwrap()
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn compressed<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     config: TransformConfig,
-) -> Chunk<'ast> {
+) -> Block<'ast> {
     let result = luck_parser::parse(allocator, source.as_bytes());
     let mut chunk = result.chunk;
     let mut name_indexes = NameIndexes::new(result.counts.names);

@@ -46,7 +46,7 @@ Diagnostics    : 16666
      1 integer_parsing
      1 mismatched_arg_count
 
-luau-0.740/apicalls.luau
+apicalls.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `add` (missing `local`?)
 4:10 no_implicit_globals: global variable `add` used
@@ -71,7 +71,7 @@ luau-0.740/apicalls.luau
 34:10 no_implicit_globals: global variable `table` used
 34:23 no_implicit_globals: global variable `table` used
 
-luau-0.740/assert.luau
+assert.luau
 2:1 no_implicit_globals: global variable `print` used
 4:4 no_implicit_globals: global variable `pcall` used
 4:10 no_implicit_globals: global variable `assert` used
@@ -120,7 +120,7 @@ luau-0.740/assert.luau
 32:32 no_implicit_globals: global variable `assert` used
 32:32 unnecessary_assert: `assert` on a constant value always passes
 
-luau-0.740/attrib.luau
+attrib.luau
 3:1 no_implicit_globals: global variable `print` used
 5:16 no_implicit_globals: global variable `table` used
 7:1 unbalanced_assignment: 2 name(s) but 1 value(s) in assignment
@@ -316,7 +316,7 @@ luau-0.740/attrib.luau
 100:29 multiple_statements_per_line: statement starts on the same line as the previous statement
 102:3 no_implicit_globals: global variable `assert` used
 
-luau-0.740/basic.luau
+basic.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `concat` (missing `local`?)
 4:10 no_implicit_globals: global variable `concat` used
@@ -1955,7 +1955,7 @@ luau-0.740/basic.luau
 1013:28 no_implicit_globals: global variable `typeof` used
 1016:1 no_implicit_globals: global variable `testgetfenv` used
 
-luau-0.740/bitwise.luau
+bitwise.luau
 3:1 no_implicit_globals: global variable `print` used
 5:39 unused_variable: unused variable `s`
 5:46 no_implicit_globals: global variable `pcall` used
@@ -2385,7 +2385,7 @@ luau-0.740/bitwise.luau
 259:1 no_implicit_globals: global variable `assert` used
 259:8 no_implicit_globals: global variable `bit32` used
 
-luau-0.740/buffers.luau
+buffers.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `call` (missing `local`?)
 4:10 no_implicit_globals: global variable `call` used
@@ -3686,7 +3686,7 @@ luau-0.740/buffers.luau
 826:3 no_implicit_globals: global variable `getfenv` used
 844:8 no_implicit_globals: global variable `table` used
 
-luau-0.740/calls.luau
+calls.luau
 3:1 no_implicit_globals: global variable `print` used
 7:1 no_implicit_globals: global variable `assert` used
 7:8 no_implicit_globals: global variable `type` used
@@ -3973,7 +3973,7 @@ luau-0.740/calls.luau
 262:3 no_implicit_globals: global variable `assert` used
 262:21 no_implicit_globals: global variable `string` used
 
-luau-0.740/clear.luau
+clear.luau
 3:17 no_implicit_globals: global variable `pcall` used
 4:2 no_implicit_globals: global variable `assert` used
 4:19 no_implicit_globals: global variable `string` used
@@ -4021,7 +4021,7 @@ luau-0.740/clear.luau
 72:12 no_implicit_globals: global variable `pairs` used
 75:3 no_implicit_globals: global variable `assert` used
 
-luau-0.740/closure.luau
+closure.luau
 3:1 no_implicit_globals: global variable `print` used
 5:16 no_implicit_globals: global variable `table` used
 8:10 setting_global: setting global variable `f` (missing `local`?)
@@ -4351,7 +4351,7 @@ luau-0.740/closure.luau
 395:9 unused_variable: unused variable `f`
 395:9 shadowing: variable `f` shadows outer variable
 
-luau-0.740/constructs.luau
+constructs.luau
 3:1 no_implicit_globals: global variable `print` used
 7:1 no_implicit_globals: global variable `assert` used
 7:1 unnecessary_assert: `assert` on a constant value always passes
@@ -4656,7 +4656,7 @@ luau-0.740/constructs.luau
 243:5 no_implicit_globals: global variable `assert` used
 248:5 redundant_nil_init: redundant `= nil` initializer, because uninitialized locals are `nil`
 
-luau-0.740/coroutine.luau
+coroutine.luau
 3:1 no_implicit_globals: global variable `print` used
 7:14 no_implicit_globals: global variable `coroutine` used
 8:1 no_implicit_globals: global variable `assert` used
@@ -5328,7 +5328,7 @@ luau-0.740/coroutine.luau
 824:37 no_implicit_globals: global variable `string` used
 825:5 no_implicit_globals: global variable `assert` used
 
-luau-0.740/coroutinehost.luau
+coroutinehost.luau
 2:1 no_implicit_globals: global variable `print` used
 5:5 merge_adjacent_locals: adjacent `local` declarations can be merged
 5:16 no_implicit_globals: global variable `coroutine` used
@@ -5388,7 +5388,7 @@ luau-0.740/coroutinehost.luau
 78:5 no_implicit_globals: global variable `assert` used
 79:5 no_implicit_globals: global variable `assert` used
 
-luau-0.740/coverage.luau
+coverage.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `foo` (missing `local`?)
 4:10 no_implicit_globals: global variable `foo` used
@@ -5460,7 +5460,7 @@ luau-0.740/coverage.luau
 70:8 no_implicit_globals: global variable `validate` used
 70:17 no_implicit_globals: global variable `c` used
 
-luau-0.740/cyield.luau
+cyield.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `ecall` (missing `local`?)
 4:10 no_implicit_globals: global variable `ecall` used
@@ -5729,7 +5729,7 @@ luau-0.740/cyield.luau
 317:8 undefined_variable: undefined variable `pcallThenPcall`
 317:8 no_implicit_globals: global variable `pcallThenPcall` used
 
-luau-0.740/datetime.luau
+datetime.luau
 3:1 no_implicit_globals: global variable `print` used
 6:21 no_implicit_globals: global variable `pcall` used
 7:3 no_implicit_globals: global variable `assert` used
@@ -5864,7 +5864,7 @@ luau-0.740/datetime.luau
 104:1 no_implicit_globals: global variable `assert` used
 104:8 no_implicit_globals: global variable `os` used
 
-luau-0.740/debug.luau
+debug.luau
 2:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `foo` (missing `local`?)
 5:10 no_implicit_globals: global variable `foo` used
@@ -6045,7 +6045,7 @@ luau-0.740/debug.luau
 149:2 no_implicit_globals: global variable `assert` used
 152:1 no_implicit_globals: global variable `coroutine` used
 
-luau-0.740/debugger.luau
+debugger.luau
 2:1 no_implicit_globals: global variable `print` used
 6:10 setting_global: setting global variable `foo` (missing `local`?)
 6:10 no_implicit_globals: global variable `foo` used
@@ -6154,7 +6154,7 @@ luau-0.740/debugger.luau
 148:1 must_use: return value of `pcall` is discarded
 148:1 no_implicit_globals: global variable `pcall` used
 
-luau-0.740/errors.luau
+errors.luau
 3:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `doit` (missing `local`?)
 5:10 no_implicit_globals: global variable `doit` used
@@ -6513,7 +6513,7 @@ luau-0.740/errors.luau
 433:89 no_implicit_globals: global variable `error` used
 433:107 multiple_statements_per_line: statement starts on the same line as the previous statement
 
-luau-0.740/events.luau
+events.luau
 3:1 no_implicit_globals: global variable `print` used
 5:16 no_implicit_globals: global variable `table` used
 7:1 no_implicit_globals: global variable `assert` used
@@ -7121,7 +7121,7 @@ luau-0.740/events.luau
 488:25 no_implicit_globals: global variable `setfenv` used
 491:1 no_implicit_globals: global variable `testfenv` used
 
-luau-0.740/exceptions.luau
+exceptions.luau
 2:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `empty_function` (missing `local`?)
 5:10 no_implicit_globals: global variable `empty_function` used
@@ -7142,7 +7142,7 @@ luau-0.740/exceptions.luau
 32:5 must_use: return value of `table.create` is discarded
 32:5 no_implicit_globals: global variable `table` used
 
-luau-0.740/explicit_type_instantiations.luau
+explicit_type_instantiations.luau
 6:1 no_implicit_globals: global variable `assert` used
 13:1 no_implicit_globals: global variable `assert` used
 19:7 shadowing: variable `a` shadows outer variable
@@ -7159,7 +7159,7 @@ luau-0.740/explicit_type_instantiations.luau
 35:10 redefining_local: local `b` is redeclared in the same block
 36:1 no_implicit_globals: global variable `assert` used
 
-luau-0.740/gc.luau
+gc.luau
 3:1 no_implicit_globals: global variable `print` used
 5:1 no_implicit_globals: global variable `collectgarbage` used
 7:1 global_usage: global environment `_G` used
@@ -7601,7 +7601,7 @@ luau-0.740/gc.luau
 399:5 no_implicit_globals: global variable `table` used
 404:3 no_implicit_globals: global variable `collectgarbage` used
 
-luau-0.740/ifelseexpr.luau
+ifelseexpr.luau
 3:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `True` (missing `local`?)
 5:10 no_implicit_globals: global variable `True` used
@@ -7667,7 +7667,7 @@ luau-0.740/ifelseexpr.luau
 77:1 no_implicit_globals: global variable `CheckForConditionalEvaluation` used
 78:1 no_implicit_globals: global variable `CheckForConditionalEvaluation` used
 
-luau-0.740/integers.luau
+integers.luau
 2:1 no_implicit_globals: global variable `print` used
 4:52 unused_variable: unused variable `s`
 4:59 no_implicit_globals: global variable `pcall` used
@@ -8744,7 +8744,7 @@ luau-0.740/integers.luau
 668:8 undefined_variable: undefined variable `is_native_if_supported`
 668:8 no_implicit_globals: global variable `is_native_if_supported` used
 
-luau-0.740/integers_regspill.luau
+integers_regspill.luau
 2:1 no_implicit_globals: global variable `print` used
 7:5 no_implicit_globals: global variable `assert` used
 7:12 undefined_variable: undefined variable `is_native`
@@ -9133,7 +9133,7 @@ luau-0.740/integers_regspill.luau
 302:1 no_implicit_globals: global variable `assert` used
 303:1 no_implicit_globals: global variable `assert` used
 
-luau-0.740/interrupt.luau
+interrupt.luau
 2:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `test` (missing `local`?)
 5:10 no_implicit_globals: global variable `test` used
@@ -9237,7 +9237,7 @@ luau-0.740/interrupt.luau
 127:3 no_implicit_globals: global variable `assert` used
 128:3 no_implicit_globals: global variable `assert` used
 
-luau-0.740/iter.luau
+iter.luau
 3:1 no_implicit_globals: global variable `print` used
 8:3 loop_executes_once: generic `for` loop body always errors, so the loop executes at most once
 8:7 shadowing: variable `a` shadows outer variable
@@ -9531,7 +9531,7 @@ luau-0.740/iter.luau
 587:8 undefined_variable: undefined variable `is_native_if_supported`
 587:8 no_implicit_globals: global variable `is_native_if_supported` used
 
-luau-0.740/iter_fenv.luau
+iter_fenv.luau
 5:10 setting_global: setting global variable `testgetfenv` (missing `local`?)
 5:10 no_implicit_globals: global variable `testgetfenv` used
 6:15 no_implicit_globals: global variable `getfenv` used
@@ -9563,7 +9563,7 @@ luau-0.740/iter_fenv.luau
 18:3 no_implicit_globals: global variable `assert` used
 21:1 no_implicit_globals: global variable `testgetfenv` used
 
-luau-0.740/jit_inliner.luau
+jit_inliner.luau
 24:9 no_implicit_globals: global variable `assert` used
 44:9 no_implicit_globals: global variable `assert` used
 68:9 merge_adjacent_locals: adjacent `local` declarations can be merged
@@ -9587,7 +9587,7 @@ luau-0.740/jit_inliner.luau
 121:9 empty_block: empty `while` loop body
 124:5 placeholder_read: read of `_`, but convention is to use `_` only for ignored bindings
 
-luau-0.740/literals.luau
+literals.luau
 3:1 no_implicit_globals: global variable `print` used
 5:36 no_implicit_globals: global variable `assert` used
 5:43 no_implicit_globals: global variable `loadstring` used
@@ -9673,7 +9673,7 @@ luau-0.740/literals.luau
 159:3 no_implicit_globals: global variable `assert` used
 159:15 no_implicit_globals: global variable `loadstring` used
 
-luau-0.740/locals.luau
+locals.luau
 3:1 no_implicit_globals: global variable `print` used
 7:12 shadowing: variable `i` shadows outer variable
 7:21 multiple_statements_per_line: statement starts on the same line as the previous statement
@@ -9792,7 +9792,7 @@ luau-0.740/locals.luau
 123:5 no_implicit_globals: global variable `assert` used
 123:24 no_implicit_globals: global variable `type` used
 
-luau-0.740/math.luau
+math.luau
 3:1 no_implicit_globals: global variable `print` used
 7:3 no_implicit_globals: global variable `assert` used
 8:3 no_implicit_globals: global variable `assert` used
@@ -10653,7 +10653,7 @@ luau-0.740/math.luau
 527:1 no_implicit_globals: global variable `assert` used
 527:8 no_implicit_globals: global variable `math` used
 
-luau-0.740/move.luau
+move.luau
 4:18 no_implicit_globals: global variable `pcall` used
 5:3 no_implicit_globals: global variable `assert` used
 5:20 no_implicit_globals: global variable `string` used
@@ -10714,7 +10714,7 @@ luau-0.740/move.luau
 167:24 no_implicit_globals: global variable `table` used
 167:36 no_implicit_globals: global variable `table` used
 
-luau-0.740/native.luau
+native.luau
 2:1 no_implicit_globals: global variable `print` used
 4:1 no_implicit_globals: global variable `assert` used
 6:3 merge_adjacent_locals: adjacent `local` declarations can be merged
@@ -11493,7 +11493,7 @@ luau-0.740/native.luau
 855:1 no_implicit_globals: global variable `assert` used
 856:1 no_implicit_globals: global variable `assert` used
 
-luau-0.740/native_integer_spills.luau
+native_integer_spills.luau
 2:1 no_implicit_globals: global variable `print` used
 5:9 no_implicit_globals: global variable `bit32` used
 10:1 merge_adjacent_locals: adjacent `local` declarations can be merged
@@ -12522,7 +12522,7 @@ luau-0.740/native_integer_spills.luau
 516:2 no_implicit_globals: global variable `buffer` used
 519:7 no_implicit_globals: global variable `buffer` used
 
-luau-0.740/native_types.luau
+native_types.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `call` (missing `local`?)
 4:10 no_implicit_globals: global variable `call` used
@@ -12610,7 +12610,7 @@ luau-0.740/native_types.luau
 89:1 no_implicit_globals: global variable `assert` used
 89:8 no_implicit_globals: global variable `call` used
 
-luau-0.740/native_userdata.luau
+native_userdata.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `ecall` (missing `local`?)
 4:10 no_implicit_globals: global variable `ecall` used
@@ -12646,14 +12646,14 @@ luau-0.740/native_userdata.luau
 47:1 no_implicit_globals: global variable `assert` used
 53:1 no_implicit_globals: global variable `assert` used
 
-luau-0.740/ndebug_upvalues.luau
+ndebug_upvalues.luau
 4:10 setting_global: setting global variable `clo_test` (missing `local`?)
 4:10 no_implicit_globals: global variable `clo_test` used
 6:5 no_implicit_globals: global variable `print` used
 8:5 no_implicit_globals: global variable `coroutine` used
 11:1 no_implicit_globals: global variable `clo_test` used
 
-luau-0.740/pcall.luau
+pcall.luau
 2:1 no_implicit_globals: global variable `print` used
 4:10 setting_global: setting global variable `striplines` (missing `local`?)
 4:10 no_implicit_globals: global variable `striplines` used
@@ -13104,7 +13104,7 @@ luau-0.740/pcall.luau
 341:1 no_implicit_globals: global variable `setfenv` used
 341:25 no_implicit_globals: global variable `getfenv` used
 
-luau-0.740/pm.luau
+pm.luau
 3:1 no_implicit_globals: global variable `print` used
 5:1 implicit_return: function returns on some paths but falls through on others
 5:10 setting_global: setting global variable `f` (missing `local`?)
@@ -13558,7 +13558,7 @@ luau-0.740/pm.luau
 315:1 no_implicit_globals: global variable `assert` used
 315:8 no_implicit_globals: global variable `string` used
 
-luau-0.740/safeenv.luau
+safeenv.luau
 2:1 no_implicit_globals: global variable `print` used
 9:12 no_implicit_globals: global variable `setmetatable` used
 11:4 no_implicit_globals: global variable `getfenv` used
@@ -13566,7 +13566,7 @@ luau-0.740/safeenv.luau
 18:2 no_implicit_globals: global variable `assert` used
 18:9 no_implicit_globals: global variable `math` used
 
-luau-0.740/sort.luau
+sort.luau
 3:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `checksort` (missing `local`?)
 5:10 no_implicit_globals: global variable `checksort` used
@@ -13731,7 +13731,7 @@ luau-0.740/sort.luau
 155:3 no_implicit_globals: global variable `table` used
 157:5 no_implicit_globals: global variable `assert` used
 
-luau-0.740/strconv.luau
+strconv.luau
 3:1 no_implicit_globals: global variable `print` used
 6:1 no_implicit_globals: global variable `assert` used
 6:8 no_implicit_globals: global variable `tostring` used
@@ -13814,7 +13814,7 @@ luau-0.740/strconv.luau
 55:1 no_implicit_globals: global variable `assert` used
 55:8 no_implicit_globals: global variable `tostring` used
 
-luau-0.740/stringinterp.luau
+stringinterp.luau
 2:2 no_implicit_globals: global variable `assert` used
 2:9 no_implicit_globals: global variable `typeof` used
 2:51 no_implicit_globals: global variable `typeof` used
@@ -13829,7 +13829,7 @@ luau-0.740/stringinterp.luau
 39:21 bad_string_escape: invalid string escape `\x20`
 48:1 no_implicit_globals: global variable `assert` used
 
-luau-0.740/strings.luau
+strings.luau
 3:1 no_implicit_globals: global variable `print` used
 5:1 no_implicit_globals: global variable `assert` used
 6:1 no_implicit_globals: global variable `assert` used
@@ -14229,7 +14229,7 @@ luau-0.740/strings.luau
 257:22 no_implicit_globals: global variable `tonumber` used
 260:1 no_implicit_globals: global variable `assert` used
 
-luau-0.740/tables.luau
+tables.luau
 3:1 no_implicit_globals: global variable `print` used
 5:16 no_implicit_globals: global variable `table` used
 8:1 no_implicit_globals: global variable `assert` used
@@ -14951,7 +14951,7 @@ luau-0.740/tables.luau
 1107:3 undefined_variable: undefined variable `setallocationlimit`
 1107:3 no_implicit_globals: global variable `setallocationlimit` used
 
-luau-0.740/tmerror.luau
+tmerror.luau
 9:1 no_implicit_globals: global variable `setmetatable` used
 11:9 no_implicit_globals: global variable `error` used
 15:18 no_implicit_globals: global variable `pcall` used
@@ -14996,7 +14996,7 @@ luau-0.740/tmerror.luau
 76:1 no_implicit_globals: global variable `assert` used
 76:8 no_implicit_globals: global variable `string` used
 
-luau-0.740/tpack.luau
+tpack.luau
 3:1 merge_adjacent_locals: adjacent `local` declarations can be merged
 3:14 no_implicit_globals: global variable `string` used
 4:18 no_implicit_globals: global variable `string` used
@@ -15220,7 +15220,7 @@ luau-0.740/tpack.luau
 325:45 no_implicit_globals: global variable `string` used
 326:3 no_implicit_globals: global variable `checkerror` used
 
-luau-0.740/types.luau
+types.luau
 2:1 no_implicit_globals: global variable `print` used
 15:10 setting_global: setting global variable `verify` (missing `local`?)
 15:10 no_implicit_globals: global variable `verify` used
@@ -15249,7 +15249,7 @@ luau-0.740/types.luau
 51:34 undefined_variable: undefined variable `RTTI`
 51:34 no_implicit_globals: global variable `RTTI` used
 
-luau-0.740/udata_direct.luau
+udata_direct.luau
 2:1 no_implicit_globals: global variable `print` used
 5:12 no_implicit_globals: global variable `math` used
 9:11 undefined_variable: undefined variable `vec2`
@@ -15397,7 +15397,7 @@ luau-0.740/udata_direct.luau
 211:39 undefined_variable: undefined variable `vec2`
 211:39 no_implicit_globals: global variable `vec2` used
 
-luau-0.740/userdata.luau
+userdata.luau
 2:1 no_implicit_globals: global variable `print` used
 7:1 no_implicit_globals: global variable `assert` used
 7:8 undefined_variable: undefined variable `int64`
@@ -15547,7 +15547,7 @@ luau-0.740/userdata.luau
 48:15 undefined_variable: undefined variable `int64`
 48:15 no_implicit_globals: global variable `int64` used
 
-luau-0.740/utf8.luau
+utf8.luau
 3:1 no_implicit_globals: global variable `print` used
 6:18 no_implicit_globals: global variable `pcall` used
 7:3 no_implicit_globals: global variable `assert` used
@@ -15689,7 +15689,7 @@ luau-0.740/utf8.luau
 233:5 no_implicit_globals: global variable `assert` used
 233:12 no_implicit_globals: global variable `utf8` used
 
-luau-0.740/vararg.luau
+vararg.luau
 3:1 no_implicit_globals: global variable `print` used
 5:16 no_implicit_globals: global variable `table` used
 7:1 global_usage: global environment `_G` used
@@ -15902,7 +15902,7 @@ luau-0.740/vararg.luau
 168:1 no_implicit_globals: global variable `assert` used
 168:8 no_implicit_globals: global variable `f` used
 
-luau-0.740/vector.luau
+vector.luau
 2:1 no_implicit_globals: global variable `print` used
 5:24 no_implicit_globals: global variable `pcall` used
 5:48 no_implicit_globals: global variable `vector` used
@@ -16170,7 +16170,7 @@ luau-0.740/vector.luau
 192:8 undefined_variable: undefined variable `is_native_if_supported`
 192:8 no_implicit_globals: global variable `is_native_if_supported` used
 
-luau-0.740/vector_library.luau
+vector_library.luau
 2:1 no_implicit_globals: global variable `print` used
 4:39 unused_variable: unused variable `s`
 4:46 no_implicit_globals: global variable `pcall` used

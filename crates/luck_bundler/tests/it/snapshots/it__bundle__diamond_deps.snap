@@ -32,7 +32,7 @@ __luck_loading[id]=nil
 __luck_loaded[id]=value
 return value
 end
--- module #1: d.lua
+-- module #1: d.luau
 __luck_modules[1]=function(...)
 local d = {
     base = 10
@@ -40,7 +40,7 @@ local d = {
 
 return d
 end
--- module #2: b.lua
+-- module #2: b.luau
 __luck_modules[2]=function(...)
 local d = __luck_require(1)
 
@@ -52,7 +52,7 @@ end
 
 return b
 end
--- module #3: c.lua
+-- module #3: c.luau
 __luck_modules[3]=function(...)
 local d = __luck_require(1)
 

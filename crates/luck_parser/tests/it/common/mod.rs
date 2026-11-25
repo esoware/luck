@@ -10,14 +10,18 @@ pub(crate) fn assert_no_errors(result: &ParseResult<'_>) {
     assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
 }
 
+pub(crate) fn assert_has_errors(result: &ParseResult<'_>) {
+    assert!(!result.errors.is_empty(), "expected parse errors but got none");
+}
+
 pub(crate) fn parse_str<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
     luck_parser::parse(allocator, source.as_bytes())
 }
 
 /// The last initializer of a `local ... = <expr>` first statement.
 pub(crate) fn local_value<'ast>(result: &'ast ParseResult<'ast>) -> &'ast Expression<'ast> {
-    let Some(Statement::LocalAssignment(local)) = result.chunk.block.stmts.first() else {
-        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts);
+    let Some(Statement::LocalAssignment(local)) = result.chunk.stmts.first() else {
+        panic!("expected LocalAssignment, got {:?}", result.chunk.stmts);
     };
     local.exprs.last().expect("assignment has values")
 }

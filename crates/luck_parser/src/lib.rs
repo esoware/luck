@@ -26,7 +26,7 @@
 //! let allocator = Allocator::new();
 //! let result = luck_parser::parse(&allocator, b"local x = 1 + 2");
 //! assert!(result.errors.is_empty());
-//! assert_eq!(result.chunk.block.stmts.len(), 1);
+//! assert_eq!(result.chunk.stmts.len(), 1);
 //! ```
 
 mod groupings;

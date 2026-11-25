@@ -7,7 +7,7 @@ use luck_formatter::{
     format,
 };
 use luck_parser::ParseResult;
-use luck_testgen::{generate_full_grammar, generate_runtime_safe, luau_fixtures, tree_shape};
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, source_fixtures, tree_shape};
 use luck_token::{Span, TokenKind, index_to_offset};
 
 const SEED_COUNT: u64 = 8;
@@ -178,7 +178,7 @@ fn assert_comments_keep_the_tree(label: &str, source: &str) {
 #[test]
 fn a_comment_in_any_gap_of_a_fixture_keeps_its_tree() {
     let fixtures: Vec<_> =
-        luau_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
+        source_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
     assert!(!fixtures.is_empty(), "no fixture outside `errors/`");
     for fixture in fixtures {
         let label = fixture.relative_path.display().to_string();

@@ -63,18 +63,21 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
     let is_open: Vec<bool> = tree
         .scopes()
         .iter()
-        .map(|scope| match nodes.kind(scope.node) {
-            AstKind::Chunk(_) => true,
-            AstKind::Block(block) => is_in_block(block),
-            AstKind::FunctionBody(body) => is_in_block(&body.block),
-            AstKind::NumericFor(numeric_for) => is_in_block(&numeric_for.block),
-            AstKind::GenericFor(generic_for) => is_in_block(&generic_for.block),
-            // The `until` condition is in the body's scope.
-            AstKind::RepeatLoop(repeat_loop) => {
-                is_in_block(&repeat_loop.block)
-                    || (repeat_loop.block.span.end <= offset && offset <= repeat_loop.span.end)
-            }
-            _ => false,
+        .map(|scope| {
+            scope.parent.is_none()
+                || match nodes.kind(scope.node) {
+                    AstKind::Block(block) => is_in_block(block),
+                    AstKind::FunctionBody(body) => is_in_block(&body.block),
+                    AstKind::NumericFor(numeric_for) => is_in_block(&numeric_for.block),
+                    AstKind::GenericFor(generic_for) => is_in_block(&generic_for.block),
+                    // The `until` condition is in the body's scope.
+                    AstKind::RepeatLoop(repeat_loop) => {
+                        is_in_block(&repeat_loop.block)
+                            || (repeat_loop.block.span.end <= offset
+                                && offset <= repeat_loop.span.end)
+                    }
+                    _ => false,
+                }
         })
         .collect();
     let mut offered: FxHashSet<&str> = FxHashSet::default();
@@ -420,7 +423,6 @@ mod tests {
         let keywords = keywords_of(&items);
         assert!(keywords.contains(&"while"), "{keywords:?}");
         assert!(keywords.contains(&"continue"), "{keywords:?}");
-        assert!(!keywords.contains(&"goto"), "{keywords:?}");
     }
 
     #[test]

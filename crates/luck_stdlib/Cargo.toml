@@ -11,6 +11,10 @@ license.workspace      = true
 repository.workspace   = true
 rust-version.workspace = true
 
+[features]
+# Derive `JsonSchema` for `Variant`, for the schema `luck_config` generates.
+schemars = ["dep:schemars"]
+
 [lints]
 workspace = true
 
@@ -26,6 +30,7 @@ luck_diagnostics = { workspace = true }
 luck_semantic    = { workspace = true }
 luck_token       = { workspace = true }
 
+schemars  = { workspace = true, optional = true }
 self_cell = { workspace = true }
 serde     = { workspace = true }
 toml      = { workspace = true }

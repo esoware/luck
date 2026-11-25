@@ -1,8 +1,8 @@
 //! # `luck_ast`
 //!
 //! The syntax tree of Luau, and what walks, measures, queries, and builds it.
-//! A tree's root is a [`Chunk`], which holds its [`Block`], a list of
-//! [`Statement`]s, and every value position is an [`Expression`].
+//! A tree's root is the [`Block`] of its chunk, a list of [`Statement`]s,
+//! and every value position is an [`Expression`].
 //!
 //! A tree lives in a `luck_allocator` arena: every node is in a `Box` or a
 //! `List` there, and none needs dropping, so a tree is freed with its arena
@@ -92,7 +92,7 @@ pub use expr::{
     IfExpression, InterpolatedSegment, InterpolatedString, MethodCall, ParenthesizedExpression,
     Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
-pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use function::{FunctionAttribute, FunctionBody, VarArgParam};
 pub use generated::{AST_TYPE_MAX, AstKind, AstType, Visit, VisitMut};
 pub use identifier::{is_valid_identifier, sanitize_identifier};
 pub use leaf::{IntegerLiteral, Name, NameIndex, NumberLiteral, StringLiteral};
@@ -100,10 +100,10 @@ pub use one_or_more::OneOrMore;
 pub use parens::Slot;
 pub use span::GetSpan;
 pub use stmt::{
-    Assignment, Block, Chunk, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, FunctionDecl,
+    Assignment, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, FunctionDecl,
     FunctionName, GenericFor, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
-    LocalFunctionKind, LocalName, NumericFor, RepeatLoop, ReturnStatement, Statement,
-    TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
+    TypeDeclarationValue, TypedName, WhileLoop,
 };
 pub use synth::{
     FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, TypeFieldSpec,

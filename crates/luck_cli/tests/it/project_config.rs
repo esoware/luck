@@ -204,22 +204,22 @@ fn a_config_error_names_the_place_in_the_file() {
 #[test]
 fn lint_reads_the_std_definitions_a_config_names() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{ "std": ["love.toml"] }"#);
+    write_file(project.path(), "luck.json", r#"{ "std": ["app.toml"] }"#);
     write_file(
         project.path(),
-        "love.toml",
+        "app.toml",
         r#"
-[globals.love]
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.graphics]
+[globals.app.members.graphics]
 kind = "namespace"
 
-[globals.love.members.graphics.members.print]
+[globals.app.members.graphics.members.print]
 kind = "function"
 params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
 
-[globals.love.members.draw]
+[globals.app.members.draw]
 kind = "function"
 is_read_only = false
 "#,
@@ -228,28 +228,28 @@ is_read_only = false
         project.path(),
         "main.lua",
         "\
-function love.draw()
-  love.graphics.print('hello', 0, 0)
+function app.draw()
+  app.graphics.print('hello', 0, 0)
 end
 ",
     );
     luck_in(project.path()).arg("lint").assert().success();
-    write_file(project.path(), "main.lua", "love.graphics.print('hello')\n");
+    write_file(project.path(), "main.lua", "app.graphics.print('hello')\n");
     luck_in(project.path())
         .arg("lint")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("`love.graphics.print` requires at least 3 argument(s)"));
+        .stderr(predicate::str::contains("`app.graphics.print` requires at least 3 argument(s)"));
 }
 
 #[test]
 fn a_std_definition_error_names_the_place_in_it() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{ "std": ["love.toml"] }"#);
+    write_file(project.path(), "luck.json", r#"{ "std": ["app.toml"] }"#);
     write_file(
         project.path(),
-        "love.toml",
-        r#"[globals.love]
+        "app.toml",
+        r#"[globals.app]
 kind = "namespace"
 shape = 1
 "#,
@@ -260,5 +260,5 @@ shape = 1
         .assert()
         .code(2)
         .stderr(predicate::str::contains("E014"))
-        .stderr(predicate::str::contains("love.toml"));
+        .stderr(predicate::str::contains("app.toml"));
 }

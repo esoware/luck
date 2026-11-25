@@ -1,6 +1,6 @@
 use luck_minifier::TransformConfig;
 
-use crate::common::{minify_default, minify_with, reparses};
+use crate::common::{minify_default, minify_typed, minify_with, reparses};
 
 #[test]
 fn folds_arithmetic() {
@@ -300,4 +300,21 @@ return 0
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.contains('3'), "1+2 should be folded to 3, got: {result}");
     assert!(!result.contains("if"), "if true should be eliminated, got: {result}");
+}
+
+const TYPED_SOURCE: &str = "\
+type Point = { x: number, y: number }
+local p: Point = { x = 1, y = 2 } :: Point
+return p, f<<Point>>(p :: any)
+";
+
+#[test]
+fn types_go_by_default() {
+    assert_eq!(minify_default(TYPED_SOURCE), "local e={x=1,y=2}return e,f(e)");
+}
+
+#[test]
+fn type_declaration_survives_minification_without_stripping() {
+    let result = minify_typed(TYPED_SOURCE);
+    assert!(result.contains("type") && result.contains("<<Point>>"), "Got: {result}");
 }

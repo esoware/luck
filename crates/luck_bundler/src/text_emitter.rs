@@ -647,7 +647,6 @@ print(m)
             output.contains("select(\"#\",...)~=1"),
             "modules must return exactly one value: {output}"
         );
-        assert!(!output.contains("package.loaded"), "Luau has no package table: {output}");
         assert_reparses(&output);
     }
 

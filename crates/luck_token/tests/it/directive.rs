@@ -90,7 +90,7 @@ fn leaves_prose_plain() {
         assert_eq!(content(text), CommentContent::Plain, "{text:?}");
     }
     assert_eq!(
-        CommentContent::of(b"#!/usr/bin/env lua luck:", CommentKind::Shebang),
+        CommentContent::of(b"#!/usr/bin/env luau luck:", CommentKind::Shebang),
         CommentContent::Plain
     );
 }

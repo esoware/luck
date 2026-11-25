@@ -4,7 +4,7 @@ Internal and unpublished: runs Luau's official conformance tests through every s
 
 ```sh
 just conformance                    # the whole suite, rewriting the snapshots
-just conformance --filter strings   # print the failures of the files whose path holds `strings`
+just conformance --filter strings   # print the failures of the files whose name holds `strings`
 ```
 
 ## The suite

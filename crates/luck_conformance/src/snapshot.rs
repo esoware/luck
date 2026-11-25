@@ -63,10 +63,10 @@ impl TestResult {
     }
 }
 
-/// A stage's result on the file at `path`.
+/// A stage's result on the file `name`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CoverageResult<'a> {
-    pub path: &'a str,
+    pub name: &'a str,
     pub result: &'a TestResult,
 }
 
@@ -121,10 +121,10 @@ fn percent(count: usize, all: usize) -> f64 {
 }
 
 /// Every result that didn't pass, then every file luck rejected as it should
-/// have, with its first error, each in the order given, which is path order.
+/// have, with its first error, each in the order given, which is name order.
 fn failures(results: &[CoverageResult<'_>]) -> String {
     let mut listed = String::new();
-    for &CoverageResult { path, result } in results {
+    for &CoverageResult { name, result } in results {
         let (label, detail) = match result {
             TestResult::Passed | TestResult::CorrectError(_) => continue,
             TestResult::IncorrectlyPassed => ("Expect Syntax Error: ", None),
@@ -139,7 +139,7 @@ fn failures(results: &[CoverageResult<'_>]) -> String {
             }
         };
         listed.push_str(label);
-        listed.push_str(path);
+        listed.push_str(name);
         listed.push('\n');
         if let Some(text) = detail {
             listed.push_str(text);
@@ -147,10 +147,10 @@ fn failures(results: &[CoverageResult<'_>]) -> String {
         }
         listed.push('\n');
     }
-    for &CoverageResult { path, result } in results {
+    for &CoverageResult { name, result } in results {
         if let TestResult::CorrectError(error) = result {
             listed.push_str("Correct Error: ");
-            listed.push_str(path);
+            listed.push_str(name);
             listed.push('\n');
             listed.push_str(error);
             listed.push_str("\n\n");
@@ -177,12 +177,12 @@ pub(crate) fn lint(
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut not_linted = Vec::new();
     let mut listed = String::new();
-    for &(path, linted) in files {
+    for &(file, linted) in files {
         match linted {
-            Err(result) => not_linted.push(CoverageResult { path, result }),
+            Err(result) => not_linted.push(CoverageResult { name: file, result }),
             Ok(diagnostics) if diagnostics.is_empty() => {}
             Ok(diagnostics) => {
-                let _ = writeln!(listed, "{path}");
+                let _ = writeln!(listed, "{file}");
                 for LintLine { rule, text } in diagnostics {
                     *counts.entry(rule).or_default() += 1;
                     let _ = writeln!(listed, "{text}");

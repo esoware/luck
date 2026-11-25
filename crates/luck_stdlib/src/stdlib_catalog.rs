@@ -5,13 +5,12 @@
 //! the result, so nothing is parsed or checked at runtime. It names what it
 //! uses from this module.
 
-use luck_token::Variant;
-
 use crate::stdlib_map::stdlib_map;
 use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };
+use crate::variant::Variant;
 
 static LUAU: StdlibLibrary<'static> = include!("stdlib_catalog/luau.rs");
 static ROBLOX: StdlibLibrary<'static> = include!("stdlib_catalog/roblox.rs");

@@ -8,8 +8,7 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
-use luck_stdlib::Stdlib;
-use luck_token::Variant;
+use luck_stdlib::{Stdlib, Variant};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 

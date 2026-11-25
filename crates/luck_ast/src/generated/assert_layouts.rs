@@ -4,20 +4,20 @@
 use luck_allocator::{List, ThinBytes, ThinStr};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
-    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, LocalName, MethodCall, Name, NameIndex,
-    NamedType, NumberLiteral, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
-    ParenthesizedType, RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix,
-    SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration,
-    TypeDeclarationValue, TypeField, TypeFieldAccess, TypePack, TypeofType, UnaryOp, UnionType,
-    Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
+    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
+    GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement, IntegerLiteral,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NameIndex, NamedType,
+    NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
+    TypeField, TypeFieldAccess, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var,
+    VarArgParam, VariadicType, WhileLoop,
 };
 
-const LAYOUTS: [(&str, usize, usize); 75] = [
+const LAYOUTS: [(&str, usize, usize); 73] = [
     ("Expression", size_of::<Expression<'_>>(), align_of::<Expression<'_>>()),
     ("Var", size_of::<Var<'_>>(), align_of::<Var<'_>>()),
     (
@@ -53,14 +53,12 @@ const LAYOUTS: [(&str, usize, usize); 75] = [
     ),
     ("TypeCast", size_of::<TypeCast<'_>>(), align_of::<TypeCast<'_>>()),
     ("FunctionBody", size_of::<FunctionBody<'_>>(), align_of::<FunctionBody<'_>>()),
-    ("Parameter", size_of::<Parameter<'_>>(), align_of::<Parameter<'_>>()),
     ("VarArgParam", size_of::<VarArgParam<'_>>(), align_of::<VarArgParam<'_>>()),
     ("FunctionAttribute", size_of::<FunctionAttribute<'_>>(), align_of::<FunctionAttribute<'_>>()),
     ("Name", size_of::<Name<'_>>(), align_of::<Name<'_>>()),
     ("NumberLiteral", size_of::<NumberLiteral<'_>>(), align_of::<NumberLiteral<'_>>()),
     ("IntegerLiteral", size_of::<IntegerLiteral<'_>>(), align_of::<IntegerLiteral<'_>>()),
     ("StringLiteral", size_of::<StringLiteral<'_>>(), align_of::<StringLiteral<'_>>()),
-    ("Chunk", size_of::<Chunk<'_>>(), align_of::<Chunk<'_>>()),
     ("Block", size_of::<Block<'_>>(), align_of::<Block<'_>>()),
     ("Statement", size_of::<Statement<'_>>(), align_of::<Statement<'_>>()),
     ("Assignment", size_of::<Assignment<'_>>(), align_of::<Assignment<'_>>()),
@@ -76,7 +74,7 @@ const LAYOUTS: [(&str, usize, usize); 75] = [
     ("FunctionDecl", size_of::<FunctionDecl<'_>>(), align_of::<FunctionDecl<'_>>()),
     ("LocalFunction", size_of::<LocalFunction<'_>>(), align_of::<LocalFunction<'_>>()),
     ("LocalFunctionKind", size_of::<LocalFunctionKind>(), align_of::<LocalFunctionKind>()),
-    ("LocalName", size_of::<LocalName<'_>>(), align_of::<LocalName<'_>>()),
+    ("TypedName", size_of::<TypedName<'_>>(), align_of::<TypedName<'_>>()),
     ("LocalAssignment", size_of::<LocalAssignment<'_>>(), align_of::<LocalAssignment<'_>>()),
     ("LocalAssignmentKind", size_of::<LocalAssignmentKind>(), align_of::<LocalAssignmentKind>()),
     ("ReturnStatement", size_of::<ReturnStatement<'_>>(), align_of::<ReturnStatement<'_>>()),

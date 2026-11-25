@@ -4,7 +4,7 @@ use luck_token::Span;
 
 use crate::expr::Expression;
 use crate::leaf::Name;
-use crate::stmt::Block;
+use crate::stmt::{Block, TypedName};
 use crate::types::{GenericTypeList, Type};
 
 #[derive(Debug, PartialEq, Eq, Ast)]
@@ -12,7 +12,7 @@ use crate::types::{GenericTypeList, Type};
 pub struct FunctionBody<'ast> {
     pub span: Span,
     pub generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-    pub params: List<'ast, Parameter<'ast>>,
+    pub params: List<'ast, TypedName<'ast>>,
     pub vararg: Option<Box<'ast, VarArgParam<'ast>>>,
     pub return_type: Option<Box<'ast, Type<'ast>>>,
     pub block: Block<'ast>,
@@ -28,14 +28,6 @@ impl FunctionBody<'_> {
     pub const fn end_keyword_span(&self) -> Span {
         Span::new(self.span.end.saturating_sub(3), self.span.end)
     }
-}
-
-/// A typed name: function parameter or generic-for loop binding. It spans
-/// from its name, so it holds no span of its own.
-#[derive(Debug, PartialEq, Eq, Ast)]
-pub struct Parameter<'ast> {
-    pub name: Name<'ast>,
-    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
 }
 
 /// `...`, where `span` starts at the dots.

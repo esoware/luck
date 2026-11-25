@@ -2,17 +2,17 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, ContentEq, DoBlock,
-    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ContentEq, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
     GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
     IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, LocalName, MethodCall, Name, NamedType,
-    NumberLiteral, NumericFor, OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NamedType,
+    NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
     RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
     TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
-    TypeField, TypeFieldAccess, TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam,
-    VariadicType, WhileLoop,
+    TypeField, TypeFieldAccess, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var,
+    VarArgParam, VariadicType, WhileLoop,
 };
 
 impl ContentEq for Expression<'_> {
@@ -247,13 +247,6 @@ impl ContentEq for FunctionBody<'_> {
     }
 }
 
-impl ContentEq for Parameter<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-            && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
-    }
-}
-
 impl ContentEq for VarArgParam<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
@@ -288,12 +281,6 @@ impl ContentEq for IntegerLiteral<'_> {
 impl ContentEq for StringLiteral<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.value, &other.value)
-    }
-}
-
-impl ContentEq for Chunk<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.block, &other.block)
     }
 }
 
@@ -404,8 +391,7 @@ impl ContentEq for ElseClause<'_> {
 
 impl ContentEq for NumericFor<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-            && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
+        ContentEq::content_eq(&self.variable, &other.variable)
             && ContentEq::content_eq(&self.start, &other.start)
             && ContentEq::content_eq(&self.limit, &other.limit)
             && ContentEq::content_eq(&self.step, &other.step)
@@ -451,7 +437,7 @@ impl ContentEq for LocalFunctionKind {
     }
 }
 
-impl ContentEq for LocalName<'_> {
+impl ContentEq for TypedName<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.name, &other.name)
             && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)

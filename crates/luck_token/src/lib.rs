@@ -1,7 +1,6 @@
 //! # `luck_token`
 //!
 //! Foundation crate for the luck toolchain. Defines [`Span`] (byte ranges),
-//! [`Variant`] (the Luau a user names, standalone or on Roblox),
 //! [`TokenKind`]/[`Token`] (every Luau token, which holds no text and slices
 //! it from its source), the AST operators ([`BinOp`], [`UnOp`],
 //! [`CompoundOp`]), [`Comment`] (extracted comments with position metadata),
@@ -9,9 +8,10 @@
 //! [`LintDirective`]), what a literal means and how to spell a value
 //! ([`read_numeral`], [`read_escape`], [`decode_string`], [`spell_number`],
 //! [`spell_string`]), the definition of a line break ([`line_breaks`],
-//! [`has_line_break`]) with the [`LineIndex`] over it, and what a chunk opens
+//! [`has_line_break`]) with the [`LineIndex`] over it, what a chunk opens
 //! with before its code ([`has_shebang`], [`leading_hot_comments`],
-//! [`chunk_header`]).
+//! [`chunk_header`]), and Luau's compiler limits ([`MAX_ACTIVE_LOCALS`],
+//! [`MAX_REGISTERS`]).
 //!
 //! A source is bytes, as Luau reads it, so its strings and comments need not
 //! be UTF-8. Its names and numerals are ASCII.
@@ -48,7 +48,6 @@ mod op;
 mod span;
 mod string;
 mod token;
-mod variant;
 mod whitespace;
 
 pub use chunk::{chunk_header, has_shebang, leading_hot_comments};
@@ -56,7 +55,7 @@ pub use comment::{Comment, CommentKind, CommentPosition};
 pub use directive::{
     CommentContent, DirectiveError, DirectiveErrorKind, LintDirective, LintExtent, LintVerb,
 };
-pub use limits::MAX_ACTIVE_LOCALS;
+pub use limits::{MAX_ACTIVE_LOCALS, MAX_REGISTERS};
 pub use line_index::LineIndex;
 pub use number::{
     NumberSpelling, Numeral, read_integer, read_numeral, spell_integer, spell_number,
@@ -69,7 +68,6 @@ pub use string::{
     write_long_string,
 };
 pub use token::{Token, TokenKind};
-pub use variant::Variant;
 pub use whitespace::{
     ends_with_line_break, has_line_break, is_luau_whitespace, line_breaks, strip_line_break,
 };

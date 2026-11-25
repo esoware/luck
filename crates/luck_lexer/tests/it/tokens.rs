@@ -352,6 +352,8 @@ fn a_lone_tilde_is_an_error() {
         panic!("{:?}", result.errors);
     };
     assert_eq!(error.span, Some(Span::new(2, 3)));
+    assert_eq!(error.message, "unexpected character `~`");
+    assert_eq!(error.help.as_deref(), Some("use `~=` for not-equal"));
     assert_eq!(
         kinds("a ~= b"),
         [TokenKind::Identifier, TokenKind::TildeEqual, TokenKind::Identifier]

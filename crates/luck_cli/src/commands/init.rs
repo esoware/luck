@@ -3,7 +3,7 @@ use std::path::Path;
 
 use clap::Args;
 use luck_config::CONFIG_FILE_NAME;
-use luck_token::Variant;
+use luck_stdlib::Variant;
 
 use crate::exit::{Exit, operation_error};
 use crate::verbosity::Verbosity;

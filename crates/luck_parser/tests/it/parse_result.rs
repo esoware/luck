@@ -41,8 +41,8 @@ fn the_tree_borrows_its_leaves_from_the_source() {
     let result = parse(&allocator, &source);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert!(ptr::eq(result.source, source.as_slice()));
-    let Some(Statement::LocalAssignment(local)) = result.chunk.block.stmts.first() else {
-        panic!("{:?}", result.chunk.block.stmts);
+    let Some(Statement::LocalAssignment(local)) = result.chunk.stmts.first() else {
+        panic!("{:?}", result.chunk.stmts);
     };
     let Some(Expression::BinaryOp(concat)) = local.exprs.first() else {
         panic!("{:?}", local.exprs);
@@ -70,7 +70,7 @@ fn declaration_without_values_spans_its_annotations() {
     for source in ["local x: number", "local a, b: {string}?"] {
         let result = parse(&allocator, source.as_bytes());
         assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
-        let statement_span = result.chunk.block.stmts[0].span();
+        let statement_span = result.chunk.stmts[0].span();
         assert_eq!(
             statement_span.text(source.as_bytes()),
             source.as_bytes(),
@@ -106,7 +106,7 @@ fn an_expression_list_nested_in_another_fills_a_list_of_exactly_its_length() {
     let result = parse(&allocator, source.as_bytes());
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     let mut calls = ArgLists { source: source.as_bytes(), lists: Vec::new() };
-    calls.visit_block(&result.chunk.block);
+    calls.visit_block(&result.chunk);
     assert_eq!(
         calls.lists,
         [

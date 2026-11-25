@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, SpanCounter, Synth};
+use luck_ast::{SpanCounter, Synth};
 use luck_codegen::LiteralSpelling;
 
 use crate::common::{assert_compacts_to, assert_reprints, assert_spells};
@@ -19,7 +19,7 @@ fn a_string_that_is_not_utf8_prints_as_written_or_escaped_from_its_value() {
     let spans = SpanCounter::new();
     let synth = Synth::new(&allocator, &spans);
     let built = synth.block([synth.return_([synth.string_bytes(b"caf\xE9")])]);
-    let chunk = Chunk::new(built);
+    let chunk = built;
     assert_eq!(luck_codegen::compact(&chunk, LiteralSpelling::AsWritten), br#"return"caf\233""#);
 }
 
@@ -67,8 +67,8 @@ fn a_literal_built_in_code_prints_from_its_value() {
     let allocator = Allocator::new();
     let spans = SpanCounter::new();
     let synth = Synth::new(&allocator, &spans);
-    let values = [synth.number_f64(3.0), synth.number_i64(-1), synth.string_bytes(b"\xFF\"")];
-    let chunk = Chunk::new(synth.block([synth.return_(values)]));
+    let values = [synth.number_f64(3.0), synth.number_f64(-1.0), synth.string_bytes(b"\xFF\"")];
+    let chunk = synth.block([synth.return_(values)]);
     for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
         let output = luck_codegen::compact(&chunk, spelling);
         assert_eq!(output, br#"return 3,-1,'\255"'"#, "{spelling:?}");

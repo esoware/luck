@@ -68,7 +68,7 @@ pub enum QuoteStyle {
 }
 
 /// Case of the hexadecimal digits `A`-`F` in numeric literals. The base
-/// prefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase,
+/// prefix (`0x`, `0b`) and the exponent marker (`e`) are always lowercase,
 /// so this setting only governs the digits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "snake_case"))]

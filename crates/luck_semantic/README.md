@@ -4,7 +4,7 @@ Semantic analysis of Luau, in one walk over a tree, as `oxc_semantic` does it.
 
 ## Overview
 
-`SemanticBuilder` walks a `Chunk` once, in source order, with Luau's scoping rules, and builds a `Semantic`. Its `Scoping` is always built: flat tables of scopes, symbols, and references, indexed by typed ids, and the chunk's distinct names, which it owns, so a pass that rewrites the tree can keep it with `Semantic::into_scoping`. A method's `self`, type functions, and type-only scopes all bind as Luau binds them.
+`SemanticBuilder` walks a chunk's `Block` once, in source order, with Luau's scoping rules, and builds a `Semantic`. Its `Scoping` is always built: flat tables of scopes, symbols, and references, indexed by typed ids, and the chunk's distinct names, which it owns, so a pass that rewrites the tree can keep it with `Semantic::into_scoping`. A method's `self`, type functions, and type-only scopes all bind as Luau binds them.
 
 Every name in the tree finds what it declares or refers to by its `NameIndex`, which the parser gives each name of its own, so a lookup is one index into a table, with no search. Each other part is built only when the caller asks for it:
 

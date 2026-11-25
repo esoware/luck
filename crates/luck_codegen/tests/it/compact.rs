@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, Expression, SpanCounter, Synth, block_nesting_depth};
+use luck_ast::{Expression, SpanCounter, Synth, block_nesting_depth};
 use luck_codegen::LiteralSpelling;
 use luck_token::{BinOp, UnOp};
 
@@ -59,7 +59,7 @@ fn a_tree_prints_the_parentheses_its_grouping_needs() {
         (|synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Add, b)), "-(a+b)"),
         (|synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Pow, b)), "-a^b"),
         (
-            |synth, _| synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]),
+            |synth, _| synth.method_call(synth.string("s"), "rep", [synth.number_f64(2.0)]),
             "(\"s\"):rep(2)",
         ),
         (|synth, _| synth.field(synth.table([]), "x"), "({}).x"),
@@ -91,20 +91,20 @@ fn a_tree_prints_the_parentheses_its_grouping_needs() {
         ),
         (
             |synth, [a, b, c]| {
-                synth.binary_op(synth.if_expr(a, b, [], c), BinOp::Add, synth.number_i64(1))
+                synth.binary_op(synth.if_expr(a, b, [], c), BinOp::Add, synth.number_f64(1.0))
             },
             "(if a then b else c)+1",
         ),
         (
             |synth, [a, b, c]| {
-                synth.binary_op(synth.number_i64(1), BinOp::Add, synth.if_expr(a, b, [], c))
+                synth.binary_op(synth.number_f64(1.0), BinOp::Add, synth.if_expr(a, b, [], c))
             },
             "1+if a then b else c",
         ),
         (
             |synth, [a, b, c]| {
                 let negation = synth.unary_op(UnOp::Neg, synth.if_expr(a, b, [], c));
-                synth.binary_op(negation, BinOp::Add, synth.number_i64(1))
+                synth.binary_op(negation, BinOp::Add, synth.number_f64(1.0))
             },
             "-(if a then b else c)+1",
         ),
@@ -114,7 +114,7 @@ fn a_tree_prints_the_parentheses_its_grouping_needs() {
         let spans = SpanCounter::new();
         let synth = Synth::new(&allocator, &spans);
         let names = ["a", "b", "c"].map(|name| synth.name_expr(name));
-        let chunk = Chunk::new(synth.block([synth.return_([build(synth, names)])]));
+        let chunk = synth.block([synth.return_([build(synth, names)])]);
         let output =
             String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::AsWritten)).unwrap();
         assert_eq!(output.strip_prefix("return").map(str::trim_start), Some(expected));
@@ -129,7 +129,7 @@ fn a_stmt_whose_prefix_needs_parens_takes_a_semicolon_where_it_would_glue_on() {
     let synth = Synth::new(&allocator, &spans);
     let call = synth.method_call(synth.string("s"), "f", []);
     let local = synth.local(&["x"], [synth.name_expr("y")]);
-    let chunk = Chunk::new(synth.block([local, synth.call_stmt(call)]));
+    let chunk = synth.block([local, synth.call_stmt(call)]);
     assert_eq!(luck_codegen::compact(&chunk, LiteralSpelling::AsWritten), b"local x=y;(\"s\"):f()");
     assert_reprints(&chunk);
 }
@@ -142,18 +142,18 @@ fn a_run_of_any_length_prints_as_one_level() {
     let mut sum = synth.name_expr("x");
     let mut calls = synth.name_expr("f");
     for _ in 0..200_000 {
-        sum = synth.binary_op(sum, BinOp::Add, synth.number_i64(1));
+        sum = synth.binary_op(sum, BinOp::Add, synth.number_f64(1.0));
     }
     for _ in 0..2_000 {
         calls = synth.call(calls, []);
     }
-    let chunk = Chunk::new(synth.block([synth.return_([sum, calls])]));
-    assert_eq!(block_nesting_depth(&chunk.block), 2);
+    let chunk = synth.block([synth.return_([sum, calls])]);
+    assert_eq!(block_nesting_depth(&chunk), 2);
     let output = luck_codegen::compact(&chunk, LiteralSpelling::AsWritten);
     assert_eq!(output.len(), "return x".len() + 200_000 * 2 + ",f".len() + 2_000 * 2);
     let reparsed = luck_parser::parse(&allocator, &output);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors.first());
-    assert_eq!(block_nesting_depth(&reparsed.chunk.block), 2);
+    assert_eq!(block_nesting_depth(&reparsed.chunk), 2);
     assert_eq!(luck_codegen::compact(&reparsed.chunk, LiteralSpelling::AsWritten), output);
 }
 

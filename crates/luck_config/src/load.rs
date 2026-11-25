@@ -175,7 +175,8 @@ pub(crate) fn in_file(path: &Path, diag: Diagnostic) -> FileDiagnostics {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{Span, Variant};
+    use luck_stdlib::Variant;
+    use luck_token::Span;
 
     use super::*;
     use crate::fixtures::project_with;

@@ -5,8 +5,8 @@ use std::slice;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::{Severity, Tag};
-use luck_stdlib::library_for;
-use luck_token::{Span, Variant, line_breaks};
+use luck_stdlib::{Variant, library_for};
+use luck_token::{Span, line_breaks};
 use serde_json::{Value, json};
 
 use crate::config::LintConfig;
@@ -99,12 +99,12 @@ impl<'case> Tester<'case> {
     where
         Case: Copy + Into<TestCase<'case>>,
     {
-        let targeted = |&case: &Case| {
+        let on_variant = |&case: &Case| {
             let case: TestCase<'case> = case.into();
             TestCase { variant, ..case }
         };
-        self.pass.extend(pass.iter().map(targeted));
-        self.fail.extend(fail.iter().map(targeted));
+        self.pass.extend(pass.iter().map(on_variant));
+        self.fail.extend(fail.iter().map(on_variant));
         self
     }
 

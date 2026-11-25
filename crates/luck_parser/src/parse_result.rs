@@ -1,4 +1,4 @@
-use luck_ast::{Chunk, TreeCounts};
+use luck_ast::{Block, TreeCounts};
 use luck_diagnostics::Diagnostic;
 use luck_token::{Comment, Span, Token};
 
@@ -10,7 +10,7 @@ use crate::groupings::Groupings;
 #[derive(Debug)]
 pub struct ParseResult<'ast> {
     pub source: &'ast [u8],
-    pub chunk: Chunk<'ast>,
+    pub chunk: Block<'ast>,
     pub comments: Vec<Comment>,
     /// Every token the parse read, as [`luck_lexer::lex`] gives them, from
     /// [`crate::parse_with_tokens`]. [`crate::parse`] leaves it empty.
@@ -21,9 +21,9 @@ pub struct ParseResult<'ast> {
     pub errors: Vec<Diagnostic>,
     /// What the lexer's [`luck_lexer::LexResult::lenient_escapes`] holds.
     pub lenient_escapes: Vec<Span>,
-    /// How many levels deep the chunk's block nests, as the parser counted
-    /// them toward [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's
-    /// never fewer than [`luck_ast::block_nesting_depth`] finds.
+    /// How many levels deep `chunk` nests, as the parser counted them toward
+    /// [`luck_ast::MAX_NESTING_DEPTH`]. With no errors, that's never fewer
+    /// than [`luck_ast::block_nesting_depth`] finds.
     pub nesting_depth: usize,
     /// What the chunk holds, for `luck_semantic::SemanticBuilder::with_counts`
     /// to size its tables from.

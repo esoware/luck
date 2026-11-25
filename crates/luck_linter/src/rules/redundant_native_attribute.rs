@@ -100,7 +100,7 @@ fn removal_span(
 /// Whether a `--!native` hot comment comes before any code. Luau ignores one
 /// placed later.
 fn has_native_directive(host: &ContextHost<'_>) -> bool {
-    leading_hot_comments(host.comments, host.chunk.block.span.start)
+    leading_hot_comments(host.comments, host.chunk.span.start)
         .any(|comment| comment.span.text(host.source)[3..].trim_ascii_end() == b"native")
 }
 

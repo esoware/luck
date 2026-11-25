@@ -477,7 +477,7 @@
       "additionalProperties": false
     },
     "HexCase": {
-      "description": "Case of the hexadecimal digits `A`-`F` in numeric literals. The base\nprefix (`0x`, `0b`) and exponent markers (`e`, `p`) are always lowercase,\nso this setting only governs the digits.",
+      "description": "Case of the hexadecimal digits `A`-`F` in numeric literals. The base\nprefix (`0x`, `0b`) and the exponent marker (`e`) are always lowercase,\nso this setting only governs the digits.",
       "oneOf": [
         {
           "description": "Leave the author's digit case untouched (`0xB0` and `0xb0` both stand).",
@@ -520,7 +520,7 @@
           "default": {}
         },
         "extra_globals": {
-          "description": "Extra global names to treat as defined, such as `vim` or `love`.",
+          "description": "Extra global names to treat as defined, such as a test framework's\n`describe` and `expect`.",
           "type": "array",
           "default": [],
           "items": {

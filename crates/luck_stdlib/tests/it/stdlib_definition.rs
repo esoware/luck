@@ -1,5 +1,4 @@
-use luck_stdlib::{Stdlib, StdlibArgKind, StdlibDefinition, StdlibEntry};
-use luck_token::Variant;
+use luck_stdlib::{Stdlib, StdlibArgKind, StdlibDefinition, StdlibEntry, Variant};
 
 fn definition(text: &str) -> StdlibDefinition {
     StdlibDefinition::parse(text).expect("the definition parses")
@@ -24,13 +23,13 @@ fn a_definition_declares_new_globals_with_their_members() {
     let stdlib = layered(
         Variant::Standalone,
         r#"
-[globals.love]
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.graphics]
+[globals.app.members.graphics]
 kind = "namespace"
 
-[globals.love.members.graphics.members.newImage]
+[globals.app.members.graphics.members.newImage]
 kind = "function"
 is_must_use = true
 params = [{ kind = "string" }]
@@ -43,9 +42,9 @@ is_method = true
     );
     let library = stdlib.library();
     assert_eq!(library.variant, Variant::Standalone);
-    let Some(StdlibEntry::Function(new_image)) = library.lookup(["love", "graphics", "newImage"])
+    let Some(StdlibEntry::Function(new_image)) = library.lookup(["app", "graphics", "newImage"])
     else {
-        panic!("love.graphics.newImage should be a function");
+        panic!("app.graphics.newImage should be a function");
     };
     assert_eq!((new_image.min_args(), new_image.max_args()), (1, Some(1)));
     assert_eq!(new_image.returns_shape, Some("Image"));

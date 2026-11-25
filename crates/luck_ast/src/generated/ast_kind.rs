@@ -4,19 +4,19 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef,
-    FunctionName, FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
+    FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
     GenericTypeParam, GetSpan, IfExpression, IfStatement, IntegerLiteral, InterpolatedSegment,
-    InterpolatedString, IntersectionType, LocalAssignment, LocalFunction, LocalName, MethodCall,
-    Name, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
-    ParenthesizedType, RepeatLoop, ReturnStatement, StringLiteral, SuffixedExpression,
-    TableConstructor, TableType, TypeArgs, TypeCast, TypeDeclaration, TypePack, TypeofType,
-    UnaryOp, UnionType, VarArgParam, VariadicType, WhileLoop,
+    InterpolatedString, IntersectionType, LocalAssignment, LocalFunction, MethodCall, Name,
+    NamedType, NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    RepeatLoop, ReturnStatement, StringLiteral, SuffixedExpression, TableConstructor, TableType,
+    TypeArgs, TypeCast, TypeDeclaration, TypePack, TypedName, TypeofType, UnaryOp, UnionType,
+    VarArgParam, VariadicType, WhileLoop,
 };
 
 /// The largest discriminant of an [`AstType`].
-pub const AST_TYPE_MAX: u8 = 54;
+pub const AST_TYPE_MAX: u8 = 52;
 
 /// Which kind of node an [`AstKind`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,14 +36,12 @@ pub enum AstType {
     InterpolatedSegment,
     TypeCast,
     FunctionBody,
-    Parameter,
     VarArgParam,
     FunctionAttribute,
     Name,
     NumberLiteral,
     IntegerLiteral,
     StringLiteral,
-    Chunk,
     Block,
     Assignment,
     DoBlock,
@@ -57,7 +55,7 @@ pub enum AstType {
     FunctionName,
     FunctionDecl,
     LocalFunction,
-    LocalName,
+    TypedName,
     LocalAssignment,
     ReturnStatement,
     CompoundAssignment,
@@ -97,14 +95,12 @@ pub enum AstKind<'ast> {
     InterpolatedSegment(&'ast InterpolatedSegment<'ast>),
     TypeCast(&'ast TypeCast<'ast>),
     FunctionBody(&'ast FunctionBody<'ast>),
-    Parameter(&'ast Parameter<'ast>),
     VarArgParam(&'ast VarArgParam<'ast>),
     FunctionAttribute(&'ast FunctionAttribute<'ast>),
     Name(&'ast Name<'ast>),
     NumberLiteral(&'ast NumberLiteral<'ast>),
     IntegerLiteral(&'ast IntegerLiteral<'ast>),
     StringLiteral(&'ast StringLiteral<'ast>),
-    Chunk(&'ast Chunk<'ast>),
     Block(&'ast Block<'ast>),
     Assignment(&'ast Assignment<'ast>),
     DoBlock(&'ast DoBlock<'ast>),
@@ -118,7 +114,7 @@ pub enum AstKind<'ast> {
     FunctionName(&'ast FunctionName<'ast>),
     FunctionDecl(&'ast FunctionDecl<'ast>),
     LocalFunction(&'ast LocalFunction<'ast>),
-    LocalName(&'ast LocalName<'ast>),
+    TypedName(&'ast TypedName<'ast>),
     LocalAssignment(&'ast LocalAssignment<'ast>),
     ReturnStatement(&'ast ReturnStatement<'ast>),
     CompoundAssignment(&'ast CompoundAssignment<'ast>),
@@ -158,14 +154,12 @@ impl<'ast> AstKind<'ast> {
             Self::InterpolatedSegment(_) => AstType::InterpolatedSegment,
             Self::TypeCast(_) => AstType::TypeCast,
             Self::FunctionBody(_) => AstType::FunctionBody,
-            Self::Parameter(_) => AstType::Parameter,
             Self::VarArgParam(_) => AstType::VarArgParam,
             Self::FunctionAttribute(_) => AstType::FunctionAttribute,
             Self::Name(_) => AstType::Name,
             Self::NumberLiteral(_) => AstType::NumberLiteral,
             Self::IntegerLiteral(_) => AstType::IntegerLiteral,
             Self::StringLiteral(_) => AstType::StringLiteral,
-            Self::Chunk(_) => AstType::Chunk,
             Self::Block(_) => AstType::Block,
             Self::Assignment(_) => AstType::Assignment,
             Self::DoBlock(_) => AstType::DoBlock,
@@ -179,7 +173,7 @@ impl<'ast> AstKind<'ast> {
             Self::FunctionName(_) => AstType::FunctionName,
             Self::FunctionDecl(_) => AstType::FunctionDecl,
             Self::LocalFunction(_) => AstType::LocalFunction,
-            Self::LocalName(_) => AstType::LocalName,
+            Self::TypedName(_) => AstType::TypedName,
             Self::LocalAssignment(_) => AstType::LocalAssignment,
             Self::ReturnStatement(_) => AstType::ReturnStatement,
             Self::CompoundAssignment(_) => AstType::CompoundAssignment,
@@ -293,11 +287,6 @@ impl<'ast> AstKind<'ast> {
     }
 
     #[inline]
-    pub const fn as_param(self) -> Option<&'ast Parameter<'ast>> {
-        if let Self::Parameter(param) = self { Some(param) } else { None }
-    }
-
-    #[inline]
     pub const fn as_var_arg_param(self) -> Option<&'ast VarArgParam<'ast>> {
         if let Self::VarArgParam(var_arg_param) = self { Some(var_arg_param) } else { None }
     }
@@ -329,11 +318,6 @@ impl<'ast> AstKind<'ast> {
     #[inline]
     pub const fn as_string_literal(self) -> Option<&'ast StringLiteral<'ast>> {
         if let Self::StringLiteral(string_literal) = self { Some(string_literal) } else { None }
-    }
-
-    #[inline]
-    pub const fn as_chunk(self) -> Option<&'ast Chunk<'ast>> {
-        if let Self::Chunk(chunk) = self { Some(chunk) } else { None }
     }
 
     #[inline]
@@ -402,8 +386,8 @@ impl<'ast> AstKind<'ast> {
     }
 
     #[inline]
-    pub const fn as_local_name(self) -> Option<&'ast LocalName<'ast>> {
-        if let Self::LocalName(local_name) = self { Some(local_name) } else { None }
+    pub const fn as_typed_name(self) -> Option<&'ast TypedName<'ast>> {
+        if let Self::TypedName(typed_name) = self { Some(typed_name) } else { None }
     }
 
     #[inline]
@@ -555,14 +539,12 @@ impl GetSpan for AstKind<'_> {
             Self::InterpolatedSegment(interpolated_segment) => interpolated_segment.span(),
             Self::TypeCast(type_cast) => type_cast.span(),
             Self::FunctionBody(function_body) => function_body.span(),
-            Self::Parameter(param) => param.span(),
             Self::VarArgParam(var_arg_param) => var_arg_param.span(),
             Self::FunctionAttribute(function_attribute) => function_attribute.span(),
             Self::Name(name) => name.span(),
             Self::NumberLiteral(number_literal) => number_literal.span(),
             Self::IntegerLiteral(integer_literal) => integer_literal.span(),
             Self::StringLiteral(string_literal) => string_literal.span(),
-            Self::Chunk(chunk) => chunk.span(),
             Self::Block(block) => block.span(),
             Self::Assignment(assignment) => assignment.span(),
             Self::DoBlock(do_block) => do_block.span(),
@@ -576,7 +558,7 @@ impl GetSpan for AstKind<'_> {
             Self::FunctionName(function_name) => function_name.span(),
             Self::FunctionDecl(function_decl) => function_decl.span(),
             Self::LocalFunction(local_function) => local_function.span(),
-            Self::LocalName(local_name) => local_name.span(),
+            Self::TypedName(typed_name) => typed_name.span(),
             Self::LocalAssignment(local_assignment) => local_assignment.span(),
             Self::ReturnStatement(return_stmt) => return_stmt.span(),
             Self::CompoundAssignment(compound_assignment) => compound_assignment.span(),

@@ -268,10 +268,10 @@ fn records_where_each_lenient_escape_is() {
     assert_eq!(lex(b"x = '\\x41\\z\\u{48}\\65'").lenient_escapes, Vec::<Span>::new());
 }
 
-/// Luau has no nesting error, so a `[[` inside a level-0 long bracket is
-/// text.
+/// A long bracket holds everything up to its closer, another opener
+/// included.
 #[test]
-fn a_level_zero_long_bracket_holds_an_opener() {
+fn a_long_bracket_holds_an_opener() {
     for source in ["return [[ a [[ b ]]", "return [[[[]]", "--[[ a [[ b ]]\nreturn 1"] {
         assert_eq!(lex(source.as_bytes()).errors, Vec::<Diagnostic>::new(), "{source:?}");
     }

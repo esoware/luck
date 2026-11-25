@@ -100,3 +100,92 @@ fn empty_input_minifies_to_empty_output() {
         "Empty input should produce empty or near-empty output, got: {result}"
     );
 }
+
+#[test]
+fn shebang_stays_on_the_first_line() {
+    let output = minify_default(
+        "\
+#!/usr/bin/env luau
+print(1)
+",
+    );
+    assert_eq!(
+        output,
+        "\
+#!/usr/bin/env luau
+print(1)"
+    );
+    assert_eq!(minify_default(&output), output, "must be idempotent");
+}
+
+#[test]
+fn shebang_drops_trailing_carriage_returns() {
+    for source in ["#!x\r\r", "#!x\r\r\nprint(1)\n"] {
+        let output = minify_default(source);
+        assert!(output.starts_with("#!x\n"), "{output:?}");
+        assert_eq!(minify_default(&output), output, "must be idempotent");
+    }
+}
+
+#[test]
+fn shebang_keeps_a_lone_carriage_return_as_text() {
+    let output = minify_default("#!x\ry = {\nprint(1)\n");
+    assert_eq!(output, "#!x\ry = {\nprint(1)");
+    assert_eq!(minify_default(&output), output, "must be idempotent");
+}
+
+#[test]
+fn shebang_stays_above_hot_comments() {
+    let output = minify_default(
+        "\
+#!/usr/bin/env luau
+--!strict
+print(1)
+",
+    );
+    assert_eq!(
+        output,
+        "\
+#!/usr/bin/env luau
+--!strict
+print(1)"
+    );
+    assert_eq!(minify_default(&output), output, "must be idempotent");
+}
+
+#[test]
+fn hot_comments_survive_minification() {
+    let output = minify_default(
+        "\
+--!strict
+--!native
+--!optimize 2
+local x: number = 1
+return x
+",
+    );
+    assert!(
+        output.starts_with(
+            "\
+--!strict
+--!native
+--!optimize 2
+"
+        ),
+        "hot comments must lead the output: {output}"
+    );
+    // Idempotent: a second pass keeps exactly one copy.
+    let second = minify_default(&output);
+    assert_eq!(output, second, "hot comment prefix must be stable");
+}
+
+#[test]
+fn plain_comments_are_dropped() {
+    let output = minify_default(
+        "\
+-- plain comment
+return 1
+",
+    );
+    assert!(!output.contains("plain comment"), "{output}");
+}

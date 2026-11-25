@@ -6,5 +6,4 @@ mod op;
 mod span;
 mod string;
 mod token;
-mod variant;
 mod whitespace;

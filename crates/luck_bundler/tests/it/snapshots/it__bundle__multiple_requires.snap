@@ -32,15 +32,15 @@ __luck_loading[id]=nil
 __luck_loaded[id]=value
 return value
 end
--- module #1: a.lua
+-- module #1: a.luau
 __luck_modules[1]=function(...)
 return { value = 10 }
 end
--- module #2: b.lua
+-- module #2: b.luau
 __luck_modules[2]=function(...)
 return { value = 20 }
 end
--- module #3: c.lua
+-- module #3: c.luau
 __luck_modules[3]=function(...)
 return { value = 30 }
 end

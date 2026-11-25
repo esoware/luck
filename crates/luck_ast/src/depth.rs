@@ -155,7 +155,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         assert_eq!(expr_nesting_depth(&synth.name_expr("x")), 0);
-        assert_eq!(expr_nesting_depth(&synth.number_i64(1)), 0);
+        assert_eq!(expr_nesting_depth(&synth.number_f64(1.0)), 0);
         assert_eq!(return_depth(synth, synth.name_expr("x")), 1);
     }
 
@@ -215,7 +215,7 @@ mod tests {
         let mut path = synth.name_expr("t");
         let mut concat = synth.name_expr("s");
         for _ in 0..300 {
-            sum = synth.binary_op(sum, BinOp::Sub, synth.number_i64(1));
+            sum = synth.binary_op(sum, BinOp::Sub, synth.number_f64(1.0));
             path = synth.method_call(synth.field(path, "a"), "m", []);
             concat = synth.binary_op(synth.name_expr("s"), BinOp::Concat, concat);
         }

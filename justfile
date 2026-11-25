@@ -95,6 +95,6 @@ minsize:
 allocs *args:
   cargo run -p luck_allocs --profile allocs -- {{args}}
 
-# Run Luau's official conformance tests through every stage and the reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose path holds it
+# Run Luau's official conformance tests through every stage and the reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose name holds it
 conformance *args:
   cargo run -p luck_conformance --profile conformance -- {{args}}

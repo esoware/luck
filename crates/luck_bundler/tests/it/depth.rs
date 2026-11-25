@@ -64,7 +64,7 @@ fn deepest_module_that_fits_bundles_to_the_cap_for_every_wrapper() {
             let reparsed = luck_parser::parse(&allocator, &output);
             assert!(reparsed.errors.is_empty(), "{}: {:?}", shape.name, reparsed.errors);
             assert_eq!(
-                block_nesting_depth(&reparsed.chunk.block),
+                block_nesting_depth(&reparsed.chunk),
                 MAX_NESTING_DEPTH,
                 "{}: the wrapper must add exactly {WRAPPER_LEVELS} levels",
                 shape.name

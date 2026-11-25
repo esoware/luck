@@ -1,7 +1,7 @@
 use std::{mem, vec};
 
 use luck_allocator::{Allocator, List};
-use luck_ast::{Block, Chunk, Expression, Statement, VisitMut};
+use luck_ast::{Block, Expression, Statement, VisitMut};
 use luck_diagnostics::FileDiagnostics;
 use luck_token::chunk_header;
 
@@ -20,13 +20,13 @@ use crate::text_emitter::{self, HOLE};
 pub(crate) fn emit<'ast>(
     allocator: &'ast Allocator,
     graph: &mut DependencyGraph<'ast>,
-) -> Result<(Chunk<'ast>, Vec<u8>), Vec<FileDiagnostics>> {
+) -> Result<(Block<'ast>, Vec<u8>), Vec<FileDiagnostics>> {
     let entry_id = graph.entry_id;
     let entry = &graph[entry_id];
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
         let block = graph[entry_id].block.take();
-        return Ok((Chunk::new(block), header));
+        return Ok((block, header));
     }
 
     let plan = Plan::new(graph);
@@ -49,7 +49,7 @@ pub(crate) fn emit<'ast>(
     let skeleton = allocator.alloc_slice_copy(&text_emitter::skeleton(graph, &plan));
     let mut chunk = luck_parser::parse(allocator, skeleton).chunk;
     let mut filler = Filler { allocator, prefix: &plan.prefix, bodies: bodies.into_iter() };
-    filler.visit_chunk(&mut chunk);
+    filler.visit_block(&mut chunk);
     Ok((chunk, header))
 }
 

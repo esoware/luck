@@ -15,7 +15,7 @@
 
 use ls_types::{Position, Range};
 use luck_ast::{
-    Assignment, Chunk, Expression, Field, FunctionDecl, FunctionName, LocalAssignment, Name,
+    Assignment, Block, Expression, Field, FunctionDecl, FunctionName, LocalAssignment, Name,
     Statement, Suffix, SuffixedExpression, TableConstructor, Var, Visit,
 };
 use luck_semantic::{Scoping, Semantic, SymbolId};
@@ -68,7 +68,7 @@ impl ModuleRecord {
     /// The record of `chunk`, whose `semantic` holds its `require` sites,
     /// with `range` placing each span.
     pub(crate) fn new(
-        chunk: &Chunk<'_>,
+        chunk: &Block<'_>,
         semantic: &Semantic<'_>,
         mut range: impl FnMut(Span) -> Range,
     ) -> Self {
@@ -89,7 +89,7 @@ impl ModuleRecord {
                 range: range(path.span),
             });
         }
-        let returned = chunk.block.stmts.last().and_then(|last| {
+        let returned = chunk.stmts.last().and_then(|last| {
             let Statement::Return(return_stmt) = last else {
                 return None;
             };
@@ -108,7 +108,7 @@ impl ModuleRecord {
         if let Some(Expression::TableConstructor(table)) = returned {
             collector.keys(table);
         }
-        collector.visit_chunk(chunk);
+        collector.visit_block(chunk);
         for symbol in scoping.symbols().iter().filter(|symbol| symbol.is_exported) {
             let name = scoping.name(symbol.name);
             collector.found.push(Found {

@@ -2,8 +2,8 @@
 //! on, as it always has in the source-based tests.
 
 use luck_ast::{
-    Block, Chunk, FieldSpec, FunctionSignature, GetSpan as _, InterpolatedStringPart,
-    MAX_NESTING_DEPTH, Synth, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
+    Block, FieldSpec, FunctionSignature, GetSpan as _, InterpolatedStringPart, MAX_NESTING_DEPTH,
+    Synth, Type, TypeFieldAccess, TypeFieldSpec, block_nesting_depth,
 };
 use luck_formatter::{
     CollapseSimpleStatement, Comments, FormatOptions, SyntheticComment, format_chunk,
@@ -16,7 +16,7 @@ use crate::common::{Fixture, assert_format_with};
 /// The output also has to format as itself and re-parse clean.
 fn assert_format_chunk_with(
     fixture: &Fixture,
-    chunk: &Chunk<'_>,
+    chunk: &Block<'_>,
     comments: Comments<'_>,
     options: &FormatOptions,
     expected: &str,
@@ -28,7 +28,7 @@ fn assert_format_chunk_with(
 }
 
 fn assert_format_block(fixture: &Fixture, block: Block<'_>, expected: &str) {
-    let chunk = Chunk::new(block);
+    let chunk = block;
     let options = FormatOptions::default();
     assert_format_chunk_with(fixture, &chunk, Comments::none(), &options, expected);
 }
@@ -273,7 +273,7 @@ fn composite_types_preserve_grouping() {
         ];
         for (ty, (narrowest, wider)) in types.into_iter().zip(layouts) {
             let block = synth.block([synth.type_declaration(false, "Result", None, ty)]);
-            let chunk = Chunk::new(block);
+            let chunk = block;
             for (line_width, expected) in [(1, narrowest), (60, wider), (80, wider), (120, wider)] {
                 let options = FormatOptions { line_width, ..FormatOptions::default() };
                 assert_format_chunk_with(&fixture, &chunk, Comments::none(), &options, expected);
@@ -290,7 +290,7 @@ fn typed_local_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let optional = synth.ty_optional(synth.ty_named("number"));
-    let stmt = synth.local_full([synth.local_name("value", Some(optional))], [synth.nil()]);
+    let stmt = synth.local_full([synth.typed_name("value", Some(optional))], [synth.nil()]);
     let block = synth.block([stmt]);
     assert_format_block(&fixture, block, "local value: number? = nil\n");
 }
@@ -300,7 +300,7 @@ fn typed_function_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let signature = FunctionSignature {
-        params: vec![synth.param_typed("n", synth.ty_named("number"))],
+        params: vec![synth.typed_name("n", Some(synth.ty_named("number")))],
         return_type: Some(synth.ty_named("number")),
         ..FunctionSignature::default()
     };
@@ -326,8 +326,8 @@ fn mixed_stmts_roundtrip() {
 
     // local data = { 1, name = 2, ["k"] = true }
     let table = synth.table([
-        FieldSpec::Positional(synth.number_i64(1)),
-        FieldSpec::Named("name", synth.number_i64(2)),
+        FieldSpec::Positional(synth.number_f64(1.0)),
+        FieldSpec::Named("name", synth.number_f64(2.0)),
         FieldSpec::Bracketed(synth.string("k"), synth.boolean(true)),
     ]);
     let local_data = synth.local(&["data"], [table]);
@@ -335,13 +335,13 @@ fn mixed_stmts_roundtrip() {
     // for key, value in pairs(data) do end
     let pairs_call = synth.call(synth.name_expr("pairs"), [synth.name_expr("data")]);
     let generic_for = synth.generic_for(
-        [synth.param("key"), synth.param("value")],
+        [synth.typed_name("key", None), synth.typed_name("value", None)],
         [pairs_call],
         synth.block([]),
     );
 
     // if data then data:insert(3) elseif false then else end
-    let method = synth.method_call(synth.name_expr("data"), "insert", [synth.number_i64(3)]);
+    let method = synth.method_call(synth.name_expr("data"), "insert", [synth.number_f64(3.0)]);
     let if_stmt = synth.if_(
         synth.name_expr("data"),
         synth.block([synth.call_stmt(method)]),
@@ -410,7 +410,7 @@ fn if_expr_operand_roundtrips() {
     // An if-expression's else branch takes in all that follows it, so it
     // needs parentheses before an operator, and none at the end.
     let if_expr =
-        || synth.if_expr(synth.name_expr("c"), synth.number_i64(1), [], synth.number_i64(2));
+        || synth.if_expr(synth.name_expr("c"), synth.number_f64(1.0), [], synth.number_f64(2.0));
     let guarded = synth.binary_op(synth.name_expr("a"), BinOp::Or, if_expr());
     let leading = synth.binary_op(if_expr(), BinOp::Or, synth.name_expr("a"));
     let block = synth.block([synth.return_([guarded, leading])]);
@@ -426,7 +426,7 @@ fn prefix_wrapping_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     // ("s"):rep(2) and ({}).field both need their receivers parenthesized.
-    let string_method = synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]);
+    let string_method = synth.method_call(synth.string("s"), "rep", [synth.number_f64(2.0)]);
     let table_field = synth.field(synth.table([]), "field");
     let block = synth.block([synth.return_([string_method, table_field])]);
     assert_format_block(&fixture, block, "return (\"s\"):rep(2), ({}).field\n");
@@ -481,8 +481,8 @@ fn numeric_specials_roundtrip() {
         synth.number_f64(-2.5),
         synth.number_f64(f64::INFINITY),
         synth.number_f64(f64::NAN),
-        synth.number_i64(-42),
-        synth.number_i64(i64::MIN),
+        synth.number_f64(-42.0),
+        synth.number_f64(-9_223_372_036_854_775_808.0),
     ];
     let block = synth.block([synth.return_([synth.array(values)])]);
     assert_format_block(
@@ -667,7 +667,8 @@ fn chained_cast_roundtrips() {
 fn const_declarations_roundtrip() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let const_local = synth.const_local([synth.local_name("frozen", None)], [synth.number_i64(1)]);
+    let const_local =
+        synth.const_local([synth.typed_name("frozen", None)], [synth.number_f64(1.0)]);
     let const_function =
         synth.const_function("pinned", [], FunctionSignature::default(), synth.block([]));
     let block = synth.block([const_local, const_function]);
@@ -707,10 +708,14 @@ fn exponent_number_roundtrips() {
 #[test]
 fn integral_numbers_roundtrip() {
     // An integral value prints as plain digits, or an exponent where that's
-    // shorter, and `i64::MIN` as a negated float.
+    // shorter, as -2^63 does.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let values = [synth.number_f64(100.0), synth.number_f64(1.5), synth.number_i64(i64::MIN)];
+    let values = [
+        synth.number_f64(100.0),
+        synth.number_f64(1.5),
+        synth.number_f64(-9_223_372_036_854_775_808.0),
+    ];
     let block = synth.block([synth.return_([synth.array(values)])]);
     assert_format_block(&fixture, block, "return { 100, 1.5, -9223372036854776e3 }\n");
 }
@@ -748,7 +753,7 @@ fn a_field_named_goto_roundtrips() {
 fn a_synthetic_comment_anchors_at_the_start_of_its_statement_or_block() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let stmt = synth.local(&["x"], [synth.number_i64(1)]);
+    let stmt = synth.local(&["x"], [synth.number_f64(1.0)]);
     let leading = SyntheticComment::leading(&stmt, "before");
     let trailing = SyntheticComment::trailing(&stmt, "after");
     assert_eq!(leading.attached_to, stmt.span().start);
@@ -766,13 +771,13 @@ fn a_synthetic_comment_anchors_at_the_start_of_its_statement_or_block() {
 fn synthetic_comments_placed_around_stmt() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let stmt = synth.local(&["x"], [synth.number_i64(1)]);
+    let stmt = synth.local(&["x"], [synth.number_f64(1.0)]);
     let leading = SyntheticComment::leading(&stmt, "leading note");
     let trailing = SyntheticComment::trailing(&stmt, "trailing note");
     let block = synth.block([stmt]);
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(block),
+        &block,
         Comments::synthetic([leading, trailing]),
         &FormatOptions::default(),
         "\
@@ -792,7 +797,7 @@ fn dangling_comment_prints_inside_empty_function() {
     let block = synth.block([stmt]);
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(block),
+        &block,
         Comments::synthetic([dangling]),
         &FormatOptions::default(),
         "\
@@ -807,10 +812,10 @@ end
 fn requested_blank_lines_separate_stmts() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let first = synth.local(&["a"], [synth.number_i64(1)]);
-    let second = synth.local(&["b"], [synth.number_i64(2)]);
+    let first = synth.local(&["a"], [synth.number_f64(1.0)]);
+    let second = synth.local(&["b"], [synth.number_f64(2.0)]);
     let blank_anchor = second.span().start;
-    let chunk = Chunk::new(synth.block([first, second]));
+    let chunk = synth.block([first, second]);
     let options = FormatOptions::default();
 
     assert_format_chunk_with(
@@ -849,7 +854,7 @@ fn sort_requires_orders_a_tree_built_in_code() {
     let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(block),
+        &block,
         Comments::synthetic([trailing]),
         &options,
         "\
@@ -871,7 +876,7 @@ fn empty_block_formats_to_parseable_output() {
 fn last_stmt_only_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let block = synth.block([synth.return_([synth.number_i64(42)])]);
+    let block = synth.block([synth.return_([synth.number_f64(42.0)])]);
     assert_format_block(&fixture, block, "return 42\n");
 }
 
@@ -879,7 +884,7 @@ fn last_stmt_only_roundtrips() {
 fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let body_stmt = synth.local(&["x"], [synth.number_i64(1)]);
+    let body_stmt = synth.local(&["x"], [synth.number_f64(1.0)]);
     let trailing = SyntheticComment::trailing(&body_stmt, "why");
     let body = synth.block([body_stmt]);
     let if_stmt = synth.if_(synth.name_expr("a"), body, [], None);
@@ -890,7 +895,7 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
     };
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(block),
+        &block,
         Comments::synthetic([trailing]),
         &options,
         "\
@@ -905,7 +910,7 @@ end
 fn multi_line_synthetic_comment_stays_a_comment() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let stmt = synth.local(&["x"], [synth.number_i64(1)]);
+    let stmt = synth.local(&["x"], [synth.number_f64(1.0)]);
     let comment = SyntheticComment::leading(
         &stmt,
         "\
@@ -915,7 +920,7 @@ y = 2",
     let block = synth.block([stmt]);
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(block),
+        &block,
         Comments::synthetic([comment]),
         &FormatOptions::default(),
         "\
@@ -951,7 +956,7 @@ fn a_tree_at_the_nesting_cap_formats_and_reparses() {
 fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse() {
     with_the_smallest_stack(|| {
         let fixture = Fixture::default();
-        let chunk = Chunk::new(nested_negations(fixture.synth(), MAX_NESTING_DEPTH));
+        let chunk = nested_negations(fixture.synth(), MAX_NESTING_DEPTH);
         let error =
             format_chunk(fixture.allocator(), &chunk, Comments::none(), &FormatOptions::default())
                 .expect_err("the tree nests one level too deep");
@@ -967,8 +972,8 @@ fn a_tree_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
     for _ in 0..200_000 {
         nested = synth.unary_op(UnOp::Not, nested);
     }
-    let chunk = Chunk::new(synth.block([synth.return_([nested])]));
-    assert_eq!(block_nesting_depth(&chunk.block), MAX_NESTING_DEPTH + 1, "measuring stops there");
+    let chunk = synth.block([synth.return_([nested])]);
+    assert_eq!(block_nesting_depth(&chunk), MAX_NESTING_DEPTH + 1, "measuring stops there");
     let options = FormatOptions::default();
     assert!(format_chunk(fixture.allocator(), &chunk, Comments::none(), &options).is_err());
 }
@@ -981,7 +986,7 @@ fn a_run_of_any_length_formats_as_one_level() {
     let mut sum = synth.name_expr("x");
     let mut methods = synth.name_expr("object");
     for _ in 0..links {
-        sum = synth.binary_op(sum, BinOp::Add, synth.number_i64(1));
+        sum = synth.binary_op(sum, BinOp::Add, synth.number_f64(1.0));
     }
     for _ in 0..calls {
         methods = synth.method_call(methods, "next", []);

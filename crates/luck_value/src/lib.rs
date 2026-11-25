@@ -35,7 +35,7 @@
 //!
 //! let allocator = Allocator::new();
 //! let parsed = luck_parser::parse(&allocator, b"return 7 // 2, x or true");
-//! let Some(Statement::Return(stmt)) = parsed.chunk.block.stmts.first() else {
+//! let Some(Statement::Return(stmt)) = parsed.chunk.stmts.first() else {
 //!     unreachable!("the chunk is one return");
 //! };
 //! let [quotient, guard] = &*stmt.exprs else { unreachable!("it returns two values") };

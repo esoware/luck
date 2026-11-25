@@ -48,7 +48,7 @@ fn a_numeral_directly_before_concat_lexes_after_an_exponent_or_a_radix_prefix() 
 
 #[test]
 fn hex_literal_without_digits_is_error() {
-    for source in ["0x", "0x.", "0x..1", "0x_"] {
+    for source in ["0x", "0x.", "0x.1", "0x..1", "0x_"] {
         let result = lex(source.as_bytes());
         assert_ne!(result.errors, Vec::<Diagnostic>::new(), "{source}");
         assert!(
@@ -60,16 +60,13 @@ fn hex_literal_without_digits_is_error() {
 }
 
 #[test]
-fn hex_floats_are_errors() {
-    for source in ["0x1.Fp10", "0xAp4", "0x.1", "0X0.41", "0xA.8", "0x1p-2"] {
-        assert!(!lex(source.as_bytes()).errors.is_empty(), "{source}");
-    }
-}
-
-#[test]
-fn hex_numeral_touching_a_letter_is_malformed() {
-    for source in ["0xFFz", "0x1g", "0x1_2g"] {
-        assert!(!lex(source.as_bytes()).errors.is_empty(), "must reject {source}");
+fn hex_numeral_touching_a_letter_or_a_fraction_is_malformed() {
+    for source in ["0xFFz", "0x1g", "0x1_2g", "0xAp4", "0x1p-2", "0x1.Fp10", "0X0.41", "0xA.8"] {
+        let errors = lex(source.as_bytes()).errors;
+        assert!(
+            matches!(&*errors, [error] if error.message == "malformed hexadecimal number"),
+            "{source}: {errors:?}"
+        );
     }
 }
 

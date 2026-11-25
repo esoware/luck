@@ -1,7 +1,7 @@
 use std::mem;
 
 use luck_allocator::{Box, List};
-use luck_ast::{FunctionBody, GetSpan as _, Name, Parameter, Type, VarArgParam};
+use luck_ast::{FunctionBody, GetSpan as _, Name, Type, TypedName, VarArgParam};
 use luck_token::{Span, TokenKind};
 
 use super::recovery::Closer;
@@ -58,17 +58,17 @@ impl<'ast> Parser<'ast> {
     /// the closing `)`.
     fn parse_params(
         &mut self,
-    ) -> (List<'ast, Parameter<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
+    ) -> (List<'ast, TypedName<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
         if self.is_at(TokenKind::DotDotDot) {
             return (List::new(), Some(self.parse_vararg_param()));
         }
         if !self.is_at_name() {
             return (List::new(), None);
         }
-        let start = self.scratch.params.len();
+        let start = self.scratch.typed_names.len();
         let first_name = self.advance_name();
-        let first = self.parse_parameter(first_name);
-        self.scratch.params.push(first);
+        let first = self.parse_typed_name(first_name);
+        self.scratch.typed_names.push(first);
         let mut vararg = None;
         while self.eat(TokenKind::Comma) {
             if self.is_at(TokenKind::DotDotDot) {
@@ -77,17 +77,17 @@ impl<'ast> Parser<'ast> {
                 break;
             }
             let name = self.expect_identifier_recover();
-            let param = self.parse_parameter(name);
-            self.scratch.params.push(param);
+            let param = self.parse_typed_name(name);
+            self.scratch.typed_names.push(param);
         }
-        (List::split_off_in(&mut self.scratch.params, start, self.allocator), vararg)
+        (List::split_off_in(&mut self.scratch.typed_names, start, self.allocator), vararg)
     }
 
-    /// Finish a function parameter or a for-loop variable whose `name` was
-    /// just consumed, taking a `: T` annotation if one follows.
-    pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
+    /// Finish a parameter, a `local` name, or a `for` variable whose `name`
+    /// was just consumed, taking a `: T` annotation if one follows.
+    pub(super) fn parse_typed_name(&mut self, name: Name<'ast>) -> TypedName<'ast> {
         self.counts.declarations += 1;
-        Parameter::new(name, self.try_parse_type_annotation())
+        TypedName::new(name, self.try_parse_type_annotation())
     }
 
     /// Parse `... [: type]`, where the type may be a pack (`...: T...`);

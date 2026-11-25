@@ -377,8 +377,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use luck_allocator::Allocator;
-    use luck_stdlib::library_for;
-    use luck_token::Variant;
+    use luck_stdlib::{Variant, library_for};
 
     use super::*;
     use crate::config::RuleLevel;

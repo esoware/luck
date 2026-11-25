@@ -1,8 +1,8 @@
 use luck_ast::{
     Assignment, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute, FunctionBody,
     FunctionDecl, GenericFor, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
-    LocalFunctionKind, LocalName, NumericFor, Parameter, RepeatLoop, Slot, Statement,
-    TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement, TypeDeclaration,
+    TypeDeclarationValue, TypedName, WhileLoop,
 };
 
 use super::Printer;
@@ -93,11 +93,7 @@ impl Printer {
 
     fn print_numeric_for(&mut self, numeric_for: &NumericFor<'_>) {
         self.piece("for");
-        self.name(numeric_for.name.text.as_str());
-        if let Some(ty) = &numeric_for.type_annotation {
-            self.piece(":");
-            self.print_type(ty);
-        }
+        self.print_typed_name(&numeric_for.variable);
         self.piece("=");
         self.print_free_expr(&numeric_for.start);
         self.piece(",");
@@ -113,7 +109,7 @@ impl Printer {
 
     fn print_generic_for(&mut self, generic_for: &GenericFor<'_>) {
         self.piece("for");
-        self.list(&generic_for.names, ",", Self::print_param);
+        self.list(&generic_for.names, ",", Self::print_typed_name);
         self.piece("in");
         self.list(&generic_for.exprs, ",", Self::print_free_expr);
         self.piece("do");
@@ -152,7 +148,7 @@ impl Printer {
             LocalAssignmentKind::ExportLocal => self.piece("export local"),
             LocalAssignmentKind::ExportConst => self.piece("export const"),
         }
-        self.list(&local.names, ",", Self::print_local_name);
+        self.list(&local.names, ",", Self::print_typed_name);
         if !local.exprs.is_empty() {
             self.piece("=");
             self.list(&local.exprs, ",", Self::print_free_expr);
@@ -191,9 +187,9 @@ impl Printer {
         }
     }
 
-    fn print_local_name(&mut self, local_name: &LocalName<'_>) {
-        self.name(local_name.name.text.as_str());
-        if let Some(ty) = &local_name.type_annotation {
+    fn print_typed_name(&mut self, typed_name: &TypedName<'_>) {
+        self.name(typed_name.name.text.as_str());
+        if let Some(ty) = &typed_name.type_annotation {
             self.piece(":");
             self.print_type(ty);
         }
@@ -228,7 +224,7 @@ impl Printer {
             self.print_generic_type_list(generics);
         }
         self.piece("(");
-        self.list(&body.params, ",", Self::print_param);
+        self.list(&body.params, ",", Self::print_typed_name);
         if let Some(vararg) = &body.vararg {
             if !body.params.is_empty() {
                 self.piece(",");
@@ -246,14 +242,6 @@ impl Printer {
         }
         self.print_block(&body.block);
         self.piece("end");
-    }
-
-    fn print_param(&mut self, param: &Parameter<'_>) {
-        self.name(param.name.text.as_str());
-        if let Some(ty) = &param.type_annotation {
-            self.piece(":");
-            self.print_type(ty);
-        }
     }
 }
 

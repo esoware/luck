@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
-use luck_ast::Chunk;
+use luck_ast::Block;
 use luck_semantic::{Semantic, SemanticBuilder};
-use luck_testgen::{generate_full_grammar, generate_runtime_safe, luau_fixtures};
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, source_fixtures};
 
 pub(crate) const NAMES_OF_EVERY_KIND: &str = "\
 local x, y = 1
@@ -12,7 +12,7 @@ for i = 1, 2 do local z: typeof(i) = i end";
 
 /// `source`'s tree, which must parse cleanly, kept in `allocator` so it
 /// outlives the node table that borrows it.
-pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> &'ast Chunk<'ast> {
+pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> &'ast Block<'ast> {
     let parsed = luck_parser::parse(allocator, source.as_bytes());
     assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
     allocator.alloc(parsed.chunk)
@@ -30,7 +30,7 @@ pub(crate) fn semantic_for<'ast>(allocator: &'ast Allocator, source: &'ast str) 
 /// generated programs.
 pub(crate) fn for_each_valid_source(mut check: impl FnMut(&str)) {
     let mut checked = 0usize;
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         if fixture.is_error {
             continue;
         }

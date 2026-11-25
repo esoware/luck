@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
-use luck_token::Variant;
 use self_cell::{MutBorrow, self_cell};
 
 use crate::layering::layer;
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_definition::StdlibDefinition;
 use crate::stdlib_model::StdlibLibrary;
+use crate::variant::Variant;
 
 /// A variant's standard library, with the std definitions a project names
 /// layered over it, which semantic analysis reads as it reads a built-in

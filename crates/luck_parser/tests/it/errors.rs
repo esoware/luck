@@ -40,7 +40,7 @@ local = 5
 local y = 10",
     );
     assert!(!result.errors.is_empty(), "should have errors from first statement");
-    let has_valid_local = result.chunk.block.stmts.iter().any(|stmt| {
+    let has_valid_local = result.chunk.stmts.iter().any(|stmt| {
         matches!(stmt, Statement::LocalAssignment(local) if {
             local.names.last().is_some_and(|local_name| local_name.name.text == "y")
         })
@@ -73,8 +73,7 @@ fn unexpected_token_becomes_an_error_stmt() {
     let allocator = Allocator::new();
     let result = parse(&allocator, ") local x = 1");
     assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
-    let has_error_node =
-        result.chunk.block.stmts.iter().any(|stmt| matches!(stmt, Statement::Error(_)));
+    let has_error_node = result.chunk.stmts.iter().any(|stmt| matches!(stmt, Statement::Error(_)));
     assert!(has_error_node, "should have an Error statement node");
 }
 
@@ -105,8 +104,8 @@ local after = 1"
         if message.starts_with("unterminated long") {
             continue;
         }
-        let Some(Statement::LocalAssignment(after)) = result.chunk.block.stmts.last() else {
-            panic!("{broken:?}: {:?}", result.chunk.block.stmts.last());
+        let Some(Statement::LocalAssignment(after)) = result.chunk.stmts.last() else {
+            panic!("{broken:?}: {:?}", result.chunk.stmts.last());
         };
         assert_eq!(after.names.first().map(|name| name.name.text.as_str()), Some("after"));
     }
@@ -159,6 +158,8 @@ fn a_semicolon_follows_a_statement() {
     let allocator = Allocator::new();
     for (source, is_valid) in [
         ("x = 1; y = 2;", true),
+        (";", false),
+        (";x = 1", false),
         ("x = 1;;", false),
         ("do ; end", false),
         ("while a do break; end", true),
@@ -275,8 +276,8 @@ local after = 1";
         .map(|e| (&*e.message, e.span.unwrap().text(source.as_bytes())))
         .collect();
     assert_eq!(errors, [("expected function arguments", &b"local"[..])]);
-    let Some(Statement::Assignment(assignment)) = result.chunk.block.stmts.first() else {
-        panic!("{:?}", result.chunk.block.stmts);
+    let Some(Statement::Assignment(assignment)) = result.chunk.stmts.first() else {
+        panic!("{:?}", result.chunk.stmts);
     };
     let Some(Expression::Suffixed(chain)) = assignment.values.first() else {
         panic!("{:?}", assignment.values);
@@ -510,9 +511,9 @@ return a
 local b = 2",
     );
     let [Statement::LocalAssignment(_), Statement::Return(_), Statement::LocalAssignment(b)] =
-        &*result.chunk.block.stmts
+        &*result.chunk.stmts
     else {
-        panic!("{:?}", result.chunk.block.stmts);
+        panic!("{:?}", result.chunk.stmts);
     };
     assert_eq!(b.names.first().map(|name| name.name.text.as_str()), Some("b"));
 }

@@ -4,7 +4,7 @@ use luck_allocator::Allocator;
 use luck_ast::{MAX_NESTING_DEPTH, Statement, Visit, block_nesting_depth};
 use luck_parser::{ParseResult, parse};
 use luck_testgen::{
-    generate_full_grammar, generate_runtime_safe, luau_fixtures, nested, with_the_smallest_stack,
+    generate_full_grammar, generate_runtime_safe, nested, source_fixtures, with_the_smallest_stack,
 };
 
 fn has_depth_limit_error(result: &ParseResult<'_>) -> bool {
@@ -54,7 +54,7 @@ fn a_run_of_any_length_is_one_level() {
         let allocator = Allocator::new();
         let result = parse(&allocator, source.as_bytes());
         assert!(result.errors.is_empty(), "{:?}: {:?}", source.get(..20), result.errors.first());
-        assert_eq!(block_nesting_depth(&result.chunk.block), 2, "{:?}", source.get(..20));
+        assert_eq!(block_nesting_depth(&result.chunk), 2, "{:?}", source.get(..20));
     }
 }
 
@@ -231,7 +231,7 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
                         shape.name,
                         result.errors.first()
                     );
-                    assert_eq!(block_nesting_depth(&result.chunk.block), depth, "{}", shape.name);
+                    assert_eq!(block_nesting_depth(&result.chunk), depth, "{}", shape.name);
                     assert_eq!(result.nesting_depth, depth, "{}", shape.name);
                 } else {
                     let [error] = result.errors.as_slice() else {
@@ -239,7 +239,7 @@ fn the_cap_bounds_the_depth_of_the_tree_exactly() {
                     };
                     assert!(error.message.contains("luck parser resource limit"), "{}", shape.name);
                     assert!(
-                        block_nesting_depth(&result.chunk.block) <= MAX_NESTING_DEPTH,
+                        block_nesting_depth(&result.chunk) <= MAX_NESTING_DEPTH,
                         "{}",
                         shape.name
                     );
@@ -276,7 +276,7 @@ fn each_construct_nests_as_deep_as_luau_reads_it() {
                 source.get(..24),
                 result.errors.first()
             );
-            deepest = deepest.max(block_nesting_depth(&result.chunk.block));
+            deepest = deepest.max(block_nesting_depth(&result.chunk));
         }
         assert_eq!(deepest, MAX_NESTING_DEPTH);
     });
@@ -298,7 +298,7 @@ fn a_run_counts_once_from_its_first_operand() {
         let source_at_the_cap = truncated("");
         let at_the_cap = parse(&allocator, source_at_the_cap.as_bytes());
         assert!(at_the_cap.errors.is_empty(), "{:?}", at_the_cap.errors.first());
-        assert_eq!(block_nesting_depth(&at_the_cap.chunk.block), MAX_NESTING_DEPTH);
+        assert_eq!(block_nesting_depth(&at_the_cap.chunk), MAX_NESTING_DEPTH);
         for (label, source) in [
             (
                 "operators over negations",
@@ -315,12 +315,12 @@ fn a_run_counts_once_from_its_first_operand() {
         let bare_optionals = format!("type X = T{}", "?".repeat(5000));
         let optional_run = parse(&allocator, bare_optionals.as_bytes());
         assert!(optional_run.errors.is_empty(), "{:?}", optional_run.errors.first());
-        assert_eq!(block_nesting_depth(&optional_run.chunk.block), 2);
+        assert_eq!(block_nesting_depth(&optional_run.chunk), 2);
 
         let later_operand = format!("return 1+{}x{}", "not ".repeat(tables), "+1".repeat(300));
         let result = parse(&allocator, later_operand.as_bytes());
         assert!(result.errors.is_empty(), "{:?}", result.errors.first());
-        assert_eq!(block_nesting_depth(&result.chunk.block), MAX_NESTING_DEPTH);
+        assert_eq!(block_nesting_depth(&result.chunk), MAX_NESTING_DEPTH);
     });
 }
 
@@ -369,7 +369,7 @@ fn a_tree_with_errors_stays_within_the_cap() {
             let result = parse(&allocator, source.as_bytes());
             assert!(has_depth_limit_error(&result), "{:?}", result.errors.first());
             let mut levels = Levels { depth: 0, deepest: 0 };
-            levels.visit_block(&result.chunk.block);
+            levels.visit_block(&result.chunk);
             assert!(
                 levels.deepest <= MAX_NESTING_DEPTH,
                 "{}: {:?}",
@@ -393,8 +393,8 @@ fn an_if_cut_off_at_the_cap_keeps_its_clauses_to_itself() {
         );
         let result = parse(&allocator, source.as_bytes());
         assert!(has_depth_limit_error(&result), "{:?}", result.errors);
-        let Some(Statement::IfStatement(outer)) = result.chunk.block.stmts.first() else {
-            panic!("{:?}", result.chunk.block.stmts.first());
+        let Some(Statement::IfStatement(outer)) = result.chunk.stmts.first() else {
+            panic!("{:?}", result.chunk.stmts.first());
         };
         assert_eq!(outer.elseif_clauses.len(), 1, "{:?}", outer.elseif_clauses);
     });
@@ -420,7 +420,7 @@ fn a_misplaced_last_statement_nests_where_it_was_written() {
             };
             assert!(error.message.contains("must be the last statement"), "{error:?}");
             assert_eq!(result.nesting_depth, MAX_NESTING_DEPTH);
-            assert_eq!(block_nesting_depth(&result.chunk.block), MAX_NESTING_DEPTH);
+            assert_eq!(block_nesting_depth(&result.chunk), MAX_NESTING_DEPTH);
         }
     });
 }
@@ -450,7 +450,7 @@ fn nesting_past_the_cap_ends_the_parse() {
             panic!("{:?}", result.errors);
         };
         assert!(error.message.contains("luck parser resource limit"), "{error:?}");
-        assert_eq!(result.chunk.block.stmts.len(), 1, "{:?}", result.chunk.block.stmts);
+        assert_eq!(result.chunk.stmts.len(), 1, "{:?}", result.chunk.stmts);
     });
 }
 
@@ -499,7 +499,7 @@ fn counted_and_built(source: &str) -> (usize, usize) {
     let allocator = Allocator::new();
     let result = parse(&allocator, source.as_bytes());
     assert!(result.errors.is_empty(), "{:?}\n{source}", result.errors.first());
-    (result.nesting_depth, block_nesting_depth(&result.chunk.block))
+    (result.nesting_depth, block_nesting_depth(&result.chunk))
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn counts_the_depth_of_generated_programs_as_the_tree_measures_it() {
 #[test]
 fn counts_the_depth_of_fixtures_as_the_tree_measures_it() {
     let mut checked = 0;
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         if fixture.is_error {
             continue;
         }

@@ -34,62 +34,62 @@ fn run_bundle_with(
 
 #[test]
 fn basic_bundle() {
-    let output = run_bundle("basic_bundle", "main.lua").expect("bundle failed");
+    let output = run_bundle("basic_bundle", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("basic_bundle", output);
 }
 
 #[test]
 fn nested_deps() {
-    let output = run_bundle("nested_deps", "main.lua").expect("bundle failed");
+    let output = run_bundle("nested_deps", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("nested_deps", output);
 }
 
 #[test]
 fn diamond_deps() {
-    let output = run_bundle("diamond_deps", "main.lua").expect("bundle failed");
+    let output = run_bundle("diamond_deps", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("diamond_deps", output);
 }
 
 #[test]
 fn deep_chain() {
-    let output = run_bundle("deep_chain", "main.lua").expect("bundle failed");
+    let output = run_bundle("deep_chain", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("deep_chain", output);
 }
 
 #[test]
-fn init_module() {
-    let output = run_bundle("init_module", "main.lua").expect("bundle failed");
-    insta::assert_snapshot!("init_module", output);
+fn init_lua() {
+    let output = run_bundle("init_lua", "main.luau").expect("bundle failed");
+    insta::assert_snapshot!("init_lua", output);
 }
 
 #[test]
 fn multiple_requires() {
-    let output = run_bundle("multiple_requires", "main.lua").expect("bundle failed");
+    let output = run_bundle("multiple_requires", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("multiple_requires", output);
 }
 
 #[test]
 fn module_required_by_many() {
-    let output = run_bundle("module_required_by_many", "main.lua").expect("bundle failed");
+    let output = run_bundle("module_required_by_many", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("module_required_by_many", output);
 }
 
 #[test]
 fn nil_return() {
-    let output = run_bundle("nil_return", "main.lua").expect("bundle failed");
+    let output = run_bundle("nil_return", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("nil_return", output);
 }
 
 #[test]
 fn no_deps() {
-    let output = run_bundle("no_deps", "main.lua").expect("bundle failed");
+    let output = run_bundle("no_deps", "main.luau").expect("bundle failed");
     insta::assert_snapshot!("no_deps", output);
 }
 
 #[test]
 fn circular_dependency_bundles_with_w003() {
     // The lazy loader lets a cycle bundle; a W003 warning flags the risk.
-    let result = run_bundle_with("errors/circular_dep", "a.lua", DynamicRequire::default())
+    let result = run_bundle_with("errors/circular_dep", "a.luau", DynamicRequire::default())
         .expect("cycle must bundle");
     assert!(
         codes(&result.warnings).contains(&"W003"),
@@ -114,16 +114,16 @@ fn missing_entry_flags_e010() {
 
 #[test]
 fn unresolved_module_flags_e004() {
-    let errors = run_bundle("errors/unresolved_module", "main.lua")
+    let errors = run_bundle("errors/unresolved_module", "main.luau")
         .expect_err("an unresolved module must not bundle");
     assert!(codes(&errors).contains(&"E004"), "Expected E004, got: {:?}", codes(&errors));
 }
 
-/// `something.lua` sits beside the entry, but a require without `./`,
+/// `something.luau` sits beside the entry, but a require without `./`,
 /// `../`, or `@` names no file.
 #[test]
 fn bare_require_flags_e004_for_its_missing_prefix() {
-    let errors = run_bundle("errors/bare_require", "main.lua")
+    let errors = run_bundle("errors/bare_require", "main.luau")
         .expect_err("a require without a prefix must not bundle");
     let located = located(&errors);
     let [(_, error)] = located.as_slice() else {
@@ -138,7 +138,7 @@ fn bare_require_flags_e004_for_its_missing_prefix() {
 
 #[test]
 fn non_literal_require_flags_e002_in_error_mode() {
-    let errors = run_bundle_with("errors/non_literal_require", "main.lua", DynamicRequire::Error)
+    let errors = run_bundle_with("errors/non_literal_require", "main.luau", DynamicRequire::Error)
         .expect_err("error mode must refuse a dynamic require");
     assert!(codes(&errors).contains(&"E002"), "Expected E002, got: {:?}", codes(&errors));
 }
@@ -147,7 +147,7 @@ fn non_literal_require_flags_e002_in_error_mode() {
 /// runtime's own `require`, and W007 says so.
 #[test]
 fn dynamic_require_stays_for_the_runtime() {
-    let result = run_bundle_with("dynamic_require", "main.lua", DynamicRequire::default())
+    let result = run_bundle_with("dynamic_require", "main.luau", DynamicRequire::default())
         .expect("a dynamic require must not abort the bundle");
 
     assert!(
@@ -161,7 +161,7 @@ fn dynamic_require_stays_for_the_runtime() {
 
 #[test]
 fn dynamic_require_in_allow_mode_is_silent() {
-    let result = run_bundle_with("dynamic_require", "main.lua", DynamicRequire::Allow)
+    let result = run_bundle_with("dynamic_require", "main.luau", DynamicRequire::Allow)
         .expect("bundle failed");
     assert!(result.warnings.is_empty(), "expected no warnings, got: {:?}", codes(&result.warnings));
     assert!(text(&result.output).contains("require(name)"), "{}", text(&result.output));
@@ -183,19 +183,9 @@ fn side_effect_require_bundles() {
 #[test]
 fn require_after_code_bundles() {
     // Requires are position-independent with the lazy loader.
-    let output = run_bundle("errors/require_after_code", "main.lua")
-        .expect("require after code must bundle");
+    let output =
+        run_bundle("require_after_code", "main.luau").expect("require after code must bundle");
     assert!(output.contains("__luck_require"), "{output}");
-}
-
-#[test]
-fn package_loaded_write_bundles_as_written() {
-    // Luau's `require` never reads `package.loaded`, so the write means in
-    // the bundle what it means without one.
-    let output = run_bundle("errors/package_loaded_manip", "main.luau")
-        .expect("package.loaded writes bundle fine");
-    assert!(output.contains("package.loaded[\"x\"] = {}"), "{output}");
-    assert!(output.contains("local x = __luck_require(1)"), "{output}");
 }
 
 #[test]

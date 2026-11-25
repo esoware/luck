@@ -1,10 +1,10 @@
 use std::mem;
 
 use luck_ast::{
-    Assignment, AstKind, Block, Call, Chunk, CompoundAssignment, DoBlock, Expression, FunctionBody,
+    Assignment, AstKind, Block, Call, CompoundAssignment, DoBlock, Expression, FunctionBody,
     FunctionDecl, FunctionDef, GenericFor, GetSpan as _, IfStatement, LocalAssignment,
     LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement, SuffixedExpression,
-    TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, Var, Visit, WhileLoop,
+    TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, TypedName, Var, Visit, WhileLoop,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::Span;
@@ -87,7 +87,7 @@ impl SemanticBuilder {
         self
     }
 
-    pub fn build<'ast>(self, chunk: &'ast Chunk<'ast>) -> SemanticBuilderReturn<'ast> {
+    pub fn build<'ast>(self, chunk: &'ast Block<'ast>) -> SemanticBuilderReturn<'ast> {
         self.build_into(chunk, Scoping::with_capacity(self.counts))
     }
 
@@ -96,7 +96,7 @@ impl SemanticBuilder {
     /// that rewrites it does, reuses their memory.
     pub fn rebuild<'ast>(
         self,
-        chunk: &'ast Chunk<'ast>,
+        chunk: &'ast Block<'ast>,
         mut scoping: Scoping,
     ) -> SemanticBuilderReturn<'ast> {
         scoping.reset(self.counts);
@@ -105,7 +105,7 @@ impl SemanticBuilder {
 
     fn build_into<'ast>(
         self,
-        chunk: &'ast Chunk<'ast>,
+        chunk: &'ast Block<'ast>,
         scoping: Scoping,
     ) -> SemanticBuilderReturn<'ast> {
         let counts = self.counts;
@@ -136,7 +136,7 @@ impl SemanticBuilder {
             scratch_nodes: Vec::new(),
             deferred_writes: Vec::new(),
         };
-        builder.visit_chunk(chunk);
+        builder.chunk(chunk);
         builder.finish()
     }
 }
@@ -269,6 +269,49 @@ impl<'ast> Builder<'ast> {
         node
     }
 
+    /// The node of a name a statement declares, which holds its annotation.
+    fn typed_name_node(&mut self, typed_name: &'ast TypedName<'ast>) -> NodeId {
+        let node = self.enter(AstKind::TypedName(typed_name));
+        self.name_node(&typed_name.name);
+        if let Some(annotation) = &typed_name.type_annotation {
+            self.visit_type(annotation);
+        }
+        self.leave();
+        node
+    }
+
+    /// The nodes of names a statement declares, kept in the scratch nodes
+    /// from the index it returns until [`Self::declare_typed_names`] binds
+    /// them.
+    fn typed_name_nodes(&mut self, typed_names: &'ast [TypedName<'ast>]) -> usize {
+        let first = self.scratch_nodes.len();
+        for typed_name in typed_names {
+            let node = self.typed_name_node(typed_name);
+            self.scratch_nodes.push(node);
+        }
+        first
+    }
+
+    /// Binds `typed_names` in the current scope, each to the node
+    /// [`Self::typed_name_nodes`] kept for it from `first`.
+    fn declare_typed_names(
+        &mut self,
+        typed_names: &[TypedName<'_>],
+        first: usize,
+        kind: SymbolKind,
+        is_exported: bool,
+        is_read_only: bool,
+    ) {
+        for (i, typed_name) in typed_names.iter().enumerate() {
+            let node = self.scratch_nodes[first + i];
+            if let Some(symbol) = self.declare_name(&typed_name.name, kind, node) {
+                symbol.is_exported = is_exported;
+                symbol.is_read_only = is_read_only;
+            }
+        }
+        self.scratch_nodes.truncate(first);
+    }
+
     fn intern(&mut self, text: &str) -> NameId {
         let id = self.scoping.intern(text);
         if self.bindings.len() <= id.index() {
@@ -280,13 +323,7 @@ impl<'ast> Builder<'ast> {
     fn push_scope(&mut self, kind: ScopeKind, node: NodeId) {
         let id = self.scoping.next_scope_id();
         let function = if kind == ScopeKind::Function { id } else { self.current_function };
-        self.scoping.add_scope(Scope {
-            parent: Some(self.current_scope),
-            kind,
-            function,
-            node,
-            has_vararg_read: false,
-        });
+        self.scoping.add_scope(Scope { parent: Some(self.current_scope), kind, function, node });
         self.outer_scopes.push(OuterScope {
             scope: mem::replace(&mut self.current_scope, id),
             function: mem::replace(&mut self.current_function, function),
@@ -442,6 +479,20 @@ impl<'ast> Builder<'ast> {
         }
     }
 
+    /// The chunk's block, which opens the module's scope.
+    fn chunk(&mut self, chunk: &'ast Block<'ast>) {
+        let node = self.enter(AstKind::Block(chunk));
+        let module = self.current_scope;
+        self.scoping.add_scope(Scope {
+            parent: None,
+            kind: ScopeKind::Module,
+            function: module,
+            node,
+        });
+        self.walk_stmts(chunk);
+        self.leave();
+    }
+
     /// A block whose scope its parent has opened.
     fn block(&mut self, block: &'ast Block<'ast>) {
         self.enter(AstKind::Block(block));
@@ -478,16 +529,7 @@ impl<'ast> Builder<'ast> {
         if let Some(generics) = &body.generics {
             self.visit_generic_type_list(generics);
         }
-        let first_param = self.scratch_nodes.len();
-        for param in &body.params {
-            let node = self.enter(AstKind::Parameter(param));
-            self.name_node(&param.name);
-            if let Some(annotation) = &param.type_annotation {
-                self.visit_type(annotation);
-            }
-            self.leave();
-            self.scratch_nodes.push(node);
-        }
+        let first_param = self.typed_name_nodes(&body.params);
         if let Some(vararg) = &body.vararg {
             self.visit_var_arg_param(vararg);
         }
@@ -511,11 +553,7 @@ impl<'ast> Builder<'ast> {
             let span = Span::new(body.span.start, body.span.start);
             self.declare("self", span, SymbolKind::ImplicitSelf, body_node);
         }
-        for (i, param) in body.params.iter().enumerate() {
-            let node = self.scratch_nodes[first_param + i];
-            self.declare_name(&param.name, SymbolKind::Parameter, node);
-        }
-        self.scratch_nodes.truncate(first_param);
+        self.declare_typed_names(&body.params, first_param, SymbolKind::Parameter, false, false);
         self.block(&body.block);
         self.pop_scope();
         if own_symbol.is_some() {
@@ -534,20 +572,6 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
 
     #[inline]
     fn leave_node(&mut self, _kind: AstKind<'ast>) {
-        self.leave();
-    }
-
-    fn visit_chunk(&mut self, chunk: &'ast Chunk<'ast>) {
-        let node = self.enter(AstKind::Chunk(chunk));
-        let module = self.current_scope;
-        self.scoping.add_scope(Scope {
-            parent: None,
-            kind: ScopeKind::Module,
-            function: module,
-            node,
-            has_vararg_read: false,
-        });
-        self.block(&chunk.block);
         self.leave();
     }
 
@@ -573,8 +597,6 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
         if let Expression::Name(name) = expr {
             self.reference_name(name, ReferenceKind::Read);
-        } else if let Expression::VarArg(_) = expr {
-            self.scoping.mark_vararg_read(self.current_function);
         } else {
             self.walk_expr(expr);
         }
@@ -648,28 +670,18 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     /// Annotations and values can't see the names being declared.
     fn visit_local_assignment(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
         self.enter(AstKind::LocalAssignment(local_assignment));
-        let first_name = self.scratch_nodes.len();
-        for local_name in &local_assignment.names {
-            let node = self.enter(AstKind::LocalName(local_name));
-            self.name_node(&local_name.name);
-            if let Some(annotation) = &local_name.type_annotation {
-                self.visit_type(annotation);
-            }
-            self.leave();
-            self.scratch_nodes.push(node);
-        }
+        let first_name = self.typed_name_nodes(&local_assignment.names);
         for expr in &local_assignment.exprs {
             self.visit_expr(expr);
         }
         let kind = local_assignment.kind;
-        for (i, local_name) in local_assignment.names.iter().enumerate() {
-            let node = self.scratch_nodes[first_name + i];
-            if let Some(symbol) = self.declare_name(&local_name.name, SymbolKind::Local, node) {
-                symbol.is_exported = kind.is_exported();
-                symbol.is_read_only = kind.is_const();
-            }
-        }
-        self.scratch_nodes.truncate(first_name);
+        self.declare_typed_names(
+            &local_assignment.names,
+            first_name,
+            SymbolKind::Local,
+            kind.is_exported(),
+            kind.is_const(),
+        );
         self.leave();
     }
 
@@ -781,17 +793,15 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     /// The loop variable binds after the header.
     fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
         let node = self.enter(AstKind::NumericFor(numeric_for));
-        self.name_node(&numeric_for.name);
-        if let Some(annotation) = &numeric_for.type_annotation {
-            self.visit_type(annotation);
-        }
+        let variable = self.typed_name_node(&numeric_for.variable);
         self.visit_expr(&numeric_for.start);
         self.visit_expr(&numeric_for.limit);
         if let Some(step) = &numeric_for.step {
             self.visit_expr(step);
         }
         self.push_scope(ScopeKind::Loop, node);
-        self.declare_name(&numeric_for.name, SymbolKind::NumericForVariable, node);
+        let kind = SymbolKind::NumericForVariable;
+        self.declare_name(&numeric_for.variable.name, kind, variable);
         self.loops.push(LoopFrame::WhileOrFor);
         self.block(&numeric_for.block);
         self.loops.pop();
@@ -802,25 +812,13 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
     /// Annotations and iterator expressions can't see the loop variables.
     fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
         let node = self.enter(AstKind::GenericFor(generic_for));
-        let first_name = self.scratch_nodes.len();
-        for binding in &generic_for.names {
-            let param = self.enter(AstKind::Parameter(binding));
-            self.name_node(&binding.name);
-            if let Some(annotation) = &binding.type_annotation {
-                self.visit_type(annotation);
-            }
-            self.leave();
-            self.scratch_nodes.push(param);
-        }
+        let first_name = self.typed_name_nodes(&generic_for.names);
         for expr in &generic_for.exprs {
             self.visit_expr(expr);
         }
         self.push_scope(ScopeKind::Loop, node);
-        for (i, binding) in generic_for.names.iter().enumerate() {
-            let declaration = self.scratch_nodes[first_name + i];
-            self.declare_name(&binding.name, SymbolKind::IteratorVariable, declaration);
-        }
-        self.scratch_nodes.truncate(first_name);
+        let kind = SymbolKind::IteratorVariable;
+        self.declare_typed_names(&generic_for.names, first_name, kind, false, false);
         self.loops.push(LoopFrame::WhileOrFor);
         self.block(&generic_for.block);
         self.loops.pop();

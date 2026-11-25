@@ -3,9 +3,8 @@ use std::ptr;
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement};
 use luck_stdlib::{
-    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, library_for,
+    StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, Variant, library_for,
 };
-use luck_token::Variant;
 
 use crate::common::{all_libraries, expand, luau, parse, roblox};
 
@@ -256,7 +255,7 @@ fn roblox_entries_absent_from_luau() {
 }
 
 #[test]
-fn loadstring_present_on_both_targets() {
+fn loadstring_present_on_both_variants() {
     assert!(luau().lookup(&["loadstring"]).is_some(), "loadstring exists in the Luau CLI");
     assert!(
         roblox().lookup(&["loadstring"]).is_some(),
@@ -308,7 +307,7 @@ fn roblox_task_replacements_change_scheduling() {
 }
 
 #[test]
-fn core_luau_entries_on_both_targets() {
+fn core_luau_entries_on_both_variants() {
     let checks: &[&[&str]] = &[
         &["typeof"],
         &["gcinfo"],
@@ -770,7 +769,7 @@ where
     let source = format!("return {text}");
     let allocator = Allocator::new();
     let chunk = parse(&allocator, &source);
-    let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
+    let [Statement::Return(return_stmt)] = &*chunk.stmts else {
         panic!("{text} must parse as a return");
     };
     is_expected(return_stmt.exprs.first().expect("one returned value"))

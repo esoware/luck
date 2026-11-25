@@ -13,7 +13,7 @@ use luck_token::Span;
 use crate::document::{DocumentState, span_text};
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
-    outline(document, &document.parse().chunk.block)
+    outline(document, &document.parse().chunk)
 }
 
 fn outline(document: &DocumentState, block: &Block<'_>) -> Vec<DocumentSymbol> {

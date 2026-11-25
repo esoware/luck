@@ -260,8 +260,7 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 #[cfg(test)]
 mod tests {
     use luck_diagnostics::Severity;
-    use luck_stdlib::library_for;
-    use luck_token::Variant;
+    use luck_stdlib::{Variant, library_for};
 
     use super::*;
     use crate::config::{LintConfig, RuleLevel};

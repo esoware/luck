@@ -21,14 +21,12 @@ InterpolatedString: size 56, align 8
 InterpolatedSegment: size 48, align 8
 TypeCast: size 40, align 8
 FunctionBody: size 72, align 8
-Parameter: size 32, align 8
 VarArgParam: size 16, align 8
 FunctionAttribute: size 48, align 8
 Name: size 24, align 4
 NumberLiteral: size 32, align 8
 IntegerLiteral: size 32, align 8
 StringLiteral: size 32, align 4
-Chunk: size 24, align 8
 Block: size 24, align 8
 Statement: size 16, align 8
 Assignment: size 40, align 8
@@ -44,7 +42,7 @@ FunctionName: size 48, align 8
 FunctionDecl: size 144, align 8
 LocalFunction: size 128, align 8
 LocalFunctionKind: size 1, align 1
-LocalName: size 32, align 8
+TypedName: size 32, align 8
 LocalAssignment: size 48, align 8
 LocalAssignmentKind: size 1, align 1
 ReturnStatement: size 24, align 8

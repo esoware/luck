@@ -26,20 +26,18 @@ use std::fmt::Write as _;
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
     Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, LocalFunction,
-    LocalFunctionKind, LocalName, Name, Statement, Type, Var, Visit, VisitMut,
+    LocalFunctionKind, Name, Statement, Type, TypedName, Var, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{NameId, Scoping, SymbolId};
-use luck_token::MAX_ACTIVE_LOCALS;
+use luck_token::{MAX_ACTIVE_LOCALS, MAX_REGISTERS};
 use rustc_hash::FxHashMap;
 
 use super::Compressor;
 use super::merge_locals::{declared_count, is_bare_local};
 use super::simplify_statements::ends_in_block_end;
 use crate::binding::{METHOD_RECEIVER_NAME, NameIndexes, has_fixed_binding};
-use crate::limits::{
-    MAX_REGISTERS, NUMERIC_FOR_REGISTERS, generic_for_registers, parameter_locals,
-};
+use crate::limits::{NUMERIC_FOR_REGISTERS, generic_for_registers, parameter_locals};
 use crate::transform_config::TransformConfig;
 
 /// Bytes a lifted declaration saves, its `local `, and what a `do` block
@@ -206,7 +204,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
 
     /// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none
     /// count as distinct.
-    fn has_distinct_names(&self, names: &[LocalName<'_>]) -> bool {
+    fn has_distinct_names(&self, names: &[TypedName<'_>]) -> bool {
         names.len() <= MAX_ACTIVE_LOCALS
             && names.iter().enumerate().all(|(i, local_name)| {
                 let name = self.name_of(&local_name.name);
@@ -330,7 +328,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                 }
                 Statement::NumericFor(numeric_for) => {
                     let open_loop = self.open_names.len();
-                    self.open(&numeric_for.name);
+                    self.open(&numeric_for.variable.name);
                     self.collect_block(&numeric_for.block);
                     self.close_names(open_loop);
                 }
@@ -432,7 +430,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         let mut names = List::with_capacity_in(self.hoisted.len(), allocator);
         for &hoisted in &self.hoisted {
             let name = Name::new(hoisted.into(), Some(self.name_indexes.next()), span);
-            names.push(LocalName::new(name, None), allocator);
+            names.push(TypedName::new(name, None), allocator);
         }
         let declaration = Statement::new_local_assignment(
             span,
@@ -687,10 +685,9 @@ impl<'tree> Visit<'tree> for ExprCounter {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::MAX_ACTIVE_LOCALS;
+    use luck_token::{MAX_ACTIVE_LOCALS, MAX_REGISTERS};
 
     use crate::fixtures::{NO_PASSES, assert_outputs, minify_with};
-    use crate::limits::MAX_REGISTERS;
     use crate::transform_config::TransformConfig;
 
     const LIFTING: TransformConfig = TransformConfig { lift_locals: true, ..NO_PASSES };

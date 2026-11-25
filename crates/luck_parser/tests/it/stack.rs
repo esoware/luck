@@ -35,6 +35,6 @@ fn parsing_and_comparing_fit_the_smallest_stack() {
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         let other_allocator = Allocator::new();
         let again = luck_parser::parse(&other_allocator, source.as_bytes());
-        assert!(again.chunk.block == parsed.chunk.block, "a reparse equals the first parse");
+        assert!(again.chunk == parsed.chunk, "a reparse equals the first parse");
     });
 }

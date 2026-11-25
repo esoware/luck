@@ -14,9 +14,9 @@ use luck_linter::{FixKind, Linter};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticBuilder;
-use luck_stdlib::library_for;
+use luck_stdlib::{Variant, library_for};
 use luck_testgen::tree_shape;
-use luck_token::{LineIndex, Variant};
+use luck_token::LineIndex;
 
 use crate::snapshot::{LintLine, TestResult};
 use crate::suite::SuiteFile;

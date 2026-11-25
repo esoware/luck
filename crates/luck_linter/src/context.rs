@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::{iter, ptr};
 
 use luck_ast::{
-    AstKind, Block, Call, Chunk, Expression, GetSpan as _, LocalAssignment, Name, Suffix,
+    AstKind, Block, Call, Expression, GetSpan as _, LocalAssignment, Name, Suffix,
     SuffixedExpression, Var,
 };
 use luck_parser::Groupings;
@@ -24,7 +24,7 @@ use crate::local_flow::LocalFlow;
 /// rule that asks.
 #[derive(Debug)]
 pub(crate) struct ContextHost<'ast> {
-    pub chunk: &'ast Chunk<'ast>,
+    pub chunk: &'ast Block<'ast>,
     pub semantic: &'ast SemanticAnalysis<'ast>,
     pub nodes: &'ast AstNodes<'ast>,
     pub directives: &'ast Directives,
@@ -101,10 +101,7 @@ impl<'ast> ContextHost<'ast> {
     /// The block of the function or chunk that opens `function`.
     fn function_block(&self, function: ScopeId) -> Option<&'ast Block<'ast>> {
         let opener = self.nodes.kind(self.scoping().scope(function).node);
-        if let AstKind::FunctionBody(body) = opener {
-            return Some(&body.block);
-        }
-        opener.as_chunk().map(|chunk| &chunk.block)
+        if let AstKind::FunctionBody(body) = opener { Some(&body.block) } else { opener.as_block() }
     }
 
     pub(crate) fn local_flow(&self) -> &LocalFlow {
@@ -192,7 +189,7 @@ impl<'ast> ContextHost<'ast> {
         &self,
         symbol: &Symbol,
     ) -> Option<(&'ast LocalAssignment<'ast>, usize)> {
-        let (AstKind::LocalName(local_name), Some(AstKind::LocalAssignment(local))) =
+        let (AstKind::TypedName(local_name), Some(AstKind::LocalAssignment(local))) =
             (self.nodes.kind(symbol.declaration), self.nodes.parent_kind(symbol.declaration))
         else {
             return None;

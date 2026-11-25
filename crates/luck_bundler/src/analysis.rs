@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, GetSpan as _, TreeCounts};
+use luck_ast::{Block, GetSpan as _, TreeCounts};
 use luck_diagnostics::Diagnostic;
 use luck_semantic::SemanticBuilder;
 use luck_token::Span;
@@ -45,7 +45,7 @@ pub(crate) struct Analysis<'ast> {
 /// reads, which the emitters move and rewrite.
 pub(crate) fn analyze<'ast>(
     allocator: &'ast Allocator,
-    chunk: &Chunk<'_>,
+    chunk: &Block<'_>,
     counts: TreeCounts,
     source: &'ast [u8],
     dynamic_require: DynamicRequire,
@@ -105,7 +105,7 @@ pub(crate) fn analyze<'ast>(
     }
     diags.sort_by_key(|diag| diag.span.map(|span| span.start));
 
-    Analysis { requires, diags, exports: Exports::new(&chunk.block, scoping, source) }
+    Analysis { requires, diags, exports: Exports::new(chunk, scoping, source) }
 }
 
 #[cfg(test)]

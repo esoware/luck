@@ -227,7 +227,7 @@ mod tests {
         let allocator = Allocator::new();
         let source = "return (a + b) - c, x .. (y .. z), (a * b) + c";
         let chunk = compressed(&allocator, source, PARENS);
-        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
+        let [Statement::Return(return_stmt)] = &*chunk.stmts else {
             panic!("expected a return");
         };
         let depths: Vec<usize> = return_stmt.exprs.iter().map(expr_nesting_depth).collect();

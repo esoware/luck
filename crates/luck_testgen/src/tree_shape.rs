@@ -9,10 +9,10 @@
 //! literal under `-` from reading as a negative literal.
 
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList, GenericTypeParam, IfStatement,
-    LocalName, Name, Parameter, Statement, StringLiteral, Suffix, SuffixedExpression,
-    TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue, TypeField, Var,
+    BinaryLink, BinaryOp, Block, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
+    FunctionName, FunctionTypeParam, GenericTypeList, GenericTypeParam, IfStatement, Name,
+    Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs,
+    TypeDeclaration, TypeDeclarationValue, TypeField, TypedName, Var,
 };
 use luck_token::{Associativity, UnOp};
 
@@ -21,9 +21,9 @@ use luck_token::{Associativity, UnOp};
 /// Two trees print the same when a printer may turn one into the other, so
 /// comparing a tree with the parse of its printed output checks that the
 /// printer kept its meaning.
-pub fn tree_shape(chunk: &Chunk<'_>) -> String {
+pub fn tree_shape(chunk: &Block<'_>) -> String {
     let mut printer = Printer { output: String::new(), depth: 0 };
-    printer.block(&chunk.block);
+    printer.block(chunk);
     printer.output
 }
 
@@ -93,8 +93,8 @@ impl Printer {
             }
             Statement::IfStatement(if_statement) => self.if_statement(if_statement),
             Statement::NumericFor(numeric_for) => {
-                self.open(&format!("NumericFor {}", numeric_for.name.text));
-                self.optional_type(numeric_for.type_annotation.as_deref());
+                self.open("NumericFor");
+                self.typed_name(&numeric_for.variable);
                 self.expr(&numeric_for.start);
                 self.expr(&numeric_for.limit);
                 if let Some(step) = &numeric_for.step {
@@ -106,7 +106,7 @@ impl Printer {
             Statement::GenericFor(generic_for) => {
                 self.open("GenericFor");
                 for name in &generic_for.names {
-                    self.parameter(name);
+                    self.typed_name(name);
                 }
                 self.exprs("in", &generic_for.exprs);
                 self.block(&generic_for.block);
@@ -127,7 +127,9 @@ impl Printer {
             }
             Statement::LocalAssignment(assignment) => {
                 self.open(&format!("LocalAssignment {:?}", assignment.kind));
-                self.local_names(&assignment.names);
+                for name in &assignment.names {
+                    self.typed_name(name);
+                }
                 self.exprs("values", &assignment.exprs);
                 self.close();
             }
@@ -414,7 +416,7 @@ impl Printer {
         self.open("FunctionBody");
         self.generic_type_list(body.generics.as_deref());
         for param in &body.params {
-            self.parameter(param);
+            self.typed_name(param);
         }
         if let Some(vararg) = &body.vararg {
             self.open("VarArgParam");
@@ -430,18 +432,10 @@ impl Printer {
         self.close();
     }
 
-    fn parameter(&mut self, param: &Parameter<'_>) {
-        self.open(&format!("Parameter {}", param.name.text));
-        self.optional_type(param.type_annotation.as_deref());
+    fn typed_name(&mut self, typed_name: &TypedName<'_>) {
+        self.open(&format!("TypedName {}", typed_name.name.text));
+        self.optional_type(typed_name.type_annotation.as_deref());
         self.close();
-    }
-
-    fn local_names(&mut self, names: &[LocalName<'_>]) {
-        for name in names {
-            self.open(&format!("name {}", name.name.text));
-            self.optional_type(name.type_annotation.as_deref());
-            self.close();
-        }
     }
 
     fn attributes(&mut self, attributes: &[FunctionAttribute<'_>]) {

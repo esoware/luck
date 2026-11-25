@@ -105,7 +105,7 @@ return results
 }
 
 #[test]
-fn captured_upvalue_renames_to_valid_lua() {
+fn captured_upvalue_renames_to_valid_luau() {
     let source = "\
 local x = 1
 local function inner()

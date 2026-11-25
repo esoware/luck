@@ -184,10 +184,10 @@ function table.foo() end",
         ("my_module_state = 5", None, None),
         (
             "\
-vim = 5
-vim.api = 1",
+app = 5
+app.api = 1",
             None,
-            Some(r#"{"extra_globals": ["vim"]}"#),
+            Some(r#"{"extra_globals": ["app"]}"#),
         ),
         // `table` is a stdlib name, so only the `extra_globals` entry keeps these
         // writes quiet.

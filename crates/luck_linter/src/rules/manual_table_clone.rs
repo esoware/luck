@@ -106,7 +106,7 @@ fn is_numeric_copy(
 ) -> bool {
     let tree = context.scoping();
     let (Some(source_table), Some(index)) =
-        (length_of_name(&numeric_for.limit), tree.symbol_of(&numeric_for.name))
+        (length_of_name(&numeric_for.limit), tree.symbol_of(&numeric_for.variable.name))
     else {
         return false;
     };

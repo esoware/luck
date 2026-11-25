@@ -339,16 +339,16 @@ fn a_change_to_an_extended_config_reloads_and_another_json_file_does_not() {
 
     let mut client = Client::start();
     client.open(&uri, "local count = 1\n");
-    assert_eq!(rename_refusal(&mut client, &uri, "vim"), None, "`vim` isn't configured yet");
+    assert_eq!(rename_refusal(&mut client, &uri, "app"), None, "`app` isn't configured yet");
 
-    fs::write(&base, r#"{ "lint": { "extra_globals": ["vim"] } }"#).expect("rewrite base.json");
+    fs::write(&base, r#"{ "lint": { "extra_globals": ["app"] } }"#).expect("rewrite base.json");
     let sourcemap = directory.path().join("sourcemap.json");
     fs::write(&sourcemap, "{}").expect("write sourcemap.json");
     client.file_changed(&sourcemap, FileChangeType::CHANGED);
-    assert_eq!(rename_refusal(&mut client, &uri, "vim"), None, "the sourcemap isn't settings");
+    assert_eq!(rename_refusal(&mut client, &uri, "app"), None, "the sourcemap isn't settings");
 
     client.file_changed(&base, FileChangeType::CHANGED);
-    assert!(rename_refusal(&mut client, &uri, "vim").is_some(), "the base's change took effect");
+    assert!(rename_refusal(&mut client, &uri, "app").is_some(), "the base's change took effect");
 }
 
 #[test]
@@ -1444,7 +1444,7 @@ fn a_vscode_windows_uri_finds_its_project_settings() {
 #[test]
 fn rename_refuses_a_configured_extra_global() {
     let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["vim"] } }"#)
+    fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["app"] } }"#)
         .expect("write luck.json");
     let path = directory.path().join("main.lua");
     fs::write(&path, "local count = 1\n").expect("write main.lua");
@@ -1453,8 +1453,8 @@ fn rename_refuses_a_configured_extra_global() {
     let mut client = Client::start();
     client.open(&uri, "local count = 1\n");
 
-    let refusal = rename_refusal(&mut client, &uri, "vim").expect("`vim` is configured");
-    assert!(refusal.contains("`vim` would shadow"), "{refusal}");
+    let refusal = rename_refusal(&mut client, &uri, "app").expect("`app` is configured");
+    assert!(refusal.contains("`app` would shadow"), "{refusal}");
     assert_eq!(rename_refusal(&mut client, &uri, "total"), None);
 }
 
@@ -1469,55 +1469,55 @@ fn watched_config_change_reseeds_open_documents_with_extra_globals() {
 
     let mut client = Client::start();
     client.open(&uri, "local count = 1\n");
-    assert_eq!(rename_refusal(&mut client, &uri, "vim"), None, "`vim` isn't configured yet");
+    assert_eq!(rename_refusal(&mut client, &uri, "app"), None, "`app` isn't configured yet");
 
-    fs::write(&config_path, r#"{ "lint": { "extra_globals": ["vim"] } }"#)
+    fs::write(&config_path, r#"{ "lint": { "extra_globals": ["app"] } }"#)
         .expect("rewrite luck.json");
     client.file_changed(&config_path, FileChangeType::CHANGED);
-    assert!(rename_refusal(&mut client, &uri, "vim").is_some(), "the config change took effect");
+    assert!(rename_refusal(&mut client, &uri, "app").is_some(), "the config change took effect");
 }
 
 #[test]
 fn a_std_definition_reaches_lints_and_hover_and_an_edit_to_it_reseeds_them() {
-    let love = r#"
-[globals.love]
+    let app = r#"
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.graphics]
+[globals.app.members.graphics]
 kind = "namespace"
 
-[globals.love.members.graphics.members.print]
+[globals.app.members.graphics.members.print]
 kind = "function"
 params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
 "#;
     let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("luck.json"), r#"{ "std": ["love.toml"] }"#)
+    fs::write(directory.path().join("luck.json"), r#"{ "std": ["app.toml"] }"#)
         .expect("write luck.json");
-    let std_path = directory.path().join("love.toml");
-    fs::write(&std_path, love).expect("write love.toml");
+    let std_path = directory.path().join("app.toml");
+    fs::write(&std_path, app).expect("write app.toml");
     let path = directory.path().join("main.lua");
-    let text = "love.graphics.print('hello')\n";
+    let text = "app.graphics.print('hello')\n";
     fs::write(&path, text).expect("write main.lua");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let mut client = Client::start();
     client.open(&uri, text);
     let diags = client.diagnostics(&uri, Some(1));
-    let arity = "`love.graphics.print` requires at least 3 argument(s), got 1";
+    let arity = "`app.graphics.print` requires at least 3 argument(s), got 1";
     assert!(diags.iter().any(|diag| diag.message == arity), "{diags:?}");
     let hover = client
         .request::<HoverRequest>(HoverParams {
             text_document_position_params: position_params(&uri, 0, 16),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .expect("cursor on love.graphics.print should hover");
+        .expect("cursor on app.graphics.print should hover");
     let HoverContents::Markup(markup) = hover.contents else {
         panic!("hover should return markup contents");
     };
-    assert!(markup.value.contains("love.graphics.print"), "{}", markup.value);
+    assert!(markup.value.contains("app.graphics.print"), "{}", markup.value);
 
-    fs::write(&std_path, love.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
-        .expect("rewrite love.toml");
+    fs::write(&std_path, app.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
+        .expect("rewrite app.toml");
     client.file_changed(&std_path, FileChangeType::CHANGED);
     let reseeded = client.diagnostics(&uri, Some(1));
     assert!(reseeded.iter().all(|diag| diag.message != arity), "{reseeded:?}");

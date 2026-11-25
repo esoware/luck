@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
-use luck_token::Variant;
 
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_definition::{
@@ -14,6 +13,7 @@ use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };
+use crate::variant::Variant;
 
 /// `definition` layered over `base`, as [`Stdlib::layer`](crate::Stdlib::layer)
 /// describes, in `allocator`.

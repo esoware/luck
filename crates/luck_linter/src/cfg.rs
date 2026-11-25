@@ -458,7 +458,7 @@ mod tests {
     use crate::fixtures::with_host;
 
     fn flow(source: &str) -> FlowGraph {
-        with_host(source, |host| FlowGraph::of_block(&host.chunk.block, host))
+        with_host(source, |host| FlowGraph::of_block(host.chunk, host))
     }
 
     #[test]
@@ -646,7 +646,7 @@ return 2",
     #[test]
     fn continue_of_the_analyzed_block_ends_it() {
         let reaches_end = with_host("for _ = 1, 3 do continue end", |host| {
-            let Some(Statement::NumericFor(numeric_for)) = host.chunk.block.stmts.first() else {
+            let Some(Statement::NumericFor(numeric_for)) = host.chunk.stmts.first() else {
                 panic!("the statement must be a numeric for");
             };
             FlowGraph::of_block(&numeric_for.block, host).reaches(Exit::End)
@@ -657,7 +657,7 @@ return 2",
     #[test]
     fn break_of_the_analyzed_block_leaves_it() {
         let graph = with_host("while true do if x then break end end", |host| {
-            let Some(Statement::WhileLoop(while_loop)) = host.chunk.block.stmts.first() else {
+            let Some(Statement::WhileLoop(while_loop)) = host.chunk.stmts.first() else {
                 panic!("the statement must be a while loop");
             };
             FlowGraph::of_block(&while_loop.block, host)
@@ -710,9 +710,9 @@ return 2",
         ];
         for source in sources {
             with_host(source, |host| {
-                let graph = FlowGraph::of_block(&host.chunk.block, host);
+                let graph = FlowGraph::of_block(host.chunk, host);
                 let mut bodies = LoopBodies::default();
-                bodies.visit_block(&host.chunk.block);
+                bodies.visit_block(host.chunk);
                 assert!(!bodies.0.is_empty(), "{source}");
                 for (start, body) in bodies.0 {
                     let alone = FlowGraph::of_block(body, host).exits();

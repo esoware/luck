@@ -2,13 +2,13 @@ use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_codegen::LiteralSpelling;
-use luck_testgen::{luau_fixtures, tree_shape};
+use luck_testgen::{source_fixtures, tree_shape};
 
 #[test]
 fn every_fixture_compacts_to_output_that_compacts_to_itself() {
     let mut report = String::new();
     let mut round_trip_count = 0;
-    for fixture in luau_fixtures() {
+    for fixture in source_fixtures() {
         if fixture.is_error {
             continue;
         }

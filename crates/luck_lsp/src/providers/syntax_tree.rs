@@ -133,7 +133,7 @@ impl fmt::Write for PrettyDump {
 #[cfg(test)]
 mod tests {
     use luck_ast::MAX_NESTING_DEPTH;
-    use luck_testgen::{generate_full_grammar, luau_fixtures, on_the_smallest_stack};
+    use luck_testgen::{generate_full_grammar, on_the_smallest_stack, source_fixtures};
 
     use super::*;
     use crate::fixtures::document;
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn a_dump_lays_the_tree_out_as_pretty_debug_does() {
         let mut sources: Vec<String> =
-            luau_fixtures().into_iter().map(|fixture| fixture.source).collect();
+            source_fixtures().into_iter().map(|fixture| fixture.source).collect();
         sources.extend((0..20).map(|seed| generate_full_grammar(seed, 25)));
         for text in sources {
             let document = document(&text);

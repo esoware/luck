@@ -4,16 +4,16 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
-    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, IfExpression,
-    IfStatement, IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType,
-    LocalAssignment, LocalFunction, LocalName, MethodCall, Name, NamedType, NumberLiteral,
-    NumericFor, OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
-    ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
-    TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField,
-    TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
+    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
+    GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, IfExpression, IfStatement,
+    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
+    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
+    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
+    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType,
+    UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 impl GetSpan for Expression<'_> {
@@ -183,17 +183,6 @@ impl GetSpan for FunctionBody<'_> {
     }
 }
 
-impl GetSpan for Parameter<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        let mut span = self.name.span();
-        if let Some(ty) = &self.type_annotation {
-            span = span.merge(ty.span());
-        }
-        span
-    }
-}
-
 impl GetSpan for VarArgParam<'_> {
     #[inline]
     fn span(&self) -> Span {
@@ -233,13 +222,6 @@ impl GetSpan for StringLiteral<'_> {
     #[inline]
     fn span(&self) -> Span {
         self.span
-    }
-}
-
-impl GetSpan for Chunk<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.block.span()
     }
 }
 
@@ -356,7 +338,7 @@ impl GetSpan for LocalFunction<'_> {
     }
 }
 
-impl GetSpan for LocalName<'_> {
+impl GetSpan for TypedName<'_> {
     #[inline]
     fn span(&self) -> Span {
         let mut span = self.name.span();

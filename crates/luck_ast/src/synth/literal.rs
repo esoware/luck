@@ -30,17 +30,6 @@ impl<'ast> Synth<'ast> {
         if value.is_sign_negative() { self.unary_op(UnOp::Neg, literal) } else { literal }
     }
 
-    /// The double nearest to `value`, which rounds one outside
-    /// `[-2^53, 2^53]`, as [`Synth::number_f64`] builds it. For the exact
-    /// integer type, use [`Synth::integer_i64`].
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the nearest double is the number a numeral of `value` reads as"
-    )]
-    pub fn number_i64(&self, value: i64) -> Expression<'ast> {
-        self.number_f64(value as f64)
-    }
-
     /// An exact 64-bit integer literal, which prints as hex when it's
     /// negative, as the bit pattern a literal can't carry a sign for.
     pub fn integer_i64(&self, value: i64) -> Expression<'ast> {
@@ -176,24 +165,6 @@ mod tests {
             assert_eq!(number_value(&division.first).to_bits(), 0.0f64.to_bits());
             assert_eq!(number_value(&link.operand).to_bits(), 0.0f64.to_bits());
         }
-    }
-
-    #[test]
-    fn number_i64_builds_the_nearest_double() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth();
-        assert_eq!(number_value(&synth.number_i64(42)), 42.0);
-        let Expression::UnaryOp(negated) = synth.number_i64(-7) else {
-            panic!("expected a negation");
-        };
-        assert_eq!(number_value(&negated.operand), 7.0);
-        let Expression::UnaryOp(negated_min) = synth.number_i64(i64::MIN) else {
-            panic!("expected a negation");
-        };
-        assert_eq!(number_value(&negated_min.operand), 9_223_372_036_854_775_808.0);
-        // 2^53 + 1, the first integer a double can't hold.
-        let rounded = number_value(&synth.number_i64(0x20_0000_0000_0001));
-        assert_eq!(rounded, 9_007_199_254_740_992.0);
     }
 
     #[test]

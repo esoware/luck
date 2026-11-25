@@ -5,17 +5,17 @@ use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
 use luck_token::{BinOp, CompoundOp, Span, UnOp};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
-    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, LocalName, MethodCall, Name, NameIndex,
-    NamedType, NumberLiteral, NumericFor, OneOrMore, OptionalType, Parameter,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
-    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp,
-    UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
+    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
+    GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement, IntegerLiteral,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NameIndex, NamedType,
+    NumberLiteral, NumericFor, OneOrMore, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
+    TypeField, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType,
+    WhileLoop,
 };
 
 impl<'ast> Expression<'ast> {
@@ -448,7 +448,7 @@ impl<'ast> FunctionBody<'ast> {
     pub const fn new(
         span: Span,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, Parameter<'ast>>,
+        params: List<'ast, TypedName<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
         return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
@@ -460,20 +460,13 @@ impl<'ast> FunctionBody<'ast> {
     pub fn boxed(
         span: Span,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, Parameter<'ast>>,
+        params: List<'ast, TypedName<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
         return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
         Box::new_in(Self::new(span, generics, params, vararg, return_type, block), allocator)
-    }
-}
-
-impl<'ast> Parameter<'ast> {
-    #[inline]
-    pub const fn new(name: Name<'ast>, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
-        Self { name, type_annotation }
     }
 }
 
@@ -573,13 +566,6 @@ impl<'ast> StringLiteral<'ast> {
     }
 }
 
-impl<'ast> Chunk<'ast> {
-    #[inline]
-    pub const fn new(block: Block<'ast>) -> Self {
-        Self { block }
-    }
-}
-
 impl<'ast> Block<'ast> {
     #[inline]
     pub const fn new(span: Span, stmts: List<'ast, Statement<'ast>>) -> Self {
@@ -653,33 +639,22 @@ impl<'ast> Statement<'ast> {
     }
 
     #[inline]
-    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
     pub fn new_numeric_for(
         span: Span,
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::NumericFor(NumericFor::boxed(
-            span,
-            name,
-            type_annotation,
-            start,
-            limit,
-            step,
-            block,
-            allocator,
-        ))
+        Self::NumericFor(NumericFor::boxed(span, variable, start, limit, step, block, allocator))
     }
 
     #[inline]
     pub fn new_generic_for(
         span: Span,
-        names: List<'ast, Parameter<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
@@ -722,7 +697,7 @@ impl<'ast> Statement<'ast> {
     #[inline]
     pub fn new_local_assignment(
         span: Span,
-        names: List<'ast, LocalName<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
         allocator: &'ast Allocator,
@@ -885,29 +860,26 @@ impl<'ast> NumericFor<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
     ) -> Self {
-        Self { span, name, type_annotation, start, limit, step, block }
+        Self { span, variable, start, limit, step, block }
     }
 
     #[inline]
-    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
     pub fn boxed(
         span: Span,
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name, type_annotation, start, limit, step, block), allocator)
+        Box::new_in(Self::new(span, variable, start, limit, step, block), allocator)
     }
 }
 
@@ -915,7 +887,7 @@ impl<'ast> GenericFor<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
-        names: List<'ast, Parameter<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         block: Block<'ast>,
     ) -> Self {
@@ -925,7 +897,7 @@ impl<'ast> GenericFor<'ast> {
     #[inline]
     pub fn boxed(
         span: Span,
-        names: List<'ast, Parameter<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
@@ -995,7 +967,7 @@ impl<'ast> LocalFunction<'ast> {
     }
 }
 
-impl<'ast> LocalName<'ast> {
+impl<'ast> TypedName<'ast> {
     #[inline]
     pub const fn new(name: Name<'ast>, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
         Self { name, type_annotation }
@@ -1006,7 +978,7 @@ impl<'ast> LocalAssignment<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
-        names: List<'ast, LocalName<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
     ) -> Self {
@@ -1016,7 +988,7 @@ impl<'ast> LocalAssignment<'ast> {
     #[inline]
     pub fn boxed(
         span: Span,
-        names: List<'ast, LocalName<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
         allocator: &'ast Allocator,
@@ -1089,7 +1061,7 @@ impl<'ast> TypeDeclarationValue<'ast> {
     pub fn new_type_function(
         span: Span,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, Parameter<'ast>>,
+        params: List<'ast, TypedName<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
         return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,

@@ -34,7 +34,7 @@ fn nodes_are_in_source_preorder_inside_their_parents() {
     let nodes = semantic.nodes();
     let chunk = nodes.iter().next().expect("the chunk has a node");
     assert_eq!(chunk.id().index(), 0);
-    assert!(matches!(chunk.kind(), AstKind::Chunk(_)));
+    assert!(matches!(chunk.kind(), AstKind::Block(_)));
     assert_eq!(nodes.parent_id(chunk.id()), None);
     let mut previous_start = 0;
     for node in nodes.iter().skip(1) {
@@ -75,12 +75,12 @@ do end",
     assert_eq!(
         declarations,
         [
-            ("a", AstType::LocalName),
+            ("a", AstType::TypedName),
             ("f", AstType::LocalFunction),
-            ("b", AstType::Parameter),
+            ("b", AstType::TypedName),
             ("self", AstType::FunctionBody),
-            ("i", AstType::NumericFor),
-            ("k", AstType::Parameter),
+            ("i", AstType::TypedName),
+            ("k", AstType::TypedName),
         ]
     );
     let read_only: Vec<&str> = scoping
@@ -95,7 +95,7 @@ do end",
     assert_eq!(
         openers,
         [
-            AstType::Chunk,
+            AstType::Block,
             AstType::FunctionBody,
             AstType::FunctionBody,
             AstType::NumericFor,
@@ -111,6 +111,6 @@ do end",
     assert_eq!(body_block.map(|block| block.scope().index()), Some(1));
     assert_eq!(
         nodes.ancestor_kinds(body).map(AstKind::ty).collect::<Vec<_>>(),
-        [AstType::LocalFunction, AstType::Block, AstType::Chunk,]
+        [AstType::LocalFunction, AstType::Block]
     );
 }

@@ -1,13 +1,13 @@
 use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_ast::{Block, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_codegen::LiteralSpelling;
 use luck_minifier::TransformConfig;
 use luck_testgen::{nested, with_the_smallest_stack};
 use luck_token::UnOp;
 
-use crate::common::{minify_bytes, minify_default, reparses};
+use crate::common::{minify_bytes, minify_default, minify_typed, reparses};
 
 const MODULE_SOURCE: &str = r#"
 local M = {}
@@ -336,13 +336,13 @@ fn nested_negations<'ast>(
     allocator: &'ast Allocator,
     spans: &'ast SpanCounter,
     wraps: usize,
-) -> Chunk<'ast> {
+) -> Block<'ast> {
     let synth = Synth::new(allocator, spans);
     let mut expr = synth.name_expr("x");
     for _ in 0..wraps {
         expr = synth.unary_op(UnOp::Not, expr);
     }
-    Chunk::new(synth.block([synth.return_([expr])]))
+    synth.block([synth.return_([expr])])
 }
 
 #[test]
@@ -351,11 +351,7 @@ fn a_tree_at_the_nesting_cap_minifies() {
         let wraps = MAX_NESTING_DEPTH - 1;
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
         let mut chunk = nested_negations(&allocator, &spans, wraps);
-        assert_eq!(
-            block_nesting_depth(&chunk.block),
-            MAX_NESTING_DEPTH,
-            "the tree sits at the cap"
-        );
+        assert_eq!(block_nesting_depth(&chunk), MAX_NESTING_DEPTH, "the tree sits at the cap");
         let config = TransformConfig::default();
         let output = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new());
         assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps)).into_bytes()));
@@ -384,13 +380,12 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
                 expr = synth.unary_op(UnOp::Not, expr);
             }
             let identity = synth.block([synth.return_([synth.name_expr("a")])]);
-            let block = synth.block([
-                synth.local(&["x"], [synth.number_i64(1)]),
+            synth.block([
+                synth.local(&["x"], [synth.number_f64(1.0)]),
                 synth.local_function("f", &["a"], identity),
                 synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
                 synth.return_([expr]),
-            ]);
-            Chunk::new(block)
+            ])
         };
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
         let mut chunk = past_the_cap(&allocator, &spans);
@@ -410,4 +405,122 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
             assert_eq!(chunk, expected, "the refused tree is as it was");
         }
     });
+}
+
+#[test]
+fn if_expr_survives_minification() {
+    let result = minify_default(
+        "\
+local x = if true then 1 else 2
+return x
+",
+    );
+    assert!(result.contains("if"), "Got: {result}");
+}
+
+#[test]
+fn string_interpolation_survives_minification() {
+    let result = minify_default(
+        "\
+local name = \"World\"
+local g = `Hello, {name}!`
+return g
+",
+    );
+    assert!(result.contains('`'), "Got: {result}");
+}
+
+#[test]
+fn continue_survives_minification() {
+    let result = minify_default(
+        "\
+for i = 1, 10 do
+  if i == 5 then continue end
+  print(i)
+end
+",
+    );
+    assert!(result.contains("continue"), "Got: {result}");
+}
+
+#[test]
+fn compound_assignment_survives_minification() {
+    let result = minify_default(
+        "\
+local x = 0
+x += 1
+return x
+",
+    );
+    assert!(result.contains("+="), "Got: {result}");
+}
+
+#[test]
+fn merged_rfc_syntax_and_exports_survive_minification() {
+    let source = "\
+export local public = 129312i
+export const mask = 0xffffffffffffffffi
+export function apply<T>(value: T)
+    return identity<<T>>(value), public, mask
+end
+";
+    let result = minify_typed(source);
+    assert!(result.contains("export local public=129312i"), "{result}");
+    assert!(result.contains("export const mask=0xffffffffffffffffi"), "{result}");
+    assert!(result.contains("export function apply"), "{result}");
+    assert!(result.contains("identity<<T>>"), "{result}");
+    assert!(result.contains(":T"), "{result}");
+    let allocator = Allocator::new();
+    let reparsed = luck_parser::parse(&allocator, result.as_bytes());
+    assert!(
+        reparsed.errors.is_empty(),
+        "minified merged-RFC syntax must reparse: {:?}\n{result}",
+        reparsed.errors
+    );
+}
+
+#[test]
+fn instantiated_literal_survives_minification() {
+    for (source, expected) in [
+        ("local a = `x{({})<<T>>}y`\n", "local e=`x{({})<<T>>}y`"),
+        ("return (\"s\")<<T>>()\n", "return(\"s\")<<T>>()"),
+        (
+            "\
+local s = \"x\"
+print(s<<T>>)
+",
+            "print((\"x\")<<T>>)",
+        ),
+    ] {
+        let result = minify_typed(source);
+        assert_eq!(result, expected, "source: {source}");
+        assert_eq!(minify_typed(&result), result, "must be idempotent");
+    }
+}
+
+#[test]
+fn inlined_cast_before_less_than_survives_minification() {
+    // Strings compare through the locale, so the comparison stays.
+    let source = "\
+local s = 'a' :: string
+return s < 'b'
+";
+    let result = minify_typed(source);
+    assert_eq!(result, "return('a'::string)<'b'");
+    assert_eq!(minify_typed(&result), result, "must be idempotent");
+}
+
+#[test]
+fn function_inside_a_type_survives_minification() {
+    for (source, expected) in [
+        ("type T = typeof(function(x) return x end)\n", "type T=typeof(function(e)return e end)"),
+        (
+            "return f<<typeof(function(x) return x end)>>()\n",
+            "return f<<typeof(function(e)return e end)>>()",
+        ),
+    ] {
+        let result = minify_typed(source);
+        assert_eq!(result, expected, "source: {source}");
+        assert_eq!(minify_typed(&result), result, "must be idempotent");
+    }
 }

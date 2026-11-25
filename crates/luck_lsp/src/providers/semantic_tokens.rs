@@ -10,9 +10,9 @@ use ls_types::{
 };
 use luck_ast::{
     Assignment, ChainHead, Expression, Field, FunctionDecl, FunctionName, FunctionTypeParam,
-    GenericPackType, GenericTypeParam, LocalAssignment, LocalFunction, Name, NamedType, NumericFor,
-    Parameter, Suffix, SuffixedExpression, TableConstructor, Type, TypeDeclaration,
-    TypeDeclarationValue, TypeField, Var, Visit,
+    GenericPackType, GenericTypeParam, LocalAssignment, LocalFunction, Name, NamedType, Suffix,
+    SuffixedExpression, TableConstructor, Type, TypeDeclaration, TypeDeclarationValue, TypeField,
+    TypedName, Var, Visit,
 };
 use luck_semantic::SymbolKind;
 use luck_stdlib::{SemanticAnalysis, StdlibEntry};
@@ -122,7 +122,7 @@ pub(crate) fn classify(document: &DocumentState) -> Highlights {
         shapes: FxHashMap::default(),
         highlights: Vec::new(),
     };
-    classifier.visit_chunk(&document.parse().chunk);
+    classifier.visit_block(&document.parse().chunk);
     classifier.highlights
 }
 
@@ -479,24 +479,11 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         self.visit_function_body(&function_decl.body);
     }
 
-    fn visit_param(&mut self, param: &'ast Parameter<'ast>) {
-        self.declaration(&param.name, None);
-        if let Some(annotation) = &param.type_annotation {
+    fn visit_typed_name(&mut self, typed_name: &'ast TypedName<'ast>) {
+        self.declaration(&typed_name.name, None);
+        if let Some(annotation) = &typed_name.type_annotation {
             self.visit_type(annotation);
         }
-    }
-
-    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
-        self.declaration(&numeric_for.name, None);
-        if let Some(annotation) = &numeric_for.type_annotation {
-            self.visit_type(annotation);
-        }
-        self.visit_expr(&numeric_for.start);
-        self.visit_expr(&numeric_for.limit);
-        if let Some(step) = &numeric_for.step {
-            self.visit_expr(step);
-        }
-        self.visit_block(&numeric_for.block);
     }
 
     fn visit_table_constructor(&mut self, table_constructor: &'ast TableConstructor<'ast>) {

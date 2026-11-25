@@ -1,24 +1,24 @@
-gen_full_luau.luau:
+gen_full.luau:
   file size: 441060 # 441.06 kB
   sys allocs: 45303
   sys reallocs: 6156
   sys deallocs: 45303
   sys alloc bytes: 13578579 # 13.58 MB
-  sys peak growth: 10526227 # 10.53 MB
+  sys peak growth: 10482993 # 10.48 MB
   arena allocs: 0
   arena reallocs: 0
   arena size: 2605744 # 2.61 MB
 
-idiomatic.lua:
+idiomatic.luau:
   file size: 2124 # 2.12 kB
   sys allocs: 188
   sys reallocs: 71
   sys deallocs: 188
-  sys alloc bytes: 52486 # 52.49 kB
-  sys peak growth: 44369 # 44.37 kB
+  sys alloc bytes: 49072 # 49.07 kB
+  sys peak growth: 42591 # 42.59 kB
   arena allocs: 0
   arena reallocs: 0
-  arena size: 12176 # 12.18 kB
+  arena size: 11824 # 11.82 kB
 
 infinite_yield.luau:
   file size: 482971 # 482.97 kB

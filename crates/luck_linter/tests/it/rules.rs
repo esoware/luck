@@ -1,5 +1,6 @@
 use luck_linter::{FixKind, RuleId};
-use luck_token::{Span, Variant};
+use luck_stdlib::Variant;
+use luck_token::Span;
 
 use crate::common::{enable, lint_bytes};
 

@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::Chunk;
+use luck_ast::Block;
 use luck_codegen::LiteralSpelling;
 use luck_testgen::tree_shape;
 
@@ -21,7 +21,7 @@ pub(crate) fn assert_spells(source: &str, expected: &str, spelling: LiteralSpell
 /// That's output that parses back to the same tree and compacts to itself.
 /// Output that parses to a different tree can still compact to itself, so
 /// the second check alone would miss it.
-pub(crate) fn assert_reprints(chunk: &Chunk<'_>) {
+pub(crate) fn assert_reprints(chunk: &Block<'_>) {
     for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
         let output = luck_codegen::compact(chunk, spelling);
         let allocator = Allocator::new();

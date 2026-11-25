@@ -14,7 +14,6 @@ use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::Linter;
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver};
-use luck_stdlib::Stdlib;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -25,9 +24,6 @@ pub(crate) struct DocumentSettings {
     /// Canonical, or `None` for a document with no file.
     pub path: Option<PathBuf>,
     pub project: Arc<LoadedProject>,
-    /// The standard library of the project's variant, with its std
-    /// definitions over it.
-    pub stdlib: Stdlib,
     /// The linter of the project's lint settings, with the overrides the
     /// path matches. Publishing, code actions, and fix-all all lint with it,
     /// so none of them fixes a diagnostic the user was never shown.
@@ -161,12 +157,11 @@ impl SettingsCache {
     ) -> DocumentSettings {
         let editorconfigs = Arc::clone(&self.lookups.read().editorconfigs);
         let loaded = project.project();
-        let stdlib = loaded.stdlib().clone();
         let linter = loaded.linter_for(file);
         let format = loaded.format_options(file, Some(&editorconfigs));
         let is_included = file.is_none_or(|located| loaded.filter().includes_located(located));
         let path = file.map(|located| FileSystemOs.canonicalize_existing(located));
-        DocumentSettings { path, project, stdlib, linter, format, is_included }
+        DocumentSettings { path, project, linter, format, is_included }
     }
 
     /// The project of the nearest `luck.json` above the file at
@@ -285,7 +280,7 @@ mod tests {
     use std::fs;
     use std::ptr;
 
-    use luck_token::Variant;
+    use luck_stdlib::Variant;
 
     use super::*;
 

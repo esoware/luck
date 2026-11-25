@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
 use luck_token::{Span, is_luau_whitespace};
@@ -21,17 +21,17 @@ pub struct FormatResult {
 
 fn print_chunk<'ast>(
     allocator: &'ast Allocator,
-    chunk: &'ast Chunk<'ast>,
+    chunk: &'ast Block<'ast>,
     comments: Comments<'ast>,
     groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
 ) -> Vec<u8> {
     let mut f = Formatter::new(allocator, *options, comments, groupings);
     f.write_shebang();
-    f.write_block(&chunk.block);
+    f.write_block(chunk);
     // Error statements print nothing, so a block holding only those must not
     // open a line before the trailing comment flush.
-    let has_stmts = first_item_start(&chunk.block).is_some();
+    let has_stmts = first_item_start(chunk).is_some();
     f.write_remaining_comments(has_stmts);
     let mut output = f.print(b"");
 
@@ -59,13 +59,13 @@ fn print_chunk<'ast>(
 /// which `luck_parser` never builds and would refuse to read back.
 pub fn format_chunk<'ast>(
     allocator: &'ast Allocator,
-    chunk: &'ast Chunk<'ast>,
+    chunk: &'ast Block<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
 ) -> Result<Vec<u8>, Diagnostic> {
-    if block_nesting_depth(&chunk.block) > MAX_NESTING_DEPTH {
+    if block_nesting_depth(chunk) > MAX_NESTING_DEPTH {
         return Err(Diagnostic::e008(
-            chunk.block.span,
+            chunk.span,
             format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
         ));
     }

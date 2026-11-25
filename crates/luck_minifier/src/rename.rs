@@ -14,7 +14,7 @@ mod rename_globals;
 mod scope_claims;
 
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, FunctionDecl, Name, TreeCounts, VisitMut};
+use luck_ast::{Block, FunctionDecl, Name, TreeCounts, VisitMut};
 use luck_data_structures::BitSet;
 use luck_semantic::{NameId, ScopeId, Scoping, SymbolId, SymbolKind};
 
@@ -41,12 +41,10 @@ struct Scope {
     end: usize,
 }
 
-/// A name the renamer can give out.
+/// A name the renamer can give out, which is never a keyword.
 #[derive(Clone, Copy)]
 struct Candidate<'ast> {
     name: &'ast str,
-    /// A keyword, which no name can be.
-    is_reserved: bool,
     /// The chunk's id for the name, if the chunk uses it.
     name_id: Option<NameId>,
 }
@@ -90,7 +88,7 @@ struct Renamer<'walk> {
 /// one's, when there is one.
 pub(crate) fn rename<'ast>(
     allocator: &'ast Allocator,
-    chunk: &mut Chunk<'ast>,
+    chunk: &mut Block<'ast>,
     counts: TreeCounts,
     should_rename_globals: bool,
     name_indexes: &mut NameIndexes,
@@ -100,7 +98,7 @@ pub(crate) fn rename<'ast>(
     let mut renamer = Renamer::new(&scoping);
     // Opt-in, since renamed globals end up under new `_G` keys.
     if should_rename_globals {
-        for name in renamable_globals(&chunk.block, &scoping) {
+        for name in renamable_globals(chunk, &scoping) {
             // Its definitions are references, so no declaration spells it.
             let id = renamer.declare(0, false, 0);
             renamer.of_global[name.index()] =
@@ -117,7 +115,7 @@ pub(crate) fn rename<'ast>(
         name_indexes,
         methods: Vec::new(),
     }
-    .visit_block(&mut chunk.block);
+    .visit_block(chunk);
 }
 
 impl<'walk> Renamer<'walk> {
@@ -349,7 +347,7 @@ return t.field
     }
 
     #[test]
-    fn renames_a_nested_scope_to_valid_lua() {
+    fn renames_a_nested_scope_to_valid_luau() {
         apply(
             "\
 local x = 1
@@ -399,7 +397,7 @@ end
     }
 
     #[test]
-    fn renames_nested_function_locals_to_valid_lua() {
+    fn renames_nested_function_locals_to_valid_luau() {
         apply(
             "\
 local outer = 1
@@ -444,35 +442,6 @@ return f
 ",
         );
         assert_eq!(result, "local function t()local t=1 e(t)return t end return t");
-    }
-
-    #[test]
-    fn env_is_an_ordinary_name() {
-        assert_renames(&[
-            (
-                "\
-_ENV = 1
-print(_ENV)
-",
-                "e=1 print(e)",
-            ),
-            (
-                "\
-function _ENV() end
-print(_ENV)
-",
-                "function e()end print(e)",
-            ),
-            (
-                "\
-local _ENV = 1
-print(_ENV)
-",
-                "local e=1 print(e)",
-            ),
-            ("for _ENV = 1, 2 do print(_ENV) end\n", "for e=1,2 do print(e)end"),
-            ("for k, _ENV in pairs(t) do print(_ENV) end\n", "for t,e in pairs(t)do print(e)end"),
-        ]);
     }
 
     #[test]

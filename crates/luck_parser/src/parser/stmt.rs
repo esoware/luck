@@ -2,7 +2,7 @@ use std::{fmt, mem};
 
 use luck_allocator::{List, ThinStr};
 use luck_ast::{
-    Block, ElseClause, ElseIfClause, Expression, GetSpan as _, Parameter, Statement, Var,
+    Block, ElseClause, ElseIfClause, Expression, GetSpan as _, Statement, TypedName, Var,
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
@@ -404,7 +404,7 @@ impl<'ast> Parser<'ast> {
         let for_span = self.advance();
         self.open(Closer::BlockEnd);
         let name = self.expect_identifier_recover();
-        let first = self.parse_parameter(name);
+        let first = self.parse_typed_name(name);
 
         // `name =` starts a numeric for; anything else is a generic for.
         if self.is_at(TokenKind::Equal) {
@@ -414,8 +414,7 @@ impl<'ast> Parser<'ast> {
         }
     }
 
-    fn parse_numeric_for(&mut self, for_span: Span, control: Parameter<'ast>) -> Statement<'ast> {
-        let Parameter { name, type_annotation } = control;
+    fn parse_numeric_for(&mut self, for_span: Span, variable: TypedName<'ast>) -> Statement<'ast> {
         self.advance(); // `=`
         let start = self.parse_expr(0);
         self.expect_keyword(TokenKind::Comma, Construct::ForLoop);
@@ -427,27 +426,18 @@ impl<'ast> Parser<'ast> {
         };
         let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, for_span);
         let span = for_span.merge(end_span);
-        Statement::new_numeric_for(
-            span,
-            name,
-            type_annotation,
-            start,
-            limit,
-            step,
-            block,
-            self.allocator,
-        )
+        Statement::new_numeric_for(span, variable, start, limit, step, block, self.allocator)
     }
 
-    fn parse_generic_for(&mut self, for_span: Span, first: Parameter<'ast>) -> Statement<'ast> {
-        let start = self.scratch.params.len();
-        self.scratch.params.push(first);
+    fn parse_generic_for(&mut self, for_span: Span, first: TypedName<'ast>) -> Statement<'ast> {
+        let start = self.scratch.typed_names.len();
+        self.scratch.typed_names.push(first);
         while self.eat(TokenKind::Comma) {
             let name = self.expect_identifier_recover();
-            let param = self.parse_parameter(name);
-            self.scratch.params.push(param);
+            let typed_name = self.parse_typed_name(name);
+            self.scratch.typed_names.push(typed_name);
         }
-        let names = List::split_off_in(&mut self.scratch.params, start, self.allocator);
+        let names = List::split_off_in(&mut self.scratch.typed_names, start, self.allocator);
 
         self.expect_keyword(TokenKind::In, Construct::ForLoop);
         let exprs = self.parse_expr_list();

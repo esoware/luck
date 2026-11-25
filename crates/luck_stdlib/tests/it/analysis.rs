@@ -1,7 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, TreeCounts};
-use luck_stdlib::{SemanticAnalysis, analyze, library_for};
-use luck_token::Variant;
+use luck_stdlib::{SemanticAnalysis, Variant, analyze, library_for};
 
 use crate::common::parse;
 
@@ -23,12 +22,12 @@ fn is_known_global_finds_stdlib_globals_and_not_locals() {
 #[test]
 fn extra_globals_are_known_globals() {
     let allocator = Allocator::new();
-    let mut analysis = analyze_source(&allocator, "vim.cmd('x')");
-    let vim = analysis.scoping().name_id("vim").expect("the chunk names vim");
-    assert!(!analysis.is_known_global("vim"));
-    analysis.add_extra_globals(["vim", "absent"]);
-    assert!(analysis.is_known_global("vim"));
-    assert!(analysis.is_extra_global(vim));
+    let mut analysis = analyze_source(&allocator, "app.cmd('x')");
+    let app = analysis.scoping().name_id("app").expect("the chunk names app");
+    assert!(!analysis.is_known_global("app"));
+    analysis.add_extra_globals(["app", "absent"]);
+    assert!(analysis.is_known_global("app"));
+    assert!(analysis.is_extra_global(app));
     assert!(analysis.is_known_global_name(analysis.scoping().references()[0].name));
 }
 
@@ -130,7 +129,7 @@ fn last_call_callee(source: &str, variant: Variant) -> Option<String> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source);
     let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(variant));
-    let last_stmt = chunk.block.stmts.last();
+    let last_stmt = chunk.stmts.last();
     let chain = if let Some(Statement::FunctionCall(chain)) = last_stmt {
         chain
     } else if let Some(Statement::LocalAssignment(local)) = last_stmt
@@ -162,7 +161,7 @@ fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source);
     let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone));
-    let Some(Statement::FunctionCall(chain)) = chunk.block.stmts.last() else {
+    let Some(Statement::FunctionCall(chain)) = chunk.stmts.last() else {
         panic!("the last statement must be a call");
     };
     let mut callees = analysis.chain_callees(chain);

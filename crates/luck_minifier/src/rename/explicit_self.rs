@@ -6,7 +6,7 @@
 //! as its walk leaves each one.
 
 use luck_allocator::Allocator;
-use luck_ast::{FunctionDecl, Name, Parameter};
+use luck_ast::{FunctionDecl, Name, TypedName};
 
 /// Makes `function t:m(...)` `function t.m(receiver, ...)`.
 pub(super) fn take_receiver<'ast>(
@@ -16,7 +16,7 @@ pub(super) fn take_receiver<'ast>(
 ) {
     if let Some(method) = function_declaration.name.method.take() {
         function_declaration.name.names.push(method, allocator);
-        function_declaration.body.params.insert(0, Parameter::new(receiver, None), allocator);
+        function_declaration.body.params.insert(0, TypedName::new(receiver, None), allocator);
     }
 }
 

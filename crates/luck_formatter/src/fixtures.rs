@@ -28,7 +28,7 @@ pub(crate) fn render_expr(source: &str, options: FormatOptions) -> String {
     let text = allocator.alloc_str(&format!("return {source}\n"));
     let parsed = luck_parser::parse(&allocator, text.as_bytes());
     assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
-    let [Statement::Return(return_stmt)] = &*parsed.chunk.block.stmts else {
+    let [Statement::Return(return_stmt)] = &*parsed.chunk.stmts else {
         panic!("expected a return statement");
     };
     let [expr] = &*return_stmt.exprs else {

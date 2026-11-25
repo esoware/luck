@@ -1,6 +1,5 @@
-use luck_token::Variant;
-
 use crate::stdlib_map::StdlibMap;
+use crate::variant::Variant;
 
 /// Each variant holds a reference, so an entry is two words, and a table of
 /// them stays dense for the lookups that scan it.

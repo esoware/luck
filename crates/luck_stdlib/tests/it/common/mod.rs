@@ -1,11 +1,10 @@
 use luck_allocator::Allocator;
-use luck_ast::Chunk;
-use luck_stdlib::{StdlibLibrary, expand_replace_template, library_for};
-use luck_token::Variant;
+use luck_ast::Block;
+use luck_stdlib::{StdlibLibrary, Variant, expand_replace_template, library_for};
 
 /// `source`'s tree, which must parse cleanly, kept in `allocator` so it
 /// outlives the analysis that borrows it.
-pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> &'ast Chunk<'ast> {
+pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> &'ast Block<'ast> {
     let parsed = luck_parser::parse(allocator, source.as_bytes());
     assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
     allocator.alloc(parsed.chunk)

@@ -850,7 +850,7 @@ function g() end
         let parsed = luck_parser::parse(&allocator, source.as_bytes());
         let scoping = analyze(&parsed.chunk, parsed.counts, None);
         let started = Instant::now();
-        let renamable = renamable_globals(&parsed.chunk.block, &scoping);
+        let renamable = renamable_globals(&parsed.chunk, &scoping);
         let elapsed = started.elapsed();
         assert_eq!(renamable.len(), 2 * count);
         // Looking each assigned global up among the function globals one by

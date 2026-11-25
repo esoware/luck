@@ -10,7 +10,7 @@ use luck_config::{Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::Variant;
+use luck_stdlib::Variant;
 
 use crate::common::{load_error, loaded, project_with};
 
@@ -149,13 +149,13 @@ fn an_overlay_wins_over_every_override() {
     )]);
     let mut overlay = LintConfig::default();
     overlay.rules.set_level(RuleId::Shadowing, RuleLevel::Error);
-    overlay.extra_globals.push("vim".to_owned());
+    overlay.extra_globals.push("app".to_owned());
     project.overlay_lint(&overlay);
     for relative in ["src/a.lua", "spec/a.lua"] {
         let linter = project.linter_for(Some(&directory.path().join(relative)));
         let lint = linter.config();
         assert_eq!(lint.rules.level(RuleId::Shadowing), Some(RuleLevel::Error), "{relative}");
-        assert_eq!(lint.extra_globals, ["vim"], "{relative}");
+        assert_eq!(lint.extra_globals, ["app"], "{relative}");
     }
 }
 
@@ -205,11 +205,11 @@ fn records_every_config_file_it_read() {
     assert_eq!(project.files(), [canonical("luck.json"), canonical("base.json")]);
 }
 
-const LOVE: &str = r#"
-[globals.love]
+const APP: &str = r#"
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.draw]
+[globals.app.members.draw]
 kind = "function"
 is_read_only = false
 "#;
@@ -217,27 +217,27 @@ is_read_only = false
 #[test]
 fn std_definitions_layer_over_the_variant_s_library() {
     let (directory, project) = loaded(&[
-        ("std/love.toml", LOVE),
-        ("luck.json", r#"{ "variant": "roblox", "std": ["std/love.toml"] }"#),
+        ("std/app.toml", APP),
+        ("luck.json", r#"{ "variant": "roblox", "std": ["std/app.toml"] }"#),
     ]);
     let stdlib = project.stdlib();
     assert_eq!(stdlib.variant(), Variant::Roblox);
-    assert!(stdlib.library().lookup(["love", "draw"]).is_some());
+    assert!(stdlib.library().lookup(["app", "draw"]).is_some());
     assert!(stdlib.library().lookup(["game"]).is_some());
     assert!(stdlib.library().lookup(["print"]).is_some());
     let std_file =
-        FileSystemOs.canonicalize(&directory.path().join("std/love.toml")).expect("exists");
+        FileSystemOs.canonicalize(&directory.path().join("std/app.toml")).expect("exists");
     assert!(project.files().contains(&std_file), "{:?}", project.files());
 }
 
 #[test]
 fn a_std_path_is_relative_to_the_file_that_names_it() {
     let (_directory, project) = loaded(&[
-        ("shared/love.toml", LOVE),
-        ("shared/base.json", r#"{ "std": ["love.toml"] }"#),
-        ("luck.json", r#"{ "extends": ["shared/base.json"], "std": ["shared/love.toml"] }"#),
+        ("shared/app.toml", APP),
+        ("shared/base.json", r#"{ "std": ["app.toml"] }"#),
+        ("luck.json", r#"{ "extends": ["shared/base.json"], "std": ["shared/app.toml"] }"#),
     ]);
-    assert!(project.stdlib().library().lookup(["love"]).is_some());
+    assert!(project.stdlib().library().lookup(["app"]).is_some());
     assert_eq!(project.files().len(), 3, "one std file, read once: {:?}", project.files());
 }
 
@@ -254,13 +254,13 @@ fn a_std_file_that_cannot_be_read_is_reported_on_its_name() {
 #[test]
 fn an_invalid_std_definition_is_reported_in_it() {
     let definition = r#"
-[globals.love]
+[globals.app]
 kind = "namspace"
 "#;
     let directory =
-        project_with(&[("love.toml", definition), ("luck.json", r#"{ "std": ["love.toml"] }"#)]);
+        project_with(&[("app.toml", definition), ("luck.json", r#"{ "std": ["app.toml"] }"#)]);
     let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("love.toml"), "{path:?}");
+    assert!(path.ends_with("app.toml"), "{path:?}");
     assert_eq!(diag.code, "E014");
     assert!(diag.message.contains("unknown variant `namspace`"), "{diag:?}");
     assert!(diag.span.is_some(), "{diag:?}");
@@ -274,9 +274,9 @@ kind = "property"
 shape = "Sceen"
 "#;
     let directory =
-        project_with(&[("love.toml", definition), ("luck.json", r#"{ "std": ["love.toml"] }"#)]);
+        project_with(&[("app.toml", definition), ("luck.json", r#"{ "std": ["app.toml"] }"#)]);
     let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("love.toml"), "{path:?}");
+    assert!(path.ends_with("app.toml"), "{path:?}");
     assert_eq!(
         diag.message,
         "invalid config: `screen` names the shape `Sceen`, which no library declares"

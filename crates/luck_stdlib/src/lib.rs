@@ -7,7 +7,7 @@
 //! [`library_for`] returns a variant's built-in [`StdlibLibrary`], a static
 //! library with signatures, overloads, value shapes, and deprecations. A
 //! [`StdlibDefinition`] is one std definition file, which describes a
-//! library such as LOVE's or Neovim's in the format the built-in libraries
+//! library such as a host application's in the format the built-in libraries
 //! are written in, and [`Stdlib::layer`] layers it over a library. [`analyze`]
 //! builds a chunk's `luck_semantic::Semantic` and reads it against a
 //! library, so rules can ask [`SemanticAnalysis::is_known_global`] whether a
@@ -18,15 +18,14 @@
 //!
 //! ```
 //! use luck_allocator::Allocator;
-//! use luck_stdlib::{Stdlib, StdlibDefinition};
-//! use luck_token::Variant;
+//! use luck_stdlib::{Stdlib, StdlibDefinition, Variant};
 //!
 //! let definition = StdlibDefinition::parse(
 //!     r#"
-//! [globals.love]
+//! [globals.app]
 //! kind = "namespace"
 //!
-//! [globals.love.members.load]
+//! [globals.app.members.load]
 //! kind = "function"
 //! is_read_only = false
 //! "#,
@@ -35,7 +34,7 @@
 //! let stdlib = Stdlib::new(Variant::Standalone).layer(&definition).expect("it layers");
 //!
 //! let allocator = Allocator::new();
-//! let source = b"local greeting = 1 print(greeting, love)";
+//! let source = b"local greeting = 1 print(greeting, app)";
 //! let parsed = luck_parser::parse(&allocator, source);
 //! let chunk = allocator.alloc(parsed.chunk);
 //! let (analysis, errors) = luck_stdlib::analyze(chunk, parsed.counts, stdlib.library());
@@ -44,7 +43,7 @@
 //! let greeting = scoping.symbols()[0].id;
 //! assert_eq!(scoping.resolved_references(greeting).len(), 1);
 //! assert!(analysis.is_known_global("print"));
-//! assert!(analysis.is_known_global("love"));
+//! assert!(analysis.is_known_global("app"));
 //! ```
 
 mod analysis;
@@ -56,6 +55,7 @@ mod stdlib_catalog;
 mod stdlib_definition;
 mod stdlib_map;
 mod stdlib_model;
+mod variant;
 
 pub use analysis::{SemanticAnalysis, analyze};
 pub use replace_template::expand_replace_template;
@@ -68,3 +68,4 @@ pub use stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };
+pub use variant::Variant;

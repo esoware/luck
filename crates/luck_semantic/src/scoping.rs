@@ -63,12 +63,9 @@ pub struct Scope {
     /// The function scope this one runs in: itself for a function or the
     /// chunk.
     pub function: ScopeId,
-    /// What opens it: the chunk, a function body, the block of a `do`, a
-    /// `while`, or an `if` clause, or a `repeat` or `for` loop.
+    /// What opens it: the chunk's block, a function body, the block of a
+    /// `do`, a `while`, or an `if` clause, or a `repeat` or `for` loop.
     pub node: NodeId,
-    /// For the chunk's scope or a function's, whether its own code, not a
-    /// nested function's, reads `...`.
-    pub has_vararg_read: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,12 +85,11 @@ pub struct Symbol {
     pub name: NameId,
     pub scope: ScopeId,
     pub kind: SymbolKind,
-    /// The node that declares it: a local's [`LocalName`], a parameter or
-    /// generic `for` variable's [`Parameter`], a numeric `for`, a
-    /// `local function`, or the [`FunctionBody`] of a method's `self`.
+    /// The node that declares it: the [`TypedName`] of a local, a
+    /// parameter, or a `for` variable, a `local function`, or the
+    /// [`FunctionBody`] of a method's `self`.
     ///
-    /// [`LocalName`]: luck_ast::LocalName
-    /// [`Parameter`]: luck_ast::Parameter
+    /// [`TypedName`]: luck_ast::TypedName
     /// [`FunctionBody`]: luck_ast::FunctionBody
     pub declaration: NodeId,
     pub definition_span: Span,
@@ -244,10 +240,6 @@ impl Scoping {
 
     pub(crate) fn add_scope(&mut self, scope: Scope) {
         self.scopes.push(scope);
-    }
-
-    pub(crate) fn mark_vararg_read(&mut self, function: ScopeId) {
-        self.scopes[function.index()].has_vararg_read = true;
     }
 
     pub(crate) fn add_symbol(

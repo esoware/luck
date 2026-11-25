@@ -5,15 +5,9 @@ use luck_ast_macros::Ast;
 use luck_token::{CompoundOp, Span};
 
 use crate::expr::{Expression, SuffixedExpression, Var};
-use crate::function::{FunctionAttribute, FunctionBody, Parameter};
+use crate::function::{FunctionAttribute, FunctionBody};
 use crate::leaf::Name;
 use crate::types::{GenericTypeList, Type};
-
-/// A whole chunk, the root of every tree.
-#[derive(Debug, PartialEq, Eq, Ast)]
-pub struct Chunk<'ast> {
-    pub block: Block<'ast>,
-}
 
 /// A statement that [has to end its block](Statement::has_to_end_block) ends
 /// it.
@@ -188,8 +182,7 @@ pub struct ElseClause<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct NumericFor<'ast> {
     pub span: Span,
-    pub name: Name<'ast>,
-    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
+    pub variable: TypedName<'ast>,
     pub start: Expression<'ast>,
     pub limit: Expression<'ast>,
     pub step: Option<Expression<'ast>>,
@@ -199,7 +192,7 @@ pub struct NumericFor<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct GenericFor<'ast> {
     pub span: Span,
-    pub names: List<'ast, Parameter<'ast>>,
+    pub names: List<'ast, TypedName<'ast>>,
     pub exprs: List<'ast, Expression<'ast>>,
     pub block: Block<'ast>,
 }
@@ -262,9 +255,10 @@ impl LocalFunctionKind {
     }
 }
 
-/// A name a [`LocalAssignment`] declares, with its `: T` annotation.
+/// A name a function parameter, a `local`, or a `for` declares, with its
+/// `: T` annotation. It spans from its name, so it holds no span of its own.
 #[derive(Debug, PartialEq, Eq, Ast)]
-pub struct LocalName<'ast> {
+pub struct TypedName<'ast> {
     pub name: Name<'ast>,
     pub type_annotation: Option<Box<'ast, Type<'ast>>>,
 }
@@ -273,7 +267,7 @@ pub struct LocalName<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct LocalAssignment<'ast> {
     pub span: Span,
-    pub names: List<'ast, LocalName<'ast>>,
+    pub names: List<'ast, TypedName<'ast>>,
     pub exprs: List<'ast, Expression<'ast>>,
     pub kind: LocalAssignmentKind,
 }

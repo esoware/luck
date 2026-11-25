@@ -1,8 +1,7 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
 use luck_linter::{Category, FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::library_for;
-use luck_token::Variant;
+use luck_stdlib::{Variant, library_for};
 
 use crate::common::{disable, enable, lint, lint_bytes};
 
@@ -40,19 +39,19 @@ fn game_is_a_global_of_roblox_only() {
 #[test]
 fn analyze_defines_the_extra_globals_of_its_config() {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, b"return vim");
+    let parse = luck_parser::parse(&allocator, b"return app");
     let linter = Linter::new(LintConfig::default());
-    let without_vim = linter.analyze(&parse, library_for(Variant::Standalone));
+    let without_app = linter.analyze(&parse, library_for(Variant::Standalone));
     let flagged = linter
-        .run_analyzed(&without_vim, FixKind::empty(), None, &|| false)
+        .run_analyzed(&without_app, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(flagged.iter().any(|diag| diag.code == "undefined_variable"), "{flagged:?}");
 
-    let with_vim =
-        Linter::new(LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() });
-    let analysis = with_vim.analyze(&parse, library_for(Variant::Standalone));
-    assert!(analysis.semantic().is_known_global("vim"));
-    let quiet = with_vim
+    let with_app =
+        Linter::new(LintConfig { extra_globals: vec!["app".to_owned()], ..LintConfig::default() });
+    let analysis = with_app.analyze(&parse, library_for(Variant::Standalone));
+    assert!(analysis.semantic().is_known_global("app"));
+    let quiet = with_app
         .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(quiet.iter().all(|diag| diag.code != "undefined_variable"), "{quiet:?}");
@@ -80,10 +79,10 @@ fn run_reports_parse_errors_without_running_rules() {
 
 #[test]
 fn run_defines_the_extra_globals_of_its_config() {
-    let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..Default::default() };
-    let diags = lint("print(vim.fn)", &config);
+    let config = LintConfig { extra_globals: vec!["app".to_owned()], ..Default::default() };
+    let diags = lint("print(app.fn)", &config);
     assert!(
-        diags.iter().all(|diag| diag.code != "undefined_variable" || !diag.message.contains("vim"))
+        diags.iter().all(|diag| diag.code != "undefined_variable" || !diag.message.contains("app"))
     );
 }
 

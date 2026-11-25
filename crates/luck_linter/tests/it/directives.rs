@@ -1,8 +1,7 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
 use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::library_for;
-use luck_token::Variant;
+use luck_stdlib::{Variant, library_for};
 
 use crate::common::{lint, lint_bytes, with_level};
 

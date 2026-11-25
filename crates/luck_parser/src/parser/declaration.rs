@@ -1,7 +1,7 @@
 use luck_allocator::List;
 use luck_ast::{
     Expression, FunctionAttribute, FunctionName, GetSpan as _, LocalAssignmentKind,
-    LocalFunctionKind, LocalName, Name, Statement, TypeDeclarationValue,
+    LocalFunctionKind, Name, Statement, TypeDeclarationValue, TypedName,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
@@ -138,27 +138,20 @@ impl<'ast> Parser<'ast> {
         Statement::new_local_assignment(span, names, exprs, kind, self.allocator)
     }
 
-    fn parse_local_names(&mut self) -> List<'ast, LocalName<'ast>> {
-        let start = self.scratch.local_names.len();
-        if let Some(first) = self.parse_local_name() {
-            self.scratch.local_names.push(first);
+    fn parse_local_names(&mut self) -> List<'ast, TypedName<'ast>> {
+        let start = self.scratch.typed_names.len();
+        if let Some(first) = self.expect_identifier() {
+            let first = self.parse_typed_name(first);
+            self.scratch.typed_names.push(first);
             while self.eat(TokenKind::Comma) {
-                let Some(name) = self.parse_local_name() else {
+                let Some(name) = self.expect_identifier() else {
                     break;
                 };
-                self.scratch.local_names.push(name);
+                let typed_name = self.parse_typed_name(name);
+                self.scratch.typed_names.push(typed_name);
             }
         }
-        List::split_off_in(&mut self.scratch.local_names, start, self.allocator)
-    }
-
-    /// Parse `Name [: T]`, or `None` after recording the error when the name
-    /// is missing.
-    fn parse_local_name(&mut self) -> Option<LocalName<'ast>> {
-        let name = self.expect_identifier()?;
-        self.counts.declarations += 1;
-        let type_annotation = self.try_parse_type_annotation();
-        Some(LocalName::new(name, type_annotation))
+        List::split_off_in(&mut self.scratch.typed_names, start, self.allocator)
     }
 
     pub(super) fn parse_type_declaration(&mut self, export_span: Option<Span>) -> Statement<'ast> {

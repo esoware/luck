@@ -8,8 +8,8 @@ use std::{iter, slice};
 
 use luck_ast::{
     Assignment, Block, CompoundAssignment, Expression, FunctionAttribute, FunctionName, GenericFor,
-    GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind, LocalName, NumericFor,
-    ReturnStatement, Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
+    GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind, NumericFor, ReturnStatement,
+    Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
 };
 
 use crate::CollapseSimpleStatement;
@@ -222,20 +222,6 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    fn write_local_name(&mut self, name: &LocalName<'ast>) {
-        self.node(
-            || name.span(),
-            |f| {
-                f.name(name.name);
-                if let Some(annotation) = &name.type_annotation {
-                    f.token(":");
-                    f.space();
-                    f.write_type(annotation);
-                }
-            },
-        );
-    }
-
     fn write_local_assignment(&mut self, local: &LocalAssignment<'ast>) {
         if local.kind.is_exported() {
             self.token("export");
@@ -251,7 +237,7 @@ impl<'ast> Formatter<'ast> {
                     f.token(",");
                     f.soft_line_or_space();
                 }
-                f.write_local_name(name);
+                f.write_typed_name(name);
             }
         });
         if !local.exprs.is_empty() {
@@ -337,13 +323,7 @@ impl<'ast> Formatter<'ast> {
     fn write_numeric_for(&mut self, numeric_for: &NumericFor<'ast>) {
         self.token("for");
         self.space();
-        self.name(numeric_for.name);
-        // `: T` on the loop variable.
-        if let Some(annotation) = &numeric_for.type_annotation {
-            self.token(":");
-            self.space();
-            self.write_type(annotation);
-        }
+        self.write_typed_name(&numeric_for.variable);
         self.space();
         self.token("=");
         self.space();
@@ -372,7 +352,7 @@ impl<'ast> Formatter<'ast> {
                 self.token(",");
                 self.space();
             }
-            self.write_parameter(name);
+            self.write_typed_name(name);
         }
         self.space();
         self.token("in");

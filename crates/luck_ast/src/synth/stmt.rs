@@ -1,10 +1,10 @@
 use luck_token::CompoundOp;
 
 use crate::expr::{Expression, Var};
-use crate::function::{FunctionAttribute, Parameter};
+use crate::function::FunctionAttribute;
 use crate::stmt::{
     Block, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind, LocalFunctionKind,
-    LocalName, Statement, TypeDeclarationValue,
+    Statement, TypeDeclarationValue, TypedName,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -164,14 +164,14 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        let local_names = names.iter().map(|name| self.local_name(name, None));
-        self.local_full(local_names, exprs)
+        let typed_names = names.iter().map(|name| self.typed_name(name, None));
+        self.local_full(typed_names, exprs)
     }
 
-    /// Build `names` with [`Synth::local_name`].
+    /// Build `names` with [`Synth::typed_name`].
     pub fn local_full<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = LocalName<'ast>>,
+        Names: IntoIterator<Item = TypedName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -186,7 +186,7 @@ impl<'ast> Synth<'ast> {
     /// Panics if `exprs` is empty; the grammar requires an initializer.
     pub fn const_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = LocalName<'ast>>,
+        Names: IntoIterator<Item = TypedName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -199,7 +199,7 @@ impl<'ast> Synth<'ast> {
     /// `export local names = exprs`.
     pub fn export_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = LocalName<'ast>>,
+        Names: IntoIterator<Item = TypedName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -214,7 +214,7 @@ impl<'ast> Synth<'ast> {
     /// Panics if `exprs` is empty; the grammar requires an initializer.
     pub fn export_const<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = LocalName<'ast>>,
+        Names: IntoIterator<Item = TypedName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -234,7 +234,7 @@ impl<'ast> Synth<'ast> {
         kind: LocalAssignmentKind,
     ) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = LocalName<'ast>>,
+        Names: IntoIterator<Item = TypedName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -246,16 +246,6 @@ impl<'ast> Synth<'ast> {
             kind,
             self.allocator,
         )
-    }
-
-    /// One declared name for [`Synth::local_full`], with an optional type
-    /// annotation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn local_name(&self, name: &str, ty: Option<Type<'ast>>) -> LocalName<'ast> {
-        LocalName::new(self.name(name), ty.map(|annotation| self.boxed(annotation)))
     }
 
     /// Build targets with [`Synth::name_var`], [`Synth::index_var`], [`Synth::field_var`].
@@ -338,10 +328,10 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// Build `variable` with [`Synth::param`] or [`Synth::param_typed`].
+    /// Build `variable` with [`Synth::typed_name`].
     pub fn numeric_for(
         &self,
-        variable: Parameter<'ast>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
@@ -349,8 +339,7 @@ impl<'ast> Synth<'ast> {
     ) -> Statement<'ast> {
         Statement::new_numeric_for(
             self.next_span(),
-            variable.name,
-            variable.type_annotation,
+            variable,
             start,
             limit,
             step,
@@ -359,7 +348,7 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// Build names with [`Synth::param`] or [`Synth::param_typed`].
+    /// Build names with [`Synth::typed_name`].
     pub fn generic_for<Names, Exprs>(
         &self,
         names: Names,
@@ -367,7 +356,7 @@ impl<'ast> Synth<'ast> {
         block: Block<'ast>,
     ) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = Parameter<'ast>>,
+        Names: IntoIterator<Item = TypedName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -475,7 +464,7 @@ mod tests {
     fn builds_local_with_binary_op() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(2));
+        let sum = synth.binary_op(synth.number_f64(1.0), BinOp::Add, synth.number_f64(2.0));
         let Statement::LocalAssignment(local) = synth.local(&["x"], [sum]) else {
             panic!("expected local assignment");
         };
@@ -499,7 +488,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let optional = synth.ty_optional(synth.ty_named("number"));
-        let stmt = synth.local_full([synth.local_name("x", Some(optional))], [synth.nil()]);
+        let stmt = synth.local_full([synth.typed_name("x", Some(optional))], [synth.nil()]);
         let Statement::LocalAssignment(local) = &stmt else {
             panic!("expected local assignment");
         };
@@ -513,13 +502,13 @@ mod tests {
     fn builds_const_declarations() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let stmt = synth.const_local([synth.local_name("frozen", None)], [synth.number_i64(1)]);
+        let stmt = synth.const_local([synth.typed_name("frozen", None)], [synth.number_f64(1.0)]);
         let Statement::LocalAssignment(const_local) = &stmt else {
             panic!("expected local assignment");
         };
         assert_eq!(const_local.kind, LocalAssignmentKind::Const);
 
-        let plain = synth.local(&["thawed"], [synth.number_i64(2)]);
+        let plain = synth.local(&["thawed"], [synth.number_f64(2.0)]);
         let Statement::LocalAssignment(plain_local) = &plain else {
             panic!("expected local assignment");
         };
@@ -537,8 +526,11 @@ mod tests {
     fn builds_compound_assignment() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let stmt =
-            synth.compound_assign(synth.name_var("counter"), CompoundOp::Add, synth.number_i64(1));
+        let stmt = synth.compound_assign(
+            synth.name_var("counter"),
+            CompoundOp::Add,
+            synth.number_f64(1.0),
+        );
         let Statement::CompoundAssignment(compound) = &stmt else {
             panic!("expected compound assignment");
         };
@@ -568,7 +560,11 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let call = synth.call(synth.name_expr("pairs"), [synth.name_expr("t")]);
-        let stmt = synth.generic_for([synth.param("k"), synth.param("v")], [call], synth.block([]));
+        let stmt = synth.generic_for(
+            [synth.typed_name("k", None), synth.typed_name("v", None)],
+            [call],
+            synth.block([]),
+        );
         let Statement::GenericFor(generic_for) = &stmt else {
             panic!("expected generic for");
         };
@@ -581,16 +577,16 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let stmt = synth.numeric_for(
-            synth.param_typed("i", synth.ty_named("number")),
-            synth.number_i64(1),
-            synth.number_i64(10),
+            synth.typed_name("i", Some(synth.ty_named("number"))),
+            synth.number_f64(1.0),
+            synth.number_f64(10.0),
             None,
             synth.block([]),
         );
         let Statement::NumericFor(numeric_for) = &stmt else {
             panic!("expected numeric for");
         };
-        assert!(numeric_for.type_annotation.is_some());
+        assert!(numeric_for.variable.type_annotation.is_some());
     }
 
     #[test]
@@ -653,8 +649,10 @@ mod tests {
     fn builds_type_function() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let signature =
-            FunctionSignature { params: vec![synth.param("ty")], ..FunctionSignature::default() };
+        let signature = FunctionSignature {
+            params: vec![synth.typed_name("ty", None)],
+            ..FunctionSignature::default()
+        };
         let stmt = synth.type_function(false, "Partial", signature, synth.block([]));
         let Statement::TypeDeclaration(declaration) = &stmt else {
             panic!("expected type declaration");
@@ -668,7 +666,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let exported = synth.export_local(
-            [synth.local_name("value", Some(synth.ty_named("integer")))],
+            [synth.typed_name("value", Some(synth.ty_named("integer")))],
             [synth.integer_i64(1)],
         );
         assert!(matches!(

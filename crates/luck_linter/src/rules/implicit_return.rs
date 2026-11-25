@@ -12,7 +12,7 @@ use crate::rule::{Rule, declare_lint_rule};
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ImplicitReturn;
 
-// "Return a value or nil" is idiomatic Lua, and neither Selene nor
+// "Return a value or nil" is idiomatic Luau, and neither Selene nor
 // Luacheck flags it, so this stays off by default.
 declare_lint_rule!(
     ImplicitReturn,

@@ -66,7 +66,7 @@ impl<'ast> Compressor<'_, 'ast> {
         // stack that every `local` leaves as it found it.
         let landed_start = self.landed_counts.len();
         for local_name in &mut local.names {
-            self.visit_local_name(local_name);
+            self.visit_typed_name(local_name);
         }
         let (name_count, value_count) = (local.names.len(), local.exprs.len());
         for (index, expr) in local.exprs.iter_mut().enumerate() {
@@ -472,7 +472,7 @@ mod tests {
         let allocator = Allocator::new();
         let source = sum_chain(links);
         let chunk = compressed(&allocator, &source, INLINING);
-        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
+        let [Statement::Return(return_stmt)] = &*chunk.stmts else {
             panic!("expected a return");
         };
         let run = return_stmt.exprs.first().expect("the return has its value");

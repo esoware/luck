@@ -32,7 +32,7 @@ __luck_loading[id]=nil
 __luck_loaded[id]=value
 return value
 end
--- module #1: sideeffect.lua
+-- module #1: sideeffect.luau
 __luck_modules[1]=function(...)
 print("side effect executed")
 

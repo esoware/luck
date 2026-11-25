@@ -390,7 +390,7 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
 mod tests {
     use std::fs;
 
-    use luck_token::Variant;
+    use luck_stdlib::Variant;
 
     use super::*;
 
@@ -538,14 +538,14 @@ mod tests {
         write_file(&root.join("a.lua"), "return 1\n");
         write_file(&root.join("pkg/b.lua"), "return 2\n");
 
-        let overlay = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
+        let overlay = LintConfig { extra_globals: vec!["app".to_owned()], ..LintConfig::default() };
         let files = project_files(None, &[root.display().to_string()], false, Some(&overlay))
             .expect("files resolve");
         let globals: Vec<Vec<String>> = files
             .iter()
             .map(|file| file.project.linter_for(Some(&file.path)).config().extra_globals.clone())
             .collect();
-        assert_eq!(globals, [["a", "vim"], ["b", "vim"]]);
+        assert_eq!(globals, [["a", "app"], ["b", "app"]]);
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_tree_default_filter_takes_all_lua() {
+    fn collect_tree_default_filter_takes_every_source_file() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
         write_file(&root.join("a.lua"), "return 1\n");

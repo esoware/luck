@@ -772,11 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unused_env_local_is_an_ordinary_one() {
-        assert_eq!(remove_dead("local _ENV = {} return 1"), "return 1");
-    }
-
-    #[test]
     fn keeps_local_rooting_a_function_declaration() {
         for source in [
             "local M = {} function M.foo() end print(\"ok\")",

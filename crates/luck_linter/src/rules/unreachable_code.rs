@@ -65,7 +65,7 @@ fn is_entered(block: &AstNode<'_>, graph: &FlowGraph, context: &LintContext<'_, 
         return true;
     };
     let kind = parent.kind();
-    if matches!(kind, AstKind::FunctionBody(_) | AstKind::Chunk(_)) {
+    if matches!(kind, AstKind::FunctionBody(_)) {
         return true;
     }
     let owner = if matches!(kind, AstKind::ElseIfClause(_) | AstKind::ElseClause(_)) {

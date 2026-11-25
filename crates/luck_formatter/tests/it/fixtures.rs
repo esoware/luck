@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use luck_formatter::FormatOptions;
-use luck_testgen::luau_fixtures;
+use luck_testgen::source_fixtures;
 
 use crate::common::formatted_with;
 
@@ -13,7 +13,7 @@ const LINE_WIDTHS: [u16; 5] = [1, 40, 80, 100, 120];
 #[test]
 fn every_fixture_formats_as_its_snapshot() {
     let fixtures: Vec<_> =
-        luau_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
+        source_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
     assert!(!fixtures.is_empty(), "no fixture outside `errors/`");
 
     for fixture in fixtures {

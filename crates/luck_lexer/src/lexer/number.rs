@@ -72,18 +72,13 @@ fn scan_hex_number(
         ));
     }
 
-    if matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
-        || matches!(cursor.peek(), Some(b'p' | b'P'))
-    {
-        return Err(Diagnostic::e008(
-            cursor.span_since(start),
-            "hex float literals are not supported",
-        ));
-    }
-
     let is_integer = eat_integer_suffix(cursor, start)?;
 
-    if is_touching_numeral(cursor) {
+    // Luau's scanner ends a hexadecimal numeral at a `.`, but one followed by
+    // a hex digit is a fraction that was meant to join it.
+    if is_touching_numeral(cursor)
+        || matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
+    {
         return Err(Diagnostic::e008(
             Span::from_indices(start, cursor.position() + 1),
             "malformed hexadecimal number",

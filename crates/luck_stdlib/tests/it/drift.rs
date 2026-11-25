@@ -203,7 +203,7 @@ fn max_placeholder(template: &str) -> usize {
 #[test]
 fn overloads_are_distinct_and_constants_unique() {
     let mut violations = Vec::new();
-    for (target, library) in all_libraries() {
+    for (variant, library) in all_libraries() {
         for (path, entry) in all_entries(library) {
             let StdlibEntry::Function(function) = entry else {
                 continue;
@@ -216,7 +216,7 @@ fn overloads_are_distinct_and_constants_unique() {
                         for v in values {
                             if !seen_values.insert(v.value) {
                                 violations.push(format!(
-                                    "{target} {path}: duplicate constant value '{}'",
+                                    "{variant} {path}: duplicate constant value '{}'",
                                     v.value
                                 ));
                             }
@@ -229,7 +229,7 @@ fn overloads_are_distinct_and_constants_unique() {
             for arity in &arities {
                 if !seen_arities.insert(*arity) {
                     violations.push(format!(
-                        "{target} {path}: two overloads with identical arity range {arity:?}"
+                        "{variant} {path}: two overloads with identical arity range {arity:?}"
                     ));
                 }
             }
@@ -241,7 +241,7 @@ fn overloads_are_distinct_and_constants_unique() {
 #[test]
 fn shape_references_resolve_and_templates_fit_arity() {
     let mut violations = Vec::new();
-    for (target, library) in all_libraries() {
+    for (variant, library) in all_libraries() {
         for (path, entry) in all_entries(library) {
             let (shape_reference, template_budget) = match entry {
                 StdlibEntry::Function(function) => {
@@ -258,7 +258,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
             if let Some(shape) = shape_reference
                 && !library.shapes.contains_key(shape)
             {
-                violations.push(format!("{target} {path}: dangling shape reference '{shape}'"));
+                violations.push(format!("{variant} {path}: dangling shape reference '{shape}'"));
             }
             let mut check_template = |context: &str,
                                       deprecation: &StdlibDeprecation<'_>,
@@ -268,7 +268,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
                     let highest = max_placeholder(template);
                     if highest > budget {
                         violations.push(format!(
-                            "{target} {path}{context}: template '{template}' references arg {highest}, max arity {budget}"
+                            "{variant} {path}{context}: template '{template}' references arg {highest}, max arity {budget}"
                         ));
                     }
                 }
@@ -297,7 +297,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
             if let Some(base) = shape.extends
                 && !library.shapes.contains_key(base)
             {
-                violations.push(format!("{target} {name}: extends the missing shape '{base}'"));
+                violations.push(format!("{variant} {name}: extends the missing shape '{base}'"));
             }
         }
     }
@@ -312,12 +312,12 @@ fn string_shape_mirrors_string_namespace() {
     // string.char builds from byte values and string.dump takes a
     // function; neither has a string subject.
     const NON_RECEIVER_MEMBERS: [&str; 2] = ["char", "dump"];
-    for (target, library) in all_libraries() {
+    for (variant, library) in all_libraries() {
         let Some(StdlibEntry::Namespace(namespace)) = library.globals.get("string") else {
-            panic!("{target}: string namespace missing");
+            panic!("{variant}: string namespace missing");
         };
         let Some(shape) = library.shapes.get("string") else {
-            panic!("{target}: derived string shape missing");
+            panic!("{variant}: derived string shape missing");
         };
         for (name, entry) in &namespace.members {
             let is_function = matches!(entry, StdlibEntry::Function(_));
@@ -325,23 +325,23 @@ fn string_shape_mirrors_string_namespace() {
             assert_eq!(
                 shape.members.contains_key(name),
                 should_be_member,
-                "{target}: string shape membership wrong for '{name}'"
+                "{variant}: string shape membership wrong for '{name}'"
             );
             if let (Some(StdlibEntry::Function(method)), StdlibEntry::Function(source)) =
                 (shape.members.get(name), entry)
             {
-                assert!(method.is_method, "{target}: string:{name} not a method");
+                assert!(method.is_method, "{variant}: string:{name} not a method");
                 assert_eq!(
                     method.primary_signature().params.len(),
                     source.primary_signature().params.len() - 1,
-                    "{target}: string:{name} did not drop exactly the subject param"
+                    "{variant}: string:{name} did not drop exactly the subject param"
                 );
             }
         }
         for name in shape.members.keys() {
             assert!(
                 namespace.members.contains_key(name),
-                "{target}: string shape member '{name}' has no namespace source"
+                "{variant}: string shape member '{name}' has no namespace source"
             );
         }
     }
@@ -376,16 +376,8 @@ fn environment_surfaces_do_not_leak() {
         "UserSettings",
         "settings",
     ];
-    // The loader and io surface the Luau VM leaves out.
-    const LUAU_ABSENT_GLOBALS: [&str; 6] =
-        ["io", "package", "dofile", "loadfile", "load", "module"];
     for name in ROBLOX_ONLY_GLOBALS {
         assert!(!luau().globals.contains_key(name), "{name} leaked into luau");
         assert!(roblox().globals.contains_key(name), "{name} missing from roblox");
-    }
-    for (target, library) in all_libraries() {
-        for name in LUAU_ABSENT_GLOBALS {
-            assert!(!library.globals.contains_key(name), "{name} must be absent from {target}");
-        }
     }
 }

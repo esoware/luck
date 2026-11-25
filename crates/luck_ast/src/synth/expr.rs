@@ -441,7 +441,7 @@ mod tests {
         assert!(matches!(synth.single_value(synth.vararg()), Expression::Parenthesized(_)));
         // Single-value expressions pass through unchanged.
         assert!(matches!(synth.single_value(synth.name_expr("x")), Expression::Name(_)));
-        assert!(matches!(synth.single_value(synth.number_i64(1)), Expression::Number(_)));
+        assert!(matches!(synth.single_value(synth.number_f64(1.0)), Expression::Number(_)));
     }
 
     #[test]
@@ -450,7 +450,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let called = synth.call(synth.name_expr("f"), []);
-        let indexed = synth.index(synth.field(called, "x"), synth.number_i64(1));
+        let indexed = synth.index(synth.field(called, "x"), synth.number_f64(1.0));
         let method_run = synth.method_call(indexed, "m", []);
         assert!(matches!(chain(&method_run).prefix, Expression::Name(_)));
         assert!(matches!(
@@ -591,8 +591,8 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let table = synth.table([
-            FieldSpec::Positional(synth.number_i64(1)),
-            FieldSpec::Named("a", synth.number_i64(2)),
+            FieldSpec::Positional(synth.number_f64(1.0)),
+            FieldSpec::Named("a", synth.number_f64(2.0)),
             FieldSpec::Bracketed(synth.string("k"), synth.boolean(true)),
         ]);
         let Expression::TableConstructor(constructor) = &table else {
@@ -609,7 +609,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let Expression::TableConstructor(array) =
-            synth.array([synth.number_i64(1), synth.number_i64(2)])
+            synth.array([synth.number_f64(1.0), synth.number_f64(2.0)])
         else {
             panic!("expected table");
         };
@@ -617,7 +617,7 @@ mod tests {
 
         // Unsafe keys fall back to the bracketed form.
         let Expression::TableConstructor(record) =
-            synth.record([("good", synth.number_i64(1)), ("not valid", synth.number_i64(2))])
+            synth.record([("good", synth.number_f64(1.0)), ("not valid", synth.number_f64(2.0))])
         else {
             panic!("expected table");
         };
@@ -630,9 +630,9 @@ mod tests {
         let synth = fixture.synth();
         let expr = synth.if_expr(
             synth.boolean(true),
-            synth.number_i64(1),
-            [(synth.boolean(false), synth.number_i64(2))],
-            synth.number_i64(3),
+            synth.number_f64(1.0),
+            [(synth.boolean(false), synth.number_f64(2.0))],
+            synth.number_f64(3.0),
         );
         let Expression::IfExpression(if_expr) = &expr else {
             panic!("expected if expression");

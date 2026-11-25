@@ -10,10 +10,9 @@ mod types;
 
 use luck_allocator::{Allocator, AsciiBytes, Box, List, ThinBytes, ThinStr};
 use luck_ast::{
-    BinaryLink, Block, Chunk, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionAttribute,
-    FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment, LocalName, Name,
-    NameIndex, NumberLiteral, Parameter, Statement, StringLiteral, Suffix, TreeCounts, Type,
-    TypeField, Var,
+    BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionAttribute,
+    FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment, Name, NameIndex,
+    NumberLiteral, Statement, StringLiteral, Suffix, TreeCounts, Type, TypeField, TypedName, Var,
 };
 use luck_diagnostics::Diagnostic;
 use luck_lexer::Lexer;
@@ -82,7 +81,7 @@ fn parse_source<'ast>(
             let block = Block::new(Span::new(0, 0), List::new());
             return ParseResult {
                 source,
-                chunk: Chunk::new(block),
+                chunk: block,
                 comments: Vec::new(),
                 tokens: Vec::new(),
                 groupings: Groupings::default(),
@@ -196,8 +195,7 @@ struct Scratch<'ast> {
     fields: Vec<Field<'ast>>,
     vars: Vec<Var<'ast>>,
     names: Vec<Name<'ast>>,
-    params: Vec<Parameter<'ast>>,
-    local_names: Vec<LocalName<'ast>>,
+    typed_names: Vec<TypedName<'ast>>,
     attributes: Vec<FunctionAttribute<'ast>>,
     elseif_clauses: Vec<ElseIfClause<'ast>>,
     elseif_exprs: Vec<ElseIfExprClause<'ast>>,
@@ -227,8 +225,7 @@ impl<'ast> Parser<'ast> {
     /// the source, and the lexer is drained by then.
     fn parse_chunk(mut self) -> ParseResult<'ast> {
         let start_span = self.token.span;
-        let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
-        let chunk = Chunk::new(block);
+        let chunk = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
         if !self.unclosed_blocks.is_empty() {
             label_forgotten_ends(&chunk, self.source, &self.unclosed_blocks, &mut self.errors);
         }

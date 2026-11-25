@@ -1,5 +1,5 @@
-//! Luau counts only LF as a line break (`Lexer::consumeAny`), so a lone CR is
-//! plain whitespace and a CRLF is one break by virtue of its LF.
+//! A line break is an LF, the byte Luau's `Lexer::consumeAny` starts a new
+//! line after. A CR is whitespace, so a CRLF is one break, at its LF.
 
 use std::ops::Range;
 

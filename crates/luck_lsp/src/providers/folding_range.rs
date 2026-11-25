@@ -7,7 +7,7 @@ use crate::line_index::Positions;
 
 pub(crate) fn folding_ranges(document: &DocumentState) -> Vec<FoldingRange> {
     let mut folder = Folder { document, starts: document.positions(), ranges: Vec::new() };
-    folder.visit_block(&document.parse().chunk.block);
+    folder.visit_block(&document.parse().chunk);
     folder.ranges
 }
 

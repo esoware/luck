@@ -55,7 +55,7 @@ mod tests {
     use crate::rules::RuleId;
 
     const PASS: &[&str] = &[
-        // `0` is truthy in Lua, so the ternary works as intended.
+        // `0` is truthy in Luau, so the ternary works as intended.
         "local r = (x and 0) or y",
         "local r = (x and y) or z",
         "local r = x or y",

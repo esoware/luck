@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// A source in the shared fixture tree.
 #[derive(Debug)]
-pub struct LuauFixture {
+pub struct SourceFixture {
     pub path: PathBuf,
     /// The path under the tree's root, which names the fixture.
     pub relative_path: PathBuf,
@@ -48,7 +48,7 @@ pub fn fixture_files() -> Vec<PathBuf> {
 /// # Panics
 ///
 /// Panics as [`fixture_files`] does, or when a file isn't readable as UTF-8.
-pub fn luau_fixtures() -> Vec<LuauFixture> {
+pub fn source_fixtures() -> Vec<SourceFixture> {
     let root = root();
     fixture_files()
         .into_iter()
@@ -59,7 +59,7 @@ pub fn luau_fixtures() -> Vec<LuauFixture> {
             let source = fs::read_to_string(&path).expect("a fixture is readable");
             let is_error =
                 relative_path.components().any(|component| component.as_os_str() == "errors");
-            LuauFixture { path, relative_path, is_error, source }
+            SourceFixture { path, relative_path, is_error, source }
         })
         .collect()
 }

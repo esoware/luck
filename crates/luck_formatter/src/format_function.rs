@@ -1,7 +1,7 @@
 use std::iter;
 
 use luck_ast::{
-    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Parameter, Slot,
+    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Slot, TypedName,
     VarArgParam,
 };
 use luck_token::{Span, TokenKind};
@@ -84,7 +84,7 @@ impl<'ast> Formatter<'ast> {
                         f.token(",");
                         f.soft_line_or_space();
                     }
-                    f.write_parameter(param);
+                    f.write_typed_name(param);
                 }
                 // The vararg comes last. Unlike a table, a broken parameter
                 // list gets no trailing comma, since the grammar allows none.
@@ -102,16 +102,15 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    pub(crate) fn write_parameter(&mut self, param: &Parameter<'ast>) {
+    pub(crate) fn write_typed_name(&mut self, typed_name: &TypedName<'ast>) {
         self.node(
-            || param.span(),
+            || typed_name.span(),
             |f| {
-                f.name(param.name);
-                // `: T` annotation.
-                if let Some(type_annotation) = &param.type_annotation {
+                f.name(typed_name.name);
+                if let Some(annotation) = &typed_name.type_annotation {
                     f.token(":");
                     f.space();
-                    f.write_type(type_annotation);
+                    f.write_type(annotation);
                 }
             },
         );

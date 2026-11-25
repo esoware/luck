@@ -78,8 +78,9 @@ mod tests {
 
     #[test]
     fn identifier_keys_become_fields_and_other_keys_stay_bracketed() {
-        // `continue` and `type` are keywords only where a statement starts.
-        for k in ["foo", "_bar", "x1", "_", "camelCase", "goto", "global", "continue", "type"] {
+        // `continue`, `export`, `const`, and `type` are keywords only where a
+        // statement starts.
+        for k in ["foo", "_bar", "x1", "_", "camelCase", "continue", "export", "const", "type"] {
             assert_eq!(apply(&format!("return t[\"{k}\"]\n")), format!("return t.{k}"));
             assert_eq!(apply(&format!("return {{[\"{k}\"] = 1}}\n")), format!("return{{{k}=1}}"));
         }

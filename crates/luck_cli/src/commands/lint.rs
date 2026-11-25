@@ -560,8 +560,7 @@ mod tests {
 
     use clap::Parser as _;
     use clap::error::ErrorKind;
-    use luck_stdlib::library_for;
-    use luck_token::Variant;
+    use luck_stdlib::{Variant, library_for};
 
     use super::*;
     use crate::cli::Cli;

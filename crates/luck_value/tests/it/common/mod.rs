@@ -20,7 +20,7 @@ pub(crate) fn of_expr<T>(source: &str, answer: impl FnOnce(&Expression<'_>) -> T
     let text = format!("return {source}");
     let parsed = luck_parser::parse(&allocator, text.as_bytes());
     assert!(parsed.errors.is_empty(), "{source} must parse: {:?}", parsed.errors);
-    let Some(Statement::Return(stmt)) = parsed.chunk.block.stmts.first() else {
+    let Some(Statement::Return(stmt)) = parsed.chunk.stmts.first() else {
         panic!("the chunk is one return");
     };
     let [expr] = &*stmt.exprs else { panic!("{source} must be one expression") };

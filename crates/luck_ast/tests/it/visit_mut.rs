@@ -94,7 +94,7 @@ fn rewrites_reach_loop_conditions_bounds_and_steps() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let numeric_for = synth.numeric_for(
-        synth.param("i"),
+        synth.typed_name("i", None),
         synth.nil(),
         synth.nil(),
         Some(synth.nil()),
@@ -117,7 +117,7 @@ fn the_default_walk_leaves_the_tree_as_it_was() {
     // start, so the two trees are equal before the walk.
     fn build(fixture: &Fixture) -> Block<'_> {
         let synth = fixture.synth();
-        let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(2));
+        let sum = synth.binary_op(synth.number_f64(1.0), BinOp::Add, synth.number_f64(2.0));
         let targets = [synth.field_var(synth.name_expr("a"), "b"), synth.name_var("c")];
         let values = [synth.name_expr("x"), synth.name_expr("x")];
         synth.block([synth.local(&["x"], [sum]), synth.assign(targets, values)])

@@ -4,7 +4,7 @@
 //! from the line it opens on, which suggests the `end` was written for the
 //! construct around it.
 
-use luck_ast::{Chunk, FunctionBody, GetSpan as _, Statement, Visit};
+use luck_ast::{Block, FunctionBody, GetSpan as _, Statement, Visit};
 use luck_diagnostics::{Diagnostic, Label};
 use luck_token::{Span, Token, TokenKind, has_line_break};
 
@@ -20,7 +20,7 @@ pub(super) struct UnclosedBlock {
 /// Labels each of `unclosed`'s errors with the construct `chunk` suggests
 /// lost its `end`, if one does.
 pub(super) fn label_forgotten_ends(
-    chunk: &Chunk<'_>,
+    chunk: &Block<'_>,
     source: &[u8],
     unclosed: &[UnclosedBlock],
     errors: &mut [Diagnostic],
@@ -30,7 +30,7 @@ pub(super) fn label_forgotten_ends(
     // block unclosed pays for.
     let tokens = luck_lexer::lex(source).tokens;
     let mut finder = Misindented { source, tokens: &tokens, found: Vec::new() };
-    finder.visit_block(&chunk.block);
+    finder.visit_block(chunk);
     for &UnclosedBlock { error_index, opener } in unclosed {
         let error = &mut errors[error_index];
         let at = error.span.expect("a parse error has a span").start;

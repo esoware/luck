@@ -61,10 +61,10 @@ use crate::leaf::Name;
 ///   and a number literal its double, and the printers spell each, escaping
 ///   what needs it. [`Synth::long_string`] also keeps a long-bracket
 ///   spelling, which the formatter prints as is.
-/// - **Numbers no literal holds.** [`Synth::number_f64`] and
-///   [`Synth::number_i64`] build any value: a negative one as a unary minus,
-///   and NaN as `0/0`. An integer may round to the nearest double, and NaN
-///   sign and payload aren't preserved.
+/// - **Numbers no literal holds.** [`Synth::number_f64`] builds any double:
+///   a negative one as a unary minus, and NaN as `0/0`, whose sign and
+///   payload aren't preserved. [`Synth::integer_i64`] builds any integer, a
+///   negative one as its bit pattern in hex.
 /// - **Loud failure on invalid names.** [`Synth::name`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of
@@ -110,10 +110,9 @@ use crate::leaf::Name;
 ///   and [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of
 ///   any depth without recursing past the cap.
 ///
-/// To print the result, put its block in a [`Chunk`](crate::Chunk), and pass
-/// that to `luck_formatter::format_chunk`, with any of its
-/// `SyntheticComment`s wrapped in `Comments::synthetic`, or to
-/// `luck_codegen::compact` for compact output. `format_chunk` returns an
+/// To print the result, pass its block to `luck_formatter::format_chunk`,
+/// with any of its `SyntheticComment`s wrapped in `Comments::synthetic`, or
+/// to `luck_codegen::compact` for compact output. `format_chunk` returns an
 /// error for a tree nested past the cap, and `compact` prints it as it is,
 /// output the parser refuses.
 ///
@@ -130,7 +129,7 @@ use crate::leaf::Name;
 /// let sum = synth.binary_op(
 ///     synth.name_expr("a"),
 ///     BinOp::Add,
-///     synth.binary_op(synth.name_expr("b"), BinOp::Mul, synth.number_i64(2)),
+///     synth.binary_op(synth.name_expr("b"), BinOp::Mul, synth.number_f64(2.0)),
 /// );
 /// let stmt = synth.assign([synth.name_var("total")], [sum]);
 /// let block = synth.block([stmt]);

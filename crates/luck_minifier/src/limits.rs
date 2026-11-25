@@ -1,10 +1,9 @@
-//! The Luau compiler's limits, which a merged or hoisted statement has to
+//! What a construct takes of the registers Luau's compiler gives one
+//! function, [`MAX_REGISTERS`], which a merged or hoisted statement has to
 //! stay under.
 
 use luck_ast::FunctionBody;
-
-/// Registers one function can use, the compiler's `kMaxRegisterCount`.
-pub(crate) const MAX_REGISTERS: usize = 255;
+use luck_token::MAX_REGISTERS;
 
 /// Registers a numeric `for` loop takes: its limit, step, and index, which
 /// its variable shares, and one more for the variable when the body assigns

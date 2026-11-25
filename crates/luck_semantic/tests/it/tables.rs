@@ -5,7 +5,7 @@
 //! and scopes, symbols, and references point into it.
 
 use luck_allocator::Allocator;
-use luck_ast::{AstKind, Chunk, Expression, GetSpan as _, Name, Visit};
+use luck_ast::{AstKind, Block, Expression, GetSpan as _, Name, Visit};
 use luck_semantic::{Scoping, SemanticBuilder};
 
 use crate::common::for_each_valid_source;
@@ -69,7 +69,7 @@ fn every_valid_source_s_tables_agree() {
 }
 
 /// What every query of `scoping` answers about `chunk`.
-fn answers(scoping: &Scoping, chunk: &Chunk<'_>) -> String {
+fn answers(scoping: &Scoping, chunk: &Block<'_>) -> String {
     struct Roles<'scoping>(&'scoping Scoping, Vec<String>);
     impl<'tree> Visit<'tree> for Roles<'_> {
         fn visit_name(&mut self, name: &'tree Name<'tree>) {
@@ -79,10 +79,10 @@ fn answers(scoping: &Scoping, chunk: &Chunk<'_>) -> String {
         }
     }
     let mut roles = Roles(scoping, Vec::new());
-    roles.visit_chunk(chunk);
+    roles.visit_block(chunk);
     let resolved: Vec<_> =
         scoping.symbols().iter().map(|symbol| scoping.resolved_references(symbol.id)).collect();
-    let within: Vec<_> = scoping.references_within(chunk.block.span).collect();
+    let within: Vec<_> = scoping.references_within(chunk.span).collect();
     format!(
         "{:?}",
         (

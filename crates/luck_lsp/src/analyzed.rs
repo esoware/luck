@@ -127,7 +127,7 @@ mod tests {
     use std::thread;
 
     use luck_linter::LintConfig;
-    use luck_token::Variant;
+    use luck_stdlib::Variant;
 
     use super::*;
 

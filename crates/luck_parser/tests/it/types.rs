@@ -9,7 +9,7 @@ use crate::common::{assert_no_errors, parse_str};
 fn alias_type<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Type<'ast> {
     let result = parse_str(allocator, source);
     assert_no_errors(&result);
-    let stmt = result.chunk.block.stmts.into_iter().next().expect("a statement");
+    let stmt = result.chunk.stmts.into_iter().next().expect("a statement");
     let Statement::TypeDeclaration(type_declaration) = stmt else {
         panic!("expected TypeDeclaration, got {stmt:?}");
     };
@@ -133,7 +133,7 @@ fn question_marks_folded_into_a_return_pack_join_its_first_elements_run() {
     let allocator = Allocator::new();
     let result = parse_str(&allocator, "local function f(): (T?, ...U)?? end");
     assert_no_errors(&result);
-    let Statement::LocalFunction(function) = &result.chunk.block.stmts[0] else {
+    let Statement::LocalFunction(function) = &result.chunk.stmts[0] else {
         panic!("expected a local function");
     };
     let Some(Type::Pack(pack)) = function.body.return_type.as_deref() else {
@@ -147,7 +147,7 @@ fn question_marks_folded_into_a_return_pack_join_its_first_elements_run() {
 }
 
 #[test]
-fn negation_syntax_is_an_error_in_luau() {
+fn negation_syntax_is_an_error() {
     let allocator = Allocator::new();
     for source in [
         "return ~1",
@@ -363,7 +363,7 @@ fn type_alias_generics_keep_their_defaults() {
     let allocator = Allocator::new();
     let result = parse_str(&allocator, "type Foo<T = string, S... = ...string> = T");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
     let generics = type_declaration.generics.as_ref().expect("generics");
@@ -377,7 +377,7 @@ fn local_keeps_its_annotation() {
     let allocator = Allocator::new();
     let result = parse_str(&allocator, "local x: number = 1");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.chunk.stmts[0] else {
         panic!("expected LocalAssignment");
     };
     let name = local.names.first().expect("name");
@@ -389,7 +389,7 @@ fn each_local_keeps_its_own_annotation() {
     let allocator = Allocator::new();
     let result = parse_str(&allocator, "local a: number, b, c: string? = 1, 2, \"x\"");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.chunk.stmts[0] else {
         panic!("expected LocalAssignment");
     };
     let annotations: Vec<bool> =
@@ -402,10 +402,10 @@ fn numeric_for_keeps_its_annotation() {
     let allocator = Allocator::new();
     let result = parse_str(&allocator, "for i: number = 1, 10 do end");
     assert_no_errors(&result);
-    let Statement::NumericFor(numeric_for) = &result.chunk.block.stmts[0] else {
+    let Statement::NumericFor(numeric_for) = &result.chunk.stmts[0] else {
         panic!("expected NumericFor");
     };
-    assert!(numeric_for.type_annotation.is_some());
+    assert!(numeric_for.variable.type_annotation.is_some());
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn generic_for_keeps_each_annotation() {
     let allocator = Allocator::new();
     let result = parse_str(&allocator, "for k: string, v: number in pairs(t) do end");
     assert_no_errors(&result);
-    let Statement::GenericFor(generic_for) = &result.chunk.block.stmts[0] else {
+    let Statement::GenericFor(generic_for) = &result.chunk.stmts[0] else {
         panic!("expected GenericFor");
     };
     assert!(generic_for.names.iter().all(|binding| binding.type_annotation.is_some()));
@@ -430,7 +430,7 @@ local function map<T, U>(items: {T}, fn: (T) -> U): {U}
 end",
     );
     assert_no_errors(&result);
-    let Statement::LocalFunction(local_function) = &result.chunk.block.stmts[0] else {
+    let Statement::LocalFunction(local_function) = &result.chunk.stmts[0] else {
         panic!("expected LocalFunction");
     };
     assert!(local_function.body.generics.is_some());
@@ -681,4 +681,112 @@ fn type_pack_after_a_defaulted_parameter_needs_a_default() {
 #[test]
 fn parenthesized_single_type_is_a_valid_pack_default() {
     assert_accepted(&["type X<T... = (number)> = number"]);
+}
+
+#[test]
+fn typed_function_keeps_its_params_and_return_type() {
+    let allocator = Allocator::new();
+    let result = parse_str(&allocator, "function f(a: string, b: number): boolean return true end");
+    assert_no_errors(&result);
+    assert_eq!(result.chunk.stmts.len(), 1);
+    if let Statement::FunctionDecl(function_decl) = &result.chunk.stmts[0] {
+        let param_count = function_decl.body.params.len();
+        assert_eq!(param_count, 2);
+        assert!(function_decl.body.return_type.is_some());
+    } else {
+        panic!("expected FunctionDecl");
+    }
+}
+
+#[test]
+fn local_takes_a_generic_type_annotation() {
+    let allocator = Allocator::new();
+    let result = parse_str(&allocator, "local t: Array<number> = {}");
+    assert_no_errors(&result);
+    assert!(matches!(&result.chunk.stmts[0], Statement::LocalAssignment(_)));
+}
+
+#[test]
+fn type_alias_keeps_its_name() {
+    let allocator = Allocator::new();
+    let result = parse_str(&allocator, "type Foo = number");
+    assert_no_errors(&result);
+    assert_eq!(result.chunk.stmts.len(), 1);
+    if let Statement::TypeDeclaration(type_declaration) = &result.chunk.stmts[0] {
+        assert_eq!(type_declaration.name.text, "Foo");
+    } else {
+        panic!("expected TypeDeclaration, got {:?}", result.chunk.stmts[0]);
+    }
+}
+
+#[test]
+fn type_alias_keeps_its_generics() {
+    let allocator = Allocator::new();
+    let result = parse_str(&allocator, "type Pair<T> = { first: T, second: T }");
+    assert_no_errors(&result);
+    if let Statement::TypeDeclaration(type_declaration) = &result.chunk.stmts[0] {
+        assert!(type_declaration.generics.is_some());
+    } else {
+        panic!("expected TypeDeclaration");
+    }
+}
+
+#[test]
+fn exported_type_alias_is_exported() {
+    let allocator = Allocator::new();
+    let result = parse_str(&allocator, "export type Point = { x: number, y: number }");
+    assert_no_errors(&result);
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.stmts[0] else {
+        panic!("expected TypeDeclaration");
+    };
+    assert!(type_declaration.is_exported);
+}
+
+#[test]
+fn type_aliases_follow_one_another() {
+    let allocator = Allocator::new();
+    let source = "\
+type A = number
+type B = string";
+    let result = parse_str(&allocator, source);
+    assert_no_errors(&result);
+    assert_eq!(result.chunk.stmts.len(), 2);
+}
+
+#[test]
+fn type_function_declaration_keeps_its_body() {
+    let allocator = Allocator::new();
+    let result = parse_str(
+        &allocator,
+        "\
+type function Id(t)
+\treturn t
+end",
+    );
+    assert_no_errors(&result);
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.stmts[0] else {
+        panic!("expected TypeDeclaration");
+    };
+    assert!(matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)));
+}
+
+#[test]
+fn local_takes_a_nested_generic_type_annotation() {
+    let allocator = Allocator::new();
+    let source = "local x: Map<string, Array<number>> = {}";
+    let result = parse_str(&allocator, source);
+    assert_no_errors(&result);
+}
+
+#[test]
+fn exported_type_function_is_exported() {
+    let allocator = Allocator::new();
+    let result = parse_str(&allocator, "export type function Id(t) return t end");
+    assert_no_errors(&result);
+    if let Statement::TypeDeclaration(type_declaration) = &result.chunk.stmts[0] {
+        assert!(type_declaration.is_exported);
+        assert!(matches!(type_declaration.value, TypeDeclarationValue::TypeFunction(_)));
+    } else {
+        panic!("expected TypeDeclaration");
+    }
 }

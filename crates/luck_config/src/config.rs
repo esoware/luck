@@ -8,7 +8,7 @@ use luck_bundler::DynamicRequire;
 use luck_formatter::FormatConfig;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use luck_token::Variant;
+use luck_stdlib::Variant;
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 

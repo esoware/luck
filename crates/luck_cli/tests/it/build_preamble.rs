@@ -40,7 +40,7 @@ fn build_preamble_stays_after_a_shebang() {
         directory.path(),
         "main.lua",
         "\
-#!/usr/bin/env lua
+#!/usr/bin/env luau
 print(1)
 ",
     );
