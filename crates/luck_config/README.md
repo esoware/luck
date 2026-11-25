@@ -20,7 +20,7 @@ A project gives every file one variant and standard library, and each file the r
 
 Every glob matches relative to the `luck.json` directory, whichever file in an `extends` chain sets it, and `*` stops at `/` while `**/` crosses directories. A directory with no `luck.json` above it gets `Project::defaults`, rooted where discovery started.
 
-`walk_source_files` finds the `.lua` and `.luau` files under a directory, past what `.gitignore` and `.luckignore` hide, so `lint`, `fmt`, and `check` take the same files the language server's workspace holds. The caller's `WalkVisitor` says which project each directory and file is in, whose `exclude` leaves a whole directory out and whose `include` and `exclude` take each file or leave it, by its canonical path, a symlink's target's for a symlink.
+`walk_source_files` finds the `.lua` and `.luau` files under a directory, past what `.gitignore` and `.luckignore` hide, so `lint`, `fmt`, and `check` take the same files the language server's workspace holds. The caller's `WalkVisitor` says which project each directory and file is in, whose `exclude` leaves a whole directory out and whose `include` and `exclude` take each file or leave it. A file's globs, as its `overrides`, match it under its directory's canonical path, as `located_path` gives it, so a symlink goes by where it is, the same place its project comes from, and is read where it leads.
 
 The VS Code extension's schema is generated from the config types, with the doc comments as its descriptions.
 

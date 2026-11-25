@@ -89,7 +89,8 @@ pub trait WalkVisitor: Sync {
 ///
 /// A source file is a file whose extension is `lua` or `luau`, or a symlink with
 /// one that leads to a file. The walk follows no symlink, so only a symlink's
-/// target needs the disk to place.
+/// target needs the disk to place, and its project's globs match the symlink
+/// where it is, as [`located_path`](crate::located_path) spells it.
 ///
 /// # Errors
 ///
@@ -160,18 +161,25 @@ where
                 {
                     return WalkState::Continue;
                 }
-                let canonical = if entry.path_is_symlink() {
-                    FileSystemOs.canonicalize(path).ok().filter(|target| target.is_file())
-                } else {
-                    file_type.is_file().then(|| canonical_under(roots, path))
-                };
-                let Some(canonical) = canonical else {
+                let is_symlink = entry.path_is_symlink();
+                if !is_symlink && !file_type.is_file() {
                     return WalkState::Continue;
-                };
-                let file = WalkEntry { path, depth };
-                if visitor.file_filter(&file).includes_canonical(&canonical) {
-                    found.lock().push(WalkedFile { path: entry.into_path(), canonical });
                 }
+                let located = canonical_under(roots, path);
+                if !visitor.file_filter(&WalkEntry { path, depth }).includes_located(&located) {
+                    return WalkState::Continue;
+                }
+                let canonical = if is_symlink {
+                    let Some(target) =
+                        FileSystemOs.canonicalize(path).ok().filter(|target| target.is_file())
+                    else {
+                        return WalkState::Continue;
+                    };
+                    target
+                } else {
+                    located
+                };
+                found.lock().push(WalkedFile { path: entry.into_path(), canonical });
                 WalkState::Continue
             })
         });
@@ -196,6 +204,11 @@ fn canonical_under(roots: &[WalkRoot<'_>], path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink as symlink_file;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_file;
 
     use luck_resolver::to_slash_lossy;
 
@@ -271,5 +284,41 @@ mod tests {
     fn leaves_out_a_directory_its_visitor_does_not_enter() {
         let files = [("luck.json", "{}"), ("a.lua", ""), ("sub/b.lua", ""), ("sub/deep/c.lua", "")];
         assert_eq!(walked(&files, 1), ["a.lua", "sub/b.lua"]);
+    }
+
+    /// A symlink is taken as its project's globs see it where it is, and read
+    /// where it leads.
+    #[test]
+    fn takes_a_symlink_its_project_includes_where_it_is() {
+        let directory =
+            project_with(&[("luck.json", r#"{ "include": ["src/**"] }"#), ("src/a.lua", "")]);
+        let elsewhere = tempfile::tempdir().expect("tempdir");
+        let target = elsewhere.path().join("b.lua");
+        fs::write(&target, "").expect("write b.lua");
+        // Windows lets only an administrator or developer mode make one.
+        if symlink_file(&target, directory.path().join("src/b.lua")).is_err() {
+            return;
+        }
+        let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+        let canonical = FileSystemOs.canonicalize(directory.path()).expect("the project exists");
+        let root = WalkRoot { path: directory.path(), canonical: &canonical };
+        let visitor = OneProject { project, max_entered_depth: usize::MAX };
+        let Ok(found) = walk_source_files(&[root], None, &visitor);
+        let mut taken: Vec<(String, PathBuf)> = found
+            .into_iter()
+            .map(|file| {
+                let below = file.path.strip_prefix(directory.path()).expect("under the root");
+                (to_slash_lossy(below).into_owned(), file.canonical)
+            })
+            .collect();
+        taken.sort_unstable();
+        let target = FileSystemOs.canonicalize(&target).expect("the target exists");
+        assert_eq!(
+            taken,
+            [
+                ("src/a.lua".to_owned(), canonical.join("src").join("a.lua")),
+                ("src/b.lua".to_owned(), target)
+            ]
+        );
     }
 }

@@ -62,7 +62,7 @@ mod walk;
 
 pub use build::{BuildConfig, check_output_paths};
 pub use editorconfig::{EDITORCONFIG_FILE_NAME, Editorconfigs};
-pub use filter::ProjectFilter;
+pub use filter::{ProjectFilter, located_path};
 pub use glob::glob_set;
 pub use load::{CONFIG_FILE_NAME, find_config};
 pub use project::Project;

@@ -8,7 +8,6 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
-use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_stdlib::Stdlib;
 use luck_token::Variant;
 use parking_lot::Mutex;
@@ -17,7 +16,7 @@ use rustc_hash::FxHashMap;
 use crate::build::{BuildConfig, BuildKeys};
 use crate::config::{Entries, LuckConfig, OverrideConfig};
 use crate::editorconfig::Editorconfigs;
-use crate::filter::ProjectFilter;
+use crate::filter::{ProjectFilter, located_path};
 use crate::glob::compiled;
 use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
 
@@ -263,8 +262,8 @@ impl Project {
         let Some(file) = path.filter(|_| !self.overrides.is_empty()) else {
             return Vec::new();
         };
-        let canonical = FileSystemOs.canonicalize_existing(file);
-        let candidate = Candidate::new(self.filter.relative(&canonical));
+        let located = located_path(file);
+        let candidate = Candidate::new(self.filter.relative(&located));
         self.overrides
             .iter()
             .enumerate()

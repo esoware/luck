@@ -1,9 +1,22 @@
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 
 use globset::{Candidate, GlobSet};
 use luck_resolver::{FileSystem as _, FileSystemOs};
 
 use crate::glob::{Glob, compiled, glob_set};
+
+/// `path` under its directory's canonical path, with its own name, so a
+/// symlink stays where it is and doesn't move to where it leads.
+///
+/// A file takes the project of its directory, and its `include`, `exclude`,
+/// and `overrides` globs match this, so all of them go by the same path.
+pub fn located_path(path: &Path) -> PathBuf {
+    let absolute = path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(directory), Some(name)) => FileSystemOs.canonicalize_existing(directory).join(name),
+        _ => FileSystemOs.canonicalize_existing(&absolute),
+    }
+}
 
 /// Decides whether a file belongs to the project from `include` and `exclude`
 /// globs, matched relative to the config directory. Exclude wins.
@@ -70,12 +83,12 @@ impl ProjectFilter {
     }
 
     pub fn is_included(&self, path: &Path) -> bool {
-        self.includes_canonical(&FileSystemOs.canonicalize_existing(path))
+        self.includes_located(&located_path(path))
     }
 
-    /// [`is_included`](Self::is_included) for a canonical path, such as a
-    /// walk from a canonical directory builds, which touches no disk.
-    pub fn includes_canonical(&self, path: &Path) -> bool {
+    /// [`is_included`](Self::is_included) for a path [`located_path`] gives,
+    /// or a walk from a canonical directory builds, which touches no disk.
+    pub fn includes_located(&self, path: &Path) -> bool {
         let candidate = Candidate::new(self.relative(path));
         let is_taken = self
             .include
@@ -87,14 +100,13 @@ impl ProjectFilter {
     /// Whether an `exclude` glob matches `path`, whatever `include` says. A
     /// file named on the command line is held to this alone.
     pub fn is_excluded(&self, path: &Path) -> bool {
-        !self.exclude.is_empty()
-            && self.exclude.is_match(self.relative(&FileSystemOs.canonicalize_existing(path)))
+        !self.exclude.is_empty() && self.exclude.is_match(self.relative(&located_path(path)))
     }
 
-    /// `canonical` as the globs see it, relative to the root when it's under
-    /// it.
-    pub(crate) fn relative<'path>(&self, canonical: &'path Path) -> &'path Path {
-        canonical.strip_prefix(&self.root).unwrap_or(canonical)
+    /// `located`, a path under canonical directories, as the globs see it,
+    /// relative to the root when it's under it.
+    pub(crate) fn relative<'path>(&self, located: &'path Path) -> &'path Path {
+        located.strip_prefix(&self.root).unwrap_or(located)
     }
 }
 

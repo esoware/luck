@@ -1,3 +1,8 @@
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink as symlink_file;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_file;
 use std::path::{Path, PathBuf};
 
 use luck_bundler::DynamicRequire;
@@ -109,6 +114,31 @@ fn an_extended_override_matches_from_the_loaded_config_s_directory() {
     ]);
     let linter = project.linter_for(Some(&directory.path().join("spec/a.lua")));
     assert_eq!(linter.config().extra_globals, ["it"]);
+}
+
+/// A symlink takes the project of its own directory, so its `include` and
+/// `overrides` globs match it there too, wherever it leads.
+#[test]
+fn a_symlink_matches_the_globs_where_it_is_and_not_where_it_leads() {
+    let (directory, project) = loaded(&[(
+        "luck.json",
+        r#"{
+            "include": ["src/**"],
+            "overrides": [{ "files": ["src/**"], "lint": { "extra_globals": ["it"] } }]
+        }"#,
+    )]);
+    let elsewhere = tempfile::tempdir().expect("tempdir");
+    let target = elsewhere.path().join("b.lua");
+    fs::write(&target, "").expect("write b.lua");
+    fs::create_dir_all(directory.path().join("src")).expect("mkdir src");
+    let link = directory.path().join("src/b.lua");
+    // Windows lets only an administrator or developer mode make one.
+    if symlink_file(&target, &link).is_err() {
+        return;
+    }
+    assert!(project.filter().is_included(&link));
+    assert!(!project.filter().is_included(&target));
+    assert_eq!(project.linter_for(Some(&link)).config().extra_globals, ["it"]);
 }
 
 #[test]

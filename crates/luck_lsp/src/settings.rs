@@ -151,9 +151,9 @@ impl Lookups {
 }
 
 impl SettingsCache {
-    /// The settings of the document at `file`, a path [`settings_path`]
-    /// gives, or of an untitled document, under `project`, the one
-    /// [`Self::project_for`] gives it.
+    /// The settings of the document at `file`, a path
+    /// [`located_path`](luck_config::located_path) gives, or of an untitled
+    /// document, under `project`, the one [`Self::project_for`] gives it.
     pub(crate) fn document_settings(
         &self,
         project: Arc<LoadedProject>,
@@ -164,9 +164,8 @@ impl SettingsCache {
         let stdlib = loaded.stdlib().clone();
         let linter = loaded.linter_for(file);
         let format = loaded.format_options(file, Some(&editorconfigs));
+        let is_included = file.is_none_or(|located| loaded.filter().includes_located(located));
         let path = file.map(|located| FileSystemOs.canonicalize_existing(located));
-        let is_included =
-            path.as_deref().is_none_or(|canonical| loaded.filter().includes_canonical(canonical));
         DocumentSettings { path, project, stdlib, linter, format, is_included }
     }
 
@@ -262,19 +261,6 @@ impl SettingsCache {
         for project in &self.lookups.read().projects {
             project.resolver.clear_cache();
         }
-    }
-}
-
-/// `spelled`, a document's path as the client spells it, under its
-/// directory's canonical path.
-///
-/// A document's project and settings follow this, as `luck lint`'s follow
-/// the path it's given, so a symlink takes the project of its own directory
-/// and not its target's.
-pub(crate) fn settings_path(spelled: &Path) -> PathBuf {
-    match (spelled.parent(), spelled.file_name()) {
-        (Some(directory), Some(name)) => FileSystemOs.canonicalize_existing(directory).join(name),
-        _ => FileSystemOs.canonicalize_existing(spelled),
     }
 }
 
