@@ -11,7 +11,7 @@ On a CPU with AVX2 or Neon, which `luck_simd` detects at runtime, the lexer clas
 ## Usage
 
 - `lex(source)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of the lenient escapes. Each batch goes straight into the vector it returns. A string token left unterminated says so, and so does the `Eof` after a block comment left unterminated. A string token says too whether it holds an escape, or in long brackets a CR, so the parser decodes only the strings that need it.
-- `Lexer` hands out one token at a time with `next_token`, from a batch it lexes ahead into a buffer that stays in the cache, and once the source is drained, `finish` takes back the tokens the caller kept and returns them in a `LexResult` with the rest. A caller that reads every token, as the parser does, can take each with `has_buffered` and `take_buffered`, which call nothing, and lex the next batch with `refill` out of line.
+- `Lexer` hands out one token at a time with `next_token`, from a batch it lexes ahead into a buffer that stays in the cache, and once the source is drained, `finish` takes back the tokens the caller kept and returns them in a `LexResult` with the rest. A caller that reads every token, as the parser does, can take each with `has_buffered` and `take_buffered`, which call nothing, look at the one after it in place with `peek_buffered`, and lex the next batch with `refill` out of line.
 - Each error is an E008 `luck_diagnostics::Diagnostic`. The lexer refuses a source over 4 GiB with one.
 
 ```rust

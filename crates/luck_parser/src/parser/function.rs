@@ -55,7 +55,8 @@ impl<'ast> Parser<'ast> {
     }
 
     /// Parse the parameter list between a function's parens, stopping before
-    /// the closing `)`.
+    /// the closing `)`. A list of one, as most are, moves to the arena as a
+    /// value.
     fn parse_params(
         &mut self,
     ) -> (List<'ast, TypedName<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
@@ -68,6 +69,9 @@ impl<'ast> Parser<'ast> {
         let start = self.scratch.typed_names.len();
         let first_name = self.advance_name();
         let first = self.parse_typed_name(first_name);
+        if !self.is_at(TokenKind::Comma) {
+            return (List::from_array_in([first], self.allocator), None);
+        }
         self.scratch.typed_names.push(first);
         let mut vararg = None;
         while self.eat(TokenKind::Comma) {

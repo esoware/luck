@@ -9,11 +9,80 @@ use luck_token::{BinOp, Span, Token, TokenKind, UnOp};
 use super::recovery::Closer;
 use super::{Parser, name_token};
 
+/// Whether `kind` can open a suffix, which `<` does only as the first of the
+/// `<<` that opens a type instantiation.
+const fn can_open_suffix(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Dot
+            | TokenKind::LeftBracket
+            | TokenKind::Colon
+            | TokenKind::LeftParen
+            | TokenKind::LeftBrace
+            | TokenKind::StringLiteral
+            | TokenKind::Less
+    )
+}
+
+/// Whether `kind` after a name or a literal ends the expression there: it
+/// opens no suffix, no cast, and no binary operator.
+const fn ends_operand(kind: TokenKind) -> bool {
+    !can_open_suffix(kind)
+        && !matches!(kind, TokenKind::DoubleColon)
+        && BinOp::from_token_kind(kind).is_none()
+}
+
+/// The tokens [`Parser::parse_lone_operand`] reads as a whole operand.
+const fn is_lone_operand(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        name_token!(
+            TokenKind::Number
+                | TokenKind::StringLiteral
+                | TokenKind::Nil
+                | TokenKind::False
+                | TokenKind::True
+                | TokenKind::DotDotDot
+        )
+    )
+}
+
 impl<'ast> Parser<'ast> {
+    /// Most expressions are a name or a literal alone, which the token after
+    /// it shows, so they skip the recursion through the whole grammar.
+    ///
+    /// Out of line, so the check is one copy rather than one in each of the
+    /// grammar's calls, which keeps its code and its recursive frames small.
+    #[inline(never)]
+    pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression<'ast> {
+        if is_lone_operand(self.peek()) && ends_operand(self.peek_next()) {
+            return self.parse_lone_operand(min_precedence);
+        }
+        self.parse_compound_expr(min_precedence)
+    }
+
+    /// The current token as the whole expression, which it is when it's a
+    /// name or a literal and the token after it ends it, as
+    /// [`Self::parse_compound_expr`] would read it. It opens no level of
+    /// nesting, so the deepest level stays where it was.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the full grammar")]
+    fn parse_lone_operand(&mut self, min_precedence: u8) -> Expression<'ast> {
+        match self.peek() {
+            name_token!() => self.parse_name_expr(),
+            TokenKind::Number => Expression::Number(self.advance_number()),
+            TokenKind::StringLiteral => Expression::StringLiteral(self.advance_string()),
+            TokenKind::Nil => Expression::Nil(self.advance()),
+            TokenKind::False => Expression::False(self.advance()),
+            TokenKind::True => Expression::True(self.advance()),
+            TokenKind::DotDotDot => self.parse_vararg(),
+            _ => self.parse_compound_expr(min_precedence),
+        }
+    }
+
     /// Each precedence level's operators run in a loop into one node, so a
     /// run of any length is one level of nesting, counted toward the depth
     /// cap from its first operand's deepest level.
-    pub(super) fn parse_expr(&mut self, min_precedence: u8) -> Expression<'ast> {
+    fn parse_compound_expr(&mut self, min_precedence: u8) -> Expression<'ast> {
         let level = self.nesting_depth;
         let outer = self.begin_operand();
         let start = self.token.span.start;
@@ -38,6 +107,7 @@ impl<'ast> Parser<'ast> {
     /// a left-associative one and only the grouping differs.
     ///
     /// Parentheses end a run, so an operand in them stays a run of its own.
+    /// Most runs hold one operator, whose link goes straight to the arena.
     fn parse_binary_run(
         &mut self,
         first: Expression<'ast>,
@@ -47,22 +117,33 @@ impl<'ast> Parser<'ast> {
     ) -> Expression<'ast> {
         self.advance();
         let operand_precedence = precedence + 1;
-        let links_start = self.scratch.binary_links.len();
         let operand = self.parse_expr(operand_precedence);
-        self.scratch.binary_links.push(BinaryLink::new(op, operand));
-        while let Some(next_op) = BinOp::from_token_kind(self.peek())
-            .filter(|next_op| next_op.precedence().0 == precedence)
-        {
-            self.advance();
-            let next_operand = self.parse_expr(operand_precedence);
-            self.scratch.binary_links.push(BinaryLink::new(next_op, next_operand));
-        }
-        let links =
-            OneOrMore::split_off_in(&mut self.scratch.binary_links, links_start, self.allocator);
-        let span = Span::new(start, self.previous_span.end);
+        let first_link = BinaryLink::new(op, operand);
+        let links = if self.operator_at(precedence).is_some() {
+            let links_start = self.scratch.binary_links.len();
+            self.scratch.binary_links.push(first_link);
+            while let Some(next_op) = self.operator_at(precedence) {
+                self.advance();
+                let next_operand = self.parse_expr(operand_precedence);
+                self.scratch.binary_links.push(BinaryLink::new(next_op, next_operand));
+            }
+            OneOrMore::split_off_in(&mut self.scratch.binary_links, links_start, self.allocator)
+        } else {
+            OneOrMore::new(first_link, self.allocator)
+        };
+        let span = Span::new(start, self.previous_end);
         Expression::new_binary_op(span, first, links, self.allocator)
     }
 
+    /// The current token's binary operator, if it has one at `precedence`.
+    #[inline]
+    fn operator_at(&self, precedence: u8) -> Option<BinOp> {
+        BinOp::from_token_kind(self.peek()).filter(|op| op.precedence().0 == precedence)
+    }
+
+    /// Most lists hold one or two expressions, which move to the arena as
+    /// values. The scratch holds the first while the second parses, so it
+    /// takes no room in the frame of every level of nesting in between.
     pub(super) fn parse_expr_list(&mut self) -> List<'ast, Expression<'ast>> {
         let first = self.parse_expr(0);
         if !self.is_at(TokenKind::Comma) {
@@ -70,11 +151,26 @@ impl<'ast> Parser<'ast> {
         }
         let start = self.scratch.exprs.len();
         self.scratch.exprs.push(first);
+        self.advance();
+        let second = self.parse_expr(0);
+        if !self.is_at(TokenKind::Comma) {
+            return self.pair_with_held(second);
+        }
+        self.scratch.exprs.push(second);
         while self.eat(TokenKind::Comma) {
             let expr = self.parse_expr(0);
             self.scratch.exprs.push(expr);
         }
         List::split_off_in(&mut self.scratch.exprs, start, self.allocator)
+    }
+
+    /// The list of the expression the scratch holds last and `second`.
+    /// Apart from [`Self::parse_expr_list`], so the pair it builds takes no
+    /// room in the frame that every level of nesting in a call takes.
+    #[inline(never)]
+    fn pair_with_held(&mut self, second: Expression<'ast>) -> List<'ast, Expression<'ast>> {
+        let held = self.scratch.exprs.pop().expect("the list's first expression is held");
+        List::from_array_in([held, second], self.allocator)
     }
 
     #[inline]
@@ -103,7 +199,7 @@ impl<'ast> Parser<'ast> {
         self.advance();
         let operand = self.parse_expr(UnOp::PRECEDENCE);
         self.exit_depth();
-        let span = Span::new(op_span.start, self.previous_span.end);
+        let span = Span::new(op_span.start, self.previous_end);
         Expression::new_unary_op(span, op, operand, self.allocator)
     }
 
@@ -122,7 +218,7 @@ impl<'ast> Parser<'ast> {
         self.advance();
         let ty = self.parse_type();
         self.nesting_depth = level;
-        let span = Span::new(start, self.previous_span.end);
+        let span = Span::new(start, self.previous_end);
         Expression::new_type_cast(span, expr, ty, self.allocator)
     }
 
@@ -131,10 +227,8 @@ impl<'ast> Parser<'ast> {
     fn parse_primary_expr(&mut self) -> Expression<'ast> {
         match self.peek() {
             name_token!() => {
-                let name = self.advance_name();
-                self.counts.name_uses += 1;
-                let start = name.span.start;
-                let prefix = Expression::Name(self.alloc(name));
+                let start = self.token.span.start;
+                let prefix = self.parse_name_expr();
                 self.parse_suffixes(prefix, start)
             }
             TokenKind::Number => Expression::Number(self.advance_number()),
@@ -157,6 +251,15 @@ impl<'ast> Parser<'ast> {
             }
             _ => self.report_unexpected_in_expr(),
         }
+    }
+
+    /// The current name, whose kind the caller has matched, as an expression
+    /// that reads it.
+    #[inline]
+    fn parse_name_expr(&mut self) -> Expression<'ast> {
+        let name = self.advance_name();
+        self.counts.name_uses += 1;
+        Expression::Name(self.alloc(name))
     }
 
     fn parse_vararg(&mut self) -> Expression<'ast> {
@@ -244,12 +347,18 @@ impl<'ast> Parser<'ast> {
             }
         }
         self.nesting_depth = level;
-        let span = Span::new(start, self.previous_span.end);
+        let span = Span::new(start, self.previous_end);
         if let Expression::Suffixed(chain) = prefix {
             return self.join_suffixes(chain, suffixes_start, span);
         }
-        let suffixes =
-            OneOrMore::split_off_in(&mut self.scratch.suffixes, suffixes_start, self.allocator);
+        // Most runs hold one suffix, which moves to the arena as a value.
+        let suffixes = if self.scratch.suffixes.len() == suffixes_start + 1
+            && let Some(suffix) = self.scratch.suffixes.pop()
+        {
+            OneOrMore::new(suffix, self.allocator)
+        } else {
+            OneOrMore::split_off_in(&mut self.scratch.suffixes, suffixes_start, self.allocator)
+        };
         Expression::new_suffixed(span, prefix, suffixes, self.allocator)
     }
 
@@ -270,19 +379,10 @@ impl<'ast> Parser<'ast> {
         Expression::Suffixed(chain)
     }
 
-    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token ends the run")]
     #[inline]
     fn is_at_suffix(&self) -> bool {
-        match self.peek() {
-            TokenKind::Dot
-            | TokenKind::LeftBracket
-            | TokenKind::Colon
-            | TokenKind::LeftParen
-            | TokenKind::LeftBrace
-            | TokenKind::StringLiteral => true,
-            TokenKind::Less => self.is_at_type_instantiation(),
-            _ => false,
-        }
+        let kind = self.peek();
+        can_open_suffix(kind) && (kind != TokenKind::Less || self.is_at_type_instantiation())
     }
 
     /// Parse one suffix onto the run being parsed.
@@ -366,7 +466,7 @@ impl<'ast> Parser<'ast> {
             let clause_condition = self.parse_expr(0);
             self.expect(TokenKind::Then);
             let expr = self.parse_expr(0);
-            let span = Span::new(elseif_span.start, self.previous_span.end);
+            let span = Span::new(elseif_span.start, self.previous_end);
             let clause = ElseIfExprClause::new(span, clause_binding, clause_condition, expr);
             self.scratch.elseif_exprs.push(clause);
         }
@@ -374,7 +474,7 @@ impl<'ast> Parser<'ast> {
         self.expect(TokenKind::Else);
         let else_expr = self.parse_expr(0);
         self.exit_depth();
-        let span = Span::new(if_span.start, self.previous_span.end);
+        let span = Span::new(if_span.start, self.previous_end);
         let elseif_clauses =
             List::split_off_in(&mut self.scratch.elseif_exprs, start, self.allocator);
         Expression::new_if_expr(
@@ -423,7 +523,7 @@ impl<'ast> Parser<'ast> {
             let brace_start = open_hole.span.end - 1;
             let end_span = self
                 .report_unclosed(TokenKind::RightBrace, Span::new(brace_start, open_hole.span.end));
-            let at = self.previous_span.end;
+            let at = self.previous_end;
             let missing = StringLiteral::new(ThinBytes::new(b""), None, Span::new(at, at));
             (end_span, missing)
         };
@@ -578,7 +678,7 @@ impl<'ast> Parser<'ast> {
             self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
             self.expect(TokenKind::Equal);
             let value = self.parse_expr(0);
-            let span = Span::new(open.start, self.previous_span.end);
+            let span = Span::new(open.start, self.previous_end);
             Field::Bracketed { span, key, value }
         } else if self.is_at_name() && self.peek_next() == TokenKind::Equal {
             // `Name = expr`, which needs one token of lookahead for the `=`.

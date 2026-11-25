@@ -468,8 +468,8 @@ impl<'ast> Parser<'ast> {
                     is_unterminated: false,
                     has_escape: false,
                 };
-                self.previous_span = Span::new(span.start, split_at);
-                self.previous_span
+                self.previous_end = split_at;
+                Span::new(span.start, split_at)
             }
             _ => self.report_unclosed(TokenKind::Greater, open),
         }

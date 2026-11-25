@@ -121,9 +121,21 @@ impl<'source> Lexer<'source> {
     /// Panics when the batch is all read, as [`Self::has_buffered`] says.
     #[inline]
     pub fn take_buffered(&mut self) -> Token {
-        let token = self.buffer[..self.buffered][self.taken];
-        self.taken += 1;
-        token
+        let index = self.taken;
+        self.taken = index + 1;
+        self.buffer[..self.buffered][index]
+    }
+
+    /// The token [`Self::take_buffered`] hands out next, left in the batch,
+    /// so a caller that looks one token ahead, as the parser does, copies
+    /// each token once.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the batch is all read, as [`Self::has_buffered`] says.
+    #[inline]
+    pub fn peek_buffered(&self) -> &Token {
+        &self.buffer[..self.buffered][self.taken]
     }
 
     /// Lex the next batch of tokens, through the `Eof` if the source ends,

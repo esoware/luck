@@ -106,8 +106,7 @@ fn parse_source<'ast>(
         text_source: TextBytes::new(source),
         lexer,
         token: placeholder,
-        next: placeholder,
-        previous_span: Span::new(0, 0),
+        previous_end: 0,
         nesting_depth: 0,
         deepest_level: 0,
         grouping_depth: 0,
@@ -126,25 +125,25 @@ fn parse_source<'ast>(
         tokens,
         counts: TreeCounts::default(),
     };
+    parser.refill();
     parser.advance();
-    parser.advance();
-    parser.previous_span = Span::new(0, 0);
     parser.parse_chunk()
 }
 
-/// The grammar needs only one token of lookahead, so `token` and `next` stand
-/// in for a materialized token stream, which measured slower to write and
-/// read back.
+/// The grammar needs only one token of lookahead, so `token` and the
+/// lexer's batch, which holds the token after it, stand in for a
+/// materialized token stream, which measured slower to write and read back.
 struct Parser<'ast> {
     allocator: &'ast Allocator,
     source: &'ast [u8],
     /// `source`, checked once, so a name in it needs no check of its own
     /// when it's all ASCII, and only of its ends when it's UTF-8.
     text_source: TextBytes<'ast>,
+    /// Never all read between two tokens, so the lookahead is always in it.
     lexer: Lexer<'ast>,
     token: Token,
-    next: Token,
-    previous_span: Span,
+    /// Where the last token read ends, where the node it ends does.
+    previous_end: u32,
     /// Levels open where the parser is, as [`luck_ast::MAX_NESTING_DEPTH`]
     /// counts them.
     nesting_depth: usize,
@@ -179,11 +178,12 @@ struct Parser<'ast> {
     counts: TreeCounts,
 }
 
-/// The items of every list being parsed, innermost list last.
+/// The items of the lists being parsed, innermost list last.
 ///
 /// Each list takes its own off the end when it closes, so it gets one exact
 /// allocation in the arena however long it grows, and nesting costs no
-/// stack.
+/// stack. The commonest lists, of one item and of some kinds two, skip the
+/// copy out of here and move to the arena as values.
 #[derive(Default)]
 struct Scratch<'ast> {
     stmts: Vec<Statement<'ast>>,
@@ -258,8 +258,8 @@ impl<'ast> Parser<'ast> {
     }
 
     #[inline]
-    const fn peek_next(&self) -> TokenKind {
-        self.next.kind
+    fn peek_next(&self) -> TokenKind {
+        self.lexer.peek_buffered().kind
     }
 
     #[inline]
@@ -286,31 +286,34 @@ impl<'ast> Parser<'ast> {
         self.text_source.text(span.into()).expect("the lexer reads names and numerals as ASCII")
     }
 
-    /// Consume the current token and return its span. While the lexer's
-    /// batch lasts it calls nothing, so it saves no register, and it reaches
-    /// the next batch through a tail call.
+    /// Consume the current token and return its span. The token after it
+    /// becomes the current one, copied out of the lexer's batch, which is
+    /// refilled as soon as it's all read. While the batch lasts it calls
+    /// nothing, so it saves no register, and it reaches the next batch
+    /// through a tail call.
     #[inline(never)]
     fn advance(&mut self) -> Span {
-        if !self.lexer.has_buffered() {
-            return self.advance_into_next_batch();
-        }
         let span = self.token.span;
-        self.previous_span = span;
-        self.token = self.next;
-        self.next = self.lexer.take_buffered();
+        self.previous_end = span.end;
+        self.token = self.lexer.take_buffered();
+        if self.lexer.has_buffered() { span } else { self.refill_after(span) }
+    }
+
+    /// [`Self::advance`] once it has taken the last token of the batch,
+    /// which returns its `span`.
+    #[cold]
+    #[inline(never)]
+    fn refill_after(&mut self, span: Span) -> Span {
+        self.refill();
         span
     }
 
-    /// [`Self::advance`] once the lexer's batch is read: lex the next one,
-    /// which `tokens` keeps for `parse_with_tokens`, and advance into it.
-    #[cold]
-    #[inline(never)]
-    fn advance_into_next_batch(&mut self) -> Span {
+    /// Lex the next batch, which `tokens` keeps for `parse_with_tokens`.
+    fn refill(&mut self) {
         let batch = self.lexer.refill();
         if let Some(tokens) = &mut self.tokens {
             tokens.extend_from_slice(batch);
         }
-        self.advance()
     }
 
     /// Consume the current token if it is a `kind`.

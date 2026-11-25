@@ -123,7 +123,7 @@ impl<'ast> Parser<'ast> {
         let has_values = self.eat(TokenKind::Equal);
         let exprs = if has_values { self.parse_expr_list() } else { List::new() };
 
-        let span = Span::new(local_span.start, self.previous_span.end);
+        let span = Span::new(local_span.start, self.previous_end);
 
         // Grammar: `const bindinglist '=' explist`, one value per name, except
         // that a last call or `...` may supply the rest.
@@ -138,10 +138,14 @@ impl<'ast> Parser<'ast> {
         Statement::new_local_assignment(span, names, exprs, kind, self.allocator)
     }
 
+    /// Most declarations bind one name, which moves to the arena as a value.
     fn parse_local_names(&mut self) -> List<'ast, TypedName<'ast>> {
         let start = self.scratch.typed_names.len();
         if let Some(first) = self.expect_identifier() {
             let first = self.parse_typed_name(first);
+            if !self.is_at(TokenKind::Comma) {
+                return List::from_array_in([first], self.allocator);
+            }
             self.scratch.typed_names.push(first);
             while self.eat(TokenKind::Comma) {
                 let Some(name) = self.expect_identifier() else {
