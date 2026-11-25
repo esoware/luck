@@ -21,7 +21,6 @@ impl<'ast> Parser<'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
             | Expression::Name(_)
@@ -52,7 +51,6 @@ impl<'ast> Parser<'ast> {
             | Expression::True(_)
             | Expression::False(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::Error(_) => true,
             Expression::InterpolatedString(_) => self.is_constant_string(expr, groupings_start),
@@ -225,7 +223,6 @@ impl<'ast> Parser<'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)

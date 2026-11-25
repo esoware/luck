@@ -100,17 +100,6 @@ impl PartialEq for NumberLiteral<'_> {
 
 impl Eq for NumberLiteral<'_> {}
 
-/// An exact 64-bit integer, `123i`, negative where its hex or binary digits
-/// pass `i64::MAX`, and its spelling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
-pub struct IntegerLiteral<'ast> {
-    pub value: i64,
-    /// The literal as written, or `None` for one built in code.
-    #[content_eq(skip)]
-    pub raw: Option<ThinStr<'ast>>,
-    pub span: Span,
-}
-
 /// A string's value, bytes that need not be UTF-8, and its spelling.
 ///
 /// A literal the parser read with nothing to decode borrows its value from

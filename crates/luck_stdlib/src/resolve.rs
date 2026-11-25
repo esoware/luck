@@ -56,7 +56,6 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
             | Expression::BinaryOp(_)

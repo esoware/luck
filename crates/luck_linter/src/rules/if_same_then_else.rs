@@ -22,7 +22,8 @@ impl Rule for IfSameThenElse {
         let AstKind::IfStatement(if_stmt) = node.kind() else {
             return;
         };
-        let Some(else_clause) = &if_stmt.else_clause else {
+        // A name the condition binds reads differently in each branch.
+        let (Some(else_clause), None) = (&if_stmt.else_clause, &if_stmt.binding) else {
             return;
         };
         if !if_stmt.block.stmts.is_empty() && if_stmt.block.content_eq(&else_clause.block) {
@@ -46,6 +47,7 @@ mod tests {
     const PASS: &[&str] = &[
         "if a then print(1) else print(2) end",
         "if a then print(1) end",
+        "if local x = f() then print(x) else print(x) end",
         "\
 if a then
   -- nothing

@@ -7,9 +7,9 @@
 use std::{iter, slice};
 
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, Expression, FunctionAttribute, FunctionName, GenericFor,
-    GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind, NumericFor, ReturnStatement,
-    Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
+    Assignment, Block, CompoundAssignment, ConditionalBinding, Expression, FunctionAttribute,
+    FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind,
+    NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
 };
 
 use crate::CollapseSimpleStatement;
@@ -62,7 +62,8 @@ impl<'ast> Formatter<'ast> {
                 self.write_body_then_end(&do_block.block);
             }
             Statement::WhileLoop(while_loop) => {
-                self.write_header("while", &while_loop.condition, "do");
+                let binding = while_loop.binding.as_deref();
+                self.write_header("while", binding, &while_loop.condition, "do");
                 self.write_body_then_end(&while_loop.block);
             }
             Statement::RepeatLoop(repeat_loop) => {
@@ -115,6 +116,7 @@ impl<'ast> Formatter<'ast> {
     fn write_header(
         &mut self,
         open: &'static str,
+        binding: Option<&ConditionalBinding<'ast>>,
         condition: &Expression<'ast>,
         close: &'static str,
     ) {
@@ -122,6 +124,10 @@ impl<'ast> Formatter<'ast> {
             grouped.token(open);
             grouped.indent(|f| {
                 f.soft_line_or_space();
+                if let Some(binding) = binding {
+                    f.write_conditional_binding(binding);
+                    f.space();
+                }
                 f.write_condition(condition, ChainIndent::Level);
             });
             grouped.soft_line_or_space();
@@ -129,8 +135,22 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    /// Statement conditions are boolean contexts, so the parentheses around a
-    /// whole one come off, even the ones the tree keeps: `(f())` truncating
+    /// `local name =` or `const name =`.
+    pub(crate) fn write_conditional_binding(&mut self, binding: &ConditionalBinding<'ast>) {
+        self.node(
+            || binding.span,
+            |f| {
+                f.token(if binding.is_const { "const" } else { "local" });
+                f.space();
+                f.write_typed_name(&binding.name);
+            },
+        );
+        self.space();
+        self.token("=");
+    }
+
+    /// Statement conditions are boolean contexts, and a binding takes one
+    /// value, so the parentheses around a whole one come off, even the ones the tree keeps: `(f())` truncating
     /// values to one changes nothing observable. They stay around a comment,
     /// which needs the line breaks they hold.
     fn write_condition(&mut self, condition: &Expression<'ast>, indent: ChainIndent) {
@@ -285,12 +305,13 @@ impl<'ast> Formatter<'ast> {
             && if_stmt.else_clause.is_none()
             && if_stmt.block.stmts.len() == 1
             && first_item_start(&if_stmt.block).is_some();
+        let binding = if_stmt.binding.as_deref();
 
         if can_collapse {
             // The group stays flat only if the whole `if` fits, and a body
             // spanning lines forces it to break.
             self.group(|grouped| {
-                grouped.write_header("if", &if_stmt.condition, "then");
+                grouped.write_header("if", binding, &if_stmt.condition, "then");
                 grouped.indent(|f| {
                     f.soft_line_or_space();
                     f.write_block(&if_stmt.block);
@@ -301,12 +322,12 @@ impl<'ast> Formatter<'ast> {
             return;
         }
 
-        self.write_header("if", &if_stmt.condition, "then");
+        self.write_header("if", binding, &if_stmt.condition, "then");
         self.write_indented_block(&if_stmt.block);
 
         for clause in &if_stmt.elseif_clauses {
             self.hard_line();
-            self.write_header("elseif", &clause.condition, "then");
+            self.write_header("elseif", clause.binding.as_deref(), &clause.condition, "then");
             self.write_indented_block(&clause.block);
         }
 

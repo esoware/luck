@@ -4,10 +4,10 @@
 use luck_allocator::{List, ThinBytes, ThinStr};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
-    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
-    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
-    GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement, IntegerLiteral,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
+    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
     InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
     LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NameIndex, NamedType,
     NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
@@ -57,13 +57,17 @@ const LAYOUTS: [(&str, usize, usize); 73] = [
     ("FunctionAttribute", size_of::<FunctionAttribute<'_>>(), align_of::<FunctionAttribute<'_>>()),
     ("Name", size_of::<Name<'_>>(), align_of::<Name<'_>>()),
     ("NumberLiteral", size_of::<NumberLiteral<'_>>(), align_of::<NumberLiteral<'_>>()),
-    ("IntegerLiteral", size_of::<IntegerLiteral<'_>>(), align_of::<IntegerLiteral<'_>>()),
     ("StringLiteral", size_of::<StringLiteral<'_>>(), align_of::<StringLiteral<'_>>()),
     ("Block", size_of::<Block<'_>>(), align_of::<Block<'_>>()),
     ("Statement", size_of::<Statement<'_>>(), align_of::<Statement<'_>>()),
     ("Assignment", size_of::<Assignment<'_>>(), align_of::<Assignment<'_>>()),
     ("DoBlock", size_of::<DoBlock<'_>>(), align_of::<DoBlock<'_>>()),
     ("WhileLoop", size_of::<WhileLoop<'_>>(), align_of::<WhileLoop<'_>>()),
+    (
+        "ConditionalBinding",
+        size_of::<ConditionalBinding<'_>>(),
+        align_of::<ConditionalBinding<'_>>(),
+    ),
     ("RepeatLoop", size_of::<RepeatLoop<'_>>(), align_of::<RepeatLoop<'_>>()),
     ("IfStatement", size_of::<IfStatement<'_>>(), align_of::<IfStatement<'_>>()),
     ("ElseIfClause", size_of::<ElseIfClause<'_>>(), align_of::<ElseIfClause<'_>>()),

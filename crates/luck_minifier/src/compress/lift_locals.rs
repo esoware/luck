@@ -25,8 +25,8 @@ use std::fmt::Write as _;
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
-    Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, LocalFunction,
-    LocalFunctionKind, Name, Statement, Type, TypedName, Var, Visit, VisitMut,
+    Block, ConditionalBinding, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, Name, Statement, Type, TypedName, Var, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{NameId, Scoping, SymbolId};
@@ -312,15 +312,15 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                     }
                 }
                 Statement::WhileLoop(while_loop) => {
-                    self.collect_block(&while_loop.block);
+                    self.collect_bound_block(while_loop.binding.as_deref(), &while_loop.block);
                 }
                 Statement::RepeatLoop(repeat_loop) => {
                     self.collect_block(&repeat_loop.block);
                 }
                 Statement::IfStatement(if_stmt) => {
-                    self.collect_block(&if_stmt.block);
+                    self.collect_bound_block(if_stmt.binding.as_deref(), &if_stmt.block);
                     for clause in &if_stmt.elseif_clauses {
-                        self.collect_block(&clause.block);
+                        self.collect_bound_block(clause.binding.as_deref(), &clause.block);
                     }
                     if let Some(else_clause) = &if_stmt.else_clause {
                         self.collect_block(&else_clause.block);
@@ -355,6 +355,22 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         free.extend(held.drain(held_start..).rev());
         self.close_names(open_start);
         (keeps_declaration, lifts)
+    }
+
+    /// [`Self::collect_block`] for a block the binding of the condition that
+    /// guards it holds, if one does, which is open there as a `for` loop's
+    /// variable is.
+    fn collect_bound_block(
+        &mut self,
+        binding: Option<&ConditionalBinding<'_>>,
+        block: &Block<'ast>,
+    ) {
+        let open_binding = self.open_names.len();
+        if let Some(binding) = binding {
+            self.open(&binding.name.name);
+        }
+        self.collect_block(block);
+        self.close_names(open_binding);
     }
 
     fn close_names(&mut self, start: usize) {
@@ -595,6 +611,16 @@ impl Pressure {
         self.registers = self.registers.max(active.registers + counter.0);
     }
 
+    /// What's active in a block the binding of the condition that guards it
+    /// holds, if one does, which takes a local and a register there.
+    fn bind(&mut self, active: Active, is_bound: bool) -> Active {
+        let binding = usize::from(is_bound);
+        let bound =
+            Active { locals: active.locals + binding, registers: active.registers + binding };
+        self.locals = self.locals.max(bound.locals);
+        bound
+    }
+
     /// Measures `block` with `active` around it, and returns what's active
     /// at its end.
     fn measure(&mut self, block: &Block<'_>, mut active: Active) -> Active {
@@ -616,7 +642,8 @@ impl Pressure {
                 }
                 Statement::WhileLoop(while_loop) => {
                     self.evaluate(active, [&while_loop.condition]);
-                    self.measure(&while_loop.block, active);
+                    let body_active = self.bind(active, while_loop.binding.is_some());
+                    self.measure(&while_loop.block, body_active);
                 }
                 Statement::RepeatLoop(repeat_loop) => {
                     let inner = self.measure(&repeat_loop.block, active);
@@ -624,10 +651,12 @@ impl Pressure {
                 }
                 Statement::IfStatement(if_stmt) => {
                     self.evaluate(active, [&if_stmt.condition]);
-                    self.measure(&if_stmt.block, active);
+                    let then_active = self.bind(active, if_stmt.binding.is_some());
+                    self.measure(&if_stmt.block, then_active);
                     for clause in &if_stmt.elseif_clauses {
                         self.evaluate(active, [&clause.condition]);
-                        self.measure(&clause.block, active);
+                        let clause_active = self.bind(active, clause.binding.is_some());
+                        self.measure(&clause.block, clause_active);
                     }
                     if let Some(else_clause) = &if_stmt.else_clause {
                         self.measure(&else_clause.block, active);
@@ -1141,6 +1170,27 @@ end
             result,
             "local function f()do local x=1 print(x)end do local w=2 print(w)end type function \
              tf(y)local c,d do c=y print(c,x)end do d=y print(d)end return y end end"
+        );
+    }
+
+    #[test]
+    fn a_binding_keeps_a_local_of_its_name_declared_under_it() {
+        let source = "\
+local function f(x)
+  local a = 1
+  if local b = x then
+    do local b = 2 print(b) end
+    print(a, b)
+  end
+  local c = 3
+  return a, c
+end
+return f
+";
+        assert_eq!(
+            apply(source),
+            "local function f(x)local a,c a=1 if local b=x then do local b=2 print(b)end print(a,b)end \
+             c=3 return a,c end return f"
         );
     }
 }

@@ -5,8 +5,9 @@ use luck_ast_macros::Ast;
 use luck_token::{BinOp, Span, UnOp};
 
 use crate::function::{FunctionAttribute, FunctionBody};
-use crate::leaf::{IntegerLiteral, Name, NumberLiteral, StringLiteral};
+use crate::leaf::{Name, NumberLiteral, StringLiteral};
 use crate::one_or_more::OneOrMore;
+use crate::stmt::ConditionalBinding;
 use crate::types::{Type, TypeArgs};
 
 /// Two words: every variant is a span or a box. `nil`, `true`, `false`,
@@ -21,8 +22,6 @@ pub enum Expression<'ast> {
     False(Span),
     True(Span),
     Number(Box<'ast, NumberLiteral<'ast>>),
-    /// An exact 64-bit integer literal with an `i` suffix.
-    Integer(Box<'ast, IntegerLiteral<'ast>>),
     StringLiteral(Box<'ast, StringLiteral<'ast>>),
     VarArg(Span),
     FunctionDef(Box<'ast, FunctionDef<'ast>>),
@@ -59,7 +58,6 @@ impl Expression<'_> {
             | Self::False(_)
             | Self::True(_)
             | Self::Number(_)
-            | Self::Integer(_)
             | Self::StringLiteral(_)
             | Self::FunctionDef(_)
             | Self::Name(_)
@@ -75,8 +73,7 @@ impl Expression<'_> {
     }
 
     /// What's inside every [`Expression::Parenthesized`] around this, for a
-    /// place where taking one value, or reading an integer literal as a
-    /// value, changes nothing.
+    /// place where taking one value changes nothing.
     pub fn unwrap_parentheses(&self) -> &Self {
         let mut current = self;
         while let Self::Parenthesized(parenthesized) = current {
@@ -189,11 +186,9 @@ pub struct UnaryOp<'ast> {
 
 /// Parentheses that change what they hold, the only ones the tree keeps.
 ///
-/// They truncate a call or `...` to one value, and stop a `-` before an
-/// integer literal from reading with it as a negative literal, so it negates
-/// the value instead. The parser leaves every other pair out of the tree, and
-/// the printers write the ones an expression needs where it goes, as
-/// [`Expression::needs_parens`] says.
+/// They truncate a call or `...` to one value. The parser leaves every other
+/// pair out of the tree, and the printers write the ones an expression needs
+/// where it goes, as [`Expression::needs_parens`] says.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct ParenthesizedExpression<'ast> {
@@ -241,6 +236,7 @@ pub struct FunctionDef<'ast> {
 #[visit(level)]
 pub struct IfExpression<'ast> {
     pub span: Span,
+    pub binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
     pub condition: Expression<'ast>,
     pub then_expr: Expression<'ast>,
     pub elseif_clauses: List<'ast, ElseIfExprClause<'ast>>,
@@ -250,6 +246,7 @@ pub struct IfExpression<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct ElseIfExprClause<'ast> {
     pub span: Span,
+    pub binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
     pub condition: Expression<'ast>,
     pub expr: Expression<'ast>,
 }

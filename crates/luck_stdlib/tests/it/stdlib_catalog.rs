@@ -85,61 +85,11 @@ fn buffer_and_vector_present() {
 }
 
 #[test]
-fn integer_library_and_buffer_accessors_are_present() {
-    let integer_members = [
-        "create",
-        "fromstring",
-        "tonumber",
-        "neg",
-        "add",
-        "sub",
-        "mul",
-        "div",
-        "rem",
-        "idiv",
-        "mod",
-        "udiv",
-        "urem",
-        "bnot",
-        "band",
-        "bor",
-        "bxor",
-        "btest",
-        "min",
-        "max",
-        "clamp",
-        "lt",
-        "le",
-        "gt",
-        "ge",
-        "ult",
-        "ule",
-        "ugt",
-        "uge",
-        "lshift",
-        "rshift",
-        "arshift",
-        "lrotate",
-        "rrotate",
-        "extract",
-        "replace",
-        "countrz",
-        "countlz",
-        "bswap",
-        "maxsigned",
-        "minsigned",
-    ];
-
+fn the_rejected_integer_library_is_absent() {
     for library in [standalone(), roblox()] {
-        assert!(library.lookup(&["integer"]).is_some());
-        for member in integer_members {
-            assert!(
-                library.lookup(&["integer", member]).is_some(),
-                "integer.{member} should be modeled"
-            );
-        }
-        assert!(library.lookup(&["buffer", "readinteger"]).is_some());
-        assert!(library.lookup(&["buffer", "writeinteger"]).is_some());
+        assert!(library.lookup(&["integer"]).is_none());
+        assert!(library.lookup(&["buffer", "readinteger"]).is_none());
+        assert!(library.lookup(&["buffer", "writeinteger"]).is_none());
     }
 }
 

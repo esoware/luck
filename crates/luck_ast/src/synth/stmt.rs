@@ -1,10 +1,11 @@
+use luck_allocator::Box;
 use luck_token::CompoundOp;
 
 use crate::expr::{Expression, Var};
 use crate::function::FunctionAttribute;
 use crate::stmt::{
-    Block, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind, LocalFunctionKind,
-    Statement, TypeDeclarationValue, TypedName,
+    Block, ConditionalBinding, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind,
+    LocalFunctionKind, Statement, TypeDeclarationValue, TypedName,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -294,7 +295,7 @@ impl<'ast> Synth<'ast> {
     }
 
     pub fn while_(&self, condition: Expression<'ast>, block: Block<'ast>) -> Statement<'ast> {
-        Statement::new_while_loop(self.next_span(), condition, block, self.allocator)
+        Statement::new_while_loop(self.next_span(), None, condition, block, self.allocator)
     }
 
     pub fn repeat_(&self, block: Block<'ast>, condition: Expression<'ast>) -> Statement<'ast> {
@@ -314,18 +315,29 @@ impl<'ast> Synth<'ast> {
     {
         let span = self.next_span();
         let elseif_clauses = self.list(elseifs.into_iter().map(|(elseif_condition, block)| {
-            ElseIfClause::new(self.next_span(), elseif_condition, block)
+            ElseIfClause::new(self.next_span(), None, elseif_condition, block)
         }));
         let else_clause =
             else_block.map(|block| ElseClause::boxed(self.next_span(), block, self.allocator));
         Statement::new_if_stmt(
             span,
+            None,
             condition,
             then_block,
             elseif_clauses,
             else_clause,
             self.allocator,
         )
+    }
+
+    /// The `local name` or `const name` of a condition, which goes in the
+    /// `binding` of an `if`, an `elseif`, or a `while` built without one.
+    pub fn conditional_binding(
+        &self,
+        name: TypedName<'ast>,
+        is_const: bool,
+    ) -> Box<'ast, ConditionalBinding<'ast>> {
+        ConditionalBinding::boxed(self.next_span(), name, is_const, self.allocator)
     }
 
     /// Build `variable` with [`Synth::typed_name`].
@@ -666,8 +678,8 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let exported = synth.export_local(
-            [synth.typed_name("value", Some(synth.ty_named("integer")))],
-            [synth.integer_i64(1)],
+            [synth.typed_name("value", Some(synth.ty_named("number")))],
+            [synth.number_f64(1.0)],
         );
         assert!(matches!(
             exported,

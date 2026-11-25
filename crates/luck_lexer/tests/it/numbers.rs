@@ -2,7 +2,7 @@ use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
 use luck_token::{Span, TokenKind};
 
-use crate::common::{token_texts, tokens};
+use crate::common::tokens;
 
 fn assert_malformed_number(source: &str) {
     let result = lex(source.as_bytes());
@@ -111,35 +111,12 @@ fn an_underscore_inside_a_radix_prefix_keeps_it() {
 }
 
 #[test]
-fn integer_suffix_lexes_only_on_integers_within_64_bits() {
-    for source in [
-        "1i",
-        "1_000_000i",
-        "0xabi",
-        "0XAB05i",
-        "0xff_ffi",
-        "0xffffffffffffffffi",
-        "0b1111111111111111111111111111111111111111111111111111111111111111i",
-        "1i_",
-    ] {
-        assert_eq!(tokens(source), [(TokenKind::Integer, source)]);
+fn an_integer_suffix_is_a_letter_touching_the_numeral() {
+    for source in ["1i", "1_000i", "0b1i", "2.5i", "1e5i"] {
+        assert_malformed_number(source);
     }
-
-    // Decimal overflow applies even under a direct unary minus;
-    // i64::MIN is only spellable as 0x8000000000000000i.
-    for source in [
-        "9223372036854775808i",
-        "0x10000000000000000i",
-        "0b10000000000000000000000000000000000000000000000000000000000000000i",
-    ] {
-        assert!(!lex(source.as_bytes()).errors.is_empty(), "{source} must overflow");
-    }
-
-    for source in ["2.5i", "1e5i", "1E5i", "1.i"] {
-        assert!(!lex(source.as_bytes()).errors.is_empty(), "{source} must be a malformed integer");
-    }
-
-    assert_malformed_number("1ix");
+    let result = lex(b"0xabi");
+    assert_eq!(result.errors[0].message, "malformed hexadecimal number");
 }
 
 #[test]
@@ -171,34 +148,5 @@ fn an_exponent_needs_a_digit_past_its_underscores() {
             "`{source}` has no exponent digits, so it should be a malformed number: {:?}",
             result.tokens
         );
-    }
-}
-
-#[test]
-fn integer_range_normalization_preserves_boundaries_and_spans() {
-    for (digits, radix, is_valid) in [
-        ("9223372036854775807", "", true),
-        ("9223372036854775808", "", false),
-        ("FFFFFFFFFFFFFFFF", "0X", true),
-        ("10000000000000000", "0x", false),
-        ("1111111111111111111111111111111111111111111111111111111111111111", "0B", true),
-        ("10000000000000000000000000000000000000000000000000000000000000000", "0b", false),
-    ] {
-        let separated = digits.chars().flat_map(|digit| [digit, '_']).collect::<String>();
-        for spelling in [digits, separated.as_str()] {
-            let literal = format!("{radix}{spelling}i");
-            let source = format!("  {literal}");
-            let result = lex(source.as_bytes());
-            assert_eq!(result.errors.is_empty(), is_valid, "{source}: {:?}", result.errors);
-            let span = Span::from_indices(2, source.len());
-            if is_valid {
-                assert_eq!(token_texts(&result, &source), [(TokenKind::Integer, literal.as_str())]);
-                assert_eq!(result.tokens[0].span, span);
-            } else {
-                assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
-                assert_eq!(result.errors[0].span, Some(span));
-                assert_eq!(result.errors[0].message, "integer literal is outside the 64-bit range");
-            }
-        }
     }
 }

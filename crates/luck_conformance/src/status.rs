@@ -47,7 +47,6 @@ const NOT_RUNNABLE: &[Skip] = &[
     Skip { file: "cyield.luau", reason: HOST_FUNCTIONS },
     Skip { file: "debugger.luau", reason: HOST_FUNCTIONS },
     Skip { file: "gc.luau", reason: HOST_FUNCTIONS },
-    Skip { file: "integers_regspill.luau", reason: NATIVE_CODE },
     Skip { file: "iter.luau", reason: HOST_FUNCTIONS },
     Skip {
         file: "move.luau",

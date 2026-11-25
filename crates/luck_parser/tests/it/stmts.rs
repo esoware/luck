@@ -620,3 +620,100 @@ fn continue_outside_loop_rejected() {
     assert_has_errors(&parse(&allocator, b"while true do local f = function() continue end end"));
     assert_no_errors(&parse(&allocator, b"while true do continue end"));
 }
+
+#[test]
+fn a_condition_opens_with_its_binding() {
+    let allocator = Allocator::new();
+    let result = parse_str(
+        &allocator,
+        "if local a: T = f() then elseif const b = g() then end while local c = h() do end",
+    );
+    assert_no_errors(&result);
+    let [Statement::IfStatement(if_stmt), Statement::WhileLoop(while_loop)] = &*result.chunk.stmts
+    else {
+        panic!("{:?}", result.chunk.stmts);
+    };
+    let binding = if_stmt.binding.as_deref().expect("the `if` binds `a`");
+    assert_eq!(binding.name.name.text.as_str(), "a");
+    assert!(binding.name.type_annotation.is_some());
+    assert!(!binding.is_const);
+    assert_eq!(binding.span.text(b"if local a: T = f()"), b"local a: T");
+    assert!(matches!(if_stmt.condition, Expression::Suffixed(_)));
+    let clause_binding = if_stmt.elseif_clauses[0].binding.as_deref().expect("`elseif` binds `b`");
+    assert_eq!(clause_binding.name.name.text.as_str(), "b");
+    assert!(clause_binding.is_const);
+    let loop_binding = while_loop.binding.as_deref().expect("the `while` binds `c`");
+    assert_eq!(loop_binding.name.name.text.as_str(), "c");
+}
+
+#[test]
+fn an_if_expression_condition_opens_with_its_binding() {
+    let allocator = Allocator::new();
+    let result =
+        parse_str(&allocator, "return if local a = f() then a elseif const b = g() then b else c");
+    assert_no_errors(&result);
+    let [Statement::Return(return_stmt)] = &*result.chunk.stmts else {
+        panic!("{:?}", result.chunk.stmts);
+    };
+    let [Expression::IfExpression(if_expr)] = &*return_stmt.exprs else {
+        panic!("{:?}", return_stmt.exprs);
+    };
+    assert!(if_expr.binding.as_deref().is_some_and(|binding| !binding.is_const));
+    assert!(if_expr.elseif_clauses[0].binding.as_deref().is_some_and(|binding| binding.is_const));
+}
+
+#[test]
+fn const_before_anything_but_a_name_is_a_variable() {
+    let allocator = Allocator::new();
+    for source in ["if const then end", "if const.x then end", "if const == 1 then end"] {
+        let result = parse_str(&allocator, source);
+        assert_no_errors(&result);
+        let [Statement::IfStatement(if_stmt)] = &*result.chunk.stmts else {
+            panic!("{source}: {:?}", result.chunk.stmts);
+        };
+        assert!(if_stmt.binding.is_none(), "{source}");
+    }
+    let loop_result = parse_str(&allocator, "while const do end");
+    assert_no_errors(&loop_result);
+    let [Statement::WhileLoop(while_loop)] = &*loop_result.chunk.stmts else {
+        panic!("{:?}", loop_result.chunk.stmts);
+    };
+    assert!(while_loop.binding.is_none());
+    let expr_result = parse_str(&allocator, "return if const then 1 else 2");
+    assert_no_errors(&expr_result);
+    let [Statement::Return(return_stmt)] = &*expr_result.chunk.stmts else {
+        panic!("{:?}", expr_result.chunk.stmts);
+    };
+    let [Expression::IfExpression(if_expr)] = &*return_stmt.exprs else {
+        panic!("{:?}", return_stmt.exprs);
+    };
+    assert!(if_expr.binding.is_none());
+}
+
+#[test]
+fn a_conditional_binding_binds_a_single_name() {
+    let allocator = Allocator::new();
+    let source = "if local a, b: T, c = f() then end";
+    let result = parse_str(&allocator, source);
+    let [error] = &*result.errors else {
+        panic!("{:?}", result.errors);
+    };
+    assert_eq!(error.message, "`if local` binds a single name");
+    assert_eq!(error.span, Some(luck_token::Span::new(10, 11)));
+    let Statement::IfStatement(if_stmt) = &result.chunk.stmts[0] else {
+        panic!("{:?}", result.chunk.stmts);
+    };
+    assert!(if_stmt.binding.is_some());
+
+    let loop_result = parse_str(&allocator, "while const a, b = f() do end");
+    assert_eq!(loop_result.errors[0].message, "`while const` binds a single name");
+}
+
+#[test]
+fn a_conditional_binding_needs_its_initializer() {
+    let allocator = Allocator::new();
+    for source in ["if local a then end", "while local a do end", "return if local a then 1 else 2"]
+    {
+        assert_has_errors(&parse_str(&allocator, source));
+    }
+}

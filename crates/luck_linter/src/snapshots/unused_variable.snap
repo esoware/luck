@@ -52,3 +52,21 @@ tag: unnecessary
 help: prefix with `_` to suppress this warning
 suggestion: prefix `unused` with `_`
   | local _unused = 1
+
+warning: unused variable `unused`
+ --> Standalone:1:10
+1 | if local unused = f() then print(1) end
+  |          ^^^^^^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+suggestion: prefix `unused` with `_`
+  | if local _unused = f() then print(1) end
+
+warning: unused variable `unused`
+ --> Standalone:1:17
+1 | return if const unused = f() then 1 else 2
+  |                 ^^^^^^
+tag: unnecessary
+help: prefix with `_` to suppress this warning
+suggestion: prefix `unused` with `_`
+  | return if const _unused = f() then 1 else 2

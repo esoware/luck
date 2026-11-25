@@ -5,16 +5,16 @@
 //! argument has parentheses, where a run of operators that group the same
 //! either way splits, and the parentheses the tree keeps where they change
 //! nothing. It keeps them only to truncate a call or `...` to one value,
-//! which changes something only at the end of a list, or to keep an integer
-//! literal under `-` from reading as a negative literal.
+//! which changes something only at the end of a list.
 
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
-    FunctionName, FunctionTypeParam, GenericTypeList, GenericTypeParam, IfStatement, Name,
-    Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs,
-    TypeDeclaration, TypeDeclarationValue, TypeField, TypedName, Var,
+    BinaryLink, BinaryOp, Block, ConditionalBinding, Expression, Field, FunctionArgs,
+    FunctionAttribute, FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList,
+    GenericTypeParam, IfStatement, Name, Statement, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue, TypeField, TypedName,
+    Var,
 };
-use luck_token::{Associativity, UnOp};
+use luck_token::Associativity;
 
 /// `chunk` as one node per line, its children indented below it.
 ///
@@ -81,6 +81,7 @@ impl Printer {
             }
             Statement::WhileLoop(while_loop) => {
                 self.open("While");
+                self.binding(while_loop.binding.as_deref());
                 self.expr(&while_loop.condition);
                 self.block(&while_loop.block);
                 self.close();
@@ -149,10 +150,12 @@ impl Printer {
 
     fn if_statement(&mut self, if_statement: &IfStatement<'_>) {
         self.open("If");
+        self.binding(if_statement.binding.as_deref());
         self.expr(&if_statement.condition);
         self.block(&if_statement.block);
         for clause in &if_statement.elseif_clauses {
             self.open("ElseIf");
+            self.binding(clause.binding.as_deref());
             self.expr(&clause.condition);
             self.block(&clause.block);
             self.close();
@@ -203,7 +206,6 @@ impl Printer {
             Expression::False(_) => self.line("False"),
             Expression::True(_) => self.line("True"),
             Expression::Number(literal) => self.line(&format!("Number {:?}", literal.value)),
-            Expression::Integer(literal) => self.line(&format!("Integer {}", literal.value)),
             Expression::StringLiteral(literal) => {
                 self.line(&format!("String {}", Self::string(literal)));
             }
@@ -230,24 +232,17 @@ impl Printer {
             Expression::BinaryOp(binary) => self.binary(binary),
             Expression::UnaryOp(unary) => {
                 self.open(&format!("UnaryOp {:?}", unary.op));
-                // `-1i` is a negative integer literal, while `-(1i)` negates
-                // an integer, which raises.
-                if unary.op == UnOp::Neg
-                    && let Expression::Parenthesized(parenthesized) = &unary.operand
-                    && let Expression::Integer(literal) = parenthesized.expr.unwrap_parentheses()
-                {
-                    self.line(&format!("Parenthesized Integer {}", literal.value));
-                } else {
-                    self.expr(&unary.operand);
-                }
+                self.expr(&unary.operand);
                 self.close();
             }
             Expression::IfExpression(if_expr) => {
                 self.open("IfExpression");
+                self.binding(if_expr.binding.as_deref());
                 self.expr(&if_expr.condition);
                 self.expr(&if_expr.then_expr);
                 for clause in &if_expr.elseif_clauses {
                     self.open("ElseIf");
+                    self.binding(clause.binding.as_deref());
                     self.expr(&clause.condition);
                     self.expr(&clause.expr);
                     self.close();
@@ -430,6 +425,14 @@ impl Printer {
         }
         self.block(&body.block);
         self.close();
+    }
+
+    fn binding(&mut self, binding: Option<&ConditionalBinding<'_>>) {
+        if let Some(binding) = binding {
+            self.open(if binding.is_const { "Binding const" } else { "Binding local" });
+            self.typed_name(&binding.name);
+            self.close();
+        }
     }
 
     fn typed_name(&mut self, typed_name: &TypedName<'_>) {
@@ -677,6 +680,5 @@ mod tests {
         assert_ne!(shape("x = a .. b .. c .. d"), shape("x = a .. (b .. c) .. d"));
         assert_ne!(shape("x = a - b + c"), shape("x = a + b - c"));
         assert_ne!(shape(r#"x = "\xFE""#), shape(r#"x = "\xFF""#));
-        assert_ne!(shape("x = -(1i)"), shape("x = -1i"));
     }
 }

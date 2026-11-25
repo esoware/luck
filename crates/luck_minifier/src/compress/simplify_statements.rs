@@ -63,8 +63,15 @@ pub(super) fn has_no_else(if_stmt: &IfStatement<'_>) -> bool {
 /// Whether `if_stmt`'s one statement is an `if` that
 /// [`Compressor::merge_nested_ifs`] can take into it.
 pub(super) fn holds_nested_if(if_stmt: &IfStatement<'_>) -> bool {
-    has_no_else(if_stmt)
-        && matches!(&*if_stmt.block.stmts, [Statement::IfStatement(inner)] if has_no_else(inner))
+    is_mergeable(if_stmt)
+        && matches!(&*if_stmt.block.stmts, [Statement::IfStatement(inner)] if is_mergeable(inner))
+}
+
+/// Whether `if_stmt` is an `if c then ... end` whose condition joins a run
+/// of `and`s, which a binding's can't, since the binding would then hold
+/// the whole run.
+fn is_mergeable(if_stmt: &IfStatement<'_>) -> bool {
+    has_no_else(if_stmt) && if_stmt.binding.is_none()
 }
 
 /// `first` and each of `rest` joined by `op`, which is `and` or `or`.
@@ -110,7 +117,7 @@ fn if_return_guard<'tree, 'ast>(
     let Statement::IfStatement(if_stmt) = stmt else {
         return None;
     };
-    if !has_no_else(if_stmt) {
+    if !is_mergeable(if_stmt) {
         return None;
     }
     let [Statement::Return(return_stmt)] = &*if_stmt.block.stmts else {
@@ -135,12 +142,12 @@ impl<'ast> Compressor<'_, 'ast> {
         }
         let mut head = outer_if;
         let mut head_depth = depth;
-        while has_no_else(head) {
+        while is_mergeable(head) {
             let mut inner_conditions = Vec::new();
             while matches!(
                 &*head.block.stmts,
                 [Statement::IfStatement(inner_if)]
-                    if has_no_else(inner_if) && fits_at_depth(head_depth, 1, &inner_if.condition)
+                    if is_mergeable(inner_if) && fits_at_depth(head_depth, 1, &inner_if.condition)
             ) && (!inner_conditions.is_empty()
                 || fits_at_depth(head_depth, 1, &head.condition))
                 && let Some(Statement::IfStatement(inner_if)) =
@@ -441,6 +448,34 @@ mod tests {
             ),
         ] {
             assert_eq!(minify_with(source, &STATEMENTS), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_bound_if_keeps_its_condition_to_itself() {
+        for (source, expected) in [
+            (
+                "if a then if local x = b then f(x) end end",
+                "if a then if local x=b then f(x)end end",
+            ),
+            (
+                "if local x = a then if b then f(x) end end",
+                "if local x=a then if b then f(x)end end",
+            ),
+            (
+                "if a then if b then if local x = c then f(x) end end end",
+                "if a and b then if local x=c then f(x)end end",
+            ),
+            (
+                "if local x = a then if b then if c then f(x) end end end",
+                "if local x=a then if b and c then f(x)end end",
+            ),
+            (
+                "if local x = a then return 1 end return b",
+                "if local x=a then return 1 end return b",
+            ),
+        ] {
+            assert_eq!(simplify(source), expected, "source: {source}");
         }
     }
 }

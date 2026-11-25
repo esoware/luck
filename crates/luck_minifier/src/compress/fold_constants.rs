@@ -41,7 +41,6 @@ impl<'ast> Compressor<'_, 'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
@@ -174,10 +173,7 @@ impl<'ast> Compressor<'_, 'ast> {
         let names = self.names();
         let string = |operand: &Expression<'ast>| match operand.evaluate_value(&names)? {
             ConstantValue::String(bytes) => Some(bytes),
-            ConstantValue::Nil
-            | ConstantValue::Boolean(_)
-            | ConstantValue::Number(_)
-            | ConstantValue::Integer(_) => None,
+            ConstantValue::Nil | ConstantValue::Boolean(_) | ConstantValue::Number(_) => None,
         };
         // Last first.
         let mut strings: Vec<&[u8]> =
@@ -315,7 +311,6 @@ fn printed_length_bound(expr: &Expression<'_>) -> Option<usize> {
         Expression::Nil(_)
         | Expression::False(_)
         | Expression::True(_)
-        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
@@ -369,7 +364,6 @@ fn value_to_expr<'ast>(
                 literal
             }
         }
-        ConstantValue::Integer(integer) => Expression::new_integer(integer, None, span, allocator),
         ConstantValue::String(bytes) => {
             Expression::new_string_literal(ThinBytes::new(bytes), None, span, allocator)
         }

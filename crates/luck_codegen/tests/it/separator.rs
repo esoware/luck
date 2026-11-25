@@ -68,7 +68,6 @@ fn a_numeral_past_its_first_letter_glues_to_a_concat() {
         ("return 0b11 .. 'x'", "return 0b11..'x'"),
         ("return 1e5 .. 'x'", "return 1e5..'x'"),
         ("return 1.5e-5 .. 'x'", "return 1.5e-5..'x'"),
-        ("return 1i .. 'x'", "return 1i..'x'"),
         ("return 1_0 .. 'x'", "return 1_0 ..'x'"),
         ("return 0xffffffffffffffff .. 2", "return 0xffffffffffffffff..2"),
         ("x = 0xff and 1e5 or 2", "x=0xff and 1e5 or 2"),

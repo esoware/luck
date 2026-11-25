@@ -1,6 +1,6 @@
 use std::iter;
 
-use luck_token::{Numeral, read_integer, read_numeral, spell_integer, spell_number};
+use luck_token::{Numeral, read_numeral, spell_number};
 
 fn value(text: &str) -> f64 {
     read_numeral(text).value
@@ -109,17 +109,6 @@ fn nearest_to(integer: u128) -> f64 {
 }
 
 #[test]
-fn integer_literals_read_64_bit_patterns() {
-    assert_eq!(read_integer("123i"), Some(123));
-    assert_eq!(read_integer("1_000i__"), Some(1000));
-    assert_eq!(read_integer("0xffffffffffffffffi"), Some(-1));
-    assert_eq!(read_integer("0b101i"), Some(5));
-    assert_eq!(read_integer("9223372036854775807i"), Some(i64::MAX));
-    assert_eq!(read_integer("9223372036854775808i"), None);
-    assert_eq!(read_integer("0x10000000000000000i"), None);
-}
-
-#[test]
 fn writes_the_shortest_numeral() {
     for (number, expected) in [
         (0.0, "0"),
@@ -140,8 +129,6 @@ fn writes_the_shortest_numeral() {
     ] {
         assert_eq!(written(number), expected, "{number:?}");
     }
-    assert_eq!(spell_integer(-1).as_str(), "0xffffffffffffffffi");
-    assert_eq!(spell_integer(42).as_str(), "42i");
 }
 
 #[test]

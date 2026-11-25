@@ -273,7 +273,16 @@ mod tests {
         for seed in 0..16 {
             all_programs.push_str(&generate_full_grammar(seed, 60));
         }
-        for needle in ["export local", "export const", "export function", "1_000_000i", "<<"] {
+        for needle in [
+            "export local",
+            "export const",
+            "export function",
+            "<<",
+            "if local",
+            "elseif local",
+            "while local",
+            "if const",
+        ] {
             assert!(all_programs.contains(needle), "expected generated {needle}");
         }
     }

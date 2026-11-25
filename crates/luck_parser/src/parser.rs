@@ -11,14 +11,13 @@ mod types;
 use luck_allocator::{Allocator, AsciiBytes, Box, List, ThinBytes, ThinStr};
 use luck_ast::{
     BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionAttribute,
-    FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment, Name, NameIndex,
-    NumberLiteral, Statement, StringLiteral, Suffix, TreeCounts, Type, TypeField, TypedName, Var,
+    FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Name, NameIndex, NumberLiteral,
+    Statement, StringLiteral, Suffix, TreeCounts, Type, TypeField, TypedName, Var,
 };
 use luck_diagnostics::Diagnostic;
 use luck_lexer::Lexer;
 use luck_token::{
-    Span, StringValue, Token, TokenKind, decode_interpolated_text, decode_string, read_integer,
-    read_numeral,
+    Span, StringValue, Token, TokenKind, decode_interpolated_text, decode_string, read_numeral,
 };
 use rustc_hash::FxHashMap;
 
@@ -366,15 +365,6 @@ impl<'ast> Parser<'ast> {
         let numeral = read_numeral(raw.as_str());
         let literal = NumberLiteral::new(numeral.value, Some(raw), span, numeral.is_exact);
         self.alloc(literal)
-    }
-
-    /// Consume the current integer, whose kind the caller has matched, which
-    /// the lexer checked fits 64 bits.
-    fn advance_integer(&mut self) -> Box<'ast, IntegerLiteral<'ast>> {
-        let span = self.advance();
-        let raw = self.ascii_text(span);
-        let value = read_integer(raw.as_str()).expect("the lexer checked the integer fits 64 bits");
-        self.alloc(IntegerLiteral::new(value, Some(raw), span))
     }
 
     /// Consume the current string, whose kind the caller has matched, as a

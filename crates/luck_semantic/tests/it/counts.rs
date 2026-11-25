@@ -1,6 +1,6 @@
 //! The parse's counts size every table analysis fills, so a clean parse
 //! counts at least as many of each as analysis makes, and one scope per
-//! block exactly.
+//! block, or per if-expression branch a binding holds, exactly.
 
 use luck_allocator::Allocator;
 use luck_semantic::SemanticBuilder;

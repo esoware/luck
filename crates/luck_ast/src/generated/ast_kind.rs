@@ -4,10 +4,10 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
-    ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
-    FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
-    GenericTypeParam, GetSpan, IfExpression, IfStatement, IntegerLiteral, InterpolatedSegment,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
+    ElseClause, ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl,
+    FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor, GenericPackType,
+    GenericTypeList, GenericTypeParam, GetSpan, IfExpression, IfStatement, InterpolatedSegment,
     InterpolatedString, IntersectionType, LocalAssignment, LocalFunction, MethodCall, Name,
     NamedType, NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
     RepeatLoop, ReturnStatement, StringLiteral, SuffixedExpression, TableConstructor, TableType,
@@ -40,12 +40,12 @@ pub enum AstType {
     FunctionAttribute,
     Name,
     NumberLiteral,
-    IntegerLiteral,
     StringLiteral,
     Block,
     Assignment,
     DoBlock,
     WhileLoop,
+    ConditionalBinding,
     RepeatLoop,
     IfStatement,
     ElseIfClause,
@@ -99,12 +99,12 @@ pub enum AstKind<'ast> {
     FunctionAttribute(&'ast FunctionAttribute<'ast>),
     Name(&'ast Name<'ast>),
     NumberLiteral(&'ast NumberLiteral<'ast>),
-    IntegerLiteral(&'ast IntegerLiteral<'ast>),
     StringLiteral(&'ast StringLiteral<'ast>),
     Block(&'ast Block<'ast>),
     Assignment(&'ast Assignment<'ast>),
     DoBlock(&'ast DoBlock<'ast>),
     WhileLoop(&'ast WhileLoop<'ast>),
+    ConditionalBinding(&'ast ConditionalBinding<'ast>),
     RepeatLoop(&'ast RepeatLoop<'ast>),
     IfStatement(&'ast IfStatement<'ast>),
     ElseIfClause(&'ast ElseIfClause<'ast>),
@@ -158,12 +158,12 @@ impl<'ast> AstKind<'ast> {
             Self::FunctionAttribute(_) => AstType::FunctionAttribute,
             Self::Name(_) => AstType::Name,
             Self::NumberLiteral(_) => AstType::NumberLiteral,
-            Self::IntegerLiteral(_) => AstType::IntegerLiteral,
             Self::StringLiteral(_) => AstType::StringLiteral,
             Self::Block(_) => AstType::Block,
             Self::Assignment(_) => AstType::Assignment,
             Self::DoBlock(_) => AstType::DoBlock,
             Self::WhileLoop(_) => AstType::WhileLoop,
+            Self::ConditionalBinding(_) => AstType::ConditionalBinding,
             Self::RepeatLoop(_) => AstType::RepeatLoop,
             Self::IfStatement(_) => AstType::IfStatement,
             Self::ElseIfClause(_) => AstType::ElseIfClause,
@@ -311,11 +311,6 @@ impl<'ast> AstKind<'ast> {
     }
 
     #[inline]
-    pub const fn as_integer_literal(self) -> Option<&'ast IntegerLiteral<'ast>> {
-        if let Self::IntegerLiteral(integer_literal) = self { Some(integer_literal) } else { None }
-    }
-
-    #[inline]
     pub const fn as_string_literal(self) -> Option<&'ast StringLiteral<'ast>> {
         if let Self::StringLiteral(string_literal) = self { Some(string_literal) } else { None }
     }
@@ -338,6 +333,15 @@ impl<'ast> AstKind<'ast> {
     #[inline]
     pub const fn as_while_loop(self) -> Option<&'ast WhileLoop<'ast>> {
         if let Self::WhileLoop(while_loop) = self { Some(while_loop) } else { None }
+    }
+
+    #[inline]
+    pub const fn as_conditional_binding(self) -> Option<&'ast ConditionalBinding<'ast>> {
+        if let Self::ConditionalBinding(conditional_binding) = self {
+            Some(conditional_binding)
+        } else {
+            None
+        }
     }
 
     #[inline]
@@ -543,12 +547,12 @@ impl GetSpan for AstKind<'_> {
             Self::FunctionAttribute(function_attribute) => function_attribute.span(),
             Self::Name(name) => name.span(),
             Self::NumberLiteral(number_literal) => number_literal.span(),
-            Self::IntegerLiteral(integer_literal) => integer_literal.span(),
             Self::StringLiteral(string_literal) => string_literal.span(),
             Self::Block(block) => block.span(),
             Self::Assignment(assignment) => assignment.span(),
             Self::DoBlock(do_block) => do_block.span(),
             Self::WhileLoop(while_loop) => while_loop.span(),
+            Self::ConditionalBinding(conditional_binding) => conditional_binding.span(),
             Self::RepeatLoop(repeat_loop) => repeat_loop.span(),
             Self::IfStatement(if_stmt) => if_stmt.span(),
             Self::ElseIfClause(else_if_clause) => else_if_clause.span(),

@@ -645,38 +645,11 @@ local after = 1",
 }
 
 #[test]
-fn integer_literals_are_integer_nodes_within_64_bits() {
+fn an_integer_suffix_is_a_malformed_number() {
     let allocator = Allocator::new();
-    let result = parse_str(
-        &allocator,
-        "return 1i, 1_000_000i, 1i_, 0xffffffffffffffffi, \
-         0b1000000000000000000000000000000000000000000000000000000000000000i",
-    );
-    assert_no_errors(&result);
-    let [Statement::Return(return_stmt)] = &*result.chunk.stmts else {
-        panic!("expected return");
-    };
-    assert!(return_stmt.exprs.iter().all(|expr| matches!(expr, Expression::Integer(_))));
-
-    for source in [
-        "return 9223372036854775808i",
-        "return 0x10000000000000000i",
-        "return 123ii",
-        "return 123.0i",
-        "return 0b250i",
-    ] {
+    for source in ["return 1i", "return 0xffi", "return -123i", "return 2.5i"] {
         assert!(!parse_str(&allocator, source).errors.is_empty(), "{source} must be rejected");
     }
-
-    // The suffix binds to the literal, not the unary minus, so the
-    // decimal boundary value overflows even when negated; i64::MIN is
-    // only spellable as a hex bit pattern.
-    assert_no_errors(&parse_str(&allocator, "return -123i"));
-    assert_no_errors(&parse_str(&allocator, "return 0x8000000000000000i"));
-    assert!(
-        !parse_str(&allocator, "return -9223372036854775808i").errors.is_empty(),
-        "decimal i64::MIN spelling must overflow"
-    );
 }
 
 #[test]

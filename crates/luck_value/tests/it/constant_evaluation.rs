@@ -34,7 +34,6 @@ fn literals_are_their_values() {
         ("1.5", NUMBER(1.5)),
         ("'\\65\\66'", Some(ConstantValue::String(b"AB"))),
         ("(((1)))", NUMBER(1.0)),
-        ("1i", Some(ConstantValue::Integer(1))),
         ("`text`", Some(ConstantValue::String(b"text"))),
         ("(2 :: number)", NUMBER(2.0)),
     ]);
@@ -97,8 +96,6 @@ fn comparisons_are_exact_and_false_with_nan() {
         ("1 == '1'", BOOLEAN(false)),
         ("'a' == '\\97'", BOOLEAN(true)),
         ("1 < '2'", None),
-        ("1i == 1i", BOOLEAN(true)),
-        ("1i == 1", BOOLEAN(false)),
     ]);
 }
 

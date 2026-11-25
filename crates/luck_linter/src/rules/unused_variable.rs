@@ -70,7 +70,7 @@ mod tests {
     const PASS: &[&str] = &[
         "\
 export local answer = 42
-export const LIMIT = 1i
+export const LIMIT = 1
 export function helper()
 return 1
 end",
@@ -85,6 +85,8 @@ local n = 1
 local m = (nil :: typeof(n))
 print(m)",
         "local _unused = 1",
+        "while local item = f() do print(item) end",
+        "return if local name = f() then name else nil",
     ];
 
     const FAIL: &[&str] = &[
@@ -104,6 +106,8 @@ print(_x)",
 local x = 2
 print(_y)",
         "local unused = 1",
+        "if local unused = f() then print(1) end",
+        "return if const unused = f() then 1 else 2",
     ];
 
     #[test]

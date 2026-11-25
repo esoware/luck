@@ -458,15 +458,15 @@ return x
 #[test]
 fn merged_rfc_syntax_and_exports_survive_minification() {
     let source = "\
-export local public = 129312i
-export const mask = 0xffffffffffffffffi
+export local public = 129312
+export const mask = 0xffff
 export function apply<T>(value: T)
     return identity<<T>>(value), public, mask
 end
 ";
     let result = minify_typed(source);
-    assert!(result.contains("export local public=129312i"), "{result}");
-    assert!(result.contains("export const mask=0xffffffffffffffffi"), "{result}");
+    assert!(result.contains("export local public=129312"), "{result}");
+    assert!(result.contains("export const mask=65535"), "{result}");
     assert!(result.contains("export function apply"), "{result}");
     assert!(result.contains("identity<<T>>"), "{result}");
     assert!(result.contains(":T"), "{result}");
@@ -523,4 +523,28 @@ fn function_inside_a_type_survives_minification() {
         assert_eq!(result, expected, "source: {source}");
         assert_eq!(minify_typed(&result), result, "must be idempotent");
     }
+}
+
+/// A condition can't see its own binding, so the binding may wear the name
+/// of what the condition calls.
+#[test]
+fn a_binding_renames_and_drops_its_type_as_a_local_does() {
+    let source = "\
+local function find(id: number): string?
+    return names[id]
+end
+if local name: string? = find(1) then
+    print(name)
+end
+while const item = queue:pop() do
+    print(item)
+end
+return if local first = find(2) then first else nil
+";
+    assert_eq!(
+        minify_default(source),
+        "local function e(e)return names[e]end if local e=e(1)then print(e)end while const \
+         e=queue:pop()do print(e)end return if local e=e(2)then e else nil"
+    );
+    assert!(minify_typed(source).contains("if local e:string?=e(1)then"));
 }

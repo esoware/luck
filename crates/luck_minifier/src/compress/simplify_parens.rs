@@ -1,8 +1,7 @@
 //! Dropping parentheses that change nothing.
 //!
-//! The tree keeps only those that truncate a call or `...` to one value or
-//! stop a `-` before an integer literal from reading as a negative one,
-//! and the printer writes whatever grouping needs. So what's left to drop
+//! The tree keeps only those that truncate a call or `...` to one value, and
+//! the printer writes whatever grouping needs. So what's left to drop
 //! is a truncation wherever only the first value counts anyway, the
 //! parentheses around a lone string or table argument, and the ones a run
 //! held in a run at its level prints with where it groups the same without.
@@ -21,9 +20,6 @@ pub(super) enum Place {
     /// Where only its first value counts: an operand, a condition, a key, a
     /// field, an index, or any but the last of a list.
     OneValue,
-    /// The operand of a `-`, under which an integer literal reads as a
-    /// negative one.
-    Negated,
 }
 
 /// Strips the parentheses around `expr` where they change nothing at
@@ -32,11 +28,7 @@ pub(super) fn strip(expr: &mut Expression<'_>, place: Place) -> bool {
     let Expression::Parenthesized(paren) = expr else {
         return false;
     };
-    let is_kept = match place {
-        Place::AllValues => paren.expr.is_multi_value(),
-        Place::OneValue => false,
-        Place::Negated => matches!(paren.expr, Expression::Integer(_)),
-    };
+    let is_kept = place == Place::AllValues && paren.expr.is_multi_value();
     if is_kept || matches!(paren.expr, Expression::Error(_)) {
         return false;
     }
@@ -215,11 +207,6 @@ mod tests {
                 ("return (\"s\"):rep(2)", "return(\"s\"):rep(2)"),
             ],
         );
-        // `-(1i)` negates an integer, which raises, and `-1i` is a literal.
-        assert_outputs(
-            apply,
-            &[("return -(1i), not (1i), (1i) + x, (1i) :: T", "return-(1i),not 1i,1i+x,1i::T")],
-        );
     }
 
     #[test]
@@ -243,7 +230,6 @@ mod tests {
                 ("return ({})<<T>>\n", "return({})<<T>>"),
                 ("return (\"s\")<<T>>\n", "return(\"s\")<<T>>"),
                 ("return (1)<<T>>\n", "return(1)<<T>>"),
-                ("return (1i)<<T>>\n", "return(1i)<<T>>"),
                 ("return (nil)<<T>>\n", "return(nil)<<T>>"),
                 ("return (function() end)<<T>>\n", "return(function()end)<<T>>"),
                 ("return (({}))<<T>>\n", "return({})<<T>>"),

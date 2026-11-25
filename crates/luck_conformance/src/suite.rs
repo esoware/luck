@@ -16,10 +16,9 @@ const TARBALL_DIRECTORY: &str = "luau-c0e346edd89066b44dca174c9f54ce84c746a540/t
 /// The cache directory the tests unpack into.
 const DIRECTORY: &str = "luau-0.740";
 
-/// The Luau flags for what luck reads ahead of the pinned release: integer
-/// literals and their library, and exported values.
-pub(crate) const FAST_FLAGS: &[&str] =
-    &["LuauIntegerType2", "LuauIntegerLibrary", "LuauExportValueSyntax"];
+/// The Luau flags for what luck reads ahead of the pinned release: exported
+/// values and conditional bindings.
+pub(crate) const FAST_FLAGS: &[&str] = &["LuauExportValueSyntax", "LuauExperimentalIfLocalSyntax"];
 
 /// A test file of the suite, as bytes, which luck parses.
 #[derive(Debug)]

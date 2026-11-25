@@ -57,9 +57,7 @@ pub use directive::{
 };
 pub use limits::{MAX_ACTIVE_LOCALS, MAX_REGISTERS};
 pub use line_index::LineIndex;
-pub use number::{
-    NumberSpelling, Numeral, read_integer, read_numeral, spell_integer, spell_number,
-};
+pub use number::{NumberSpelling, Numeral, read_numeral, spell_number};
 pub use op::{Associativity, BinOp, CompoundOp, UnOp};
 pub use span::{Span, index_to_offset, offset_to_index};
 pub use string::{

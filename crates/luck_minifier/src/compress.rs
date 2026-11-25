@@ -34,13 +34,12 @@ use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    Assignment, BinaryOp, Block, Expression, Field, FunctionArgs, FunctionBody, GenericFor, Name,
-    ReturnStatement, Statement, Suffix, SuffixedExpression, TableConstructor, TreeCounts, Type,
-    TypedName, Visit, VisitMut,
+    Assignment, BinaryOp, Block, ConditionalBinding, Expression, Field, FunctionArgs, FunctionBody,
+    GenericFor, Name, ReturnStatement, Statement, Suffix, SuffixedExpression, TableConstructor,
+    TreeCounts, Type, TypedName, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{Scoping, SymbolId};
-use luck_token::UnOp;
 use luck_value::ConstantEvaluation as _;
 
 use self::inline_locals::Held;
@@ -256,6 +255,23 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         self.dropper().visit_block(block);
     }
 
+    /// Walks the annotation of a condition's binding, if there is one, which
+    /// the walk reaches before the condition, as the source has them.
+    fn visit_binding(&mut self, binding: Option<&mut ConditionalBinding<'ast>>) {
+        if let Some(ty) = binding.and_then(|binding| binding.name.type_annotation.as_deref_mut()) {
+            self.visit_type(ty);
+        }
+    }
+
+    /// Walks a block, where a binding of the condition that guards it, if
+    /// one does, takes a register.
+    fn visit_bound_block(&mut self, is_bound: bool, block: &mut Block<'ast>) {
+        let registers = usize::from(is_bound);
+        self.live_registers += registers;
+        self.visit_block(block);
+        self.live_registers -= registers;
+    }
+
     /// Marks the references in the annotation of a name the walk drops from
     /// its `local`.
     fn drop_annotation(&mut self, local_name: &TypedName<'ast>) {
@@ -318,6 +334,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             }
             Statement::IfStatement(_) => return self.visit_if(stmt),
             Statement::WhileLoop(while_loop) => {
+                self.visit_binding(while_loop.binding.as_deref_mut());
                 self.visit_expr(&mut while_loop.condition);
                 if should_remove_dead_code
                     && while_loop.condition.get_side_free_boolean_value(&self.names())
@@ -326,7 +343,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.drop_stmt(stmt);
                     return false;
                 }
-                self.visit_block(&mut while_loop.block);
+                self.visit_bound_block(while_loop.binding.is_some(), &mut while_loop.block);
                 return true;
             }
             Statement::RepeatLoop(_) => return self.visit_repeat(stmt),
@@ -425,9 +442,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::BinaryOp(run) => self.walk_run(run),
             Expression::UnaryOp(unary_op) => {
                 if self.descend() {
-                    let operand_place =
-                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::OneValue };
-                    self.visit_operand(&mut unary_op.operand, operand_place);
+                    self.visit_operand(&mut unary_op.operand, Place::OneValue);
                 }
                 self.ascend();
             }
@@ -442,7 +457,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
@@ -508,12 +522,9 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                 // So does an operator a rewrite built.
                 if self.config.simplify_parens
                     && let Expression::UnaryOp(unary_op) = expr
+                    && simplify_parens::strip(&mut unary_op.operand, Place::OneValue)
                 {
-                    let operand_place =
-                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::OneValue };
-                    if simplify_parens::strip(&mut unary_op.operand, operand_place) {
-                        self.has_changed = true;
-                    }
+                    self.has_changed = true;
                 }
             }
             Expression::Parenthesized(_) => {
@@ -525,7 +536,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)

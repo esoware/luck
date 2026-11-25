@@ -335,7 +335,6 @@ impl<'document> Classifier<'document> {
                     | Expression::False(_)
                     | Expression::True(_)
                     | Expression::Number(_)
-                    | Expression::Integer(_)
                     | Expression::StringLiteral(_)
                     | Expression::VarArg(_)
                     | Expression::FunctionDef(_)
@@ -530,7 +529,6 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
                     | "never"
                     | "boolean"
                     | "number"
-                    | "integer"
                     | "string"
                     | "thread"
                     | "userdata"

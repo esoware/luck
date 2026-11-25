@@ -151,7 +151,6 @@ impl<'ast> Parser<'ast> {
             // `simpleexp ::= attributes 'function' funcbody`
             TokenKind::Function | TokenKind::At => self.parse_function_def(),
             TokenKind::DotDotDot => self.parse_vararg(),
-            TokenKind::Integer => Expression::Integer(self.advance_integer()),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::InterpolatedStringBegin | TokenKind::InterpolatedStringSimple => {
                 self.parse_interpolated_string()
@@ -169,10 +168,8 @@ impl<'ast> Parser<'ast> {
     }
 
     /// The tree keeps the parentheses around a call or `...`, which they
-    /// truncate to one value, and around an integer literal, whose negation
-    /// they keep from reading as a negative literal. It records the
-    /// rest and reads what they hold as if they weren't there, so they open
-    /// no level.
+    /// truncate to one value. It records the rest and reads what they hold
+    /// as if they weren't there, so they open no level.
     fn parse_parenthesized(&mut self) -> Expression<'ast> {
         let open = self.token.span;
         if !self.enter_grouping() {
@@ -186,7 +183,7 @@ impl<'ast> Parser<'ast> {
         self.grouping_depth -= 1;
         let close = self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
         let parens = open.merge(close);
-        let grouped = if expr.is_multi_value() || matches!(expr, Expression::Integer(_)) {
+        let grouped = if expr.is_multi_value() {
             if !self.enter_wrapper(level) {
                 return Expression::Error(parens);
             }
@@ -355,17 +352,22 @@ impl<'ast> Parser<'ast> {
         }
         self.advance();
         self.open(Closer::Else);
+        let binding = self.parse_conditional_binding("if");
+        // A binding holds its branch in a scope of its own, as a block does.
+        self.counts.blocks += u32::from(binding.is_some());
         let condition = self.parse_expr(0);
         self.expect(TokenKind::Then);
         let then_expr = self.parse_expr(0);
         let start = self.scratch.elseif_exprs.len();
         while self.is_at(TokenKind::ElseIf) {
             let elseif_span = self.advance();
+            let clause_binding = self.parse_conditional_binding("elseif");
+            self.counts.blocks += u32::from(clause_binding.is_some());
             let clause_condition = self.parse_expr(0);
             self.expect(TokenKind::Then);
             let expr = self.parse_expr(0);
             let span = Span::new(elseif_span.start, self.previous_span.end);
-            let clause = ElseIfExprClause::new(span, clause_condition, expr);
+            let clause = ElseIfExprClause::new(span, clause_binding, clause_condition, expr);
             self.scratch.elseif_exprs.push(clause);
         }
         self.close(Closer::Else);
@@ -377,6 +379,7 @@ impl<'ast> Parser<'ast> {
             List::split_off_in(&mut self.scratch.elseif_exprs, start, self.allocator);
         Expression::new_if_expr(
             span,
+            binding,
             condition,
             then_expr,
             elseif_clauses,

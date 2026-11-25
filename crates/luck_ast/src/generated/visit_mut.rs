@@ -2,16 +2,16 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, AstType, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
-    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
-    LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
-    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType,
-    UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, AstType, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
+    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
+    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
+    IfExpression, IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType,
+    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor,
+    OptionalType, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement,
+    Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type,
+    TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName,
+    TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// [`Visit`](crate::Visit)'s walk through `&mut`, in the same order and
@@ -178,11 +178,6 @@ pub trait VisitMut<'ast> {
     }
 
     #[inline]
-    fn visit_integer_literal(&mut self, integer_literal: &mut IntegerLiteral<'ast>) {
-        self.walk_integer_literal(integer_literal);
-    }
-
-    #[inline]
     fn visit_string_literal(&mut self, string_literal: &mut StringLiteral<'ast>) {
         self.walk_string_literal(string_literal);
     }
@@ -210,6 +205,11 @@ pub trait VisitMut<'ast> {
     #[inline]
     fn visit_while_loop(&mut self, while_loop: &mut WhileLoop<'ast>) {
         self.walk_while_loop(while_loop);
+    }
+
+    #[inline]
+    fn visit_conditional_binding(&mut self, conditional_binding: &mut ConditionalBinding<'ast>) {
+        self.walk_conditional_binding(conditional_binding);
     }
 
     #[inline]
@@ -383,7 +383,6 @@ pub trait VisitMut<'ast> {
             | Expression::VarArg(_)
             | Expression::Error(_) => {}
             Expression::Number(number_literal) => self.visit_number_literal(number_literal),
-            Expression::Integer(integer_literal) => self.visit_integer_literal(integer_literal),
             Expression::StringLiteral(string_literal) => self.visit_string_literal(string_literal),
             Expression::FunctionDef(function_def) => self.visit_function_def(function_def),
             Expression::Name(name) => self.visit_name(name),
@@ -551,6 +550,9 @@ pub trait VisitMut<'ast> {
         let kind = AstType::IfExpression;
         self.enter_node(kind);
         if self.descend() {
+            if let Some(binding) = &mut if_expr.binding {
+                self.visit_conditional_binding(binding);
+            }
             self.visit_expr(&mut if_expr.condition);
             self.visit_expr(&mut if_expr.then_expr);
             for else_if_expr_clause in &mut if_expr.elseif_clauses {
@@ -566,6 +568,9 @@ pub trait VisitMut<'ast> {
     fn walk_else_if_expr_clause(&mut self, else_if_expr_clause: &mut ElseIfExprClause<'ast>) {
         let kind = AstType::ElseIfExprClause;
         self.enter_node(kind);
+        if let Some(binding) = &mut else_if_expr_clause.binding {
+            self.visit_conditional_binding(binding);
+        }
         self.visit_expr(&mut else_if_expr_clause.condition);
         self.visit_expr(&mut else_if_expr_clause.expr);
         self.leave_node(kind);
@@ -673,14 +678,6 @@ pub trait VisitMut<'ast> {
 
     #[inline]
     #[expect(unused_variables, reason = "nothing it holds is a node")]
-    fn walk_integer_literal(&mut self, integer_literal: &mut IntegerLiteral<'ast>) {
-        let kind = AstType::IntegerLiteral;
-        self.enter_node(kind);
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    #[expect(unused_variables, reason = "nothing it holds is a node")]
     fn walk_string_literal(&mut self, string_literal: &mut StringLiteral<'ast>) {
         let kind = AstType::StringLiteral;
         self.enter_node(kind);
@@ -751,8 +748,19 @@ pub trait VisitMut<'ast> {
     fn walk_while_loop(&mut self, while_loop: &mut WhileLoop<'ast>) {
         let kind = AstType::WhileLoop;
         self.enter_node(kind);
+        if let Some(binding) = &mut while_loop.binding {
+            self.visit_conditional_binding(binding);
+        }
         self.visit_expr(&mut while_loop.condition);
         self.visit_block(&mut while_loop.block);
+        self.leave_node(kind);
+    }
+
+    #[inline]
+    fn walk_conditional_binding(&mut self, conditional_binding: &mut ConditionalBinding<'ast>) {
+        let kind = AstType::ConditionalBinding;
+        self.enter_node(kind);
+        self.visit_typed_name(&mut conditional_binding.name);
         self.leave_node(kind);
     }
 
@@ -769,6 +777,9 @@ pub trait VisitMut<'ast> {
     fn walk_if_stmt(&mut self, if_stmt: &mut IfStatement<'ast>) {
         let kind = AstType::IfStatement;
         self.enter_node(kind);
+        if let Some(binding) = &mut if_stmt.binding {
+            self.visit_conditional_binding(binding);
+        }
         self.visit_expr(&mut if_stmt.condition);
         self.visit_block(&mut if_stmt.block);
         for else_if_clause in &mut if_stmt.elseif_clauses {
@@ -784,6 +795,9 @@ pub trait VisitMut<'ast> {
     fn walk_else_if_clause(&mut self, else_if_clause: &mut ElseIfClause<'ast>) {
         let kind = AstType::ElseIfClause;
         self.enter_node(kind);
+        if let Some(binding) = &mut else_if_clause.binding {
+            self.visit_conditional_binding(binding);
+        }
         self.visit_expr(&mut else_if_clause.condition);
         self.visit_block(&mut else_if_clause.block);
         self.leave_node(kind);

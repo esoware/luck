@@ -17,8 +17,6 @@ pub enum TokenKind {
     Write,
 
     Number,
-    /// A numeral with the `i` suffix, which reads as an exact 64-bit integer.
-    Integer,
     StringLiteral,
 
     // Interpolated string pieces, each spanning its delimiters
@@ -129,7 +127,6 @@ impl TokenKind {
         Spelling::Fixed(match self {
             Self::Identifier => return Spelling::Described("identifier"),
             Self::Number => return Spelling::Described("number"),
-            Self::Integer => return Spelling::Described("integer"),
             Self::StringLiteral => return Spelling::Described("string"),
             Self::InterpolatedStringBegin => {
                 return Spelling::Described("interpolated string start");
@@ -255,7 +252,6 @@ impl TokenKind {
             | Self::Read
             | Self::Write => true,
             Self::Number
-            | Self::Integer
             | Self::StringLiteral
             | Self::InterpolatedStringBegin
             | Self::InterpolatedStringMiddle
@@ -490,7 +486,7 @@ impl fmt::Display for TokenDisplay<'_> {
         // A name or a numeral is ASCII, which this writes as it is.
         if self.kind.is_name() {
             write!(f, "{} `{}`", TokenKind::Identifier, self.text.escape_ascii())
-        } else if matches!(self.kind, TokenKind::Number | TokenKind::Integer) {
+        } else if self.kind == TokenKind::Number {
             write!(f, "{} `{}`", self.kind, self.text.escape_ascii())
         } else {
             self.kind.fmt(f)

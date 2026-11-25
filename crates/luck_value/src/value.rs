@@ -14,8 +14,6 @@ pub enum ConstantValue<'ast> {
     Nil,
     Boolean(bool),
     Number(f64),
-    /// A 64-bit integer, which `1i` spells.
-    Integer(i64),
     /// A string's bytes, which need not be UTF-8.
     String(&'ast [u8]),
 }
@@ -26,12 +24,8 @@ impl PartialEq for ConstantValue<'_> {
             (Self::Nil, Self::Nil) => true,
             (Self::Boolean(lhs), Self::Boolean(rhs)) => lhs == rhs,
             (Self::Number(lhs), Self::Number(rhs)) => lhs.to_bits() == rhs.to_bits(),
-            (Self::Integer(lhs), Self::Integer(rhs)) => lhs == rhs,
             (Self::String(lhs), Self::String(rhs)) => lhs == rhs,
-            (
-                Self::Nil | Self::Boolean(_) | Self::Number(_) | Self::Integer(_) | Self::String(_),
-                _,
-            ) => false,
+            (Self::Nil | Self::Boolean(_) | Self::Number(_) | Self::String(_), _) => false,
         }
     }
 }
@@ -97,10 +91,7 @@ impl ConstantValue<'_> {
             (Self::Number(lhs), Self::Number(rhs)) => {
                 lhs.partial_cmp(&rhs) == Some(Ordering::Equal)
             }
-            (
-                Self::Nil | Self::Boolean(_) | Self::Number(_) | Self::Integer(_) | Self::String(_),
-                _,
-            ) => self == other,
+            (Self::Nil | Self::Boolean(_) | Self::Number(_) | Self::String(_), _) => self == other,
         }
     }
 }

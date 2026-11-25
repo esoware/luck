@@ -176,7 +176,7 @@ fn empty_source_lexes_to_only_eof() {
 #[test]
 fn every_prefix_of_a_source_lexes_to_an_eof_at_its_end() {
     let source = "\u{FEFF}#!luau
-local name_longer_than_a_word, x = 0x1F.8p-3 + 1e+10 .. 0b1_01i, 1_000i
+local name_longer_than_a_word, x = 0x1F.8p-3 + 1e+10 .. 0b1_01, 1_000
 s = \"esc \\n \\z \t \\x41 \\u{1F600} \\065 \\q \u{e9}\" .. 'q\\\r
 ' t = [==[ long ]] ]=] ]==] --[[ block
 comment ]] -- line \u{1F600}\r

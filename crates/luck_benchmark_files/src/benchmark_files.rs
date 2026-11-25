@@ -73,7 +73,7 @@ fn parse_cleanly<'ast>(
     parse_result
 }
 
-const BENCHMARK_FILES_SHA: &str = "44602811fec92e0ddee0a711113abd852fbc4a8e"; // esoware/luck-benchmark-files
+const BENCHMARK_FILES_SHA: &str = "7d70535b4a9e96afdc7dfc22e16e9d5a99f9e4ea"; // esoware/luck-benchmark-files
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const CRYPTOGRAPHY_SHA: &str = "26226eeecbb7314b91095f3dea4d4b4444495247"; // daily3014/rbx-cryptography v4.1.2
 
