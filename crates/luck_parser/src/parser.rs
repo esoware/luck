@@ -126,7 +126,6 @@ fn parse_source<'ast>(
         tokens,
         counts: TreeCounts::default(),
     };
-    // `advance` is the lexer's one caller, so it's inlined there alone.
     parser.advance();
     parser.advance();
     parser.previous_span = Span::new(0, 0);
@@ -287,19 +286,31 @@ impl<'ast> Parser<'ast> {
         self.text_source.text(span.into()).expect("the lexer reads names and numerals as ASCII")
     }
 
-    /// Consume the current token and return its span. Out of line, so the
-    /// lexer it inlines is inlined once: inlined into every caller, it parses
-    /// 5% slower.
+    /// Consume the current token and return its span. While the lexer's
+    /// batch lasts it calls nothing, so it saves no register, and it reaches
+    /// the next batch through a tail call.
     #[inline(never)]
     fn advance(&mut self) -> Span {
+        if !self.lexer.has_buffered() {
+            return self.advance_into_next_batch();
+        }
         let span = self.token.span;
         self.previous_span = span;
         self.token = self.next;
-        self.next = self.lexer.next_token();
-        if let Some(tokens) = &mut self.tokens {
-            tokens.push(self.next);
-        }
+        self.next = self.lexer.take_buffered();
         span
+    }
+
+    /// [`Self::advance`] once the lexer's batch is read: lex the next one,
+    /// which `tokens` keeps for `parse_with_tokens`, and advance into it.
+    #[cold]
+    #[inline(never)]
+    fn advance_into_next_batch(&mut self) -> Span {
+        let batch = self.lexer.refill();
+        if let Some(tokens) = &mut self.tokens {
+            tokens.extend_from_slice(batch);
+        }
+        self.advance()
     }
 
     /// Consume the current token if it is a `kind`.

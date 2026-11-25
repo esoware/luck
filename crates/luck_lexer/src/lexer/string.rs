@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use luck_token::{EscapeError, StringKind, Token, TokenKind, read_escape};
 
-use super::Lexer;
+use super::Scanner;
 use crate::search::{ByteMatchTable, byte_match_table, find_match};
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
@@ -35,7 +35,7 @@ pub(super) struct LongBracketBody {
     pub has_cr: bool,
 }
 
-impl Lexer<'_> {
+impl Scanner<'_> {
     /// Lex a single- or double-quoted string that opened with `quote` at
     /// `start`, with the cursor past it.
     ///

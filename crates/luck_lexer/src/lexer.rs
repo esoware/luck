@@ -17,9 +17,9 @@ use crate::lex_result::LexResult;
 use batch::{BUFFER_TOKENS, UNREAD_TOKEN};
 use string::LongBracketKind;
 
-/// The densest real file among the benchmark files runs about this many
-/// bytes per token, so most sources fit the first reservation, and pages a
-/// sparser one leaves untouched cost nothing.
+/// Most real files run about this many bytes per token or more, so most
+/// sources fit the first reservation, and pages a sparser one leaves
+/// untouched cost nothing.
 const BYTES_PER_TOKEN: usize = 4;
 
 /// Keeps a huge comment-only file from reserving gigabytes it never touches.
@@ -27,57 +27,37 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
 /// tokens.
+#[expect(
+    unsafe_code,
+    reason = "each batch goes straight into the vector's spare capacity, which a buffer and a copy would double"
+)]
+#[expect(clippy::missing_panics_doc, reason = "the slots a batch takes were just reserved")]
 pub fn lex(source: &[u8]) -> LexResult {
-    let mut lexer = match Lexer::new(source) {
-        Ok(lexer) => lexer,
+    let mut scanner = match Scanner::new(source, DynCpu::detect()) {
+        Ok(scanner) => scanner,
         Err(error) => return LexResult { errors: vec![error], ..LexResult::default() },
     };
-    let mut tokens = Vec::with_capacity(lexer.token_capacity());
-    if matches!(lexer.cpu, DynCpu::Generic(_)) {
-        loop {
-            let token = lexer.scan_token();
-            tokens.push(token);
-            if token.kind == TokenKind::Eof {
-                break;
-            }
-        }
-    } else {
-        loop {
-            lexer.refill();
-            let batch = &lexer.buffer[..lexer.buffered];
-            tokens.extend_from_slice(batch);
-            if batch.last().is_some_and(|token| token.kind == TokenKind::Eof) {
-                break;
-            }
+    let mut tokens = Vec::with_capacity(scanner.token_capacity() + BUFFER_TOKENS);
+    loop {
+        tokens.reserve(BUFFER_TOKENS);
+        let (slots, _) =
+            tokens.spare_capacity_mut().split_first_chunk_mut().expect("room for a batch");
+        let count = scanner.fill(slots);
+        // SAFETY: `fill` writes each of the first `count` slots it's given,
+        // which are the `count` past the vector's length.
+        unsafe { tokens.set_len(tokens.len() + count) };
+        if tokens.last().is_some_and(|token| token.kind == TokenKind::Eof) {
+            break;
         }
     }
-    lexer.finish(tokens)
+    scanner.finish(tokens)
 }
 
+/// Lexes a source a batch at a time, which [`Lexer::next_token`] hands out a
+/// token at a time.
 #[derive(Debug)]
 pub struct Lexer<'source> {
-    cursor: Cursor<'source>,
-    /// Whether a line break came since the last token. The start of the
-    /// source counts as one.
-    has_line_break: bool,
-    /// Only read once a token has been lexed.
-    last_token_start: u32,
-    comments: Vec<Comment>,
-    /// How many of `comments` know their token. The rest lead the next one.
-    attached_comment_count: usize,
-    errors: Vec<Diagnostic>,
-    /// Unmatched `{` count for each open interpolation expression, innermost
-    /// last. A `}` at depth 0 closes the expression and resumes the string.
-    interpolation_brace_depths: Vec<u32>,
-    /// Whether a block comment ran to the end of the source without its
-    /// closer, which the `Eof` token after it says.
-    is_in_block_comment: bool,
-    /// Whether the string being lexed holds an escape, which its token says.
-    has_escape: bool,
-    lenient_escapes: Vec<Span>,
-    /// A SIMD feature set lexes into `buffer` a batch at a time, and
-    /// `Generic` a token at a time.
-    cpu: DynCpu,
+    scanner: Scanner<'source>,
     buffer: [Token; BUFFER_TOKENS],
     /// How many tokens `buffer` holds, of which the first `taken` are read.
     buffered: usize,
@@ -104,6 +84,100 @@ impl<'source> Lexer<'source> {
     /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
     pub fn with_cpu(source: &'source [u8], cpu: DynCpu) -> Result<Self, Diagnostic> {
+        Ok(Self {
+            scanner: Scanner::new(source, cpu)?,
+            buffer: [UNREAD_TOKEN; BUFFER_TOKENS],
+            buffered: 0,
+            taken: 0,
+        })
+    }
+
+    /// Lex and return the next token on demand, without materializing the
+    /// whole stream. Comments, errors, and the rest accumulate on the lexer;
+    /// collect them with [`Lexer::finish`] once the caller has drained to
+    /// EOF.
+    /// Returns the same EOF token forever once the source is exhausted.
+    #[inline]
+    pub fn next_token(&mut self) -> Token {
+        if !self.has_buffered() {
+            self.refill();
+        }
+        self.take_buffered()
+    }
+
+    /// Whether the batch [`Self::refill`] lexed holds a token
+    /// [`Self::take_buffered`] hasn't handed out. A caller that reads every
+    /// token through the two, as the parser does, keeps its refill out of
+    /// line, so it calls nothing per token.
+    #[inline]
+    pub fn has_buffered(&self) -> bool {
+        self.taken < self.buffered
+    }
+
+    /// The next token of the batch [`Self::refill`] lexed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the batch is all read, as [`Self::has_buffered`] says.
+    #[inline]
+    pub fn take_buffered(&mut self) -> Token {
+        let token = self.buffer[..self.buffered][self.taken];
+        self.taken += 1;
+        token
+    }
+
+    /// Lex the next batch of tokens, through the `Eof` if the source ends,
+    /// for [`Self::take_buffered`] to hand out, and return it. Past the end
+    /// of the source, each batch is the `Eof` again.
+    #[inline(never)]
+    pub fn refill(&mut self) -> &[Token] {
+        self.buffered = self.scanner.fill(&mut self.buffer);
+        self.taken = 0;
+        &self.buffer[..self.buffered]
+    }
+
+    /// What a list of the tokens left to lex reserves.
+    pub fn token_capacity(&self) -> usize {
+        self.scanner.token_capacity()
+    }
+
+    /// What the lexer gathered, with `tokens`, the ones its caller took from
+    /// [`Lexer::next_token`].
+    pub fn finish(self, tokens: Vec<Token>) -> LexResult {
+        self.scanner.finish(tokens)
+    }
+}
+
+/// The lexer's state as it reads the source, which a batch fills tokens
+/// from.
+#[derive(Debug)]
+struct Scanner<'source> {
+    cursor: Cursor<'source>,
+    /// Whether a line break came since the last token. The start of the
+    /// source counts as one.
+    has_line_break: bool,
+    /// Only read once a token has been lexed.
+    last_token_start: u32,
+    comments: Vec<Comment>,
+    /// How many of `comments` know their token. The rest lead the next one.
+    attached_comment_count: usize,
+    errors: Vec<Diagnostic>,
+    /// Unmatched `{` count for each open interpolation expression, innermost
+    /// last. A `}` at depth 0 closes the expression and resumes the string.
+    interpolation_brace_depths: Vec<u32>,
+    /// Whether a block comment ran to the end of the source without its
+    /// closer, which the `Eof` token after it says.
+    is_in_block_comment: bool,
+    /// Whether the string being lexed holds an escape, which its token says.
+    has_escape: bool,
+    lenient_escapes: Vec<Span>,
+    /// A SIMD feature set lexes the simple tokens a window at a time, and
+    /// `Generic` every token a byte at a time.
+    cpu: DynCpu,
+}
+
+impl<'source> Scanner<'source> {
+    fn new(source: &'source [u8], cpu: DynCpu) -> Result<Self, Diagnostic> {
         if u32::try_from(source.len()).is_err() {
             return Err(Diagnostic::e008(
                 Span::new(0, 0),
@@ -115,7 +189,7 @@ impl<'source> Lexer<'source> {
         }
 
         let source_end = memchr::memchr(0, source).unwrap_or(source.len());
-        let mut lexer = Self {
+        let mut scanner = Self {
             cursor: Cursor::new(&source[..source_end]),
             has_line_break: true,
             last_token_start: 0,
@@ -127,46 +201,21 @@ impl<'source> Lexer<'source> {
             has_escape: false,
             lenient_escapes: Vec::new(),
             cpu,
-            buffer: [UNREAD_TOKEN; BUFFER_TOKENS],
-            buffered: 0,
-            taken: 0,
         };
 
-        if has_shebang(lexer.cursor.rest()) {
-            lexer.lex_shebang();
+        if has_shebang(scanner.cursor.rest()) {
+            scanner.lex_shebang();
         }
 
-        Ok(lexer)
-    }
-
-    /// Lex and return the next token on demand, without materializing the
-    /// whole stream. Comments, errors, and the rest accumulate on the lexer;
-    /// collect them with [`Lexer::finish`] once the caller has drained to
-    /// EOF.
-    /// Returns the same EOF token forever once the source is exhausted.
-    ///
-    /// Always inlined, so a caller runs its loop without a call per token.
-    /// Call it from one place, as the parser does.
-    #[expect(
-        clippy::inline_always,
-        reason = "measured: the parser runs 2-4% faster for it, and `lex` 10-15%"
-    )]
-    #[inline(always)]
-    pub fn next_token(&mut self) -> Token {
-        if matches!(self.cpu, DynCpu::Generic(_)) {
-            return self.scan_token();
-        }
-        if self.taken == self.buffered {
-            self.refill();
-        }
-        let token = self.buffer[self.taken];
-        self.taken += 1;
-        token
+        Ok(scanner)
     }
 
     /// Lex the next token a byte at a time, as `Generic` lexes every token
     /// and a SIMD feature set every token a window can't.
-    #[expect(clippy::inline_always, reason = "inlined into `next_token`, as it was")]
+    #[expect(
+        clippy::inline_always,
+        reason = "inlined into `Generic`'s batch loop and `scan_complex_token`, its only callers"
+    )]
     #[inline(always)]
     fn scan_token(&mut self) -> Token {
         loop {
@@ -257,13 +306,11 @@ impl<'source> Lexer<'source> {
     }
 
     /// What a list of the tokens left to lex reserves.
-    pub fn token_capacity(&self) -> usize {
+    fn token_capacity(&self) -> usize {
         self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS)
     }
 
-    /// What the lexer gathered, with `tokens`, the ones its caller took from
-    /// [`Lexer::next_token`].
-    pub fn finish(self, tokens: Vec<Token>) -> LexResult {
+    fn finish(self, tokens: Vec<Token>) -> LexResult {
         LexResult {
             tokens,
             comments: self.comments,

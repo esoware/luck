@@ -1,10 +1,10 @@
 use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
 
-use super::Lexer;
+use super::Scanner;
 use crate::cursor::Cursor;
 
-impl Lexer<'_> {
+impl Scanner<'_> {
     /// Lex a numeral that starts at `start` with `first`, a digit or a `.`
     /// before one, with the cursor past `first`, or report a malformed one
     /// and return `None`.

@@ -22,6 +22,11 @@ pub(crate) struct Planes {
     /// when they follow it: `-`, `.`, `/`, `:`, `<`, `=`, `>`, and `[`.
     pub(crate) continuation: u64,
     pub(crate) dot: u64,
+    pub(crate) double_quote: u64,
+    pub(crate) single_quote: u64,
+    /// `\` and CR, which end a run of a short string's body as its quote and
+    /// LF do.
+    pub(crate) string_break: u64,
 }
 
 /// A SIMD feature set's way to classify a window.
@@ -49,11 +54,14 @@ const UPPER_P_TO_Z_OR_UNDERSCORE: u8 = 1 << 1;
 const LOWER_P_TO_Z: u8 = 1 << 2;
 const CONTROL_WHITESPACE: u8 = 1 << 3;
 const SPACE: u8 = 1 << 4;
+const CARRIAGE_RETURN: u8 = 1 << 5;
+const BACKSLASH: u8 = 1 << 6;
 /// The top bit, which a movemask reads with no compare.
 const DIGIT: u8 = 1 << 7;
 
 const NAME: u8 = DIGIT | A_TO_O | UPPER_P_TO_Z_OR_UNDERSCORE | LOWER_P_TO_Z;
 const WHITESPACE: u8 = CONTROL_WHITESPACE | SPACE;
+const STRING_BREAK: u8 = CARRIAGE_RETURN | BACKSLASH;
 
 const PUNCT_ROW_2: u8 = 1 << 0;
 const PUNCT_ROW_3: u8 = 1 << 1;
@@ -73,8 +81,10 @@ const fn word_bits(byte: u8) -> u8 {
         b'A'..=b'O' | b'a'..=b'o' => A_TO_O,
         b'P'..=b'Z' | b'_' => UPPER_P_TO_Z_OR_UNDERSCORE,
         b'p'..=b'z' => LOWER_P_TO_Z,
-        b'\t' | b'\n' | 0x0B | 0x0C | b'\r' => CONTROL_WHITESPACE,
+        b'\t' | b'\n' | 0x0B | 0x0C => CONTROL_WHITESPACE,
+        b'\r' => CONTROL_WHITESPACE | CARRIAGE_RETURN,
         b' ' => SPACE,
+        b'\\' => BACKSLASH,
         _ => 0,
     }
 }
@@ -172,6 +182,9 @@ impl Classify for Avx2 {
             punct: join(PLANE_PUNCT),
             continuation: join(PLANE_CONTINUATION),
             dot: join(PLANE_DOT),
+            double_quote: join(PLANE_DOUBLE_QUOTE),
+            single_quote: join(PLANE_SINGLE_QUOTE),
+            string_break: join(PLANE_STRING_BREAK),
         }
     }
 }
@@ -183,7 +196,10 @@ const PLANE_LF: usize = 3;
 const PLANE_PUNCT: usize = 4;
 const PLANE_CONTINUATION: usize = 5;
 const PLANE_DOT: usize = 6;
-const PLANES: usize = 7;
+const PLANE_DOUBLE_QUOTE: usize = 7;
+const PLANE_SINGLE_QUOTE: usize = 8;
+const PLANE_STRING_BREAK: usize = 9;
+const PLANES: usize = 10;
 
 // The AVX2 kernel spells out each half, and builds no array with `map`,
 // which is std code compiled without AVX2 that could leave each vector
@@ -214,6 +230,9 @@ fn classify_avx2_half(half: &[u8; 32], cpu: Avx2) -> [u32; PLANES] {
         has(punct, PUNCT),
         has_any(punct, CONTINUATION),
         v.eq(Vec256::splat(b'.', cpu)).movemask(),
+        v.eq(Vec256::splat(b'"', cpu)).movemask(),
+        v.eq(Vec256::splat(b'\'', cpu)).movemask(),
+        has(word, STRING_BREAK),
     ]
 }
 
@@ -236,6 +255,9 @@ impl Classify for Neon {
             punct: plane(PLANE_PUNCT),
             continuation: plane(PLANE_CONTINUATION),
             dot: plane(PLANE_DOT),
+            double_quote: plane(PLANE_DOUBLE_QUOTE),
+            single_quote: plane(PLANE_SINGLE_QUOTE),
+            string_break: plane(PLANE_STRING_BREAK),
         }
     }
 }
@@ -264,6 +286,9 @@ fn classify_neon_quarter(quarter: &[u8; 16], cpu: Neon) -> [Vec128; PLANES] {
         has(punct, PUNCT),
         has(punct, CONTINUATION),
         v.eq(Vec128::splat(b'.', cpu)),
+        v.eq(Vec128::splat(b'"', cpu)),
+        v.eq(Vec128::splat(b'\'', cpu)),
+        has(word, STRING_BREAK),
     ]
 }
 
@@ -312,6 +337,13 @@ mod tests {
                         assert_eq!(bit(planes.punct), is_punct(b), "{context}");
                         assert_eq!(bit(planes.continuation), is_continuation, "{context}");
                         assert_eq!(bit(planes.dot), b == b'.', "{context}");
+                        assert_eq!(bit(planes.double_quote), b == b'"', "{context}");
+                        assert_eq!(bit(planes.single_quote), b == b'\'', "{context}");
+                        assert_eq!(
+                            bit(planes.string_break),
+                            matches!(b, b'\\' | b'\r'),
+                            "{context}"
+                        );
                     }
                 }
             }
