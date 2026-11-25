@@ -55,19 +55,22 @@ pub(crate) fn analyze<'ast>(
     let scoping = semantic.scoping();
     let mut requires = Vec::new();
     let mut diags = Vec::new();
-    // The call that first required each string.
+    // The call that first required each string when the chunk runs.
     let mut first_requires: FxHashMap<&str, Span> = FxHashMap::default();
     for site in semantic.requires() {
         let call_span = site.call.span();
         match site.path.and_then(|literal| Some((literal.as_str()?, literal.span))) {
             Some((path, path_span)) => {
-                let first = *first_requires.entry(path).or_insert(call_span);
-                if first != call_span {
-                    diags.push(Diagnostic::w001(call_span, path, first));
+                if !site.is_in_type {
+                    let first = *first_requires.entry(path).or_insert(call_span);
+                    if first != call_span {
+                        diags.push(Diagnostic::w001(call_span, path, first));
+                    }
                 }
                 let require_string = allocator.alloc_str(path);
                 requires.push(StaticRequire { require_string, call_span, path_span });
             }
+            None if site.is_in_type => {}
             // `require(expr)` can't be resolved statically. Aborting the whole
             // bundle over one such call is rarely what the author wants, so by
             // default it stays and resolves at runtime. Luau keys its cache by
@@ -209,6 +212,17 @@ local x = require(\"./x\")
         assert!(analysis.requires.is_empty());
         assert!(with_code(&analysis, "E002").is_empty(), "{:?}", analysis.diags);
         assert_eq!(with_code(&analysis, "W007").len(), 1, "{:?}", analysis.diags);
+    }
+
+    #[test]
+    fn a_non_literal_require_in_a_type_flags_nothing() {
+        let allocator = Allocator::new();
+        let source = "type T = typeof(require(varname))\n";
+        for dynamic_require in [DynamicRequire::Error, DynamicRequire::Warn] {
+            let analysis = analyze_with(&allocator, source, dynamic_require);
+            assert!(analysis.requires.is_empty());
+            assert!(analysis.diags.is_empty(), "{dynamic_require:?}: {:?}", analysis.diags);
+        }
     }
 
     #[test]
@@ -374,6 +388,20 @@ local b = require(\"./utils\")
         let labeled: Vec<&[u8]> =
             warning.labels.iter().map(|label| label.span.text(source.as_bytes())).collect();
         assert_eq!(labeled, [b"require(\"./utils\")"], "{warning:?}");
+    }
+
+    #[test]
+    fn a_require_in_a_type_neither_duplicates_nor_is_duplicated() {
+        let allocator = Allocator::new();
+        let source = "\
+export type T = typeof(require(\"./x\"))
+local x = require(\"./x\")
+type U = typeof(require(\"./x\"))
+return x
+";
+        let analysis = analyze_source(&allocator, source);
+        assert_eq!(require_strings(&analysis), ["./x", "./x", "./x"]);
+        assert!(analysis.diags.is_empty(), "{:?}", analysis.diags);
     }
 
     #[test]

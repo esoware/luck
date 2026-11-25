@@ -16,6 +16,9 @@ pub struct RequireSite<'ast> {
     /// The module path, when the call passes one string literal and nothing
     /// else, and `None` for a path only the running program knows.
     pub path: Option<&'ast StringLiteral<'ast>>,
+    /// Made in a type, as `typeof(require(path))` makes one, which never
+    /// runs.
+    pub is_in_type: bool,
 }
 
 /// The non-method call `chain` opens with when it calls a name `require`, or
@@ -52,7 +55,11 @@ pub(crate) fn require_sites<'ast>(
             scoping.is_host_global(scoping.reference(reference))
                 && (call.callee.suffixes.is_empty() || !is_require_assigned)
         })
-        .map(|(call, _)| RequireSite { call, path: require_path(call.args) })
+        .map(|(call, reference)| RequireSite {
+            call,
+            path: require_path(call.args),
+            is_in_type: scoping.reference(reference).is_in_type,
+        })
         .collect()
 }
 

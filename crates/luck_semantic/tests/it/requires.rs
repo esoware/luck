@@ -50,3 +50,19 @@ return require(require(\"f\").g)";
     let unasked = SemanticBuilder::new().build(parse(&allocator, "require(\"a\")"));
     assert!(unasked.semantic.requires().is_empty());
 }
+
+#[test]
+fn a_require_site_knows_whether_it_is_in_a_type() {
+    let allocator = Allocator::new();
+    let source = "\
+type T = typeof(require(\"a\"))
+local b: typeof(require(\"b\")) = require(\"c\")
+return require(\"d\")";
+    let semantic = semantic_for(&allocator, source);
+    let sites: Vec<(&[u8], bool)> = semantic
+        .requires()
+        .iter()
+        .map(|site| (site.path.expect("a literal path").value.as_bytes(), site.is_in_type))
+        .collect();
+    assert_eq!(sites, [(&b"a"[..], true), (b"b", true), (b"c", false), (b"d", false)]);
+}
