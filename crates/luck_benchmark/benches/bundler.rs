@@ -1,6 +1,6 @@
 use luck_allocator::ThreadAllocators;
 use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use luck_benchmark_files::bundle_project_root;
+use luck_benchmark_files::bundle_projects;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use rayon::ThreadPoolBuilder;
 
@@ -13,23 +13,24 @@ fn bench_bundler(criterion: &mut Criterion) {
         .build_global()
         .expect("nothing built the global pool before");
 
-    let root = bundle_project_root();
-    let entry_path = root.join("main.luau");
-    let options = BundleOptions { project_root: &root, dynamic_require: DynamicRequire::default() };
-    let mut arenas = ThreadAllocators::new();
-    let mut bundle = || {
-        arenas.reset();
-        luck_bundler::bundle(&arenas, &entry_path, &options)
-    };
-    bundle().expect("the benchmark project bundles");
-
     let mut group = criterion.benchmark_group("bundler");
-    // Measures the full pipeline a `luck bundle` invocation runs:
-    // resolution (with disk probes), graph construction, and emit over a
-    // 40-module diamond DAG of generated code.
-    group.bench_function(BenchmarkId::from_parameter("gen_modules"), |bencher| {
-        bencher.iter(&mut bundle);
-    });
+    let mut arenas = ThreadAllocators::new();
+    for project in bundle_projects() {
+        let options = BundleOptions {
+            project_root: &project.root,
+            dynamic_require: DynamicRequire::default(),
+        };
+        let mut bundle = || {
+            arenas.reset();
+            luck_bundler::bundle(&arenas, &project.entry, &options)
+        };
+        bundle().unwrap_or_else(|errors| panic!("{} bundles: {errors:?}", project.name));
+        // Measures the full pipeline a `luck bundle` invocation runs:
+        // resolution (with disk probes), graph construction, and emit.
+        group.bench_function(BenchmarkId::from_parameter(project.name), |bencher| {
+            bencher.iter(&mut bundle);
+        });
+    }
     group.finish();
 }
 

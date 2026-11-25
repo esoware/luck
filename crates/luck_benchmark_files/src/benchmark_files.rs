@@ -3,8 +3,9 @@
 //! - three single files and a 40-module tree for the bundler in
 //!   esoware/luck-benchmark-files, fetched as one tarball;
 //! - two real multi-file projects fetched as pinned upstream tarballs:
-//!   Roact (Roblox Luau, ~80 files) and Penlight (portable code that reads as
-//!   Luau, ~40 files).
+//!   Roact (Roblox Luau, ~80 files) and rbx-cryptography (hashing,
+//!   encryption, and signatures in `bit32` and `buffer` arithmetic, ~60 files
+//!   and 26k lines), the second of which also bundles.
 //!
 //! Everything lands in the gitignored `cache/` directory and is pinned to a
 //! commit SHA, so an input changes only when its pin does.
@@ -74,7 +75,11 @@ fn parse_cleanly<'ast>(
 
 const BENCHMARK_FILES_SHA: &str = "44602811fec92e0ddee0a711113abd852fbc4a8e"; // esoware/luck-benchmark-files
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
-const PENLIGHT_SHA: &str = "e0bc8f7fce3b6a4fdef3660066f5006bf8456b32"; // lunarmodules/Penlight 1.15.0
+const CRYPTOGRAPHY_SHA: &str = "26226eeecbb7314b91095f3dea4d4b4444495247"; // daily3014/rbx-cryptography v4.1.2
+
+fn cryptography_root() -> PathBuf {
+    fetch_project_tarball("daily3014", "rbx-cryptography", CRYPTOGRAPHY_SHA)
+}
 
 fn benchmark_files_root() -> PathBuf {
     fetch_project_tarball("esoware", "luck-benchmark-files", BENCHMARK_FILES_SHA)
@@ -130,20 +135,34 @@ pub fn test_files() -> Vec<TestFile> {
     ]
 }
 
-/// Real projects don't bundle cleanly: Penlight requires its modules by
-/// dotted name, which Luau doesn't resolve, and Roact requires Roblox
-/// instances.
-///
-/// So this tree is the programs of `gen_full.luau` split into a 40-module
-/// diamond DAG, in which each module requires the next one and the third one
-/// on, entered at `main.luau`.
-pub fn bundle_project_root() -> PathBuf {
-    benchmark_files_root().join("gen_bundle")
+/// A tree `luck_bundler` bundles from `entry`, with module paths relative to
+/// `root`.
+#[derive(Debug)]
+pub struct BundleProject {
+    pub name: &'static str,
+    pub root: PathBuf,
+    pub entry: PathBuf,
+}
+
+/// Roact requires Roblox instances, which no bundle can resolve, so beside
+/// rbx-cryptography, whose requires are all relative, the bundler measures
+/// the programs of `gen_full.luau` split into a 40-module diamond DAG, in
+/// which each module requires the next one and the third one on.
+pub fn bundle_projects() -> Vec<BundleProject> {
+    let generated = benchmark_files_root().join("gen_bundle");
+    let cryptography = cryptography_root();
+    vec![
+        BundleProject { name: "gen_modules", entry: generated.join("main.luau"), root: generated },
+        BundleProject {
+            name: "rbx_cryptography",
+            entry: cryptography.join("src").join("init.luau"),
+            root: cryptography,
+        },
+    ]
 }
 
 pub fn test_projects() -> Vec<TestProject> {
     let roact_root = fetch_project_tarball("Roblox", "roact", ROACT_SHA);
-    let penlight_root = fetch_project_tarball("lunarmodules", "Penlight", PENLIGHT_SHA);
     vec![
         TestProject {
             name: "roact",
@@ -151,9 +170,9 @@ pub fn test_projects() -> Vec<TestProject> {
             variant: Variant::Roblox,
         },
         TestProject {
-            name: "penlight",
-            files: collect_source_files(&penlight_root.join("lua")),
-            variant: Variant::Standalone,
+            name: "rbx_cryptography",
+            files: collect_source_files(&cryptography_root().join("src")),
+            variant: Variant::Roblox,
         },
     ]
 }
