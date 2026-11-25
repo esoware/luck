@@ -85,14 +85,27 @@ impl<'ast> Formatter<'ast> {
         has_ignore
     }
 
-    /// Writes the leading comments of the operand at `start` ahead of the
-    /// operator before it, which starts the operand's line when the chain
-    /// breaks, when one of them ends its line. A comment that doesn't stays
-    /// with the operand, after the operator.
-    pub(crate) fn write_hoisted_comments(&mut self, start: u32) {
+    /// Writes the leading comments of the operand `start` finds the start of
+    /// ahead of the operator before it, which starts the operand's line when
+    /// the chain breaks, when one of them ends its line. A comment that
+    /// doesn't stays with the operand, after the operator.
+    pub(crate) fn write_hoisted_comments(&mut self, start: impl FnOnce(&Self) -> u32) {
+        if !self.comments().has_pending_before(self.enclosing_end()) {
+            return;
+        }
+        let start = start(self);
         if self.comments().has_line_ending_comment_before(start) {
             self.write_leading_comments(start);
         }
+    }
+
+    /// Whether a comment leading the node `start` finds the start of ends its
+    /// line. That node is inside the one being written, which holds no comment
+    /// when none is pending before its end, so `start` is only worked out
+    /// otherwise.
+    pub(crate) fn has_line_ending_comment_before(&self, start: impl FnOnce(&Self) -> u32) -> bool {
+        self.comments().has_pending_before(self.enclosing_end())
+            && self.comments().has_line_ending_comment_before(start(self))
     }
 
     /// Writes the comments right after a node ending at `end`, on its line and
@@ -321,12 +334,20 @@ impl<'ast> Formatter<'ast> {
     /// [`Comments::take_dangling`](crate::comments::Comments::take_dangling)
     /// takes after `last_end`, so a comment only moves past a `;`. Parsed
     /// input only: a synthetic comment names its anchor.
+    ///
+    /// When that run would start inside the node being written, the block's
+    /// closer lies between it and any comment pending past the node's end, so
+    /// with none pending before that end, the run is empty.
     pub(crate) fn write_tail_comments(&mut self, last_end: u32) {
         let Some(source) = self.comments().source_text() else {
             return;
         };
         let gap_start =
             self.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
+        let enclosing_end = self.enclosing_end();
+        if gap_start <= enclosing_end && !self.comments().has_pending_before(enclosing_end) {
+            return;
+        }
         let taken = self.comments_mut().take_dangling(gap_start);
         let Some(first) = taken.first() else {
             return;
@@ -365,10 +386,10 @@ mod tests {
     use crate::FormatOptions;
     use crate::comments::{Comments, SyntheticComment};
     use crate::fixtures::parse;
-    use crate::ir::FormatElement;
+    use crate::ir::{FormatElement, Room};
 
     fn formatter<'ast>(allocator: &'ast Allocator, comments: Comments<'ast>) -> Formatter<'ast> {
-        Formatter::new(allocator, FormatOptions::default(), comments, None)
+        Formatter::new(allocator, FormatOptions::default(), comments, None, b"", Room::default())
     }
 
     fn texts<'ast>(f: &Formatter<'ast>) -> Vec<&'ast str> {
@@ -451,7 +472,7 @@ local x = 1";
         let allocator = Allocator::new();
         let store = Comments::synthetic([synthetic(5, "kept", CommentPosition::Leading)]);
         let mut f = formatter(&allocator, store);
-        f.node(|| Span::new(5, 5), |_| {});
+        f.node(|_| Span::new(5, 5), |_| {});
         assert_eq!(texts(&f), Vec::<&str>::new());
         f.write_stmt_leading_comments(5);
         assert_eq!(texts(&f), ["-- kept"]);

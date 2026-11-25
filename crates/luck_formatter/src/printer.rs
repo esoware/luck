@@ -3,12 +3,14 @@
 //! As the formatter writes, every group that contains a forced break (a hard
 //! or empty line, `ExpandParent`, or multi-line text) is marked expanded as
 //! the break goes in, since such a group can never print flat and isn't worth
-//! measuring.
+//! measuring. As a group closes, it records how many elements it holds and
+//! two bounds on how wide it prints flat.
 //!
-//! The print loop then walks the stream once with a mode stack. Entering an
-//! undecided group measures whether it fits the remaining width and commits
-//! to `Flat` or `Expanded`, and each decision is recorded by `GroupId` so
-//! conditional content elsewhere can look it up.
+//! The print loop walks the stream once with a mode stack, a run at a time as
+//! the formatter hands it over. Entering an undecided group measures whether
+//! it fits the remaining width and commits to `Flat` or `Expanded`, and each
+//! decision is recorded by `GroupId` so conditional content elsewhere can look
+//! it up.
 //!
 //! A measurement runs to the end of the line, not of the group, so `.field`
 //! after a call's arguments counts against them. The group's content counts
@@ -16,7 +18,8 @@
 //! first line break that mode prints. A group there that no break has decided
 //! counts in the mode of the region around it, so in an expanded region the
 //! line can end at that group's first break, and it ends before a next-line
-//! group.
+//! group. The group's bounds settle most of its measurements without a walk
+//! over its content, and a walk settles the rest.
 //!
 //! A group holding hugged groups has two more layouts, tried when it doesn't
 //! fit flat. It stays flat while hugged groups expand in its place: first
@@ -27,7 +30,6 @@
 //! from the start of the next line, one indent deeper. If it fits there, the
 //! printer breaks the line before it and prints it flat.
 
-use std::cell::Cell;
 use std::ops::{ControlFlow, Range};
 use std::{iter, mem};
 
@@ -49,9 +51,9 @@ enum PrintMode {
 struct Hug {
     child: GroupId,
     /// The first line directly inside the child, where its opening line ends.
-    first_line: usize,
+    first_line: u32,
     /// The last such line, where its closing line starts.
-    last_line: usize,
+    last_line: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +61,18 @@ struct Group {
     /// `Expanded` for a group a forced break expands, and filled in as the
     /// printer enters the group otherwise.
     mode: Option<PrintMode>,
+    /// Whether only a walk over the group's elements can tell it fits: it
+    /// holds a line suffix, which ends its line at the next text, or a forced
+    /// break in a hugged group the group can stay flat around.
+    is_walked: bool,
+    /// At least as many columns as the group takes flat, and `u16::MAX` for
+    /// any more: the bytes of its text, and a column for each space and line.
+    width_bound: u16,
+    /// At most as many columns as the group takes flat, which are those of
+    /// its text outside conditional content, and `u16::MAX` for any more.
+    min_columns: u16,
+    /// How many elements lie between its start and its end.
+    length: u32,
     /// The hugged groups this one holds, in order, in `Layout::hugs`.
     hugs_start: u32,
     hugs_end: u32,
@@ -68,15 +82,29 @@ struct Group {
 struct OpenGroup {
     id: GroupId,
     /// Index of the group's first element.
-    content_start: usize,
+    content_start: u32,
     is_hugged: bool,
+    is_walked: bool,
     /// Where its hugs start in `Layout::pending`.
-    pending_hugs: usize,
+    pending_hugs: u32,
     /// For a hugged group, the first and last lines directly inside it, as
     /// the group around it counts them.
-    hug_lines: Option<(usize, usize)>,
+    hug_lines: Option<(u32, u32)>,
     /// The element a forced break marked the group expanded at.
-    marked_at: Option<usize>,
+    marked_at: Option<u32>,
+    /// How wide the stream was when the group opened.
+    width: StreamWidth,
+}
+
+/// What bounds how wide the stream written so far prints flat.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct StreamWidth {
+    /// The bytes of every text, and one for each space and line, which is no
+    /// fewer than the columns any of it prints in.
+    pub(crate) bytes: usize,
+    /// The columns of every text outside conditional content, which a flat
+    /// measurement counts whatever else it meets.
+    pub(crate) columns: usize,
 }
 
 /// What the printer has to know about each group before it reaches it, kept
@@ -90,19 +118,30 @@ pub(crate) struct Layout<'ast> {
     /// contiguous, since each group inside it moves its own out as it closes,
     /// before its parent's hug of it goes in.
     pending: Vec<Hug>,
+    /// How many groups have their ids but haven't opened yet.
+    #[cfg(debug_assertions)]
+    unopened_count: usize,
 }
 
 /// Where the layout stood when the stream was at a checkpoint.
 ///
 /// Every group opened since has closed by the time it's restored, and only an
 /// open group can be marked, so only the marks on the groups still open, the
-/// hugs, and the lines the innermost one has seen can have moved.
+/// hugs, and the lines the innermost one has seen can have moved. A group
+/// still open keeps any walk the elements taken back asked for, which only
+/// costs its measurement time.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LayoutCheckpoint {
-    element_count: usize,
+    element_count: u32,
     hugs: usize,
     pending: usize,
-    hug_lines: Option<(usize, usize)>,
+    hug_lines: Option<(u32, u32)>,
+}
+
+/// An element's position in the whole stream, which counts the elements the
+/// printer has taken too, as a `u32`.
+fn element_index(index: usize) -> u32 {
+    u32::try_from(index).expect("a document holds fewer elements than `u32::MAX`")
 }
 
 impl<'ast> Layout<'ast> {
@@ -112,40 +151,108 @@ impl<'ast> Layout<'ast> {
             hugs: Vec::new(),
             open: Vec::new(),
             pending: Vec::new(),
+            #[cfg(debug_assertions)]
+            unopened_count: 0,
         }
     }
 
     pub(crate) fn new_group(&mut self, allocator: &'ast Allocator) -> GroupId {
         let id = GroupId::new(self.groups.len());
-        self.groups.push(Group { mode: None, hugs_start: 0, hugs_end: 0 }, allocator);
+        let group = Group {
+            mode: None,
+            is_walked: false,
+            width_bound: 0,
+            min_columns: 0,
+            length: 0,
+            hugs_start: 0,
+            hugs_end: 0,
+        };
+        self.groups.push(group, allocator);
+        #[cfg(debug_assertions)]
+        {
+            self.unopened_count += 1;
+        }
         id
     }
 
-    /// `content_start` is the index of the group's first element.
-    pub(crate) fn open(&mut self, id: GroupId, content_start: usize, is_hugged: bool) {
-        let pending_hugs = self.pending.len();
+    /// `content_start` is the index of the group's first element, and
+    /// `width` how wide the stream is.
+    pub(crate) fn open(
+        &mut self,
+        id: GroupId,
+        content_start: usize,
+        width: StreamWidth,
+        is_hugged: bool,
+    ) {
+        let pending_hugs =
+            u32::try_from(self.pending.len()).expect("a document holds fewer hugs than `u32::MAX`");
         self.open.push(OpenGroup {
             id,
-            content_start,
+            content_start: element_index(content_start),
             is_hugged,
+            is_walked: false,
             pending_hugs,
             hug_lines: None,
             marked_at: None,
+            width,
         });
+        #[cfg(debug_assertions)]
+        {
+            self.unopened_count -= 1;
+        }
     }
 
-    pub(crate) fn close(&mut self) {
+    /// `end` is the index of the group's end, and `width` as for
+    /// [`Layout::open`].
+    pub(crate) fn close(&mut self, end: usize, width: StreamWidth) {
         let closed = self.open.pop().expect("every group closes after it opens");
-        if closed.pending_hugs < self.pending.len() {
-            let group = &mut self.groups[closed.id.index()];
+        let group = &mut self.groups[closed.id.index()];
+        if closed.pending_hugs as usize != self.pending.len() {
             group.hugs_start = u32::try_from(self.hugs.len())
                 .expect("a document holds fewer hugs than `u32::MAX`");
-            self.hugs.extend(self.pending.drain(closed.pending_hugs..));
+            self.hugs.extend(self.pending.drain(closed.pending_hugs as usize..));
             group.hugs_end = u32::try_from(self.hugs.len())
                 .expect("a document holds fewer hugs than `u32::MAX`");
         }
         if let Some((first_line, last_line)) = closed.hug_lines {
             self.pending.push(Hug { child: closed.id, first_line, last_line });
+        }
+        group.length = element_index(end) - closed.content_start;
+        group.width_bound = u16::try_from(width.bytes - closed.width.bytes).unwrap_or(u16::MAX);
+        group.min_columns = u16::try_from(width.columns - closed.width.columns).unwrap_or(u16::MAX);
+        group.is_walked = closed.is_walked;
+        // A forced break expands every group around it but the one right
+        // around a hugged group, where a walk finds it.
+        if (closed.is_walked || group.mode.is_some())
+            && let Some(parent) = self.open.last_mut()
+        {
+            parent.is_walked = true;
+        }
+    }
+
+    /// Whether every open group is decided, so the printer can enter them
+    /// before they close. Only the group right around a hugged group can be
+    /// open and undecided after a forced break.
+    pub(crate) fn is_settled(&self) -> bool {
+        self.open.iter().all(|open| self.groups[open.id.index()].mode.is_some())
+    }
+
+    /// Forgets the groups the printer has left, once it has printed every
+    /// element written. Each group opens as its id is handed out, so those
+    /// handed out after the innermost open one have all closed, and the open
+    /// ones keep their ids. The hugs belong to closed groups too.
+    pub(crate) fn release_printed(&mut self) {
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(self.unopened_count, 0, "a group to open would lose its id");
+        let kept = self.open.last().map_or(0, |open| open.id.index() + 1);
+        self.groups.truncate(kept);
+        self.hugs.clear();
+    }
+
+    /// A line suffix, which only a walk over the groups around it measures.
+    pub(crate) fn line_suffix(&mut self) {
+        if let Some(open) = self.open.last_mut() {
+            open.is_walked = true;
         }
     }
 
@@ -155,7 +262,7 @@ impl<'ast> Layout<'ast> {
         if let [.., parent, child] = self.open.as_mut_slice()
             && child.is_hugged
         {
-            let line = index - parent.content_start;
+            let line = element_index(index) - parent.content_start;
             let first_line = child.hug_lines.map_or(line, |(first_line, _)| first_line);
             child.hug_lines = Some((first_line, line));
         }
@@ -175,6 +282,7 @@ impl<'ast> Layout<'ast> {
     ///
     /// `index` is the element the break is.
     pub(crate) fn force_break(&mut self, index: usize) {
+        let index = element_index(index);
         let mut is_inner_hugged = false;
         for open in self.open.iter_mut().rev() {
             if !is_inner_hugged {
@@ -192,7 +300,7 @@ impl<'ast> Layout<'ast> {
     /// `element_count` is how many elements the stream holds now.
     pub(crate) fn checkpoint(&self, element_count: usize) -> LayoutCheckpoint {
         LayoutCheckpoint {
-            element_count,
+            element_count: element_index(element_count),
             hugs: self.hugs.len(),
             pending: self.pending.len(),
             hug_lines: self.open.last().and_then(|open| open.hug_lines),
@@ -212,46 +320,6 @@ impl<'ast> Layout<'ast> {
             open.hug_lines = checkpoint.hug_lines;
         }
     }
-}
-
-pub(crate) fn print(
-    elements: &[FormatElement<'_>],
-    layout: Layout<'_>,
-    options: &FormatOptions,
-    base_indent: &[u8],
-    capacity: usize,
-) -> Vec<u8> {
-    let columns_per_indent = usize::from(options.indent_width);
-    let (indent_byte, bytes_per_indent) = match options.indent_style {
-        IndentStyle::Tabs => (b'\t', 1),
-        IndentStyle::Spaces => (b' ', columns_per_indent),
-    };
-    let base_indent_columns =
-        base_indent.iter().map(|&b| if b == b'\t' { columns_per_indent } else { 1 }).sum();
-    let mut printer = Printer {
-        line_width: usize::from(options.line_width),
-        indent_byte,
-        bytes_per_indent,
-        columns_per_indent,
-        base_indent,
-        base_indent_columns,
-        output: CodeBuffer::with_capacity(capacity),
-        is_crlf: options.line_endings == LineEndings::Windows,
-        line_start: 0,
-        display_column: 0,
-        indent_level: 0,
-        modes: Vec::new(),
-        measured_regions: Cell::default(),
-        groups: layout.groups,
-        hugs: layout.hugs,
-        next_line_moves: Vec::new(),
-        suffixes: Vec::new(),
-        is_pending_space: false,
-        is_pending_indent: !base_indent.is_empty(),
-    };
-    printer.print_elements(elements);
-    printer.flush_suffixes();
-    printer.output.into_bytes()
 }
 
 /// A line as a measurement has it so far.
@@ -291,7 +359,11 @@ impl<'elements> MeasuredLine<'elements> {
     }
 }
 
-struct Printer<'ast, 'layout> {
+/// Prints the stream a run of elements at a time, as the formatter hands it
+/// over, so its state carries from one run to the next.
+#[derive(Debug)]
+pub(crate) struct Printer<'ast> {
+    pub(crate) layout: Layout<'ast>,
     line_width: usize,
     /// One indent level is `bytes_per_indent` copies of `indent_byte` and
     /// measures `columns_per_indent` columns, so a tab is one byte and as wide
@@ -315,9 +387,7 @@ struct Printer<'ast, 'layout> {
     modes: Vec<PrintMode>,
     /// Where a measurement keeps the modes of the regions it opens, which
     /// every measurement reuses.
-    measured_regions: Cell<Vec<PrintMode>>,
-    groups: List<'layout, Group>,
-    hugs: Vec<Hug>,
+    measured_regions: Vec<PrintMode>,
     /// Per open next-line group, whether it moved to the next line, so its
     /// end takes back the indent it added.
     next_line_moves: Vec<bool>,
@@ -326,24 +396,69 @@ struct Printer<'ast, 'layout> {
     is_pending_indent: bool,
 }
 
-impl<'ast> Printer<'ast, '_> {
+impl<'ast> Printer<'ast> {
+    /// `capacity` is how many bytes the output is likely to take.
+    pub(crate) fn new(
+        options: &FormatOptions,
+        base_indent: &'ast [u8],
+        capacity: usize,
+        layout: Layout<'ast>,
+    ) -> Self {
+        let columns_per_indent = usize::from(options.indent_width);
+        let (indent_byte, bytes_per_indent) = match options.indent_style {
+            IndentStyle::Tabs => (b'\t', 1),
+            IndentStyle::Spaces => (b' ', columns_per_indent),
+        };
+        let base_indent_columns =
+            base_indent.iter().map(|&b| if b == b'\t' { columns_per_indent } else { 1 }).sum();
+        Self {
+            layout,
+            line_width: usize::from(options.line_width),
+            indent_byte,
+            bytes_per_indent,
+            columns_per_indent,
+            base_indent,
+            base_indent_columns,
+            output: CodeBuffer::with_capacity(capacity),
+            is_crlf: options.line_endings == LineEndings::Windows,
+            line_start: 0,
+            display_column: 0,
+            indent_level: 0,
+            modes: Vec::new(),
+            measured_regions: Vec::new(),
+            next_line_moves: Vec::new(),
+            suffixes: Vec::new(),
+            is_pending_space: false,
+            is_pending_indent: !base_indent.is_empty(),
+        }
+    }
+
+    /// Prints `elements`, which close every region they open but those of
+    /// groups the layout has decided and of indentation, and which hold every
+    /// line a measurement of them reaches.
+    pub(crate) fn print(&mut self, elements: &[FormatElement<'ast>]) {
+        let mut remaining = elements;
+        while let Some((element, rest)) = remaining.split_first() {
+            remaining = self.print_element(element, rest);
+        }
+    }
+
+    /// The output, once the whole stream is printed.
+    pub(crate) fn finish(mut self) -> Vec<u8> {
+        self.flush_suffixes();
+        self.output.into_bytes()
+    }
+
     fn current_mode(&self) -> PrintMode {
         *self.modes.last().unwrap_or(&PrintMode::Expanded)
     }
 
     fn group_mode(&self, id: GroupId) -> Option<PrintMode> {
-        self.groups[id.index()].mode
+        self.layout.groups[id.index()].mode
     }
 
     fn set_group_mode(&mut self, id: GroupId, mode: PrintMode) {
-        self.groups[id.index()].mode = Some(mode);
-    }
-
-    fn print_elements(&mut self, elements: &'ast [FormatElement<'ast>]) {
-        let mut remaining = elements;
-        while let Some((element, rest)) = remaining.split_first() {
-            remaining = self.print_element(element, rest);
-        }
+        self.layout.groups[id.index()].mode = Some(mode);
     }
 
     /// Print `element`, returning the elements left after it and after any
@@ -353,11 +468,11 @@ impl<'ast> Printer<'ast, '_> {
         reason = "measured: a call per element costs the print loop 7%"
     )]
     #[inline(always)]
-    fn print_element(
+    fn print_element<'elements>(
         &mut self,
         element: &FormatElement<'ast>,
-        rest: &'ast [FormatElement<'ast>],
-    ) -> &'ast [FormatElement<'ast>] {
+        rest: &'elements [FormatElement<'ast>],
+    ) -> &'elements [FormatElement<'ast>] {
         match *element {
             FormatElement::Text(content, width) => {
                 self.end_suffixed_line(content);
@@ -383,10 +498,12 @@ impl<'ast> Printer<'ast, '_> {
                 let next_line = MeasuredLine::after_break(rest, next_line_indent);
                 let (mode, is_moved) = match self.group_mode(id) {
                     Some(forced) => (forced, false),
-                    None if self.current_mode() == PrintMode::Flat || self.fits(rest) => {
+                    None if self.current_mode() == PrintMode::Flat
+                        || self.fits_group(id, self.current_line(rest)) =>
+                    {
                         (PrintMode::Flat, false)
                     }
-                    None if self.fits_from(next_line, 1) => (PrintMode::Flat, true),
+                    None if self.fits_group(id, next_line) => (PrintMode::Flat, true),
                     None => (PrintMode::Expanded, false),
                 };
                 self.set_group_mode(id, mode);
@@ -450,10 +567,10 @@ impl<'ast> Printer<'ast, '_> {
     fn decide_mode(&mut self, id: GroupId, rest: &[FormatElement<'_>]) -> PrintMode {
         // An enclosing flat group already measured this content;
         // re-measuring can't change the answer.
-        if self.current_mode() == PrintMode::Flat || self.fits(rest) {
+        if self.current_mode() == PrintMode::Flat || self.fits_group(id, self.current_line(rest)) {
             return PrintMode::Flat;
         }
-        let group = self.groups[id.index()];
+        let group = self.layout.groups[id.index()];
         let hugs = group.hugs_start as usize..group.hugs_end as usize;
         if hugs.is_empty() {
             return PrintMode::Expanded;
@@ -461,7 +578,7 @@ impl<'ast> Printer<'ast, '_> {
         // A hugged group left undecided here prints flat, like anything else
         // in a flat group. With none forced, that's the flat layout that just
         // failed.
-        let is_any_hug_forced = self.hugs[hugs.clone()]
+        let is_any_hug_forced = self.layout.hugs[hugs.clone()]
             .iter()
             .any(|hug| self.group_mode(hug.child) == Some(PrintMode::Expanded));
         if is_any_hug_forced && self.fits_hugging(rest, hugs.clone(), false) {
@@ -469,7 +586,7 @@ impl<'ast> Printer<'ast, '_> {
         }
         if self.fits_hugging(rest, hugs.clone(), true) {
             for i in hugs {
-                self.set_group_mode(self.hugs[i].child, PrintMode::Expanded);
+                self.set_group_mode(self.layout.hugs[i].child, PrintMode::Expanded);
             }
             return PrintMode::Flat;
         }
@@ -503,7 +620,10 @@ impl<'ast> Printer<'ast, '_> {
     /// Greedy fill: each entry goes on the current line if it fits,
     /// otherwise the preceding separator becomes a newline. Entries that
     /// don't fit even on a fresh line print expanded.
-    fn print_fill(&mut self, elements: &'ast [FormatElement<'ast>]) -> &'ast [FormatElement<'ast>] {
+    fn print_fill<'elements>(
+        &mut self,
+        elements: &'elements [FormatElement<'ast>],
+    ) -> &'elements [FormatElement<'ast>] {
         let mut remaining = elements;
         while let Some((element, rest)) = remaining.split_first() {
             match element {
@@ -596,8 +716,38 @@ impl<'ast> Printer<'ast, '_> {
     /// Whether `elements`, the content of a group or fill entry about to
     /// print, fit flat on the line from here, along with what follows them on
     /// it.
-    fn fits(&self, elements: &[FormatElement<'_>]) -> bool {
+    fn fits(&mut self, elements: &[FormatElement<'_>]) -> bool {
         self.fits_from(self.current_line(elements), 1)
+    }
+
+    /// Whether group `id`, whose elements `line` starts at, fits flat on
+    /// `line`, along with what follows it there.
+    ///
+    /// A walk over the group counts at least its `min_columns`, so a group
+    /// those overflow the line with can't fit. One whose `width_bound` fits,
+    /// with a column for a space pending before it, can't overflow, and the
+    /// walk would leave the line no wider than that bound with no space left
+    /// pending, since the bound counts one for every space it holds. So when
+    /// what follows fits after that, it fits after the walk too. Otherwise the
+    /// walk decides.
+    fn fits_group(&mut self, id: GroupId, line: MeasuredLine<'_>) -> bool {
+        let group = self.layout.groups[id.index()];
+        if line.columns + usize::from(group.min_columns) > self.line_width {
+            return false;
+        }
+        let columns = line.columns + 1 + usize::from(group.width_bound);
+        if !group.is_walked && !line.has_line_suffix && columns <= self.line_width {
+            let after = MeasuredLine {
+                remaining: &line.remaining[group.length as usize + 1..],
+                columns,
+                is_pending_space: false,
+                has_line_suffix: false,
+            };
+            if self.measure_rest(after) {
+                return true;
+            }
+        }
+        self.fits_from(line, 1)
     }
 
     /// Whether a group fits with its hugged children expanded and the rest
@@ -609,7 +759,7 @@ impl<'ast> Printer<'ast, '_> {
     /// child closes on. Without `should_expand_all`, only the children a
     /// forced break expands count, and the others are measured flat.
     fn fits_hugging(
-        &self,
+        &mut self,
         elements: &[FormatElement<'_>],
         hugs: Range<usize>,
         should_expand_all: bool,
@@ -617,15 +767,16 @@ impl<'ast> Printer<'ast, '_> {
         let mut line = self.current_line(elements);
         let mut line_start = 0;
         let mut depth = 1;
-        for hug in &self.hugs[hugs] {
+        for hug in hugs {
+            let hug = self.layout.hugs[hug];
             if !should_expand_all && self.group_mode(hug.child) != Some(PrintMode::Expanded) {
                 continue;
             }
-            line.remaining = &elements[line_start..hug.first_line];
+            line.remaining = &elements[line_start..hug.first_line as usize];
             if !self.fits_from(line, depth) {
                 return false;
             }
-            line_start = hug.last_line + 1;
+            line_start = hug.last_line as usize + 1;
             line = MeasuredLine::after_break(&[], self.indent_columns());
             // The next line starts inside the child, two groups deep.
             depth = 2;
@@ -639,7 +790,7 @@ impl<'ast> Printer<'ast, '_> {
     ///
     /// Past those regions, each element counts in the mode of the region it
     /// sits in, the printer's own mode for a region the printer has open.
-    fn fits_from(&self, line: MeasuredLine<'_>, depth: usize) -> bool {
+    fn fits_from(&mut self, line: MeasuredLine<'_>, depth: usize) -> bool {
         match self.measure_flat(line, depth) {
             ControlFlow::Break(fits) => fits,
             ControlFlow::Continue(rest_of_line) => self.measure_rest(rest_of_line),
@@ -719,14 +870,19 @@ impl<'ast> Printer<'ast, '_> {
     /// prints expanded and which no element closes. Each element counts in
     /// the mode of the region it sits in, to the first line break that mode
     /// prints.
-    fn measure_rest(&self, mut line: MeasuredLine<'_>) -> bool {
+    fn measure_rest(&mut self, mut line: MeasuredLine<'_>) -> bool {
+        // A forced break ends the line in every mode, and ends most statements.
+        if let [FormatElement::Line(LineMode::Hard | LineMode::Empty), ..] = line.remaining {
+            return true;
+        }
+        let (groups, line_width) = (&self.layout.groups, self.line_width);
         let mut outer_modes =
             self.modes.iter().rev().copied().chain(iter::once(PrintMode::Expanded));
         let mut mode = outer_modes.next().expect("the top level ends the chain");
         // The modes of the regions around those opened since, innermost last.
-        let mut around = self.measured_regions.take();
+        let around = &mut self.measured_regions;
         around.clear();
-        let fits = loop {
+        loop {
             let Some((element, rest)) = line.remaining.split_first() else {
                 break true;
             };
@@ -737,7 +893,7 @@ impl<'ast> Printer<'ast, '_> {
                     if line.has_line_suffix && !is_separator(content) {
                         break true;
                     }
-                    if !line.push_text(width, self.line_width) {
+                    if !line.push_text(width, line_width) {
                         break false;
                     }
                     // The line ends inside text that spans lines.
@@ -754,7 +910,7 @@ impl<'ast> Printer<'ast, '_> {
                 FormatElement::LineSuffix(_, width, is_measured) => {
                     line.has_line_suffix = true;
                     if is_measured {
-                        if !line.push_suffix(width, self.line_width) {
+                        if !line.push_suffix(width, line_width) {
                             break false;
                         }
                         if width.is_multiline() {
@@ -763,7 +919,7 @@ impl<'ast> Printer<'ast, '_> {
                     }
                 }
                 FormatElement::StartIfGroupBreaks(id) => {
-                    if self.group_mode(id) != Some(PrintMode::Expanded) {
+                    if groups[id.index()].mode != Some(PrintMode::Expanded) {
                         line.remaining = skip_conditional(rest);
                     }
                 }
@@ -776,7 +932,7 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::StartHuggedGroup(id)
                 | FormatElement::StartNextLineGroup(id) => {
                     around.push(mode);
-                    mode = self.group_mode(id).unwrap_or(mode);
+                    mode = groups[id.index()].mode.unwrap_or(mode);
                 }
                 FormatElement::StartFlat => {
                     around.push(mode);
@@ -799,9 +955,7 @@ impl<'ast> Printer<'ast, '_> {
                 | FormatElement::StartFill
                 | FormatElement::EndFill => {}
             }
-        };
-        self.measured_regions.set(around);
-        fits
+        }
     }
 
     fn emit_text(&mut self, content: &[u8], width: TextWidth) {
@@ -955,7 +1109,7 @@ mod tests {
     use luck_allocator::Allocator;
 
     use crate::comments::Comments;
-    use crate::ir::Formatter;
+    use crate::ir::{Formatter, Room};
     use crate::{FormatOptions, IndentStyle};
 
     fn print_with(
@@ -964,9 +1118,16 @@ mod tests {
         build: impl Fn(&mut Formatter<'_>),
     ) -> String {
         let allocator = Allocator::new();
-        let mut f = Formatter::new(&allocator, options, Comments::none(), None);
+        let mut f = Formatter::new(
+            &allocator,
+            options,
+            Comments::none(),
+            None,
+            base_indent.as_bytes(),
+            Room::default(),
+        );
         build(&mut f);
-        String::from_utf8(f.print(base_indent.as_bytes())).unwrap()
+        String::from_utf8(f.finish()).unwrap()
     }
 
     fn print_document(build: impl Fn(&mut Formatter<'_>), line_width: u16) -> String {

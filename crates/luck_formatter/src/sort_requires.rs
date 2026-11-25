@@ -60,13 +60,26 @@ pub(crate) struct RequireRun<'ast> {
 }
 
 impl<'ast> RequireRun<'ast> {
-    pub(crate) fn push(&mut self, require: Require<'ast>, elements: Range<usize>) {
+    /// The run holds its members' elements back from the printer until it
+    /// finishes.
+    pub(crate) fn push(
+        &mut self,
+        f: &mut Formatter<'_>,
+        require: Require<'ast>,
+        elements: Range<usize>,
+    ) {
+        if self.members.is_empty() {
+            f.hold();
+        }
         self.members.push(Member { require, elements });
     }
 
     /// Prints the run sorted when it has two or more members and sorting
     /// can't change what they read, then empties it.
     pub(crate) fn finish(&mut self, f: &mut Formatter<'_>) {
+        if !self.members.is_empty() {
+            f.release();
+        }
         if self.members.len() < 2 {
             self.members.clear();
             return;

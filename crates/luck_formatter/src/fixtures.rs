@@ -4,7 +4,7 @@ use luck_parser::ParseResult;
 
 use crate::FormatOptions;
 use crate::comments::Comments;
-use crate::ir::Formatter;
+use crate::ir::{Formatter, Room};
 
 /// `source` parsed, its tokens kept, whether it parses or not.
 pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
@@ -17,9 +17,9 @@ pub(crate) fn render<'ast>(
     options: FormatOptions,
     write: impl FnOnce(&mut Formatter<'ast>),
 ) -> String {
-    let mut f = Formatter::new(allocator, options, Comments::none(), None);
+    let mut f = Formatter::new(allocator, options, Comments::none(), None, b"", Room::default());
     write(&mut f);
-    String::from_utf8(f.print(b"")).unwrap()
+    String::from_utf8(f.finish()).unwrap()
 }
 
 /// The expression `source`, printed alone.
@@ -34,7 +34,14 @@ pub(crate) fn render_expr(source: &str, options: FormatOptions) -> String {
     let [expr] = &*return_stmt.exprs else {
         panic!("expected one returned expression");
     };
-    let mut f = Formatter::new(&allocator, options, Comments::none(), Some(&parsed.groupings));
+    let mut f = Formatter::new(
+        &allocator,
+        options,
+        Comments::none(),
+        Some(&parsed.groupings),
+        b"",
+        Room::default(),
+    );
     f.write_expr(expr);
-    String::from_utf8(f.print(b"")).unwrap()
+    String::from_utf8(f.finish()).unwrap()
 }

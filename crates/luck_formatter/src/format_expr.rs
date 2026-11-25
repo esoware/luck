@@ -82,29 +82,29 @@ impl<'ast> Formatter<'ast> {
     /// comments, so those before them lead it and those after them trail it.
     pub(crate) fn write_expr_in(&mut self, expr: &Expression<'ast>, slot: Slot) {
         let grouping = self.grouping(expr);
-        let is_kept = grouping.is_some_and(|parens| self.keeps_grouping(expr, parens));
-        let span = grouping.unwrap_or_else(|| expr.span());
-        if is_kept {
+        if let Some(parens) = grouping
+            && self.keeps_grouping(expr, parens)
+        {
             self.node(
-                || span,
+                |_| parens,
                 |f| {
                     f.token("(");
-                    f.node(|| expr.span(), |inner| inner.write_bare_expr(expr, Slot::FREE));
-                    f.write_closing_comments(span.end);
+                    f.node(|_| expr.span(), |inner| inner.write_bare_expr(expr, Slot::FREE));
+                    f.write_closing_comments(parens.end);
                     f.token(")");
                 },
             );
-        } else if expr.needs_parens(slot) {
-            self.node(
-                || span,
-                |f| {
-                    f.token("(");
-                    f.write_bare_expr(expr, Slot::FREE);
-                    f.token(")");
-                },
-            );
+            return;
+        }
+        let span = |_: &Self| grouping.unwrap_or_else(|| expr.span());
+        if expr.needs_parens(slot) {
+            self.node(span, |f| {
+                f.token("(");
+                f.write_bare_expr(expr, Slot::FREE);
+                f.token(")");
+            });
         } else {
-            self.node(|| span, |f| f.write_bare_expr(expr, slot));
+            self.node(span, |f| f.write_bare_expr(expr, slot));
         }
     }
 
@@ -301,7 +301,7 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn write_var(&mut self, var: &Var<'ast>) {
         match var {
             Var::Name(name) => self.name(**name),
-            Var::Suffixed(chain) => self.node(|| chain.span, |f| f.write_suffixed(chain)),
+            Var::Suffixed(chain) => self.node(|_| chain.span, |f| f.write_suffixed(chain)),
         }
     }
 
@@ -346,7 +346,7 @@ impl<'ast> Formatter<'ast> {
                             for suffix in run {
                                 if matches!(suffix, Suffix::MethodCall(_)) {
                                     f.soft_line();
-                                    f.write_hoisted_comments(suffix.span().start);
+                                    f.write_hoisted_comments(|_| suffix.span().start);
                                 }
                                 f.write_suffix(suffix);
                             }
@@ -358,7 +358,7 @@ impl<'ast> Formatter<'ast> {
                         for suffix in run {
                             if let Suffix::Field(name) = suffix {
                                 f.soft_line();
-                                f.write_hoisted_comments(name.span.start);
+                                f.write_hoisted_comments(|_| name.span.start);
                                 f.token(".");
                                 f.name(*name);
                             }
@@ -368,7 +368,7 @@ impl<'ast> Formatter<'ast> {
                 _ => {
                     for suffix in run {
                         if !matches!(suffix, Suffix::Call(_))
-                            && self.comments().has_line_ending_comment_before(suffix.span().start)
+                            && self.has_line_ending_comment_before(|_| suffix.span().start)
                         {
                             self.space();
                             self.write_leading_comments(suffix.span().start);
@@ -394,8 +394,7 @@ impl<'ast> Formatter<'ast> {
                 // A method call whose `(` is on a later line than its name
                 // doesn't parse. The tree keeps no span for the outer `>`.
                 if let Some(type_args) = &call.type_args {
-                    let closer =
-                        self.comments().closer_offset(type_args.span.end, TokenKind::Greater);
+                    let closer = self.closer_offset(type_args.span.end, TokenKind::Greater);
                     self.flat(|f| f.write_type_args(("<<", ">>"), type_args, closer));
                 }
                 self.write_function_args(&call.args);
@@ -421,7 +420,7 @@ impl<'ast> Formatter<'ast> {
         let operators = |f: &mut Self| {
             for (index, link) in (1..).zip(&binary_op.links) {
                 f.soft_line_or_space();
-                f.write_hoisted_comments(f.extent(&link.operand).start);
+                f.write_hoisted_comments(|f| f.extent(&link.operand).start);
                 f.token(link.op.static_text());
                 f.space();
                 f.write_expr_in(&link.operand, slot.operand(binary_op, index));
@@ -474,13 +473,13 @@ impl<'ast> Formatter<'ast> {
             });
             grouped.indent(|f| {
                 f.soft_line_or_space();
-                f.write_hoisted_comments(f.extent(&if_expr.then_expr).start);
+                f.write_hoisted_comments(|f| f.extent(&if_expr.then_expr).start);
                 f.token("then");
                 f.space();
                 f.write_expr(&if_expr.then_expr);
                 for clause in &if_expr.elseif_clauses {
                     f.soft_line_or_space();
-                    f.write_hoisted_comments(f.extent(&clause.condition).start);
+                    f.write_hoisted_comments(|f| f.extent(&clause.condition).start);
                     f.token("elseif");
                     f.space();
                     if let Some(binding) = &clause.binding {
@@ -494,7 +493,7 @@ impl<'ast> Formatter<'ast> {
                     f.write_expr(&clause.expr);
                 }
                 f.soft_line_or_space();
-                f.write_hoisted_comments(f.extent(&if_expr.else_expr).start);
+                f.write_hoisted_comments(|f| f.extent(&if_expr.else_expr).start);
                 f.token("else");
                 f.space();
                 f.write_expr(&if_expr.else_expr);

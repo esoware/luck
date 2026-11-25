@@ -37,6 +37,7 @@ use luck_token::{
 };
 use rustc_hash::{FxBuildHasher, FxHashSet};
 
+use crate::ir::Room;
 use crate::lines::{after_line_break, own_line_start};
 
 /// A comment for a tree built in code, which lives outside the tree, keyed by
@@ -219,12 +220,28 @@ impl<'ast> Comments<'ast> {
         }
     }
 
-    /// How many tokens and comments the parse holds, which a tree built in
-    /// code has none of.
-    pub(crate) const fn token_and_comment_count(&self) -> usize {
-        match self.parsed() {
-            Some(parsed) => parsed.tokens.len() + parsed.comments.len(),
-            None => 0,
+    /// Room to format the source `printed` spans, whose statements span
+    /// `items`. A tree built in code has no source to tell and starts with
+    /// none.
+    ///
+    /// The printer takes the stream at least between two of those statements,
+    /// so the stream holds no more than the largest one's elements, which are
+    /// as many for its bytes as the source's. A token or a comment comes to
+    /// about two elements, and seldom to more than two and a half, however
+    /// long its text. Formatting seldom grows what it prints by more than a
+    /// quarter, as its indentation can.
+    pub(crate) fn room(&self, printed: Span, items: impl Iterator<Item = Span>) -> Room {
+        let Some(parsed) = self.parsed() else {
+            return Room::default();
+        };
+        let largest = items.map(Span::len).max().unwrap_or(0);
+        let source_elements = (parsed.tokens.len() + parsed.comments.len()) * 5 / 2;
+        let elements =
+            u128::from(largest) * source_elements as u128 / parsed.source.len().max(1) as u128;
+        let output = printed.len() as usize;
+        Room {
+            output: output + output / 4,
+            elements: usize::try_from(elements).unwrap_or(source_elements),
         }
     }
 
@@ -728,9 +745,11 @@ impl<'ast> Parsed<'ast> {
                 if is_after_line_comment || gap_start > comment.span.start {
                     return false;
                 }
+                // The line break, which nearly always comes a byte or two
+                // after the statement, is cheaper to find than a token.
                 let gap = Span::new(gap_start, comment.span.start).text(self.source);
                 let is_on_the_line =
-                    self.is_code_free(gap_start, comment.span.start) && !has_line_break(gap);
+                    !has_line_break(gap) && self.is_code_free(gap_start, comment.span.start);
                 gap_start = comment.span.end;
                 is_after_line_comment = comment.kind == CommentKind::Line;
                 is_on_the_line

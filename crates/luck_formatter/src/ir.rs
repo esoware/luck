@@ -6,6 +6,11 @@
 //! arena, or the binary, so building the stream copies none. Text is bytes, as
 //! the source is, so a comment or a string that isn't UTF-8 prints as written.
 //!
+//! The printer takes the stream as it's written, at each line break between
+//! two statements that leaves nothing it has to see whole open, so the stream
+//! holds a statement's elements or so at a time, and its buffer stays small
+//! and in cache.
+//!
 //! Emitters write through `Formatter`'s methods. Only this module pushes raw
 //! elements, and each region takes its content as a closure, which is what
 //! keeps every start paired with its end.
@@ -17,13 +22,13 @@ use std::ops::Range;
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
 use luck_parser::Groupings;
-use luck_token::Span;
+use luck_token::{Span, TokenKind};
 use memchr::memchr2;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::FormatOptions;
 use crate::comments::{Comments, CommentsCheckpoint};
-use crate::printer::{self, Layout, LayoutCheckpoint};
+use crate::printer::{Layout, LayoutCheckpoint, Printer, StreamWidth};
 
 /// Lets conditional content follow the break decision of a group other than
 /// the innermost one around it. Doubles as the group's index into the
@@ -127,7 +132,7 @@ impl TextWidth {
         // to the vectorized scans. A lone CR breaks the line too, as it does
         // in most editors.
         let is_one_ascii_line = if text.len() <= 64 {
-            text.iter().all(|&b| b.is_ascii() && b != b'\n' && b != b'\r')
+            is_one_ascii_line(text)
         } else {
             text.is_ascii() && memchr2(b'\n', b'\r', text).is_none()
         };
@@ -164,6 +169,27 @@ impl TextWidth {
     }
 }
 
+/// Whether `text` is ASCII with no LF or CR in it, read eight bytes at a time,
+/// the last eight overlapping the word before them.
+fn is_one_ascii_line(text: &[u8]) -> bool {
+    const LOW_BITS: u64 = u64::from_ne_bytes([0x01; 8]);
+    const HIGH_BITS: u64 = u64::from_ne_bytes([0x80; 8]);
+    // In a word of ASCII, only a zero byte borrows into its own high bit when
+    // every byte drops by one, and a borrow it passes on can only mark a byte
+    // after it, so the test is exact for whether one is zero.
+    let has_zero_byte = |word: u64| word.wrapping_sub(LOW_BITS) & !word & HIGH_BITS != 0;
+    let is_one_line = |word: u64| {
+        word & HIGH_BITS == 0
+            && !has_zero_byte(word ^ u64::from_ne_bytes([b'\n'; 8]))
+            && !has_zero_byte(word ^ u64::from_ne_bytes([b'\r'; 8]))
+    };
+    let Some(last) = text.last_chunk::<8>() else {
+        return text.iter().all(|&b| b.is_ascii() && b != b'\n' && b != b'\r');
+    };
+    let (words, _) = text.as_chunks::<8>();
+    words.iter().chain([last]).all(|word| is_one_line(u64::from_ne_bytes(*word)))
+}
+
 /// How many columns an editor shows `line` in: a character of UTF-8 as wide
 /// as Unicode says, and any other byte as one, as a one-byte encoding such as
 /// Latin-1 shows it.
@@ -178,24 +204,40 @@ pub(crate) fn columns(line: &[u8]) -> usize {
     }
 }
 
-/// Restoring rewinds the element stream, the layout, and the comment cursor
-/// but not the group counter, so no id is ever handed out twice.
+/// How much a formatter is about to write, so its buffers seldom grow.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Room {
+    /// The bytes it prints.
+    pub(crate) output: usize,
+    /// The elements the stream holds at most before the printer takes them.
+    pub(crate) elements: usize,
+}
+
+/// Restoring rewinds the element stream and its width, the layout, and the
+/// comment cursor but not the group counter, so restoring hands out no id
+/// twice. Only a group the printer has left gives its id up.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     element_count: usize,
+    width: StreamWidth,
     layout: LayoutCheckpoint,
     comments: CommentsCheckpoint,
 }
 
 #[derive(Debug)]
 pub(crate) struct Formatter<'ast> {
+    /// The elements written since the printer last took them.
     elements: List<'ast, FormatElement<'ast>>,
-    layout: Layout<'ast>,
-    /// How many bytes of text the stream holds, which the output takes at
-    /// least.
-    text_bytes: usize,
-    /// No space joins an element before this one, which starts a run of
-    /// elements an emitter moves or takes back as a unit.
+    /// How many elements came before `elements`, so a position counts every
+    /// element of the stream.
+    printed_count: usize,
+    printer: Printer<'ast>,
+    /// How many regions the printer can't take part of are open: a fill, a
+    /// conditional, a speculative write, or a run of requires to sort.
+    holds: u32,
+    width: StreamWidth,
+    /// No space joins an element of `elements` before this one, which starts a
+    /// run of elements an emitter moves or takes back as a unit.
     space_fence: usize,
     options: FormatOptions,
     allocator: &'ast Allocator,
@@ -220,23 +262,24 @@ pub(crate) struct Formatter<'ast> {
 }
 
 impl<'ast> Formatter<'ast> {
-    /// `groupings` are the parentheses the user of a parse wrote.
+    /// `groupings` are the parentheses the user of a parse wrote, and every
+    /// line printed starts with `base_indent`.
     pub(crate) fn new(
         allocator: &'ast Allocator,
         options: FormatOptions,
         comments: Comments<'ast>,
         groupings: Option<&'ast Groupings>,
+        base_indent: &'ast [u8],
+        room: Room,
     ) -> Self {
-        // A token or a comment comes to about two elements, and seldom to
-        // more than two and a half, however long its text, so this room
-        // seldom has to grow. A tree built in code has neither and starts
-        // empty.
-        let capacity = (comments.token_and_comment_count() * 5).div_ceil(2);
+        // About one element in eleven starts a group.
+        let layout = Layout::with_capacity_in(room.elements.div_ceil(8), allocator);
         Self {
-            elements: List::with_capacity_in(capacity, allocator),
-            // About one element in eleven starts a group.
-            layout: Layout::with_capacity_in(capacity.div_ceil(8), allocator),
-            text_bytes: 0,
+            elements: List::with_capacity_in(room.elements, allocator),
+            printed_count: 0,
+            printer: Printer::new(&options, base_indent, room.output, layout),
+            holds: 0,
+            width: StreamWidth::default(),
             space_fence: 0,
             options,
             allocator,
@@ -263,6 +306,18 @@ impl<'ast> Formatter<'ast> {
         self.enclosing_end
     }
 
+    /// Where the first `closer` at or after `from` is, for the comments
+    /// before it, which the node being written holds none of when none is
+    /// pending before its end. Any offset in the node places them the same
+    /// then, so the tokens are searched only otherwise.
+    pub(crate) fn closer_offset(&self, from: u32, closer: TokenKind) -> u32 {
+        if self.comments.has_pending_before(self.enclosing_end) {
+            self.comments.closer_offset(from, closer)
+        } else {
+            from
+        }
+    }
+
     pub(crate) const fn sorts_requires(&self) -> bool {
         self.sorts_requires
     }
@@ -280,17 +335,49 @@ impl<'ast> Formatter<'ast> {
     /// so that run can move or be taken back as a unit.
     pub(crate) fn mark(&mut self) -> usize {
         self.space_fence = self.elements.len();
-        self.space_fence
+        self.printed_count + self.space_fence
+    }
+
+    /// Where the next element goes in the stream.
+    fn position(&self) -> usize {
+        self.printed_count + self.elements.len()
+    }
+
+    /// Hands the elements written to the printer, right after a forced break,
+    /// which ends every measurement, so the printer lays them out as it would
+    /// with the rest of the stream after them. It waits while a group the
+    /// printer would have to measure is open, or anything it must see whole.
+    pub(crate) fn print_written(&mut self) {
+        if self.holds > 0 || !self.printer.layout.is_settled() {
+            return;
+        }
+        self.printer.print(&self.elements);
+        self.printed_count += self.elements.len();
+        self.elements.truncate(0);
+        self.space_fence = 0;
+        self.printer.layout.release_printed();
+    }
+
+    /// Keeps the printer from taking what's written until
+    /// [`Formatter::release`], as a run of requires to sort needs.
+    pub(crate) const fn hold(&mut self) {
+        self.holds += 1;
+    }
+
+    pub(crate) const fn release(&mut self) {
+        self.holds -= 1;
     }
 
     /// Prints the statements written to `slices`, element ranges in stream
     /// order, in `order`, which indexes `slices`. What lies between two of
-    /// them stays in place.
+    /// them stays in place. The printer has taken none of them yet, since a
+    /// run of requires holds them back.
     pub(crate) fn reorder(&mut self, slices: &[Range<usize>], order: &[usize]) {
         let (Some(first), Some(last)) = (slices.first(), slices.last()) else {
             return;
         };
-        let written = self.elements[first.start..last.end].to_vec();
+        let base = self.printed_count;
+        let written = self.elements[first.start - base..last.end - base].to_vec();
         let mut target = first.start;
         let mut gap_start = first.start;
         for (slice, &i) in slices.iter().zip(order) {
@@ -299,7 +386,7 @@ impl<'ast> Formatter<'ast> {
             for range in [gap, slices[i].clone()] {
                 let source = &written[range.start - first.start..range.end - first.start];
                 let end = target + source.len();
-                self.elements[target..end].copy_from_slice(source);
+                self.elements[target - base..end - base].copy_from_slice(source);
                 target = end;
             }
         }
@@ -331,7 +418,11 @@ impl<'ast> Formatter<'ast> {
     /// That's nearly every node, which then needs no span, so `span` is only
     /// worked out otherwise.
     #[inline]
-    pub(crate) fn node(&mut self, span: impl FnOnce() -> Span, content: impl FnOnce(&mut Self)) {
+    pub(crate) fn node(
+        &mut self,
+        span: impl FnOnce(&Self) -> Span,
+        content: impl FnOnce(&mut Self),
+    ) {
         self.write_node(span, true, content);
     }
 
@@ -340,7 +431,7 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn node_placing_leading_comments(
         &mut self,
-        span: impl FnOnce() -> Span,
+        span: impl FnOnce(&Self) -> Span,
         content: impl FnOnce(&mut Self),
     ) {
         self.write_node(span, false, content);
@@ -351,12 +442,12 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     fn write_node(
         &mut self,
-        span_of: impl FnOnce() -> Span,
+        span_of: impl FnOnce(&Self) -> Span,
         should_lead: bool,
         content: impl FnOnce(&mut Self),
     ) {
         let bounds = self.comments.has_pending_before(self.enclosing_end).then(|| {
-            let span = span_of();
+            let span = span_of(self);
             if should_lead {
                 self.write_leading_comments(span.start);
             }
@@ -385,7 +476,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn group_id(&mut self) -> GroupId {
-        self.layout.new_group(self.allocator)
+        self.printer.layout.new_group(self.allocator)
     }
 
     #[inline]
@@ -393,12 +484,11 @@ impl<'ast> Formatter<'ast> {
         self.elements.push(element, self.allocator);
     }
 
+    /// Text whose break, if it spans lines, the caller has already forced.
     #[inline]
     fn push_text(&mut self, text: &'ast [u8], width: TextWidth) {
-        self.text_bytes += text.len();
-        if width.is_multiline() {
-            self.layout.force_break(self.elements.len());
-        }
+        self.width.bytes += text.len();
+        self.width.columns += width.columns();
         self.push(FormatElement::Text(text, width));
     }
 
@@ -411,7 +501,11 @@ impl<'ast> Formatter<'ast> {
 
     #[inline]
     pub(crate) fn text(&mut self, text: &'ast [u8]) {
-        self.push_text(text, TextWidth::of(text));
+        let width = TextWidth::of(text);
+        if width.is_multiline() {
+            self.printer.layout.force_break(self.position());
+        }
+        self.push_text(text, width);
     }
 
     /// An identifier or a numeral, which the lexer and `Synth` only ever make
@@ -424,27 +518,29 @@ impl<'ast> Formatter<'ast> {
     /// A name is a node of its own, which comments can lead and trail.
     #[inline]
     pub(crate) fn name(&mut self, name: Name<'ast>) {
-        self.node(|| name.span, |f| f.ascii(name.text.as_bytes()));
+        self.node(|_| name.span, |f| f.ascii(name.text.as_bytes()));
     }
 
     pub(crate) fn verbatim(&mut self, text: &'ast [u8]) {
         let width = TextWidth::of(text);
-        self.text_bytes += text.len();
+        self.width.bytes += text.len();
+        self.width.columns += width.columns();
         if width.is_multiline() {
-            self.layout.force_break(self.elements.len());
+            self.printer.layout.force_break(self.position());
         }
         self.push(FormatElement::Verbatim(text, width));
     }
 
     /// See [`FormatElement::LineSuffix`]. A break in one forces nothing.
     pub(crate) fn line_suffix(&mut self, text: &'ast [u8], is_measured: bool) {
-        self.text_bytes += text.len() + 1;
+        self.width.bytes += text.len() + 1;
+        self.printer.layout.line_suffix();
         self.push(FormatElement::LineSuffix(text, TextWidth::of(text), is_measured));
     }
 
     #[inline]
     pub(crate) fn space(&mut self) {
-        self.text_bytes += 1;
+        self.width.bytes += 1;
         if self.elements.len() > self.space_fence
             && let Some(FormatElement::Text(_, width)) = self.elements.last_mut()
         {
@@ -456,8 +552,8 @@ impl<'ast> Formatter<'ast> {
 
     #[inline]
     pub(crate) fn line(&mut self, mode: LineMode) {
-        self.text_bytes += 1;
-        self.layout.line(self.elements.len(), mode);
+        self.width.bytes += 1;
+        self.printer.layout.line(self.position(), mode);
         self.push(FormatElement::Line(mode));
     }
 
@@ -488,7 +584,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn expand_parent(&mut self) {
-        self.layout.force_break(self.elements.len());
+        self.printer.layout.force_break(self.position());
         self.push(FormatElement::ExpandParent);
     }
 
@@ -510,9 +606,9 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn group_with_id(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
         self.push(FormatElement::StartGroup(id));
-        self.layout.open(id, self.elements.len(), false);
+        self.printer.layout.open(id, self.position(), self.width, false);
         content(self);
-        self.layout.close();
+        self.printer.layout.close(self.position(), self.width);
         self.push(FormatElement::EndGroup);
     }
 
@@ -520,9 +616,9 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn hugged_group_with_id(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
         self.push(FormatElement::StartHuggedGroup(id));
-        self.layout.open(id, self.elements.len(), true);
+        self.printer.layout.open(id, self.position(), self.width, true);
         content(self);
-        self.layout.close();
+        self.printer.layout.close(self.position(), self.width);
         self.push(FormatElement::EndGroup);
     }
 
@@ -531,9 +627,9 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn next_line_group(&mut self, content: impl FnOnce(&mut Self)) {
         let id = self.group_id();
         self.push(FormatElement::StartNextLineGroup(id));
-        self.layout.open(id, self.elements.len(), false);
+        self.printer.layout.open(id, self.position(), self.width, false);
         content(self);
-        self.layout.close();
+        self.printer.layout.close(self.position(), self.width);
         self.push(FormatElement::EndNextLineGroup);
     }
 
@@ -545,12 +641,18 @@ impl<'ast> Formatter<'ast> {
         self.push(FormatElement::EndIndentIfGroupBreaks(id));
     }
 
-    /// The group must start before this element (enclosing or earlier
-    /// sibling).
+    /// The group must start before this element (enclosing, or an earlier
+    /// sibling with no statement break between them, at which the printer
+    /// can forget a group it has left). No flat measurement is sure to count
+    /// the content's columns.
     #[inline]
     pub(crate) fn if_group_breaks(&mut self, id: GroupId, content: impl FnOnce(&mut Self)) {
         self.push(FormatElement::StartIfGroupBreaks(id));
+        self.hold();
+        let columns = self.width.columns;
         content(self);
+        self.width.columns = columns;
+        self.release();
         self.push(FormatElement::EndIfGroupBreaks);
     }
 
@@ -566,7 +668,9 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn fill(&mut self, content: impl FnOnce(&mut Self)) {
         self.push(FormatElement::StartFill);
+        self.hold();
         content(self);
+        self.release();
         self.push(FormatElement::EndFill);
     }
 
@@ -592,25 +696,60 @@ impl<'ast> Formatter<'ast> {
         &self.elements
     }
 
+    /// Holds what's written from here back from the printer until the
+    /// checkpoint is restored or kept.
     pub(crate) fn checkpoint(&mut self) -> Checkpoint {
         let element_count = self.mark();
+        self.hold();
         Checkpoint {
             element_count,
-            layout: self.layout.checkpoint(element_count),
+            width: self.width,
+            layout: self.printer.layout.checkpoint(element_count),
             comments: self.comments.checkpoint(),
         }
     }
 
     pub(crate) fn restore(&mut self, checkpoint: Checkpoint) {
-        self.elements.truncate(checkpoint.element_count);
-        self.layout.restore(checkpoint.layout);
+        self.elements.truncate(checkpoint.element_count - self.printed_count);
+        self.width = checkpoint.width;
+        self.printer.layout.restore(checkpoint.layout);
         self.comments.restore(checkpoint.comments);
+        self.release();
     }
 
-    pub(crate) fn print(self, base_indent: &[u8]) -> Vec<u8> {
-        // Indentation comes on top of the text, and seldom reaches a quarter
-        // of it.
-        let capacity = self.text_bytes + self.text_bytes.div_ceil(4);
-        printer::print(&self.elements, self.layout, &self.options, base_indent, capacity)
+    /// Keeps what's been written since `checkpoint`.
+    pub(crate) const fn keep(&mut self, _checkpoint: Checkpoint) {
+        self.release();
+    }
+
+    /// Prints what's left of the stream.
+    pub(crate) fn finish(mut self) -> Vec<u8> {
+        self.printer.print(&self.elements);
+        self.printer.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_word_at_a_time_finds_what_a_byte_at_a_time_does() {
+        // Every length up to three words, each with a byte at each position
+        // that stops the scan or sits next to one that does, among fillers
+        // that hold zero bytes, whose borrow is the scan's one subtlety.
+        for length in 0..=24 {
+            for position in 0..length {
+                for stop in [b'\n', b'\r', 0x80, 0xFF, 0x00, 0x01, b'\t', b'\x0B', b'\x0E'] {
+                    for filler in [b'a', 0x00, 0x01, b'\x0B'] {
+                        let mut text = vec![filler; length];
+                        text[position] = stop;
+                        let expected =
+                            text.iter().all(|&b| b.is_ascii() && b != b'\n' && b != b'\r');
+                        assert_eq!(is_one_ascii_line(&text), expected, "{text:?}");
+                    }
+                }
+            }
+        }
     }
 }

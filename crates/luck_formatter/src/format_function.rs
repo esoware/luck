@@ -69,7 +69,7 @@ impl<'ast> Formatter<'ast> {
             .as_ref()
             .map(|vararg| vararg.span.end)
             .or_else(|| body.params.last().map(|param| param.span().end));
-        let closer = self.comments().closer_offset(last_end.unwrap_or(open), TokenKind::RightParen);
+        let closer = self.closer_offset(last_end.unwrap_or(open), TokenKind::RightParen);
         if last_end.is_none() {
             self.write_dangling_list(("(", ")"), closer, LineMode::Soft);
             return;
@@ -104,7 +104,7 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) fn write_typed_name(&mut self, typed_name: &TypedName<'ast>) {
         self.node(
-            || typed_name.span(),
+            |_| typed_name.span(),
             |f| {
                 f.name(typed_name.name);
                 if let Some(annotation) = &typed_name.type_annotation {
@@ -118,7 +118,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_vararg_param(&mut self, vararg: &VarArgParam<'ast>) {
         self.node(
-            || vararg.span,
+            |_| vararg.span,
             |f| {
                 f.token("...");
                 // `: T` annotation (may be a pack, e.g. `...number`).
@@ -134,7 +134,7 @@ impl<'ast> Formatter<'ast> {
     /// Arguments only exist on the bracketed form.
     pub(crate) fn write_function_attribute(&mut self, attribute: &FunctionAttribute<'ast>) {
         self.node(
-            || attribute.span,
+            |_| attribute.span,
             |f| {
                 f.token("@");
                 let Some(args) = &attribute.args else {
@@ -205,7 +205,7 @@ impl<'ast> Formatter<'ast> {
                 };
                 let write_table = |f: &mut Self| {
                     f.node(
-                        || table.span,
+                        |_| table.span,
                         |inner| inner.write_table(table, TablePlacement::Standalone),
                     );
                 };
@@ -242,7 +242,7 @@ impl<'ast> Formatter<'ast> {
                     | CallParentheses::Input => true,
                 };
                 let write_string = |f: &mut Self| {
-                    f.node(|| literal.span, |inner| inner.write_string(literal));
+                    f.node(|_| literal.span, |inner| inner.write_string(literal));
                 };
                 if should_keep_bare {
                     self.space();
@@ -323,8 +323,10 @@ impl<'ast> Formatter<'ast> {
                         && let Expression::TableConstructor(table) = arg
                         && !f.is_wrapped(arg, Slot::FREE)
                     {
-                        let extent = f.extent(arg);
-                        f.node(|| extent, |inner| inner.write_table(table, TablePlacement::Hugged));
+                        f.node(
+                            |outer| outer.extent(arg),
+                            |inner| inner.write_table(table, TablePlacement::Hugged),
+                        );
                     } else if is_hugged {
                         let function_group = f.group_id();
                         f.hugged_group_with_id(function_group, |hugged| hugged.write_expr(arg));
