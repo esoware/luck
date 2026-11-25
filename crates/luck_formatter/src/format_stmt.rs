@@ -135,7 +135,6 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    /// `local name =` or `const name =`.
     pub(crate) fn write_conditional_binding(&mut self, binding: &ConditionalBinding<'ast>) {
         self.node(
             || binding.span,
@@ -150,9 +149,10 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// Statement conditions are boolean contexts, and a binding takes one
-    /// value, so the parentheses around a whole one come off, even the ones the tree keeps: `(f())` truncating
-    /// values to one changes nothing observable. They stay around a comment,
-    /// which needs the line breaks they hold.
+    /// value, so the parentheses around a whole one come off, even the ones
+    /// the tree keeps: `(f())` truncating values to one changes nothing
+    /// observable. They stay around a comment, which needs the line breaks
+    /// they hold.
     fn write_condition(&mut self, condition: &Expression<'ast>, indent: ChainIndent) {
         let unwrapped = condition.unwrap_parentheses();
         let outer = self.grouping_around(condition.span()).unwrap_or_else(|| condition.span());

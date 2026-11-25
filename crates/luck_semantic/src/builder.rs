@@ -469,8 +469,6 @@ impl<'ast> Builder<'ast> {
         }
     }
 
-    /// `expr`, in a scope `opener` opens for the binding of the condition
-    /// before it, if there is one.
     fn bound_expr(
         &mut self,
         opener: NodeId,
@@ -532,8 +530,6 @@ impl<'ast> Builder<'ast> {
         Some((binding, node))
     }
 
-    /// Binds a condition's name, from [`Self::binding_node`], in the scope
-    /// just opened.
     fn declare_binding(&mut self, binding: Option<(&'ast ConditionalBinding<'ast>, NodeId)>) {
         if let Some((binding, node)) = binding
             && let Some(symbol) = self.declare_name(&binding.name.name, SymbolKind::Local, node)

@@ -187,7 +187,6 @@ impl Printer {
         }
     }
 
-    /// A condition, after the binding that opens it, if one does.
     pub(super) fn print_condition(
         &mut self,
         binding: Option<&ConditionalBinding<'_>>,

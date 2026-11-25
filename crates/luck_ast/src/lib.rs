@@ -10,9 +10,10 @@
 //! each, and a part most nodes of a kind lack, an `if`'s `else` or a type
 //! annotation, is boxed, so a node without one doesn't hold its space. A
 //! [`Name`] holds its text, and a literal, a [`NumberLiteral`] or a
-//! [`StringLiteral`], its value, which the parser decodes once, and its spelling as written, which a tree built in code
-//! leaves out. A parsed tree's leaves borrow the source, and a built tree's
-//! live in the arena, so a printer never needs the source. A name also holds
+//! [`StringLiteral`], its value, which the parser decodes once, and its
+//! spelling as written, which a tree built in code leaves out. A parsed
+//! tree's leaves borrow the source, and a built tree's live in the arena, so
+//! a printer never needs the source. A name also holds
 //! a [`NameIndex`], a plain field that the parser numbers, each name its own,
 //! by which semantic analysis finds what the name declares or refers to. A
 //! tree is `Send` and `Sync`, and may join nodes from any number of arenas
