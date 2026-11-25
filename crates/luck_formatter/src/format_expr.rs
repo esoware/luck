@@ -465,11 +465,13 @@ impl<'ast> Formatter<'ast> {
         self.group(|grouped| {
             grouped.token("if");
             grouped.space();
-            if let Some(binding) = &if_expr.binding {
-                grouped.write_conditional_binding(binding);
-                grouped.space();
-            }
-            grouped.write_expr(&if_expr.condition);
+            grouped.indent(|f| {
+                if let Some(binding) = &if_expr.binding {
+                    f.write_conditional_binding(binding);
+                    f.space();
+                }
+                f.write_expr(&if_expr.condition);
+            });
             grouped.indent(|f| {
                 f.soft_line_or_space();
                 f.write_hoisted_comments(f.extent(&if_expr.then_expr).start);
@@ -478,11 +480,7 @@ impl<'ast> Formatter<'ast> {
                 f.write_expr(&if_expr.then_expr);
                 for clause in &if_expr.elseif_clauses {
                     f.soft_line_or_space();
-                    let start = clause.binding.as_ref().map_or_else(
-                        || f.extent(&clause.condition).start,
-                        |binding| binding.span.start,
-                    );
-                    f.write_hoisted_comments(start);
+                    f.write_hoisted_comments(f.extent(&clause.condition).start);
                     f.token("elseif");
                     f.space();
                     if let Some(binding) = &clause.binding {

@@ -1962,3 +1962,45 @@ end
 ",
     );
 }
+
+#[test]
+fn a_line_comment_after_an_if_expressions_if_indents_the_condition() {
+    assert_format(
+        "\
+local y = if -- c
+g() then v else nil
+local z = if local v = -- d
+g() then v else nil
+",
+        "\
+local y = if -- c
+	g()
+	then v
+	else nil
+local z = if local v = -- d
+	g()
+	then v
+	else nil
+",
+    );
+}
+
+#[test]
+fn a_line_comment_in_an_elseif_binding_goes_above_the_elseif() {
+    assert_format(
+        "\
+local y = if a then b elseif local v = -- c
+	g() then v elseif local -- d
+	w = h() then w else nil
+",
+        "\
+local y = if a
+	then b
+	-- c
+	elseif local v = g() then v
+	-- d
+	elseif local w = h() then w
+	else nil
+",
+    );
+}

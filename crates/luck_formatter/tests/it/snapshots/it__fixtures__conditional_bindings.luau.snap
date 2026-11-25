@@ -61,8 +61,8 @@ do
 end
 
 local label = if local user = find(
-	3
-)
+		3
+	)
 	then user.name
 	elseif local guest = find(
 		4
