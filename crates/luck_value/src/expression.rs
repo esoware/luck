@@ -1,5 +1,7 @@
 //! One analysis of what evaluating an expression does, which every question
-//! the crate answers about an expression reads, so the answers agree.
+//! the crate answers about an expression reads, so the answers agree. A
+//! question that settles on less, a value or literalness, stops once it has,
+//! and reads the analysis only for the parts that need all of it.
 
 use std::iter;
 
@@ -57,8 +59,7 @@ impl ToBoolean for Expression<'_> {
 
 impl<'ast> ConstantEvaluation<'ast> for Expression<'ast> {
     fn evaluate_value(&self, context: &dyn ValueContext) -> Option<ConstantValue<'ast>> {
-        let outcome = analyze(self, context);
-        outcome.value.filter(|_| !outcome.has_effects)
+        pure_value(self, context)
     }
 
     fn get_side_free_boolean_value(&self, context: &dyn ValueContext) -> Option<bool> {
@@ -75,7 +76,7 @@ impl MayHaveSideEffects for Expression<'_> {
 
 impl IsLiteralValue for Expression<'_> {
     fn is_literal_value(&self, context: &dyn ValueContext) -> bool {
-        analyze(self, context).is_literal
+        !holds_variable_or_fresh_value(self) && analyze(self, context).is_literal
     }
 }
 
@@ -265,6 +266,129 @@ fn analyze<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Outcome
     }
 }
 
+/// The value [`analyze`] finds `expr` yields when it finds no effect, read
+/// only as far as the value needs.
+///
+/// An operator other than `and`, `or`, and `not` has a value only when
+/// every operand has one and no effect, and on known values
+/// [`ConstantValue::binary`] has a result only where the operator can't
+/// raise or run a metamethod, so the first operand with no value settles
+/// it. A name, `...`, a table, and a closure never have one, and the rest,
+/// which read their operands' truthiness, take the whole analysis.
+fn pure_value<'ast>(
+    expr: &Expression<'ast>,
+    context: &dyn ValueContext,
+) -> Option<ConstantValue<'ast>> {
+    match expr {
+        Expression::Nil(_) => Some(ConstantValue::Nil),
+        Expression::False(_) => Some(ConstantValue::Boolean(false)),
+        Expression::True(_) => Some(ConstantValue::Boolean(true)),
+        Expression::Number(literal) => Some(ConstantValue::Number(literal.value)),
+        Expression::StringLiteral(literal) => Some(ConstantValue::String(literal.value.as_bytes())),
+        Expression::InterpolatedString(string) => {
+            string.segments.is_empty().then(|| ConstantValue::String(string.tail.value.as_bytes()))
+        }
+        Expression::VarArg(_)
+        | Expression::Name(_)
+        | Expression::FunctionDef(_)
+        | Expression::TableConstructor(_)
+        | Expression::Error(_) => None,
+        Expression::Suffixed(chain) => {
+            if chain
+                .suffixes
+                .iter()
+                .all(|suffix| matches!(suffix, Suffix::TypeInstantiation { .. }))
+            {
+                pure_value(&chain.prefix, context)
+            } else {
+                None
+            }
+        }
+        Expression::Parenthesized(parenthesized) => pure_value(&parenthesized.expr, context),
+        Expression::TypeCast(cast) => pure_value(&cast.expr, context),
+        Expression::UnaryOp(unary) => match unary.op {
+            UnOp::Neg | UnOp::Len => {
+                let operand = Outcome::constant(pure_value(&unary.operand, context)?);
+                unary_outcome(unary.op, operand).value
+            }
+            UnOp::Not => whole_analysis_value(expr, context),
+        },
+        Expression::BinaryOp(run) => {
+            if run.links.iter().any(|link| matches!(link.op, BinOp::And | BinOp::Or)) {
+                return whole_analysis_value(expr, context);
+            }
+            match run.precedence().1 {
+                Associativity::Left => {
+                    run.links.iter().try_fold(pure_value(&run.first, context)?, |lhs, link| {
+                        lhs.binary(link.op, pure_value(&link.operand, context)?)
+                    })
+                }
+                Associativity::Right => {
+                    let operands =
+                        iter::once(&run.first).chain(run.links.iter().map(|link| &link.operand));
+                    let left_operands = operands.rev().skip(1);
+                    let last = pure_value(&run.links.last().operand, context)?;
+                    run.links.iter().rev().zip(left_operands).try_fold(last, |rhs, (link, lhs)| {
+                        pure_value(lhs, context)?.binary(link.op, rhs)
+                    })
+                }
+            }
+        }
+        Expression::IfExpression(_) => whole_analysis_value(expr, context),
+    }
+}
+
+/// Whether `expr` holds, anywhere, even in an operand that never runs, a
+/// part [`analyze`] finds is no literal whatever surrounds it: a variable,
+/// `...`, a table, a closure, a call, an index, or text with an expression
+/// in it. Literalness only ever narrows as the analysis joins its parts, so
+/// one such part settles it, and the search stops there.
+fn holds_variable_or_fresh_value(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::Nil(_)
+        | Expression::False(_)
+        | Expression::True(_)
+        | Expression::Number(_)
+        | Expression::StringLiteral(_) => false,
+        Expression::InterpolatedString(string) => !string.segments.is_empty(),
+        Expression::VarArg(_)
+        | Expression::Name(_)
+        | Expression::FunctionDef(_)
+        | Expression::TableConstructor(_)
+        | Expression::Error(_) => true,
+        Expression::Suffixed(chain) => {
+            !chain.suffixes.iter().all(|suffix| matches!(suffix, Suffix::TypeInstantiation { .. }))
+                || holds_variable_or_fresh_value(&chain.prefix)
+        }
+        Expression::Parenthesized(parenthesized) => {
+            holds_variable_or_fresh_value(&parenthesized.expr)
+        }
+        Expression::TypeCast(cast) => holds_variable_or_fresh_value(&cast.expr),
+        Expression::UnaryOp(unary) => holds_variable_or_fresh_value(&unary.operand),
+        Expression::BinaryOp(run) => {
+            holds_variable_or_fresh_value(&run.first)
+                || run.links.iter().any(|link| holds_variable_or_fresh_value(&link.operand))
+        }
+        Expression::IfExpression(if_expr) => {
+            holds_variable_or_fresh_value(&if_expr.condition)
+                || holds_variable_or_fresh_value(&if_expr.then_expr)
+                || if_expr.elseif_clauses.iter().any(|clause| {
+                    holds_variable_or_fresh_value(&clause.condition)
+                        || holds_variable_or_fresh_value(&clause.expr)
+                })
+                || holds_variable_or_fresh_value(&if_expr.else_expr)
+        }
+    }
+}
+
+fn whole_analysis_value<'ast>(
+    expr: &Expression<'ast>,
+    context: &dyn ValueContext,
+) -> Option<ConstantValue<'ast>> {
+    let outcome = analyze(expr, context);
+    outcome.value.filter(|_| !outcome.has_effects)
+}
+
 fn table_outcome<'ast>(
     table: &TableConstructor<'ast>,
     context: &dyn ValueContext,
@@ -418,4 +542,61 @@ fn if_outcome<'ast>(if_expr: &IfExpression<'ast>, context: &dyn ValueContext) ->
         None => else_branch,
     };
     Outcome { has_effects: conditions_have_effects || outcome.has_effects, is_literal, ..outcome }
+}
+
+#[cfg(test)]
+mod tests {
+    use luck_allocator::Allocator;
+    use luck_ast::{Name, Visit};
+    use luck_testgen::{generate_full_grammar, generate_runtime_safe, source_fixtures};
+
+    use super::*;
+    use crate::context::NoBindings;
+
+    /// A context in which every name is a local, so only operators and
+    /// indexes have effects.
+    struct NoGlobals;
+
+    impl ValueContext for NoGlobals {
+        fn is_global_reference(&self, _name: &Name<'_>) -> bool {
+            false
+        }
+    }
+
+    /// Checks every expression of a tree against the whole analysis, and
+    /// counts the ones with a value and the literal ones.
+    struct Agreement {
+        valued: usize,
+        literal: usize,
+    }
+
+    impl<'ast> Visit<'ast> for Agreement {
+        fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+            let contexts: [&dyn ValueContext; 2] = [&NoBindings, &NoGlobals];
+            for context in contexts {
+                let value = pure_value(expr, context);
+                assert_eq!(value, whole_analysis_value(expr, context), "{expr:?}");
+                self.valued += usize::from(value.is_some());
+                let is_literal = expr.is_literal_value(context);
+                assert_eq!(is_literal, analyze(expr, context).is_literal, "{expr:?}");
+                self.literal += usize::from(is_literal);
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    #[test]
+    fn each_question_answers_as_the_whole_analysis_does() {
+        let generated = (0..40)
+            .flat_map(|seed| [generate_full_grammar(seed, 25), generate_runtime_safe(seed, 25)]);
+        let sources = source_fixtures().into_iter().map(|fixture| fixture.source).chain(generated);
+        let mut agreement = Agreement { valued: 0, literal: 0 };
+        for source in sources {
+            let allocator = Allocator::new();
+            let parsed = luck_parser::parse(&allocator, source.as_bytes());
+            agreement.visit_block(&parsed.chunk);
+        }
+        let Agreement { valued, literal } = agreement;
+        assert!(valued > 1_000 && literal > 1_000, "{valued} with a value, {literal} literal");
+    }
 }

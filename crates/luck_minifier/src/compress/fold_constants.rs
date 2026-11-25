@@ -298,7 +298,9 @@ fn joined_bound(bound: Option<usize>, op: BinOp, operand: &Expression<'_>) -> Op
 /// parentheses it may add.
 fn printed_length_bound(expr: &Expression<'_>) -> Option<usize> {
     match expr {
-        Expression::Number(literal) => Some(spell_number(literal.value).as_str().len()),
+        Expression::Number(literal) => {
+            Some(spell_number(literal.value, literal.raw.as_deref()).length())
+        }
         Expression::UnaryOp(unary) => {
             let operand_bound = printed_length_bound(&unary.operand)?;
             Some(unary.op.static_text().len() + operand_bound)
@@ -335,7 +337,7 @@ fn is_short_enough(value: ConstantValue<'_>, bound: Option<usize>) -> bool {
     let Some((is_negative, magnitude)) = literal_magnitude(number) else {
         return false;
     };
-    let length = usize::from(is_negative) + spell_number(magnitude).as_str().len();
+    let length = usize::from(is_negative) + spell_number(magnitude, None).length();
     bound.is_none_or(|replaced| length <= replaced)
 }
 

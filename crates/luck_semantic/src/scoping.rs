@@ -1,4 +1,5 @@
 use std::mem;
+use std::sync::OnceLock;
 
 use luck_ast::{Name, NameIndex, TreeCounts};
 use luck_token::Span;
@@ -30,30 +31,58 @@ pub struct Scoping {
     /// Where each symbol's run of `resolved` starts, and then where the last
     /// one ends. Until [`Self::finish`], each symbol's count, one slot along.
     resolved_offsets: Vec<u32>,
-    /// Every reference, by where its name starts.
-    positions: Vec<ReferenceId>,
-    /// How many slots of `positions` the walk reserved and hasn't filled.
-    unfilled_positions: u32,
+    /// Every reference, by where its name starts, which only
+    /// [`Self::references_within`] reads, so it's sorted the first time that
+    /// asks.
+    positions: OnceLock<Box<[ReferenceId]>>,
     /// What each name of the tree is, by its index.
     roles: Vec<NameRole>,
     names: Names,
 }
 
-/// A slot of the references by position that holds no reference yet. No
-/// chunk has as many references as its last index, since it has more bytes.
-fn unfilled_position() -> ReferenceId {
-    ReferenceId::from_index(usize::MAX)
+/// What a name in the tree is to the tables, in one word: 0 for nothing, as
+/// a field, a type, a function attribute, or a name the walk never reached
+/// is, a symbol's [`SymbolId::get`], or a reference's index with
+/// [`NameRole::REFERENCE`] set.
+///
+/// A chunk spans fewer than `u32::MAX` bytes, and a name and what sets it
+/// apart from the next take two, so no id reaches the bit.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct NameRole(u32);
+
+impl NameRole {
+    const REFERENCE: u32 = 1 << 31;
+
+    pub(crate) fn symbol(id: SymbolId) -> Self {
+        debug_assert!(id.get() < Self::REFERENCE, "a symbol id stays below the reference bit");
+        Self(id.get())
+    }
+
+    pub(crate) fn reference(id: ReferenceId) -> Self {
+        debug_assert!(id.get() <= Self::REFERENCE, "a reference id stays below the reference bit");
+        Self(Self::REFERENCE | (id.get() - 1))
+    }
+
+    const fn symbol_id(self) -> Option<SymbolId> {
+        if self.0 & Self::REFERENCE == 0 { SymbolId::new(self.0) } else { None }
+    }
+
+    const fn reference_id(self) -> Option<ReferenceId> {
+        if self.0 & Self::REFERENCE == 0 {
+            None
+        } else {
+            ReferenceId::new((self.0 & !Self::REFERENCE) + 1)
+        }
+    }
 }
 
-/// What a name in the tree is to the tables.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) enum NameRole {
-    /// A field, a type, a function attribute, or a name the walk never
-    /// reached.
-    #[default]
-    None,
-    Symbol(SymbolId),
-    Reference(ReferenceId),
+/// How many distinct names to make room for in a chunk with `counts`. No
+/// chunk has more than its declarations and uses together, and one uses
+/// most of its names many times, so a quarter of those, and some more for a
+/// small chunk, holds them, and a chunk with more grows its tables.
+pub(crate) fn distinct_names_estimate(counts: TreeCounts) -> usize {
+    let uses = counts.declarations as usize + counts.name_uses as usize;
+    uses.min(64 + uses / 4)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -192,12 +221,9 @@ impl Scoping {
             references: Vec::with_capacity(name_uses),
             resolved: Vec::new(),
             resolved_offsets,
-            positions: Vec::with_capacity(name_uses),
-            unfilled_positions: 0,
-            roles: vec![NameRole::None; counts.names as usize],
-            // No chunk has more distinct names than declarations and uses
-            // together.
-            names: Names::with_capacity(declarations + name_uses),
+            positions: OnceLock::new(),
+            roles: vec![NameRole::default(); counts.names as usize],
+            names: Names::with_capacity(distinct_names_estimate(counts)),
         }
     }
 
@@ -213,7 +239,6 @@ impl Scoping {
             resolved,
             resolved_offsets,
             positions,
-            unfilled_positions,
             roles,
             names,
         } = self;
@@ -227,12 +252,10 @@ impl Scoping {
         resolved_offsets.clear();
         resolved_offsets.reserve(declarations + 1);
         resolved_offsets.push(0);
-        positions.clear();
-        positions.reserve(name_uses);
-        *unfilled_positions = 0;
+        *positions = OnceLock::new();
         roles.clear();
-        roles.resize(counts.names as usize, NameRole::None);
-        names.reset(declarations + name_uses);
+        roles.resize(counts.names as usize, NameRole::default());
+        names.reset(distinct_names_estimate(counts));
     }
 
     pub(crate) fn next_scope_id(&self) -> ScopeId {
@@ -274,34 +297,13 @@ impl Scoping {
         &mut self.symbols[id.index()]
     }
 
-    /// A slot in the references by position for one the walk adds once it's
-    /// past the name that makes it, as it does a name an assignment writes.
-    pub(crate) fn reserve_position(&mut self) -> usize {
-        let slot = self.positions.len();
-        self.positions.push(unfilled_position());
-        self.unfilled_positions += 1;
-        slot
-    }
-
-    /// Adds `reference`, which its symbol counts among its own, at the end
-    /// of the references by position, or in `position`, a slot
-    /// [`Self::reserve_position`] gave.
-    pub(crate) fn add_reference(
-        &mut self,
-        reference: Reference,
-        position: Option<usize>,
-    ) -> ReferenceId {
+    /// Adds `reference`, which its symbol counts among its own.
+    pub(crate) fn add_reference(&mut self, reference: Reference) -> ReferenceId {
         let id = ReferenceId::from_index(self.references.len());
         if let Some(symbol) = reference.resolved {
             self.resolved_offsets[symbol.index() + 1] += 1;
         }
         self.references.push(reference);
-        if let Some(slot) = position {
-            self.positions[slot] = id;
-            self.unfilled_positions -= 1;
-        } else {
-            self.positions.push(id);
-        }
         id
     }
 
@@ -321,7 +323,7 @@ impl Scoping {
         };
         let index = index.get() as usize;
         if self.roles.len() <= index {
-            self.roles.resize(index + 1, NameRole::None);
+            self.roles.resize(index + 1, NameRole::default());
         }
         self.roles[index] = role;
     }
@@ -353,7 +355,7 @@ impl Scoping {
 
     /// Lays out each symbol's references once the walk has added them all.
     pub(crate) fn finish(&mut self) {
-        let Self { references, resolved, resolved_offsets, positions, .. } = self;
+        let Self { references, resolved, resolved_offsets, .. } = self;
         // Each symbol's count, one slot along, becomes the start of its run,
         // which then fills in reference order up to where the next starts.
         let mut total = 0;
@@ -368,12 +370,6 @@ impl Scoping {
                 resolved[*cursor as usize] = ReferenceId::from_index(i);
                 *cursor += 1;
             }
-        }
-        // A slot a name reserved but that made no reference, which a name the
-        // parser found missing does, holds none.
-        if self.unfilled_positions > 0 {
-            let unfilled = unfilled_position();
-            positions.retain(|&id| id != unfilled);
         }
     }
 
@@ -436,19 +432,13 @@ impl Scoping {
 
     /// The symbol `name` declares: `None` for a name that declares none.
     pub fn symbol_of(&self, name: &Name<'_>) -> Option<SymbolId> {
-        let NameRole::Symbol(id) = self.role(name) else {
-            return None;
-        };
-        Some(id)
+        self.role(name).symbol_id()
     }
 
     /// The reference `name` makes: `None` for a name that makes none, such
     /// as a field or a declaration.
     pub fn reference_of(&self, name: &Name<'_>) -> Option<ReferenceId> {
-        let NameRole::Reference(id) = self.role(name) else {
-            return None;
-        };
-        Some(id)
+        self.role(name).reference_id()
     }
 
     /// The symbol the reference `name` makes resolves to: `None` for a name
@@ -459,9 +449,20 @@ impl Scoping {
 
     /// The references whose names lie within `span`, by where they start.
     pub fn references_within(&self, span: Span) -> impl Iterator<Item = ReferenceId> + '_ {
-        let first =
-            self.positions.partition_point(|&id| self.reference(id).span.start < span.start);
-        self.positions[first..]
+        let positions = self.positions.get_or_init(|| {
+            // Two names that start together, as only a tree built in code
+            // has, keep the order the chunk evaluates them in.
+            let mut starts: Vec<(u32, ReferenceId)> = self
+                .references
+                .iter()
+                .enumerate()
+                .map(|(index, reference)| (reference.span.start, ReferenceId::from_index(index)))
+                .collect();
+            starts.sort_unstable();
+            starts.into_iter().map(|(_, id)| id).collect()
+        });
+        let first = positions.partition_point(|&id| self.reference(id).span.start < span.start);
+        positions[first..]
             .iter()
             .copied()
             .take_while(move |&id| self.reference(id).span.start < span.end)
@@ -532,6 +533,23 @@ mod tests {
         assert_eq!(size_of::<Reference>(), 28);
         assert_eq!(size_of::<Symbol>(), 36);
         assert_eq!(size_of::<Scope>(), 16);
-        assert_eq!(size_of::<NameRole>(), 8);
+        assert_eq!(size_of::<NameRole>(), 4);
+    }
+
+    #[test]
+    fn a_role_is_nothing_a_symbol_or_a_reference() {
+        let below_the_bit = (1 << 31) - 1;
+        assert_eq!(NameRole::default().symbol_id(), None);
+        assert_eq!(NameRole::default().reference_id(), None);
+        for index in [0, 1, below_the_bit - 1] {
+            let symbol = SymbolId::from_index(index);
+            assert_eq!(NameRole::symbol(symbol).symbol_id(), Some(symbol));
+            assert_eq!(NameRole::symbol(symbol).reference_id(), None);
+        }
+        for index in [0, 1, below_the_bit] {
+            let reference = ReferenceId::from_index(index);
+            assert_eq!(NameRole::reference(reference).reference_id(), Some(reference));
+            assert_eq!(NameRole::reference(reference).symbol_id(), None);
+        }
     }
 }

@@ -129,11 +129,10 @@ impl<'alloc, T> List<'alloc, T> {
     /// Panics if `at > items.len()`, or if more than `u32::MAX` items move.
     pub fn split_off_in(items: &mut Vec<T>, at: usize, allocator: &'alloc Allocator) -> Self {
         let tail = &items[at..];
-        let count = tail.len();
-        // A `memcpy` call only beats moving item by item from about 512 bytes.
-        if size_of_val(tail) < 512 {
-            return Self::from_iter_in(items.drain(at..), allocator);
+        if tail.is_empty() {
+            return Self::new();
         }
+        let count = tail.len();
         let destination = allocator.alloc_layout(Layout::for_value(tail)).cast::<T>();
         // SAFETY: `destination` is a fresh arena allocation with room for `count` items, so it
         // can't overlap `items`.

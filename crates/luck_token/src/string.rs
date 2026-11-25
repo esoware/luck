@@ -6,8 +6,6 @@
 
 use std::iter;
 
-use memchr::memmem;
-
 use crate::{is_luau_whitespace, strip_line_break};
 
 /// What an escape sequence puts in a string's value.
@@ -269,8 +267,12 @@ fn decode_long_bracket<'raw>(
         })
         .unwrap_or(body_with_closer);
     let body = strip_line_break(content).unwrap_or(content);
-    let mut crlfs = memmem::find_iter(body, b"\r\n").peekable();
-    if !has_cr || crlfs.peek().is_none() {
+    if !has_cr {
+        return StringValue::Verbatim(body);
+    }
+    let mut crlfs =
+        memchr::memchr_iter(b'\r', body).filter(|&cr| body.get(cr + 1) == Some(&b'\n')).peekable();
+    if crlfs.peek().is_none() {
         return StringValue::Verbatim(body);
     }
     output.reserve(body.len());

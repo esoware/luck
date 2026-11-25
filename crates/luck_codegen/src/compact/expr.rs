@@ -2,82 +2,85 @@ use luck_ast::{
     BinaryOp, Expression, Field, FunctionArgs, FunctionDef, IfExpression, InterpolatedString,
     MethodCall, Slot, Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
+use luck_token::{BinOp, UnOp};
 
 use super::Printer;
 use crate::separator::{INTERPOLATION_BRACE, OTHER, merges_after};
 
 impl Printer {
-    /// Names, numbers, and strings, half of all expressions, print inline
-    /// where they're reached, which saves them a call to a function that
-    /// saves every callee-saved register.
+    /// An expression where nothing groups with it, as a list's items are,
+    /// which never takes parentheses, so every check of `print_expr` folds
+    /// away.
+    #[expect(clippy::inline_always, reason = "see `print_expr`")]
+    #[inline(always)]
+    pub(super) fn print_free_expr(&mut self, expr: &Expression<'_>) {
+        self.print_expr(expr, Slot::FREE);
+    }
+
+    /// An expression in a slot it can't stand in bare prints in parentheses,
+    /// and what's in them prints as if nothing were around it. Its operands
+    /// take the slots `slot` gives them.
+    ///
+    /// Each kind goes straight to its own printer from where it's reached,
+    /// asking `slot` about itself on the way, and a name, a literal, or a
+    /// keyword prints right there, so none takes a call to a function that
+    /// only dispatches it.
     #[expect(clippy::inline_always, reason = "an outlined copy would be the call it saves")]
     #[inline(always)]
     fn print_expr(&mut self, expr: &Expression<'_>, slot: Slot) {
         match expr {
             Expression::Name(name) => self.name(name.text.as_str()),
-            Expression::Number(literal) if !expr.needs_parens(slot) => self.print_number(literal),
-            Expression::StringLiteral(literal) if !expr.needs_parens(slot) => {
+            Expression::Number(literal) if !slot.wraps_atom() => self.print_number(literal),
+            Expression::StringLiteral(literal) if !slot.wraps_atom() => {
                 self.print_string(literal);
             }
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => self.print_other_expr(expr, slot),
-        }
-    }
-
-    /// An expression in a slot it can't stand in bare prints in parentheses,
-    /// and what's in them prints as if nothing were around it. Its operands
-    /// take the slots that one gives them.
-    fn print_other_expr(&mut self, expr: &Expression<'_>, outer: Slot) {
-        let is_wrapped = expr.needs_parens(outer);
-        let slot = if is_wrapped {
-            self.piece("(");
-            Slot::FREE
-        } else {
-            outer
-        };
-        match expr {
-            Expression::Name(name) => self.name(name.text.as_str()),
-            Expression::Number(literal) => self.print_number(literal),
-            Expression::StringLiteral(literal) => self.print_string(literal),
-            Expression::Nil(_) => self.piece("nil"),
-            Expression::False(_) => self.piece("false"),
-            Expression::True(_) => self.piece("true"),
+            Expression::Nil(_) if !slot.wraps_atom() => self.piece("nil"),
+            Expression::False(_) if !slot.wraps_atom() => self.piece("false"),
+            Expression::True(_) if !slot.wraps_atom() => self.piece("true"),
             // `.....` reads as `...` `..`, so nothing merges with a vararg.
-            Expression::VarArg(_) => self.emit(b"...", merges_after(b'.'), OTHER),
-            Expression::FunctionDef(function) => self.print_function_def(function),
+            Expression::VarArg(_) if !slot.wraps_atom() => {
+                self.emit(b"...", merges_after(b'.'), OTHER);
+            }
+            Expression::FunctionDef(function) if !slot.wraps_atom() => {
+                self.print_function_def(function);
+            }
+            Expression::TableConstructor(table) if !slot.wraps_atom() => self.print_table(table),
+            Expression::InterpolatedString(interpolated) if !slot.wraps_atom() => {
+                self.print_interpolated(interpolated);
+            }
+            Expression::BinaryOp(binary_op) if !slot.wraps_run(binary_op) => {
+                self.print_run(binary_op, slot);
+            }
+            Expression::UnaryOp(unary_op) if !slot.wraps_unary() => {
+                self.print_unary_op(unary_op, slot);
+            }
+            Expression::IfExpression(if_expr) if !slot.wraps_if() => self.print_if_expr(if_expr),
+            Expression::TypeCast(cast) if !slot.wraps_cast(cast) => self.print_type_cast(cast),
             Expression::Suffixed(chain) => self.print_suffixed(chain),
             Expression::Parenthesized(parenthesized) => {
                 self.print_parenthesized(&parenthesized.expr);
             }
-            Expression::TableConstructor(table) => self.print_table(table),
-            Expression::BinaryOp(binary_op) => self.print_run(binary_op, slot),
-            Expression::UnaryOp(unary_op) => self.print_unary_op(unary_op, slot),
-            Expression::IfExpression(if_expr) => self.print_if_expr(if_expr),
-            Expression::InterpolatedString(interpolated) => self.print_interpolated(interpolated),
-            Expression::TypeCast(cast) => self.print_type_cast(cast),
             Expression::Error(_) => {}
-        }
-        if is_wrapped {
-            self.piece(")");
+            Expression::Number(_)
+            | Expression::StringLiteral(_)
+            | Expression::Nil(_)
+            | Expression::False(_)
+            | Expression::True(_)
+            | Expression::VarArg(_)
+            | Expression::FunctionDef(_)
+            | Expression::TableConstructor(_)
+            | Expression::InterpolatedString(_)
+            | Expression::BinaryOp(_)
+            | Expression::UnaryOp(_)
+            | Expression::IfExpression(_)
+            | Expression::TypeCast(_) => self.print_parenthesized(expr),
         }
     }
 
     fn print_function_def(&mut self, function: &FunctionDef<'_>) {
-        self.print_function_attributes(&function.attributes);
+        if !function.attributes.is_empty() {
+            self.print_function_attributes(&function.attributes);
+        }
         self.piece("function");
         self.print_function_body(&function.body);
     }
@@ -91,13 +94,40 @@ impl Printer {
     fn print_run(&mut self, binary_op: &BinaryOp<'_>, slot: Slot) {
         self.print_expr(&binary_op.first, slot.operand(binary_op, 0));
         for (index, link) in (1..).zip(&binary_op.links) {
-            self.piece(link.op.static_text());
+            self.binary_operator(link.op);
             self.print_expr(&link.operand, slot.operand(binary_op, index));
         }
     }
 
+    /// Each operator prints from an arm of its own, as a piece whose text is
+    /// a constant, so what it merges with is one too.
+    fn binary_operator(&mut self, op: BinOp) {
+        match op {
+            BinOp::Add => self.piece("+"),
+            BinOp::Sub => self.piece("-"),
+            BinOp::Mul => self.piece("*"),
+            BinOp::Div => self.piece("/"),
+            BinOp::FloorDiv => self.piece("//"),
+            BinOp::Mod => self.piece("%"),
+            BinOp::Pow => self.piece("^"),
+            BinOp::Concat => self.piece(".."),
+            BinOp::Eq => self.piece("=="),
+            BinOp::Ne => self.piece("~="),
+            BinOp::Lt => self.piece("<"),
+            BinOp::Le => self.piece("<="),
+            BinOp::Gt => self.piece(">"),
+            BinOp::Ge => self.piece(">="),
+            BinOp::And => self.piece("and"),
+            BinOp::Or => self.piece("or"),
+        }
+    }
+
     fn print_unary_op(&mut self, unary_op: &UnaryOp<'_>, slot: Slot) {
-        self.piece(unary_op.op.static_text());
+        match unary_op.op {
+            UnOp::Not => self.piece("not"),
+            UnOp::Neg => self.piece("-"),
+            UnOp::Len => self.piece("#"),
+        }
         self.print_expr(&unary_op.operand, slot.unary_operand());
     }
 
@@ -136,32 +166,6 @@ impl Printer {
         self.print_expr(&cast.expr, Slot::CAST_OPERAND);
         self.piece("::");
         self.print_type(&cast.ty);
-    }
-
-    /// An expression where nothing groups with it, as a list's items are,
-    /// where a name or a literal never needs the check `print_expr` makes.
-    #[expect(clippy::inline_always, reason = "see `print_expr`")]
-    #[inline(always)]
-    pub(super) fn print_free_expr(&mut self, expr: &Expression<'_>) {
-        match expr {
-            Expression::Name(name) => self.name(name.text.as_str()),
-            Expression::Number(literal) => self.print_number(literal),
-            Expression::StringLiteral(literal) => self.print_string(literal),
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => self.print_other_expr(expr, Slot::FREE),
-        }
     }
 
     pub(super) fn print_var(&mut self, var: &Var<'_>) {
@@ -209,7 +213,7 @@ impl Printer {
         match function_args {
             FunctionArgs::Parenthesized { args, .. } => {
                 self.piece("(");
-                self.list(args, ",", Self::print_free_expr);
+                self.list(args, Self::print_free_expr);
                 self.piece(")");
             }
             FunctionArgs::TableConstructor(table) => self.print_table(table),
@@ -221,7 +225,7 @@ impl Printer {
     /// A trailing separator changes nothing, so it's dropped.
     fn print_table(&mut self, table: &TableConstructor<'_>) {
         self.piece("{");
-        self.list(&table.fields, ",", Self::print_field);
+        self.list(&table.fields, Self::print_field);
         self.piece("}");
     }
 

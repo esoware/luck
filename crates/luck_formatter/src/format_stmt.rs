@@ -97,9 +97,10 @@ impl<'ast> Formatter<'ast> {
         self.group(|grouped| {
             grouped.token("return");
             grouped.space();
-            grouped.write_after_operator(first.span().start, |f| {
-                f.write_expr_list(&return_stmt.exprs);
-            });
+            grouped.write_after_operator(
+                |_| first.span().start,
+                |f| f.write_expr_list(&return_stmt.exprs),
+            );
         });
     }
 
@@ -137,7 +138,7 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) fn write_conditional_binding(&mut self, binding: &ConditionalBinding<'ast>) {
         self.node(
-            || binding.span,
+            |_| binding.span,
             |f| {
                 f.token(if binding.is_const { "const" } else { "local" });
                 f.space();
@@ -159,9 +160,9 @@ impl<'ast> Formatter<'ast> {
         if self.comments().has_comment_outside(outer, iter::once(unwrapped.span())) {
             self.write_expr(condition);
         } else if let Expression::BinaryOp(chain) = unwrapped {
-            self.node(|| outer, |f| f.write_binary_chain(chain, indent, Slot::FREE));
+            self.node(|_| outer, |f| f.write_binary_chain(chain, indent, Slot::FREE));
         } else {
-            self.node(|| outer, |f| f.write_bare_expr(unwrapped, Slot::FREE));
+            self.node(|_| outer, |f| f.write_bare_expr(unwrapped, Slot::FREE));
         }
     }
 
@@ -169,8 +170,12 @@ impl<'ast> Formatter<'ast> {
     /// `in`, on the next line, one indent deeper, when a comment leading it
     /// ends its line, as Prettier breaks an assignment after its `=`. The
     /// printer trims the space written before it from the line's end.
-    pub(crate) fn write_after_operator(&mut self, start: u32, content: impl FnOnce(&mut Self)) {
-        if self.comments().has_line_ending_comment_before(start) {
+    pub(crate) fn write_after_operator(
+        &mut self,
+        start: impl FnOnce(&Self) -> u32,
+        content: impl FnOnce(&mut Self),
+    ) {
+        if self.has_line_ending_comment_before(start) {
             self.indent(|f| {
                 f.hard_line();
                 content(f);
@@ -205,8 +210,7 @@ impl<'ast> Formatter<'ast> {
         if let Expression::FunctionDef(function_def) = value
             && !self.is_wrapped(value, Slot::FREE)
         {
-            let span = self.extent(value);
-            self.node(|| span, |f| f.write_function_definition(function_def));
+            self.node(|f| f.extent(value), |f| f.write_function_definition(function_def));
         } else {
             self.write_expr(value);
         }
@@ -233,13 +237,16 @@ impl<'ast> Formatter<'ast> {
                 write(f);
             }
         };
-        self.write_after_operator(self.extent(first).start, |f| {
-            if is_bracketed(values) {
-                write_list(f);
-            } else {
-                f.next_line_group(write_list);
-            }
-        });
+        self.write_after_operator(
+            |f| f.extent(first).start,
+            |f| {
+                if is_bracketed(values) {
+                    write_list(f);
+                } else {
+                    f.next_line_group(write_list);
+                }
+            },
+        );
     }
 
     fn write_local_assignment(&mut self, local: &LocalAssignment<'ast>) {
@@ -348,17 +355,20 @@ impl<'ast> Formatter<'ast> {
         self.space();
         self.token("=");
         self.space();
-        self.write_after_operator(numeric_for.start.span().start, |f| {
-            f.write_expr(&numeric_for.start);
-            f.token(",");
-            f.space();
-            f.write_expr(&numeric_for.limit);
-            if let Some(step) = &numeric_for.step {
+        self.write_after_operator(
+            |_| numeric_for.start.span().start,
+            |f| {
+                f.write_expr(&numeric_for.start);
                 f.token(",");
                 f.space();
-                f.write_expr(step);
-            }
-        });
+                f.write_expr(&numeric_for.limit);
+                if let Some(step) = &numeric_for.step {
+                    f.token(",");
+                    f.space();
+                    f.write_expr(step);
+                }
+            },
+        );
         self.space();
         self.token("do");
         self.write_body_then_end(&numeric_for.block);
@@ -379,9 +389,10 @@ impl<'ast> Formatter<'ast> {
         self.token("in");
         self.space();
         if let Some(first) = generic_for.exprs.first() {
-            self.write_after_operator(first.span().start, |f| {
-                f.write_expr_list(&generic_for.exprs);
-            });
+            self.write_after_operator(
+                |_| first.span().start,
+                |f| f.write_expr_list(&generic_for.exprs),
+            );
         }
         self.space();
         self.token("do");
@@ -407,7 +418,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_function_name(&mut self, name: &FunctionName<'ast>) {
         self.node(
-            || name.span,
+            |_| name.span,
             |f| {
                 for (i, part) in name.names.iter().enumerate() {
                     if i > 0 {
@@ -443,9 +454,10 @@ impl<'ast> Formatter<'ast> {
                 if matches!(annotation, Type::Union(_) | Type::Intersection(_)) {
                     self.write_type(annotation);
                 } else {
-                    self.write_after_operator(annotation.span().start, |f| {
-                        f.write_type(annotation);
-                    });
+                    self.write_after_operator(
+                        |_| annotation.span().start,
+                        |f| f.write_type(annotation),
+                    );
                 }
             }
             TypeDeclarationValue::TypeFunction(body) => {

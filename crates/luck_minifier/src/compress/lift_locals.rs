@@ -156,12 +156,10 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
             };
             let declared = scoping.symbol(symbol);
             if scoping.crosses_function_boundary(reference.scope, declared.scope)
-                && !self.captured.contains(symbol.index())
+                && self.captured.insert(symbol.index())
+                && let Some(captures) = self.name_captures.get_mut(declared.name.index())
             {
-                self.captured.insert(symbol.index());
-                if let Some(captures) = self.name_captures.get_mut(declared.name.index()) {
-                    *captures += 1;
-                }
+                *captures += 1;
             }
         }
     }

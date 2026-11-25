@@ -170,7 +170,12 @@ pub struct BinaryOp<'ast> {
 }
 
 /// An operator and the operand after it.
+///
+/// It's no node of its own: it spans exactly its operand, so a walk passes
+/// through it to the operand, which is the run's child as the first operand
+/// is.
 #[derive(Debug, PartialEq, Eq, Ast)]
+#[visit(no_kind)]
 pub struct BinaryLink<'ast> {
     pub op: BinOp,
     pub operand: Expression<'ast>,

@@ -73,25 +73,37 @@ impl Groupings {
     }
 
     /// Drops the entries of pairs the tree kept, and of all but the outermost
-    /// pair around one expression, which comes first. A parse that recovered
-    /// from an error can leave them out of order, which a sort settles.
+    /// pair around one expression, which comes first, in one pass that also
+    /// checks their order. A parse that recovered from an error can leave
+    /// them out of order, which a sort settles.
     pub(crate) fn finish(&mut self) {
-        self.0.retain(|grouping| !grouping.parens.is_empty());
-        self.0.dedup_by_key(|grouping| grouping.key());
-        if !self.0.is_sorted_by_key(Grouping::key) {
+        let mut last_key = None;
+        let mut is_sorted = true;
+        self.0.retain(|grouping| {
+            let key = Some(grouping.key());
+            let is_kept = !grouping.parens.is_empty() && key != last_key;
+            if is_kept {
+                is_sorted &= last_key < key;
+                last_key = key;
+            }
+            is_kept
+        });
+        if !is_sorted {
             self.0.sort_by_key(Grouping::key);
         }
     }
 }
 
 impl Grouping {
-    const fn key(&self) -> (u32, u32) {
+    const fn key(&self) -> u64 {
         key(self.expr)
     }
 }
 
-const fn key(expr: Span) -> (u32, u32) {
-    (expr.start, expr.end)
+/// `expr`'s start, then its end, as one integer, which orders the entries as
+/// the pair does and compares in one step.
+const fn key(expr: Span) -> u64 {
+    ((expr.start as u64) << u32::BITS) | expr.end as u64
 }
 
 #[cfg(test)]

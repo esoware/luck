@@ -38,8 +38,9 @@ impl<'a> ThinStr<'a> {
     #[must_use]
     #[inline]
     pub const fn as_str(self) -> &'a str {
-        // SAFETY: `new` took the bytes from a `&'a str`, and `from_ascii` and
-        // `AsciiBytes::new` checked they're ASCII.
+        // SAFETY: `new` took the bytes from a `&'a str`, `from_ascii` checked they're ASCII, and
+        // `TextBytes::text` checked they're ASCII, or a run of UTF-8 that starts and ends with an
+        // ASCII byte.
         unsafe { str::from_utf8_unchecked(self.bytes.as_bytes()) }
     }
 
@@ -50,24 +51,65 @@ impl<'a> ThinStr<'a> {
     }
 }
 
-/// Bytes checked once to be ASCII, as a whole source can be, so any range of
-/// them is text with no check of its own.
+/// Bytes checked once, as a whole source can be, so a range of them that starts and ends with an
+/// ASCII byte, as a name or a numeral does, reads as text with the least check of its own they
+/// allow: none when they're ASCII, its first and last bytes when they're UTF-8, and every byte of
+/// it otherwise.
 #[derive(Clone, Copy, Debug)]
-pub struct AsciiBytes<'a>(&'a [u8]);
+pub struct TextBytes<'a> {
+    bytes: &'a [u8],
+    encoding: Encoding,
+}
 
-impl<'a> AsciiBytes<'a> {
+/// What the bytes of a [`TextBytes`] were checked to be.
+#[derive(Clone, Copy, Debug)]
+enum Encoding {
+    Ascii,
+    Utf8,
+    /// Neither, so a range of them is text only when each of its bytes is ASCII.
+    Other,
+}
+
+impl<'a> TextBytes<'a> {
     #[must_use]
     #[inline]
-    pub fn new(bytes: &'a [u8]) -> Option<Self> {
-        bytes.is_ascii().then_some(Self(bytes))
+    pub fn new(bytes: &'a [u8]) -> Self {
+        // Checking for ASCII costs a fraction of validating UTF-8, and most sources are ASCII.
+        let encoding = if bytes.is_ascii() {
+            Encoding::Ascii
+        } else if str::from_utf8(bytes).is_ok() {
+            Encoding::Utf8
+        } else {
+            Encoding::Other
+        };
+        Self { bytes, encoding }
     }
 
-    /// Empty if `range` is out of the bytes.
+    /// `range` of the bytes as text, or `None` when it's out of them, or doesn't start and end
+    /// with an ASCII byte, or holds a byte that isn't ASCII in bytes that aren't UTF-8.
     #[must_use]
     #[inline]
-    pub fn text(self, range: Range<usize>) -> ThinStr<'a> {
-        ThinStr { bytes: ThinBytes::new(self.0.get(range).unwrap_or_default()) }
+    pub fn text(self, range: Range<usize>) -> Option<ThinStr<'a>> {
+        let bytes = self.bytes.get(range)?;
+        let is_text = match self.encoding {
+            Encoding::Ascii => true,
+            // In UTF-8, an ASCII byte is a whole character, so a run that starts and ends with
+            // one starts and ends between characters, and holds only whole ones.
+            Encoding::Utf8 => match (bytes.first(), bytes.last()) {
+                (Some(first), Some(last)) => (first | last).is_ascii(),
+                _ => true,
+            },
+            Encoding::Other => is_ascii_out_of_line(bytes),
+        };
+        is_text.then_some(ThinStr { bytes: ThinBytes::new(bytes) })
     }
+}
+
+/// [`is_ascii`] for bytes that are seldom checked this way, kept out of the callers of
+/// [`TextBytes::text`], which run on every name.
+#[inline(never)]
+fn is_ascii_out_of_line(bytes: &[u8]) -> bool {
+    is_ascii(bytes)
 }
 
 /// `[u8]::is_ascii`, but a slice of at most 16 bytes, as nearly every name

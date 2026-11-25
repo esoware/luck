@@ -115,6 +115,18 @@ const fn name_bytes(word: u64) -> u64 {
     (digits | letters | underscores) & !word & HIGH_BITS
 }
 
+/// Whether the first `count` bytes of `chunk`, 1 to 8, are all hex digits.
+#[inline]
+pub(crate) const fn are_hex_digits(chunk: [u8; 8], count: usize) -> bool {
+    let word = word(chunk);
+    let ascii = word & LOW_BITS;
+    let digits = bytes_in_range(ascii, 0x3030_3030_3030_3030, 0x3939_3939_3939_3939);
+    let folded = ascii | 0x2020_2020_2020_2020;
+    let letters = bytes_in_range(folded, 0x6161_6161_6161_6161, 0x6666_6666_6666_6666);
+    let wanted = HIGH_BITS & (u64::MAX >> (64 - 8 * count));
+    (digits | letters) & !word & wanted == wanted
+}
+
 /// How many bytes of name open `bytes`.
 #[inline]
 pub(crate) fn name_length(bytes: &[u8]) -> usize {
@@ -201,6 +213,27 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn are_hex_digits_checks_each_byte_it_counts_and_none_past_them() {
+        for count in 1..=8 {
+            for stop in 0..count {
+                for byte in 0..=u8::MAX {
+                    let mut chunk = [b'f'; 8];
+                    chunk[stop] = byte;
+                    chunk[count..].fill(b'g');
+                    assert_eq!(
+                        are_hex_digits(chunk, count),
+                        byte.is_ascii_hexdigit(),
+                        "{byte:#04x} at {stop} of {count}"
+                    );
+                }
+            }
+            let mut chunk = [0xFF; 8];
+            chunk[..count].fill(b'7');
+            assert!(are_hex_digits(chunk, count), "{count} digits, then bytes that aren't ASCII");
         }
     }
 

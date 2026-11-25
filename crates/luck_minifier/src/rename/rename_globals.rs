@@ -30,10 +30,9 @@ pub(super) fn renamable_globals(block: &Block<'_>, scoping: &Scoping) -> Vec<Nam
         reads.read_assignment(assignment);
         for target in &assignment.targets {
             if let Some(name) = target_global(target, scoping)
-                && !is_renamable.contains(name.index())
                 && !reads.has(name)
+                && is_renamable.insert(name.index())
             {
-                is_renamable.insert(name.index());
                 renamable.push(name);
             }
         }
@@ -95,8 +94,7 @@ fn function_globals(top_level: &[&Statement<'_>], scoping: &Scoping) -> Vec<Name
                     continue;
                 };
                 let is_read_first = reads.has(name) && !is_assigned_first.contains(name.index());
-                if !is_read_first && !is_taken.contains(name.index()) {
-                    is_taken.insert(name.index());
+                if !is_read_first && is_taken.insert(name.index()) {
                     function_globals.push(name);
                 }
             }

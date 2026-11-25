@@ -140,33 +140,29 @@ impl<'ast> Formatter<'ast> {
     /// A named or positional field spans from its name or value, and the
     /// parentheses the source grouped its value in.
     fn write_field(&mut self, field: &Field<'ast>) {
-        let span = match field {
-            Field::Named { name, value } => Span::new(name.span.start, self.extent(value).end),
-            Field::Positional(value) => self.extent(value),
+        let span = |f: &Self| match field {
+            Field::Named { name, value } => Span::new(name.span.start, f.extent(value).end),
+            Field::Positional(value) => f.extent(value),
             Field::Bracketed { span, .. } => *span,
         };
-        self.node(
-            || span,
-            |f| match field {
-                Field::Named { name, value } => {
-                    f.name(*name);
-                    f.space();
-                    f.token("=");
-                    f.space();
-                    f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
-                }
-                Field::Bracketed { key, value, .. } => {
-                    let closer =
-                        f.comments().closer_offset(f.extent(key).end, TokenKind::RightBracket);
-                    f.write_bracketed_key(key, closer);
-                    f.space();
-                    f.token("=");
-                    f.space();
-                    f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
-                }
-                Field::Positional(value) => f.write_expr(value),
-            },
-        );
+        self.node(span, |f| match field {
+            Field::Named { name, value } => {
+                f.name(*name);
+                f.space();
+                f.token("=");
+                f.space();
+                f.write_after_operator(|f| f.extent(value).start, |inner| inner.write_expr(value));
+            }
+            Field::Bracketed { key, value, .. } => {
+                let closer = f.closer_offset(f.extent(key).end, TokenKind::RightBracket);
+                f.write_bracketed_key(key, closer);
+                f.space();
+                f.token("=");
+                f.space();
+                f.write_after_operator(|f| f.extent(value).start, |inner| inner.write_expr(value));
+            }
+            Field::Positional(value) => f.write_expr(value),
+        });
     }
 }
 

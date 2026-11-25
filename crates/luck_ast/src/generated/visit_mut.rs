@@ -479,10 +479,7 @@ pub trait VisitMut<'ast> {
 
     #[inline]
     fn walk_binary_link(&mut self, binary_link: &mut BinaryLink<'ast>) {
-        let kind = AstType::BinaryLink;
-        self.enter_node(kind);
         self.visit_expr(&mut binary_link.operand);
-        self.leave_node(kind);
     }
 
     #[inline]

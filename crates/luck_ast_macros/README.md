@@ -3,6 +3,7 @@
 `#[derive(Ast)]`, which marks a type as part of `luck_ast`'s syntax tree and generates nothing. `luck_ast_tools` reads the marked types and writes the tree's support code from them, and the derive lets the types carry the tool's attributes:
 
 - `#[visit(level)]` on a type makes its walk one level of nesting, and on a field makes visiting that field one.
+- `#[visit(no_kind)]` on a struct makes it no node of its own, with no `AstKind`, for a struct that spans exactly what it holds.
 - `#[content_eq(skip)]` on a field leaves it out of `ContentEq`, for a field that records only how the source was written.
 
 ```rust,ignore

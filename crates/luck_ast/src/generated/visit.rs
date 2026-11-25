@@ -16,11 +16,12 @@ use crate::{
 
 /// A walk over a tree that borrows it.
 ///
-/// Each `visit_*` hook defaults to its `walk_*`, which enters the node,
-/// visits what it holds in source order, and leaves it. Override the hooks
-/// you need and call `self.walk_*` from them to keep recursing. The
-/// `walk_*` methods are the default recursion, so overriding one instead
-/// of its hook would leave nothing to fall back on.
+/// Each `visit_*` hook defaults to its `walk_*`, which visits what the
+/// value holds in source order, after entering it and before leaving it
+/// when it's a node. Override the hooks you need and call `self.walk_*`
+/// from them to keep recursing. The `walk_*` methods are the default
+/// recursion, so overriding one instead of its hook would leave nothing to
+/// fall back on.
 ///
 /// Every node comes with the tree's own lifetime, so a visitor can keep
 /// the references it's handed. A tree lent for less than its arena's
@@ -481,10 +482,7 @@ pub trait Visit<'ast> {
 
     #[inline]
     fn walk_binary_link(&mut self, binary_link: &'ast BinaryLink<'ast>) {
-        let kind = AstKind::BinaryLink(binary_link);
-        self.enter_node(kind);
         self.visit_expr(&binary_link.operand);
-        self.leave_node(kind);
     }
 
     #[inline]

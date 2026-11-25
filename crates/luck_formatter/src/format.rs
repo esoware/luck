@@ -1,10 +1,10 @@
 use std::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, GetSpan as _, MAX_NESTING_DEPTH, Statement, block_nesting_depth};
 use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{Span, is_luau_whitespace};
+use luck_token::{Span, index_to_offset, is_luau_whitespace};
 
 use crate::comments::Comments;
 use crate::format_block::{first_item_start, format_selection};
@@ -26,14 +26,18 @@ fn print_chunk<'ast>(
     groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
 ) -> Vec<u8> {
-    let mut f = Formatter::new(allocator, *options, comments, groupings);
+    let printed = comments
+        .source_text()
+        .map_or(Span::new(0, 0), |source| Span::new(0, index_to_offset(source.len())));
+    let room = comments.room(printed, chunk.stmts.iter().map(Statement::span));
+    let mut f = Formatter::new(allocator, *options, comments, groupings, b"", room);
     f.write_shebang();
     f.write_block(chunk);
     // Error statements print nothing, so a block holding only those must not
     // open a line before the trailing comment flush.
     let has_stmts = first_item_start(chunk).is_some();
     f.write_remaining_comments(has_stmts);
-    let mut output = f.print(b"");
+    let mut output = f.finish();
 
     let trimmed_length =
         output.iter().rposition(|&b| !is_luau_whitespace(b)).map_or(0, |last| last + 1);

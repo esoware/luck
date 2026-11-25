@@ -74,8 +74,10 @@ fn mergeable<'ast>(
     // or global `a`.
     let tree = context.scoping();
     let reads_first = tree.symbol_of(first.name).is_some_and(|symbol| {
-        tree.references_within(second.initializer)
-            .any(|id| tree.reference(id).resolved == Some(symbol))
+        tree.resolved_references(symbol).iter().any(|&id| {
+            let span = tree.reference(id).span;
+            second.initializer.start <= span.start && span.end <= second.initializer.end
+        })
     });
     (!reads_first).then_some((first, second))
 }

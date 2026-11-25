@@ -1167,7 +1167,6 @@ dependencies = [
  "luck_parser",
  "luck_testgen",
  "luck_token",
- "rustc-hash",
 ]
 
 [[package]]
@@ -1218,6 +1217,7 @@ dependencies = [
  "luck_allocator",
  "luck_ast",
  "luck_parser",
+ "luck_testgen",
  "luck_token",
 ]
 

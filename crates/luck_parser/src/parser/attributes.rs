@@ -92,7 +92,7 @@ impl<'ast> Parser<'ast> {
                     let groupings_start = self.groupings.len();
                     let args = self.parse_attribute_args(groupings_start);
                     self.validate_function_attribute(name, args.as_deref(), start, groupings_start);
-                    let span = Span::new(at_span.start, self.previous_span.end);
+                    let span = Span::new(at_span.start, self.previous_end);
                     let attribute = FunctionAttribute::new(span, name, args);
                     self.scratch.attributes.push(attribute);
                     if !self.eat(TokenKind::Comma) {

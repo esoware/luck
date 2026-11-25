@@ -5,6 +5,10 @@ use quickcheck::{Arbitrary, Gen};
 
 use crate::common::{check, panic_message};
 
+/// The least alignment the arena gives an allocation, so a cursor that starts at a multiple of it
+/// stays at one.
+const MIN_ALIGN: usize = 8;
+
 /// One, two, or four `T`s or `U`s, allocated together.
 #[derive(Clone, Debug)]
 enum Elements<T, U> {
@@ -142,7 +146,8 @@ fn capacity_covers_every_byte_allocated() {
     check::<fn(Vec<usize>)>(property);
 }
 
-/// Bytes need no alignment, so the bytes used are exactly the bytes allocated.
+/// Every allocation starts at a multiple of 8, so the bytes used are the bytes allocated, each run
+/// of them rounded up to a multiple of 8.
 #[test]
 fn used_bytes_count_every_byte_allocated() {
     fn property(lengths: Vec<usize>) {
@@ -151,7 +156,7 @@ fn used_bytes_count_every_byte_allocated() {
         for length in lengths {
             let count = length % 512;
             allocator.alloc_slice_copy(&vec![0_u8; count]);
-            total += count;
+            total += count.next_multiple_of(MIN_ALIGN);
             assert_eq!(allocator.used_bytes(), total);
             assert!(allocator.used_bytes() <= allocator.capacity());
         }
@@ -161,8 +166,8 @@ fn used_bytes_count_every_byte_allocated() {
     check::<fn(Vec<usize>)>(property);
 }
 
-/// Allocations that share an alignment and whose sizes are multiples of it fill each chunk with
-/// no padding, so the bytes used are exactly their sizes.
+/// Allocations that share an alignment and whose sizes are multiples of it and of 8 fill each
+/// chunk with no padding, so the bytes used are exactly their sizes.
 #[test]
 fn allocations_of_one_alignment_take_no_padding() {
     #[expect(
@@ -174,7 +179,7 @@ fn allocations_of_one_alignment_take_no_padding() {
             let allocator = Allocator::with_capacity(513);
             let mut total = 0;
             for case in &sizes {
-                let size = (case % 10) * alignment;
+                let size = (case % 10) * max(alignment, MIN_ALIGN);
                 let ptr = allocator.alloc_layout(Layout::from_size_align(size, alignment).unwrap());
                 assert!(ptr.as_ptr().addr().is_multiple_of(alignment));
                 total += size;
@@ -185,6 +190,8 @@ fn allocations_of_one_alignment_take_no_padding() {
     check::<fn(Vec<usize>)>(property);
 }
 
+/// Every allocation starts at a multiple of 8, so those of no size and an alignment of at most 8
+/// take no room at all, even after a byte.
 #[test]
 fn zero_sized_allocations_take_only_their_alignment_padding() {
     struct ZeroSized;
@@ -195,10 +202,9 @@ fn zero_sized_allocations_take_only_their_alignment_padding() {
     allocator.alloc_layout(Layout::array::<String>(0).unwrap());
     allocator.alloc_layout(Layout::array::<u64>(0).unwrap());
     let zero_sized = ptr::from_mut(allocator.alloc(ZeroSized)).addr();
-    let alignment = max(align_of::<u64>(), align_of::<String>());
-    assert_eq!(byte & !(alignment - 1), zero_sized);
+    assert_eq!(byte, zero_sized);
     let next_byte = allocator.alloc_layout(Layout::new::<u8>()).as_ptr().addr();
-    assert_eq!(zero_sized, next_byte + 1);
+    assert_eq!(zero_sized, next_byte + MIN_ALIGN);
 }
 
 /// No `Layout` can always wrap the cursor below address 0 on a 32-bit target, where the heap may
@@ -260,15 +266,17 @@ fn alloc_slice_copy_copies_every_item() {
     assert_eq!(allocator.alloc_slice_copy(items), items);
 }
 
+/// A value narrower than 8 bytes takes 8, and no wider one takes any padding.
 #[test]
-fn with_capacity_holds_values_of_every_size_without_padding() {
+fn with_capacity_holds_values_of_every_size() {
     fn allocate_in_order<T: Copy + Debug + Eq>(values: &(impl Iterator<Item = T> + Clone)) {
         for capacity in [0, 1, 8, 11, 0x1000, 0x12345] {
             let allocator = Allocator::with_capacity(capacity);
             assert!(allocator.capacity() >= capacity);
             let allocated: Vec<&T> = values.clone().map(|value| &*allocator.alloc(value)).collect();
             assert!(values.clone().eq(allocated.iter().map(|&&value| value)));
-            assert_eq!(allocator.used_bytes(), allocated.len() * size_of::<T>(), "{capacity}");
+            let size = max(size_of::<T>(), MIN_ALIGN);
+            assert_eq!(allocator.used_bytes(), allocated.len() * size, "{capacity}");
         }
     }
     allocate_in_order(&(0_u8..255));
@@ -286,14 +294,14 @@ fn with_capacity_past_isize_max_runs_out_of_memory() {
     assert_eq!(message, "out of memory");
 }
 
-/// The `u32` lands 4 bytes below the two bytes, at a multiple of 4.
+/// Each value lands 8 bytes below the one before, at a multiple of 8, however narrow it is.
 #[test]
 fn used_bytes_count_alignment_padding() {
     let mut allocator = Allocator::with_capacity(64 * 1024);
     allocator.alloc(1_u8);
     allocator.alloc(2_u8);
     allocator.alloc(3_u32);
-    assert_eq!(allocator.used_bytes(), 8);
+    assert_eq!(allocator.used_bytes(), 3 * MIN_ALIGN);
     allocator.reset();
     assert_eq!(allocator.used_bytes(), 0);
 }

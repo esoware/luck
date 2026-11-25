@@ -54,9 +54,9 @@ impl<'ast> Formatter<'ast> {
     /// it may open with.
     pub(crate) fn write_type(&mut self, ty: &Type<'ast>) {
         if matches!(ty, Type::Union(_) | Type::Intersection(_)) {
-            self.node_placing_leading_comments(|| ty.span(), |f| f.write_type_content(ty));
+            self.node_placing_leading_comments(|_| ty.span(), |f| f.write_type_content(ty));
         } else {
-            self.node(|| ty.span(), |f| f.write_type_content(ty));
+            self.node(|_| ty.span(), |f| f.write_type_content(ty));
         }
     }
 
@@ -93,7 +93,7 @@ impl<'ast> Formatter<'ast> {
                     .as_ref()
                     .map_or(function.span.start, |generics| generics.span.end);
                 let last_end = function.params.last().map_or(open, |param| param.span().end);
-                let closer = self.comments().closer_offset(last_end, TokenKind::RightParen);
+                let closer = self.closer_offset(last_end, TokenKind::RightParen);
                 self.write_delimited(
                     ("(", ")"),
                     &function.params,
@@ -180,7 +180,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_type_field(&mut self, field: &TypeField<'ast>) {
         self.node(
-            || field.span(),
+            |_| field.span(),
             |f| match field {
                 TypeField::Named { access, name, value, .. } => {
                     // A `read`/`write` access modifier sits before the name.
@@ -198,8 +198,7 @@ impl<'ast> Formatter<'ast> {
                         f.token(modifier.as_str());
                         f.space();
                     }
-                    let closer =
-                        f.comments().closer_offset(key.span().end, TokenKind::RightBracket);
+                    let closer = f.closer_offset(key.span().end, TokenKind::RightBracket);
                     f.token("[");
                     f.write_type(key);
                     f.write_closing_comments(closer);
@@ -242,7 +241,7 @@ impl<'ast> Formatter<'ast> {
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     f.soft_line_or_space();
-                    f.write_hoisted_comments(item.span().start);
+                    f.write_hoisted_comments(|_| item.span().start);
                     f.token(op);
                     f.space();
                 }
@@ -277,10 +276,10 @@ impl<'ast> Formatter<'ast> {
     fn write_at_line_start(&mut self, ty: &Type<'ast>, should_lead: bool) {
         let placement = Placement::LineStart { should_lead };
         if let Type::Union(union) = ty {
-            self.node(|| union.span, |f| f.write_alternation(&union.types, "|", placement));
+            self.node(|_| union.span, |f| f.write_alternation(&union.types, "|", placement));
         } else if let Type::Intersection(intersection) = ty {
             self.node(
-                || intersection.span,
+                |_| intersection.span,
                 |f| {
                     f.write_alternation(&intersection.types, "&", placement);
                 },
@@ -296,7 +295,7 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) fn write_generic_type_list(&mut self, generics: &GenericTypeList<'ast>) {
         self.node(
-            || generics.span,
+            |_| generics.span,
             |f| {
                 let closer = generics.span.end;
                 f.write_delimited(
@@ -311,7 +310,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_generic_type_param(&mut self, param: &GenericTypeParam<'ast>) {
         self.node(
-            || param.span,
+            |_| param.span,
             |f| {
                 f.name(param.name);
                 // `T...` marks a generic pack parameter.
@@ -331,7 +330,7 @@ impl<'ast> Formatter<'ast> {
 
     fn write_function_type_param(&mut self, param: &FunctionTypeParam<'ast>) {
         self.node(
-            || param.span(),
+            |_| param.span(),
             |f| {
                 if let Some(name) = &param.name {
                     f.name(*name);

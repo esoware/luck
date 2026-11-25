@@ -53,6 +53,29 @@ define_index_id!(
     NameId
 );
 
+/// An id as the word a name's role packs it in.
+macro_rules! impl_raw_id {
+    ($name:ident) => {
+        impl $name {
+            /// `index + 1`, which is never 0.
+            pub(crate) const fn get(self) -> u32 {
+                self.0.get()
+            }
+
+            /// The id whose [`Self::get`] is `raw`, or `None` for 0.
+            pub(crate) const fn new(raw: u32) -> Option<Self> {
+                match std::num::NonZeroU32::new(raw) {
+                    Some(raw) => Some(Self(raw)),
+                    None => None,
+                }
+            }
+        }
+    };
+}
+
+impl_raw_id!(SymbolId);
+impl_raw_id!(ReferenceId);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -189,9 +189,26 @@ impl<'ast> Parser<'ast> {
         self.exit_depth();
         self.block_depth -= 1;
 
-        let stmts = List::split_off_in(&mut self.scratch.stmts, start, self.allocator);
-        let end_span = if stmts.is_empty() { start_span } else { self.previous_span };
-        Some(Block::new(start_span.merge(end_span), stmts))
+        // Most blocks hold one or two statements, which move to the arena as
+        // values.
+        let scratch = &mut self.scratch.stmts;
+        let count = scratch.len() - start;
+        let stmts = if count == 1
+            && let Some(only) = scratch.pop()
+        {
+            List::from_array_in([only], self.allocator)
+        } else if count == 2
+            && let Some(last) = scratch.pop()
+            && let Some(first) = scratch.pop()
+        {
+            List::from_array_in([first, last], self.allocator)
+        } else {
+            List::split_off_in(scratch, start, self.allocator)
+        };
+        // A statement reads at least one token, so the last read is in the
+        // block once it holds one.
+        let end = if stmts.is_empty() { start_span.end } else { self.previous_end };
+        Some(Block::new(Span::new(start_span.start, end), stmts))
     }
 
     /// A run of `;`, which does nothing, each an error but a first that
@@ -328,7 +345,7 @@ impl<'ast> Parser<'ast> {
             self.parse_expr_list()
         };
         self.eat(TokenKind::Semicolon);
-        let span = Span::new(return_span.start, self.previous_span.end);
+        let span = Span::new(return_span.start, self.previous_end);
         Statement::new_return(span, exprs, self.allocator)
     }
 
@@ -347,7 +364,7 @@ impl<'ast> Parser<'ast> {
         let binding_keyword = self.advance();
         let name = self.expect_identifier_recover();
         let typed_name = self.parse_typed_name(name);
-        let span = binding_keyword.merge(self.previous_span);
+        let span = Span::new(binding_keyword.start, self.previous_end);
         if self.is_at(TokenKind::Comma) {
             let local = if is_const { "const" } else { "local" };
             let comma = self.token.span;
@@ -498,7 +515,7 @@ impl<'ast> Parser<'ast> {
         };
         self.expect_closer(TokenKind::Until, Closer::BlockEnd, repeat_span);
         let condition = self.parse_expr(0);
-        let span = Span::new(repeat_span.start, self.previous_span.end);
+        let span = Span::new(repeat_span.start, self.previous_end);
         Statement::new_repeat_loop(span, block, condition, self.allocator)
     }
 
@@ -514,7 +531,7 @@ impl<'ast> Parser<'ast> {
             let target = self.ungrouped_target(expr, grouping);
             let value = self.parse_expr(0);
             let var = self.assignment_target(target);
-            let span = Span::new(start, self.previous_span.end);
+            let span = Span::new(start, self.previous_end);
             return Statement::new_compound_assignment(span, var, op, value, self.allocator);
         }
 
@@ -567,15 +584,24 @@ impl<'ast> Parser<'ast> {
 
         // Targets convert after the values parse, which decides how an
         // invalid target's error sorts among others at the same position.
-        let mut exprs = mem::take(&mut self.scratch.exprs);
-        let vars_start = self.scratch.vars.len();
-        for target in exprs.drain(targets_start..) {
+        // Most assignments have one target, which moves to the arena as a
+        // value.
+        let targets = if self.scratch.exprs.len() == targets_start + 1
+            && let Some(target) = self.scratch.exprs.pop()
+        {
             let var = self.assignment_target(target);
-            self.scratch.vars.push(var);
-        }
-        self.scratch.exprs = exprs;
-        let targets = List::split_off_in(&mut self.scratch.vars, vars_start, self.allocator);
-        let span = Span::new(start, self.previous_span.end);
+            List::from_array_in([var], self.allocator)
+        } else {
+            let mut exprs = mem::take(&mut self.scratch.exprs);
+            let vars_start = self.scratch.vars.len();
+            for target in exprs.drain(targets_start..) {
+                let var = self.assignment_target(target);
+                self.scratch.vars.push(var);
+            }
+            self.scratch.exprs = exprs;
+            List::split_off_in(&mut self.scratch.vars, vars_start, self.allocator)
+        };
+        let span = Span::new(start, self.previous_end);
         Statement::new_assignment(span, targets, values, self.allocator)
     }
 

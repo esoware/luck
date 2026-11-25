@@ -187,7 +187,10 @@ impl<'ast> Formatter<'ast> {
                     BlockItem::Stmt(_) | BlockItem::Verbatim { .. } => None,
                 };
                 match sortable {
-                    Some(require) => requires.push(require, item_start..self.mark()),
+                    Some(require) => {
+                        let elements = item_start..self.mark();
+                        requires.push(self, require, elements);
+                    }
                     None => requires.finish(self),
                 }
             }
@@ -317,6 +320,7 @@ impl<'ast> Formatter<'ast> {
             }
         };
         self.line_break(is_blank);
+        self.print_written();
         is_blank
     }
 
@@ -346,15 +350,17 @@ impl<'ast> Formatter<'ast> {
         }
         let checkpoint = self.checkpoint();
         self.write_item(item, end);
-        if self.comments().has_comment_in(start, end) {
-            self.restore(checkpoint);
-            let line_start = self
-                .comments()
-                .source_text()
-                .and_then(|source| own_line_start(source, start))
-                .unwrap_or(start);
-            self.write_exact(Span::new(line_start, end));
+        if !self.comments().has_comment_in(start, end) {
+            self.keep(checkpoint);
+            return;
         }
+        self.restore(checkpoint);
+        let line_start = self
+            .comments()
+            .source_text()
+            .and_then(|source| own_line_start(source, start))
+            .unwrap_or(start);
+        self.write_exact(Span::new(line_start, end));
     }
 
     fn write_exact(&mut self, span: Span) {
@@ -454,8 +460,11 @@ pub(crate) fn format_selection<'ast>(
     let mut comments = Comments::from_parse(parse);
     comments.restrict_to(Span::new(line_start, last_end));
 
-    let mut f = Formatter::new(allocator, *options, comments, Some(&parse.groupings));
+    let room = comments
+        .room(Span::new(line_start, last_end), items.clone().map(|item| item.span(groupings)));
+    let mut f =
+        Formatter::new(allocator, *options, comments, Some(&parse.groupings), base_indent, room);
     f.write_items(items);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
-    Some((Span::new(line_start, end), f.print(base_indent)))
+    Some((Span::new(line_start, end), f.finish()))
 }

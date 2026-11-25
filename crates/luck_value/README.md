@@ -4,7 +4,7 @@ Luau's value semantics over the syntax tree, which `luck_minifier` and `luck_lin
 
 ## Overview
 
-One analysis of what evaluating an expression does answers every question, so the answers agree. It assumes that every metamethod can run wherever Luau allows one and do anything, and that the environment can have a metatable. Reading a global indexes the environment, so it may run `__index`, and reading a local or an upvalue runs nothing. An operator is pure only on values whose types rule a metamethod and an error out, such as two numbers for `+`, and an index or a call never is.
+One analysis of what evaluating an expression does answers every question, so the answers agree. A question that settles on less stops once it has: a value at the first operand with none, since only `and`, `or`, `not`, and an if-expression read their operands' truthiness, and literalness at the first variable, `...`, table, closure, call, or index, and a test holds both to the whole analysis on every fixture. It assumes that every metamethod can run wherever Luau allows one and do anything, and that the environment can have a metatable. Reading a global indexes the environment, so it may run `__index`, and reading a local or an upvalue runs nothing. An operator is pure only on values whose types rule a metamethod and an error out, such as two numbers for `+`, and an index or a call never is.
 
 ## Usage
 

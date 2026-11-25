@@ -51,7 +51,7 @@ impl Printer {
         self.name(named.name.text.as_str());
         if let Some(generics) = &named.generics {
             self.piece("<");
-            self.list(&generics.args, ",", Self::print_type);
+            self.list(&generics.args, Self::print_type);
             self.piece(">");
         }
     }
@@ -64,7 +64,7 @@ impl Printer {
 
     fn print_table_type(&mut self, fields: &[TypeField<'_>]) {
         self.piece("{");
-        self.list(fields, ",", Self::print_type_field);
+        self.list(fields, Self::print_type_field);
         self.piece("}");
     }
 
@@ -73,7 +73,7 @@ impl Printer {
             self.print_generic_type_list(generics);
         }
         self.piece("(");
-        self.list(&function.params, ",", Self::print_function_type_param);
+        self.list(&function.params, Self::print_function_type_param);
         self.piece(")->");
         self.print_type(&function.return_type);
     }
@@ -87,7 +87,12 @@ impl Printer {
         if has_leading_operator {
             self.piece(operator);
         }
-        self.list(types, operator, Self::print_type);
+        for (index, ty) in types.iter().enumerate() {
+            if index != 0 {
+                self.piece(operator);
+            }
+            self.print_type(ty);
+        }
     }
 
     fn print_parenthesized_type(&mut self, ty: &Type<'_>) {
@@ -98,7 +103,7 @@ impl Printer {
 
     fn print_type_pack(&mut self, types: &[Type<'_>]) {
         self.piece("(");
-        self.list(types, ",", Self::print_type);
+        self.list(types, Self::print_type);
         self.piece(")");
     }
 
@@ -143,7 +148,7 @@ impl Printer {
 
     pub(super) fn print_generic_type_list(&mut self, generics: &GenericTypeList<'_>) {
         self.piece("<");
-        self.list(&generics.params, ",", Self::print_generic_type_param);
+        self.list(&generics.params, Self::print_generic_type_param);
         self.piece(">");
     }
 
@@ -160,7 +165,7 @@ impl Printer {
 
     pub(super) fn print_type_instantiation(&mut self, type_args: &TypeArgs<'_>) {
         self.piece("<<");
-        self.list(&type_args.args, ",", Self::print_type);
+        self.list(&type_args.args, Self::print_type);
         self.piece(">>");
     }
 }
