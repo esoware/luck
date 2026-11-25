@@ -39,13 +39,13 @@ fn a_problem_with_no_place_has_no_span() {
 /// on purpose.
 #[test]
 fn a_wrapped_help_joins_its_lines_with_single_spaces() {
-    let cycle = Diagnostic::w003(None, &["a.lua".to_owned(), "b.lua".to_owned()]);
+    let cycle = Diagnostic::w003(None, &["a.luau".to_owned(), "b.luau".to_owned()]);
     assert_eq!(
         cycle.help.as_deref(),
         Some(
             "\
-cycle: `a.lua` -> `b.lua`
-modules load lazily, so a cycle through a function body works, but one hit while a module is still loading fails at runtime, as it would without bundling"
+cycle: `a.luau` -> `b.luau`
+modules load lazily, so a cycle through a function body works, but requiring a module while it's still loading raises an error at runtime"
         )
     );
     let hot_comment = Diagnostic::w006(Span::new(0, 9), "--!strict");

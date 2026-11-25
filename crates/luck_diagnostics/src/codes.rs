@@ -169,8 +169,7 @@ impl Diagnostic {
         let cycle = quoted_paths.join(" -> ");
         Self::warning("W003", span, "circular dependency between modules").with_help(format!(
             "cycle: {cycle}\nmodules load lazily, so a cycle through a function body works, \
-             but one hit while a module is still loading fails at runtime, as it would \
-             without bundling"
+             but requiring a module while it's still loading raises an error at runtime"
         ))
     }
 

@@ -14,11 +14,20 @@ pub(crate) fn write_prelude(prefix: &str, has_export_runtime: bool, output: &mut
 ///
 /// Chunks receive no arguments and must return exactly one value
 /// (`Require/src/RequireImpl.cpp`, `CLI/src/ReplRequirer.cpp`).
+///
+/// A require of a module whose own chunk is on the calling thread's stack is
+/// a load-time cycle, which raises, as Roblox's "required recursively" does,
+/// where recursing would only overflow the stack. `{prefix}loading` marks a
+/// module from its first require until its chunk returns, so the stack is
+/// walked only for a marked one. The mark alone can't decide: a chunk that
+/// raised leaves it set and may be required again, and a chunk that yields
+/// leaves it set while another thread requires the module.
 fn write_loader(prefix: &str, output: &mut String) {
     let _ = write!(
         output,
         "local {prefix}modules={{}}\n\
          local {prefix}loaded={{}}\n\
+         local {prefix}loading={{}}\n\
          local function {prefix}result(...)\n\
          if select(\"#\",...)~=1 then\n\
          error(\"luck bundle: module must return a single value\",0)\n\
@@ -28,7 +37,21 @@ fn write_loader(prefix: &str, output: &mut String) {
          local function {prefix}require(id)\n\
          local value={prefix}loaded[id]\n\
          if value~=nil then return value end\n\
-         value={prefix}result({prefix}modules[id]())\n\
+         local chunk={prefix}modules[id]\n\
+         if {prefix}loading[id] then\n\
+         local level=2\n\
+         local caller=debug.info(level,\"f\")\n\
+         while caller do\n\
+         if caller==chunk then\n\
+         error(\"luck bundle: module #\"..id..\" was required recursively while it loads\",2)\n\
+         end\n\
+         level+=1\n\
+         caller=debug.info(level,\"f\")\n\
+         end\n\
+         end\n\
+         {prefix}loading[id]=true\n\
+         value={prefix}result(chunk())\n\
+         {prefix}loading[id]=nil\n\
          {prefix}loaded[id]=value\n\
          return value\n\
          end\n"

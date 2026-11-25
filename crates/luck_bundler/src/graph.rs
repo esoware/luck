@@ -176,8 +176,8 @@ fn warn_inert_hot_comments(
 /// The loader doesn't depend on registration order, so a cycle only warns
 /// (W003) and falls back to discovery order.
 ///
-/// A deferred cycle works as in real Luau, and a load-time cycle fails at
-/// runtime.
+/// A deferred cycle works as in real Luau, and the loader raises on a
+/// load-time one.
 fn topological_order(
     modules: &[ModuleInfo<'_>],
     warnings: &mut [Vec<Diagnostic>],

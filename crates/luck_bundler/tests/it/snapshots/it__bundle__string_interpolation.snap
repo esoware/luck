@@ -4,6 +4,7 @@ expression: output
 ---
 local __luck_modules={}
 local __luck_loaded={}
+local __luck_loading={}
 local function __luck_result(...)
 if select("#",...)~=1 then
 error("luck bundle: module must return a single value",0)
@@ -13,7 +14,21 @@ end
 local function __luck_require(id)
 local value=__luck_loaded[id]
 if value~=nil then return value end
-value=__luck_result(__luck_modules[id]())
+local chunk=__luck_modules[id]
+if __luck_loading[id] then
+local level=2
+local caller=debug.info(level,"f")
+while caller do
+if caller==chunk then
+error("luck bundle: module #"..id.." was required recursively while it loads",2)
+end
+level+=1
+caller=debug.info(level,"f")
+end
+end
+__luck_loading[id]=true
+value=__luck_result(chunk())
+__luck_loading[id]=nil
 __luck_loaded[id]=value
 return value
 end
