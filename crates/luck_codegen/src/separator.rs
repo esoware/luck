@@ -10,7 +10,7 @@
 use std::ops::BitOr;
 
 /// Classes, one bit each: the one a piece leaves, or the ones it merges with.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Classes(u8);
 
 impl Classes {
@@ -32,11 +32,13 @@ impl BitOr for Classes {
 pub(crate) const OTHER: Classes = Classes(0);
 /// A keyword or a name.
 pub(crate) const WORD: Classes = Classes(1);
-/// A numeral with no letter in it, which reads on through letters, digits,
-/// `_`, and `.`. One with a letter leaves [`WORD`].
+/// A numeral, which reads on through letters, digits, and `_`, and through
+/// `.` only before its first letter. Only a piece that starts with `.` asks
+/// which it is, so the printer reads its text then, and not before.
 pub(crate) const NUMBER: Classes = Classes(1 << 1);
 /// `..`, which a `.` extends to `...`, and the field `.`, which nothing that
-/// starts with one follows.
+/// starts with one follows. What merges with it is just what starts with
+/// `.`.
 pub(crate) const DOT_DOT: Classes = Classes(1 << 2);
 /// `-`, which another makes a comment.
 pub(crate) const MINUS: Classes = Classes(1 << 3);

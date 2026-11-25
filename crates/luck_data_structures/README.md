@@ -5,7 +5,7 @@ Data structures that luck's crates share and that know nothing of Luau, as `oxc_
 ## Usage
 
 - `CodeBuffer`: the output buffer `luck_codegen` and `luck_formatter` write into. It holds bytes, as a source is, so a printer copies a string or a comment that isn't UTF-8 as it was written, and it copies a short piece, as nearly every piece of code is, without a `memcpy` call.
-- `BitSet`: a fixed number of bits, one apiece, as `luck_minifier` marks the references a pass drops.
+- `BitSet`: a fixed number of bits, one apiece, as `luck_minifier` marks the references a pass drops. `insert` says whether the bit was clear, as `HashSet::insert` says whether a value is new, so a check and a set take one lookup.
 
 ```rust
 use luck_data_structures::CodeBuffer;

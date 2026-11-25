@@ -4,6 +4,7 @@ use luck_ast::{
     LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement,
     TypeDeclaration, TypeDeclarationValue, TypedName, WhileLoop,
 };
+use luck_token::CompoundOp;
 
 use super::Printer;
 
@@ -47,9 +48,9 @@ impl Printer {
     }
 
     fn print_assignment(&mut self, assignment: &Assignment<'_>) {
-        self.list(&assignment.targets, ",", Self::print_var);
+        self.list(&assignment.targets, Self::print_var);
         self.piece("=");
-        self.list(&assignment.values, ",", Self::print_free_expr);
+        self.list(&assignment.values, Self::print_free_expr);
     }
 
     fn print_do_block(&mut self, do_block: &DoBlock<'_>) {
@@ -109,20 +110,25 @@ impl Printer {
 
     fn print_generic_for(&mut self, generic_for: &GenericFor<'_>) {
         self.piece("for");
-        self.list(&generic_for.names, ",", Self::print_typed_name);
+        self.list(&generic_for.names, Self::print_typed_name);
         self.piece("in");
-        self.list(&generic_for.exprs, ",", Self::print_free_expr);
+        self.list(&generic_for.exprs, Self::print_free_expr);
         self.piece("do");
         self.print_block(&generic_for.block);
         self.piece("end");
     }
 
     fn print_function_decl(&mut self, declaration: &FunctionDecl<'_>) {
-        self.print_function_attributes(&declaration.attributes);
+        if !declaration.attributes.is_empty() {
+            self.print_function_attributes(&declaration.attributes);
+        }
         self.piece("function");
-        self.list(&declaration.name.names, ".", |printer, name| {
-            printer.name(name.text.as_str());
-        });
+        for (index, name) in declaration.name.names.iter().enumerate() {
+            if index != 0 {
+                self.piece(".");
+            }
+            self.name(name.text.as_str());
+        }
         if let Some(method) = &declaration.name.method {
             self.piece(":");
             self.name(method.text.as_str());
@@ -131,7 +137,9 @@ impl Printer {
     }
 
     fn print_local_function(&mut self, local_function: &LocalFunction<'_>) {
-        self.print_function_attributes(&local_function.attributes);
+        if !local_function.attributes.is_empty() {
+            self.print_function_attributes(&local_function.attributes);
+        }
         match local_function.kind {
             LocalFunctionKind::Local => self.piece("local function"),
             LocalFunctionKind::Const => self.piece("const function"),
@@ -148,21 +156,31 @@ impl Printer {
             LocalAssignmentKind::ExportLocal => self.piece("export local"),
             LocalAssignmentKind::ExportConst => self.piece("export const"),
         }
-        self.list(&local.names, ",", Self::print_typed_name);
+        self.list(&local.names, Self::print_typed_name);
         if !local.exprs.is_empty() {
             self.piece("=");
-            self.list(&local.exprs, ",", Self::print_free_expr);
+            self.list(&local.exprs, Self::print_free_expr);
         }
     }
 
     fn print_return(&mut self, exprs: &[Expression<'_>]) {
         self.piece("return");
-        self.list(exprs, ",", Self::print_free_expr);
+        self.list(exprs, Self::print_free_expr);
     }
 
+    /// Each operator prints as a constant piece, as a binary one does.
     fn print_compound_assignment(&mut self, compound: &CompoundAssignment<'_>) {
         self.print_var(&compound.var);
-        self.piece(compound.op.static_text());
+        match compound.op {
+            CompoundOp::Add => self.piece("+="),
+            CompoundOp::Sub => self.piece("-="),
+            CompoundOp::Mul => self.piece("*="),
+            CompoundOp::Div => self.piece("/="),
+            CompoundOp::FloorDiv => self.piece("//="),
+            CompoundOp::Mod => self.piece("%="),
+            CompoundOp::Pow => self.piece("^="),
+            CompoundOp::Concat => self.piece("..="),
+        }
         self.print_free_expr(&compound.expr);
     }
 
@@ -221,7 +239,7 @@ impl Printer {
                     self.print_free_expr(arg);
                 } else {
                     self.piece("(");
-                    self.list(args, ",", Self::print_free_expr);
+                    self.list(args, Self::print_free_expr);
                     self.piece(")");
                 }
                 self.piece("]");
@@ -237,7 +255,7 @@ impl Printer {
             self.print_generic_type_list(generics);
         }
         self.piece("(");
-        self.list(&body.params, ",", Self::print_typed_name);
+        self.list(&body.params, Self::print_typed_name);
         if let Some(vararg) = &body.vararg {
             if !body.params.is_empty() {
                 self.piece(",");
@@ -258,9 +276,11 @@ impl Printer {
     }
 }
 
+/// A name, as most prefixes are, never takes parentheses.
 fn starts_with_paren(stmt: &Statement<'_>) -> bool {
     stmt.leading_prefix().is_some_and(|prefix| {
-        matches!(prefix, Expression::Parenthesized(_)) || prefix.needs_parens(Slot::PREFIX)
+        !matches!(prefix, Expression::Name(_))
+            && (matches!(prefix, Expression::Parenthesized(_)) || prefix.needs_parens(Slot::PREFIX))
     })
 }
 

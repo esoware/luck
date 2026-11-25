@@ -4,7 +4,7 @@
 
 use luck_token::{BinOp, UnOp};
 
-use crate::expr::{BinaryOp, Expression};
+use crate::expr::{BinaryOp, Expression, TypeCast};
 use crate::types::Type;
 
 /// What a printer writes right after an expression, as far as reading the
@@ -38,7 +38,8 @@ pub struct Slot {
 
 impl Slot {
     /// Where nothing groups with the expression: a list item, a condition, a
-    /// key, a value, or anything inside a closer.
+    /// key, a value, or anything inside a closer. No expression needs
+    /// parentheses there.
     pub const FREE: Self = Self { level: 0, follower: Follower::Nothing };
     /// A chain's prefix, before its first suffix.
     pub const PREFIX: Self = Self { level: 0, follower: Follower::Suffix };
@@ -60,16 +61,66 @@ impl Slot {
     pub const fn unary_operand(self) -> Self {
         Self { level: UnOp::PRECEDENCE, follower: self.follower }
     }
+
+    /// Whether a literal, `...`, a function, a table, or an interpolated
+    /// string needs parentheses here, as [`Expression::needs_parens`] says.
+    ///
+    /// Each kind has a check of its own, so a printer that has matched an
+    /// expression's kind asks this slot about it without a second match,
+    /// and one that knows the slot, such as [`Slot::FREE`], asks nothing.
+    #[inline]
+    pub fn wraps_atom(self) -> bool {
+        self.follower == Follower::Suffix
+    }
+
+    /// Whether `run` needs parentheses here, as [`Slot::wraps_atom`] says of
+    /// an atom.
+    ///
+    /// A run is the operators read in a row, so one written as another's
+    /// operand at its own level reads back as part of it, and takes
+    /// parentheses even where its operators would group the same.
+    #[inline]
+    pub fn wraps_run(self, run: &BinaryOp<'_>) -> bool {
+        run.precedence().0 <= self.level
+            || matches!(self.follower, Follower::Cast | Follower::Suffix)
+    }
+
+    /// Whether a unary operator needs parentheses here, as
+    /// [`Slot::wraps_atom`] says of an atom. Its operand reads on through
+    /// `^`, the one operator that binds tighter, and through a cast.
+    #[inline]
+    pub fn wraps_unary(self) -> bool {
+        match self.follower {
+            Follower::Operator(op) => op.precedence().0 > UnOp::PRECEDENCE,
+            Follower::Cast | Follower::Suffix => true,
+            Follower::Nothing => false,
+        }
+    }
+
+    /// Whether an if expression needs parentheses here, as
+    /// [`Slot::wraps_atom`] says of an atom. Its `else` branch reads on
+    /// through whatever follows.
+    #[inline]
+    pub fn wraps_if(self) -> bool {
+        self.follower != Follower::Nothing
+    }
+
+    /// Whether `cast` needs parentheses here, as [`Slot::wraps_atom`] says of
+    /// an atom. A type that ends in a bare name reads on through `<` as its
+    /// generic arguments, and Luau rejects a cast of a cast.
+    #[inline]
+    pub fn wraps_cast(self, cast: &TypeCast<'_>) -> bool {
+        match self.follower {
+            Follower::Operator(op) => op == BinOp::Lt && ends_in_bare_name(&cast.ty),
+            Follower::Cast | Follower::Suffix => true,
+            Follower::Nothing => false,
+        }
+    }
 }
 
 impl Expression<'_> {
     /// Whether this expression, printed bare in `slot`, would read back as
-    /// something else.
-    ///
-    /// A run is the operators read in a row, so one written as another's
-    /// operand at its own level reads back as part of it, and takes
-    /// parentheses even where its operators would group the same. A
-    /// [`Expression::Parenthesized`] prints its own.
+    /// something else. A [`Expression::Parenthesized`] prints its own.
     pub fn needs_parens(&self, slot: Slot) -> bool {
         match self {
             Self::Name(_) | Self::Suffixed(_) | Self::Parenthesized(_) | Self::Error(_) => false,
@@ -81,27 +132,11 @@ impl Expression<'_> {
             | Self::VarArg(_)
             | Self::FunctionDef(_)
             | Self::TableConstructor(_)
-            | Self::InterpolatedString(_) => slot.follower == Follower::Suffix,
-            Self::BinaryOp(run) => {
-                run.precedence().0 <= slot.level
-                    || matches!(slot.follower, Follower::Cast | Follower::Suffix)
-            }
-            // The operand reads on through `^`, the one operator that binds
-            // tighter, and through a cast.
-            Self::UnaryOp(_) => match slot.follower {
-                Follower::Operator(op) => op.precedence().0 > UnOp::PRECEDENCE,
-                Follower::Cast | Follower::Suffix => true,
-                Follower::Nothing => false,
-            },
-            // The `else` branch reads on through whatever follows.
-            Self::IfExpression(_) => slot.follower != Follower::Nothing,
-            // A type that ends in a bare name reads on through `<` as its
-            // generic arguments, and Luau rejects a cast of a cast.
-            Self::TypeCast(cast) => match slot.follower {
-                Follower::Operator(op) => op == BinOp::Lt && ends_in_bare_name(&cast.ty),
-                Follower::Cast | Follower::Suffix => true,
-                Follower::Nothing => false,
-            },
+            | Self::InterpolatedString(_) => slot.wraps_atom(),
+            Self::BinaryOp(run) => slot.wraps_run(run),
+            Self::UnaryOp(_) => slot.wraps_unary(),
+            Self::IfExpression(_) => slot.wraps_if(),
+            Self::TypeCast(cast) => slot.wraps_cast(cast),
         }
     }
 }
@@ -237,6 +272,34 @@ mod tests {
         ] {
             let typed = synth.type_cast(synth.name_expr("a"), ty);
             assert_eq!(typed.needs_parens(before_less), is_wrapped, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn no_expression_takes_parentheses_where_nothing_groups_with_it() {
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
+        let name = || synth.name_expr("a");
+        let mut exprs = vec![
+            synth.nil(),
+            synth.number_f64(1.0),
+            synth.string("s"),
+            synth.vararg(),
+            synth.table([]),
+            synth.function_def(&[], synth.block([])),
+            name(),
+            synth.field(name(), "b"),
+            synth.single_value(synth.vararg()),
+            synth.unary_op(UnOp::Neg, name()),
+            synth.if_expr(name(), name(), [], name()),
+            synth.type_cast(name(), synth.ty_named("T")),
+        ];
+        exprs.extend(
+            [BinOp::Or, BinOp::Concat, BinOp::Pow]
+                .map(|op| fixture.unspliced_run(name(), op, name())),
+        );
+        for expr in exprs {
+            assert!(!expr.needs_parens(Slot::FREE), "{expr:?}");
         }
     }
 
