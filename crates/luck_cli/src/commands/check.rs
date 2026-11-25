@@ -114,14 +114,14 @@ mod tests {
 
     #[test]
     fn check_is_top_level_command_with_paths_and_config() {
-        let cli = Cli::try_parse_from(["luck", "check", "src", "main.lua", "-c", "luck.json"])
+        let cli = Cli::try_parse_from(["luck", "check", "src", "main.luau", "-c", "luck.json"])
             .expect("check parses");
         let Command::Check(CheckArgs { paths, config, no_error_on_unmatched_pattern }) =
             cli.command
         else {
             panic!("expected Command::Check");
         };
-        assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
+        assert_eq!(paths, vec!["src".to_owned(), "main.luau".to_owned()]);
         assert_eq!(config, Some(PathBuf::from("luck.json")));
         assert!(!no_error_on_unmatched_pattern);
     }
@@ -130,7 +130,7 @@ mod tests {
     fn an_unreadable_file_reports_e010() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
-        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+        let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let rendered = check_file(&Allocator::new(), &file).expect("an unread file fails");
 

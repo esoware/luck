@@ -150,8 +150,8 @@ fn assert_sorted(input: &str, expected: &str) {
 #[test]
 fn sort_requires_is_off_by_default() {
     let input = "\
-local zeta = require(\"zeta\")
-local alpha = require(\"alpha\")
+local zeta = require(\"./zeta\")
+local alpha = require(\"./alpha\")
 ";
     assert_format(input, input);
 }
@@ -174,14 +174,14 @@ local Zebra = require(script.Parent.Zebra)
 #[test]
 fn sort_requires_alphabetizes_consecutive() {
     let input = "\
-local zeta = require(\"zeta\")
-local alpha = require(\"alpha\")
-local mid = require(\"mid\")
+local zeta = require(\"./zeta\")
+local alpha = require(\"./alpha\")
+local mid = require(\"./mid\")
 ";
     let expected = "\
-local alpha = require(\"alpha\")
-local mid = require(\"mid\")
-local zeta = require(\"zeta\")
+local alpha = require(\"./alpha\")
+local mid = require(\"./mid\")
+local zeta = require(\"./zeta\")
 ";
     assert_sorted(input, expected);
 }
@@ -191,14 +191,14 @@ fn sort_requires_respects_blank_line_break() {
     // A blank line splits the run into two single requires, so nothing is
     // reordered.
     let input = "\
-local zeta = require(\"zeta\")
+local zeta = require(\"./zeta\")
 
-local alpha = require(\"alpha\")
+local alpha = require(\"./alpha\")
 ";
     let expected = "\
-local zeta = require(\"zeta\")
+local zeta = require(\"./zeta\")
 
-local alpha = require(\"alpha\")
+local alpha = require(\"./alpha\")
 ";
     assert_sorted(input, expected);
 }
@@ -208,14 +208,14 @@ fn sort_requires_keeps_a_header_comment_in_place() {
     assert_sorted(
         "\
 -- a header
-local zeta = require(\"zeta\")
-local alpha = require(\"alpha\")
+local zeta = require(\"./zeta\")
+local alpha = require(\"./alpha\")
 return alpha, zeta
 ",
         "\
 -- a header
-local alpha = require(\"alpha\")
-local zeta = require(\"zeta\")
+local alpha = require(\"./alpha\")
+local zeta = require(\"./zeta\")
 return alpha, zeta
 ",
     );
@@ -225,8 +225,8 @@ return alpha, zeta
 fn sort_requires_format_off_excluded() {
     let input = "\
 -- luck: format off
-local zeta = require(\"zeta\")
-local alpha = require(\"alpha\")
+local zeta = require(\"./zeta\")
+local alpha = require(\"./alpha\")
 -- luck: format on
 ";
     assert_sorted(input, input);
@@ -236,14 +236,14 @@ local alpha = require(\"alpha\")
 fn sort_requires_run_ends_at_another_stmt() {
     for input in [
         "\
-local zeta = require(\"zeta\")
+local zeta = require(\"./zeta\")
 local x = 1
-local alpha = require(\"alpha\")
+local alpha = require(\"./alpha\")
 ",
         "\
-local zeta = require(\"zeta\")
+local zeta = require(\"./zeta\")
 local a, b = 1, 2
-local alpha = require(\"alpha\")
+local alpha = require(\"./alpha\")
 ",
     ] {
         assert_sorted(input, input);
@@ -253,8 +253,8 @@ local alpha = require(\"alpha\")
 #[test]
 fn sort_requires_keeps_requires_that_may_have_side_effects() {
     let input = "\
-local zeta = require(\"zeta\")()
-local alpha = require(\"alpha\")()
+local zeta = require(\"./zeta\")()
+local alpha = require(\"./alpha\")()
 ";
     assert_sorted(input, input);
 }
@@ -263,12 +263,12 @@ local alpha = require(\"alpha\")()
 fn sort_requires_orders_get_service_with_requires() {
     assert_sorted(
         "\
-local zeta = require(\"zeta\")
+local zeta = require(\"./zeta\")
 local alpha = game:GetService(\"Players\")
 ",
         "\
 local alpha = game:GetService(\"Players\")
-local zeta = require(\"zeta\")
+local zeta = require(\"./zeta\")
 ",
     );
 }
@@ -318,14 +318,14 @@ local Apple = require(script.Apple)
 fn sort_requires_orders_a_run_in_a_function_body() {
     let input = "\
 local function f()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 ";
     let expected = "\
 local function f()
-\tlocal alpha = require(\"alpha\")
-\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"./alpha\")
+\tlocal zeta = require(\"./zeta\")
 end
 ";
     assert_sorted(input, expected);
@@ -335,80 +335,80 @@ end
 fn sort_requires_orders_only_blocks_a_statement_opens() {
     let input = "\
 local assigned = function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 reassigned = function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 describe(\"x\", function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 \tdo
-\t\tlocal zeta = require(\"zeta\")
-\t\tlocal alpha = require(\"alpha\")
+\t\tlocal zeta = require(\"./zeta\")
+\t\tlocal alpha = require(\"./alpha\")
 \tend
 end)
 local t = {
 \tf = function()
-\t\tlocal zeta = require(\"zeta\")
-\t\tlocal alpha = require(\"alpha\")
+\t\tlocal zeta = require(\"./zeta\")
+\t\tlocal alpha = require(\"./alpha\")
 \tend,
 }
 return function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 ";
     let expected = "\
 local assigned = function()
-\tlocal alpha = require(\"alpha\")
-\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"./alpha\")
+\tlocal zeta = require(\"./zeta\")
 end
 reassigned = function()
-\tlocal alpha = require(\"alpha\")
-\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"./alpha\")
+\tlocal zeta = require(\"./zeta\")
 end
 describe(\"x\", function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 \tdo
-\t\tlocal zeta = require(\"zeta\")
-\t\tlocal alpha = require(\"alpha\")
+\t\tlocal zeta = require(\"./zeta\")
+\t\tlocal alpha = require(\"./alpha\")
 \tend
 end)
 local t = {
 \tf = function()
-\t\tlocal zeta = require(\"zeta\")
-\t\tlocal alpha = require(\"alpha\")
+\t\tlocal zeta = require(\"./zeta\")
+\t\tlocal alpha = require(\"./alpha\")
 \tend,
 }
 return function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 ";
     assert_sorted(input, expected);
 
     let functions_input = "\
 type function f()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 x += function()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 ";
     let functions_expected = "\
 type function f()
-\tlocal zeta = require(\"zeta\")
-\tlocal alpha = require(\"alpha\")
+\tlocal zeta = require(\"./zeta\")
+\tlocal alpha = require(\"./alpha\")
 end
 x += function()
-\tlocal alpha = require(\"alpha\")
-\tlocal zeta = require(\"zeta\")
+\tlocal alpha = require(\"./alpha\")
+\tlocal zeta = require(\"./zeta\")
 end
 ";
     assert_sorted(functions_input, functions_expected);
@@ -418,12 +418,12 @@ end
 fn sort_requires_moves_trailing_comments_with_their_stmts() {
     assert_sorted(
         "\
-local zeta = require(\"zeta\") -- last
-local alpha = require(\"alpha\") --[[ first ]]
+local zeta = require(\"./zeta\") -- last
+local alpha = require(\"./alpha\") --[[ first ]]
 ",
         "\
-local alpha = require(\"alpha\") --[[ first ]]
-local zeta = require(\"zeta\") -- last
+local alpha = require(\"./alpha\") --[[ first ]]
+local zeta = require(\"./zeta\") -- last
 ",
     );
 }
@@ -431,27 +431,27 @@ local zeta = require(\"zeta\") -- last
 #[test]
 fn sort_requires_orders_stmts_sharing_a_source_line_as_the_lines_they_print() {
     assert_sorted(
-        "local zeta = require(\"zeta\") local alpha = require(\"alpha\")\n",
+        "local zeta = require(\"./zeta\") local alpha = require(\"./alpha\")\n",
         "\
-local alpha = require(\"alpha\")
-local zeta = require(\"zeta\")
+local alpha = require(\"./alpha\")
+local zeta = require(\"./zeta\")
 ",
     );
     assert_sorted(
         "\
-local zeta = require(\"zeta\") -- z
-local beta = require(\"beta\") local alpha = require(\"alpha\") --[[ a ]]
+local zeta = require(\"./zeta\") -- z
+local beta = require(\"./beta\") local alpha = require(\"./alpha\") --[[ a ]]
 do
-\tlocal y = require(\"y\");local x = require(\"x\")
+\tlocal y = require(\"./y\");local x = require(\"./x\")
 end
 ",
         "\
-local alpha = require(\"alpha\") --[[ a ]]
-local beta = require(\"beta\")
-local zeta = require(\"zeta\") -- z
+local alpha = require(\"./alpha\") --[[ a ]]
+local beta = require(\"./beta\")
+local zeta = require(\"./zeta\") -- z
 do
-\tlocal x = require(\"x\")
-\tlocal y = require(\"y\")
+\tlocal x = require(\"./x\")
+\tlocal y = require(\"./y\")
 end
 ",
     );
@@ -666,11 +666,11 @@ fn sort_requires_keeps_a_stmt_before_a_comment_at_eof() {
     // its comment.
     assert_sorted(
         "\
-local z = require(\"z\")
-local a = require(\"a\") -- note",
+local z = require(\"./z\")
+local a = require(\"./a\") -- note",
         "\
-local a = require(\"a\") -- note
-local z = require(\"z\")
+local a = require(\"./a\") -- note
+local z = require(\"./z\")
 ",
     );
 }
@@ -679,14 +679,14 @@ local z = require(\"z\")
 fn sort_requires_keeps_a_comment_between_requires() {
     assert_sorted(
         "\
-local b = require(\"b\")
+local b = require(\"./b\")
 ; -- important
-local a = require(\"a\")
+local a = require(\"./a\")
 ",
         "\
-local b = require(\"b\")
+local b = require(\"./b\")
 -- important
-local a = require(\"a\")
+local a = require(\"./a\")
 ",
     );
 }
@@ -695,13 +695,13 @@ local a = require(\"a\")
 fn sort_requires_keeps_a_multi_line_comment_between_requires() {
     assert_sorted(
         "\
-local z = require(\"z\") --[[
-]] local a = require(\"a\")
+local z = require(\"./z\") --[[
+]] local a = require(\"./a\")
 ",
         "\
-local z = require(\"z\") --[[
+local z = require(\"./z\") --[[
 ]]
-local a = require(\"a\")
+local a = require(\"./a\")
 ",
     );
 }
@@ -710,14 +710,14 @@ local a = require(\"a\")
 fn sort_requires_keeps_a_require_inside_the_block_opened_on_its_line() {
     assert_sorted(
         "\
-do local z = require(\"z\")
-local a = require(\"a\")
+do local z = require(\"./z\")
+local a = require(\"./a\")
 end
 ",
         "\
 do
-\tlocal a = require(\"a\")
-\tlocal z = require(\"z\")
+\tlocal a = require(\"./a\")
+\tlocal z = require(\"./z\")
 end
 ",
     );
@@ -728,13 +728,13 @@ fn sort_requires_keeps_the_end_closing_on_a_require_line() {
     assert_sorted(
         "\
 if x then
-local z = require(\"z\")
-local a = require(\"a\") end
+local z = require(\"./z\")
+local a = require(\"./a\") end
 ",
         "\
 if x then
-\tlocal a = require(\"a\")
-\tlocal z = require(\"z\")
+\tlocal a = require(\"./a\")
+\tlocal z = require(\"./z\")
 end
 ",
     );
@@ -743,7 +743,7 @@ end
 #[test]
 fn sort_requires_keeps_a_binding_before_the_get_service_that_uses_it() {
     let input = "\
-local zeta = require(\"z\")
+local zeta = require(\"./z\")
 local alpha = zeta:GetService(\"x\")
 ";
     assert_sorted(input, input);
@@ -752,8 +752,8 @@ local alpha = zeta:GetService(\"x\")
 #[test]
 fn sort_requires_keeps_a_shadowing_require_before_its_callers() {
     let input = "\
-local require = require(\"custom\")
-local a = require(\"a\")
+local require = require(\"./custom\")
+local a = require(\"./a\")
 ";
     assert_sorted(input, input);
 }
@@ -762,8 +762,8 @@ local a = require(\"a\")
 fn sort_requires_keeps_an_ignored_stmt_under_its_directive() {
     let input = "\
 -- luck: ignore
-local   z  = require(\"z\")
-local a = require(\"a\")
+local   z  = require(\"./z\")
+local a = require(\"./a\")
 ";
     assert_sorted(input, input);
 }

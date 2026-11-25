@@ -497,7 +497,7 @@ fn numeric_specials_roundtrip() {
 fn call_sugar_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let require = synth.call_string(synth.name_expr("require"), "module");
+    let require = synth.call_string(synth.name_expr("require"), "./module");
     let configure = synth
         .call_table(synth.name_expr("configure"), [FieldSpec::Named("debug", synth.boolean(true))]);
     let block = synth.block([synth.call_stmt(require), synth.call_stmt(configure)]);
@@ -505,7 +505,7 @@ fn call_sugar_roundtrips() {
         &fixture,
         block,
         "\
-require(\"module\")
+require(\"./module\")
 configure({ debug = true })
 ",
     );
@@ -739,14 +739,14 @@ fn long_string_carriage_return_roundtrips() {
 }
 
 #[test]
-fn a_field_named_goto_roundtrips() {
+fn a_field_named_by_a_contextual_keyword_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    // `goto` is a plain identifier, so the dot form is used and must survive
-    // a re-parse.
-    let access = synth.field_or_index(synth.name_expr("t"), "goto");
+    // A contextual keyword is a name after a dot, so the dot form is used and
+    // must survive a re-parse.
+    let access = synth.field_or_index(synth.name_expr("t"), "continue");
     let block = synth.block([synth.return_([access])]);
-    assert_format_block(&fixture, block, "return t.goto\n");
+    assert_format_block(&fixture, block, "return t.continue\n");
 }
 
 #[test]
@@ -846,7 +846,8 @@ fn sort_requires_orders_a_tree_built_in_code() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let require = |module| {
-        synth.local(&[module], [synth.call(synth.name_expr("require"), [synth.string(module)])])
+        let path = synth.string(&format!("./{module}"));
+        synth.local(&[module], [synth.call(synth.name_expr("require"), [path])])
     };
     let zeta = require("zeta");
     let trailing = SyntheticComment::trailing(&zeta, "last");
@@ -858,8 +859,8 @@ fn sort_requires_orders_a_tree_built_in_code() {
         Comments::synthetic([trailing]),
         &options,
         "\
-local alpha = require(\"alpha\")
-local zeta = require(\"zeta\") -- last
+local alpha = require(\"./alpha\")
+local zeta = require(\"./zeta\") -- last
 ",
     );
 }

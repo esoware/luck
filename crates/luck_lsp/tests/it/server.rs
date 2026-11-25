@@ -70,10 +70,10 @@ fn project_with_excluded_directory(directory: &Path) -> (Uri, Uri) {
     .expect("write luck.json");
     let generated = directory.join("gen");
     fs::create_dir_all(&generated).expect("mkdir gen");
-    let included_path = directory.join("kept.lua");
-    let excluded_path = generated.join("a.lua");
-    fs::write(&included_path, "local x = nil\n").expect("write kept.lua");
-    fs::write(&excluded_path, "local x = nil\n").expect("write gen/a.lua");
+    let included_path = directory.join("kept.luau");
+    let excluded_path = generated.join("a.luau");
+    fs::write(&included_path, "local x = nil\n").expect("write kept.luau");
+    fs::write(&excluded_path, "local x = nil\n").expect("write gen/a.luau");
     (
         Uri::from_file_path(&included_path).expect("file path URI"),
         Uri::from_file_path(&excluded_path).expect("file path URI"),
@@ -164,7 +164,7 @@ fn a_client_that_offers_utf8_gets_byte_columns() {
     let (mut client, encoding) =
         client_offering(&[PositionEncodingKind::UTF16, PositionEncodingKind::UTF8]);
     assert_eq!(encoding, Some(PositionEncodingKind::UTF8));
-    let uri = workspace_uri("utf8.lua");
+    let uri = workspace_uri("utf8.luau");
     // The crab is 4 bytes, so `target` starts at byte 23, UTF-16 unit 21.
     client.open(&uri, "local s = \"\u{1F980}\" local target = 1\nprint(s, target)\n");
     let prepared = client
@@ -181,7 +181,7 @@ fn a_client_that_offers_utf8_gets_byte_columns() {
 fn a_client_that_offers_only_utf32_gets_character_columns() {
     let (mut client, encoding) = client_offering(&[PositionEncodingKind::UTF32]);
     assert_eq!(encoding, Some(PositionEncodingKind::UTF32));
-    let uri = workspace_uri("utf32.lua");
+    let uri = workspace_uri("utf32.luau");
     // The crab is one character, so `target` starts at character 20.
     client.open(&uri, "local s = \"\u{1F980}\" local target = 1\nprint(s, target)\n");
     let prepared = client
@@ -196,7 +196,7 @@ fn a_client_that_offers_only_utf32_gets_character_columns() {
 #[test]
 fn formatting_normalizes_spacing() {
     let mut client = Client::start();
-    let uri = workspace_uri("ugly.lua");
+    let uri = workspace_uri("ugly.luau");
     // No spaces around `=`, extra spaces, and trailing whitespace.
     let ugly = "local x=1   \nlocal     y=2";
     client.open(&uri, ugly);
@@ -214,7 +214,7 @@ fn formatting_normalizes_spacing() {
 #[test]
 fn lint_runs_the_default_rules_without_config() {
     let mut client = Client::start();
-    let uri = workspace_uri("unused.lua");
+    let uri = workspace_uri("unused.luau");
     client.open(&uri, "local unused = 1\n");
 
     let diags = client.diagnostics(&uri, Some(1));
@@ -229,7 +229,7 @@ fn lint_runs_the_default_rules_without_config() {
 #[test]
 fn parse_errors_surface_without_config() {
     let mut client = Client::start();
-    let uri = workspace_uri("broken.lua");
+    let uri = workspace_uri("broken.luau");
     client.open(&uri, "local x =\n");
     assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "parse errors must surface");
 }
@@ -241,8 +241,8 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join("luck.json");
     fs::write(&config_path, "{\n  \"variant\": \"bogus\"\n}\n").expect("write luck.json");
-    let path = directory.path().join("main.lua");
-    fs::write(&path, "local unused = 1\n").expect("write main.lua");
+    let path = directory.path().join("main.luau");
+    fs::write(&path, "local unused = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
     let config_uri = Uri::from_file_path(&config_path).expect("file path URI");
 
@@ -277,9 +277,9 @@ fn a_symlink_takes_the_project_of_its_own_directory() {
     )
     .expect("write elsewhere/luck.json");
     let text = "local unused = 1\n";
-    let target = elsewhere.join("b.lua");
-    fs::write(&target, text).expect("write b.lua");
-    let link = directory.path().join("a.lua");
+    let target = elsewhere.join("b.luau");
+    fs::write(&target, text).expect("write b.luau");
+    let link = directory.path().join("a.luau");
     // Windows lets only an administrator or developer mode make one.
     if symlink_file(&target, &link).is_err() {
         return;
@@ -306,7 +306,7 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
     )
     .expect("write luck.json");
     fs::create_dir_all(directory.path().join("spec")).expect("mkdir spec");
-    let (source, spec) = (directory.path().join("a.lua"), directory.path().join("spec/a.lua"));
+    let (source, spec) = (directory.path().join("a.luau"), directory.path().join("spec/a.luau"));
     for path in [&source, &spec] {
         fs::write(path, "local unused = 1\n").expect("write source");
     }
@@ -333,8 +333,8 @@ fn a_change_to_an_extended_config_reloads_and_another_json_file_does_not() {
     fs::write(&base, "{}").expect("write base.json");
     fs::write(directory.path().join("luck.json"), r#"{ "extends": ["base.json"] }"#)
         .expect("write luck.json");
-    let path = directory.path().join("main.lua");
-    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let path = directory.path().join("main.luau");
+    fs::write(&path, "local count = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let mut client = Client::start();
@@ -356,7 +356,7 @@ fn range_formatting_preserves_out_of_range_content() {
     // The server sends one whole-document edit, so this checks that text
     // outside the range survives, not that the edit is narrowed.
     let mut client = Client::start();
-    let uri = workspace_uri("partial.lua");
+    let uri = workspace_uri("partial.luau");
     let source = "\
 local first=1
 local middle=2
@@ -391,7 +391,7 @@ local last=3
 #[test]
 fn formatting_unknown_document_returns_none() {
     let mut client = Client::start();
-    let result = client.request::<Formatting>(formatting_params(&workspace_uri("missing.lua")));
+    let result = client.request::<Formatting>(formatting_params(&workspace_uri("missing.luau")));
     assert!(result.is_none(), "formatting an unopened document should return None");
 }
 
@@ -423,7 +423,7 @@ fn exit_ends_the_server_while_its_request_to_the_client_is_unanswered() {
         ..ClientCapabilities::default()
     };
     let (mut client, _) = Client::start_with(capabilities);
-    let uri = workspace_uri("unanswered.lua");
+    let uri = workspace_uri("unanswered.luau");
     client.open(&uri, "local unused = 1\n");
     assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "the server works meanwhile");
     assert!(
@@ -438,7 +438,7 @@ fn exit_ends_the_server_while_its_request_to_the_client_is_unanswered() {
 fn requests_after_shutdown_are_refused() {
     let mut client = Client::start();
     client.request::<Shutdown>(());
-    let refused = client.request_result::<Formatting>(formatting_params(&workspace_uri("a.lua")));
+    let refused = client.request_result::<Formatting>(formatting_params(&workspace_uri("a.luau")));
     assert!(refused.is_err(), "{refused:?}");
     client.exit().expect("exit after shutdown is a clean end");
 }
@@ -446,7 +446,7 @@ fn requests_after_shutdown_are_refused() {
 #[test]
 fn a_cancelled_request_gets_exactly_one_answer() {
     let mut client = Client::start();
-    let uri = workspace_uri("cancelled.lua");
+    let uri = workspace_uri("cancelled.luau");
     client.open(&uri, "local value = 1\n");
     let id = client.send::<SemanticTokensFullRequest>(SemanticTokensParams {
         work_done_progress_params: WorkDoneProgressParams::default(),
@@ -468,7 +468,7 @@ fn a_cancelled_request_gets_exactly_one_answer() {
 #[test]
 fn hover_renders_stdlib_signature() {
     let mut client = Client::start();
-    let uri = workspace_uri("hover.lua");
+    let uri = workspace_uri("hover.luau");
     // Cursor on `format` in `string.format`.
     client.open(&uri, "local formatted = string.format(\"%d\", 1)\n");
 
@@ -496,7 +496,7 @@ fn hover_renders_stdlib_signature() {
 #[test]
 fn completion_lists_locals_and_stdlib_globals() {
     let mut client = Client::start();
-    let uri = workspace_uri("completion.lua");
+    let uri = workspace_uri("completion.luau");
     // A visible local plus a bare-identifier completion site inside a call.
     client.open(
         &uri,
@@ -530,7 +530,7 @@ print(m)
 #[test]
 fn signature_help_marks_active_parameter() {
     let mut client = Client::start();
-    let uri = workspace_uri("signature.lua");
+    let uri = workspace_uri("signature.luau");
     // Cursor lands on the second argument `5`, so parameter index 1 is active.
     client.open(&uri, "local x = string.format(\"a\", 5)\n");
 
@@ -556,7 +556,7 @@ fn signature_help_marks_active_parameter() {
 #[test]
 fn document_symbol_reports_named_function() {
     let mut client = Client::start();
-    let uri = workspace_uri("symbols.lua");
+    let uri = workspace_uri("symbols.luau");
     client.open(
         &uri,
         "\
@@ -572,7 +572,7 @@ end
 #[test]
 fn folding_range_covers_multiline_function() {
     let mut client = Client::start();
-    let uri = workspace_uri("folding.lua");
+    let uri = workspace_uri("folding.luau");
     client.open(
         &uri,
         "\
@@ -598,7 +598,7 @@ end
 #[test]
 fn document_highlight_finds_all_occurrences() {
     let mut client = Client::start();
-    let uri = workspace_uri("highlight.lua");
+    let uri = workspace_uri("highlight.luau");
     client.open(
         &uri,
         "\
@@ -625,7 +625,7 @@ count = count + 1
 #[test]
 fn selection_range_expands_from_identifier() {
     let mut client = Client::start();
-    let uri = workspace_uri("selection.lua");
+    let uri = workspace_uri("selection.luau");
     client.open(&uri, "local value = alpha.beta + 1\n");
 
     // Cursor on `beta` inside the `alpha.beta` field access.
@@ -675,7 +675,7 @@ fn semantic_tokens(client: &mut Client, uri: &Uri) -> Vec<ls_types::SemanticToke
 #[test]
 fn semantic_tokens_cover_every_identifier() {
     let mut client = Client::start();
-    let uri = workspace_uri("tokens.lua");
+    let uri = workspace_uri("tokens.luau");
     client.open(
         &uri,
         "\
@@ -692,7 +692,7 @@ local mine = my_helper(1)
 #[test]
 fn semantic_tokens_count_the_session_s_units() {
     let (mut client, _) = client_offering(&[PositionEncodingKind::UTF8]);
-    let uri = workspace_uri("wide_string.lua");
+    let uri = workspace_uri("wide_string.luau");
     client.open(&uri, "local s = \"\u{1F980}\" local target = 1\n");
     let tokens = semantic_tokens(&mut client, &uri);
     let starts: Vec<(u32, u32)> =
@@ -708,9 +708,9 @@ fn document_link_resolves_require_path() {
     // settings.
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     // A neighboring module the `require` should resolve to.
-    fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
-    let main_path = directory.path().join("main.lua");
-    fs::write(&main_path, "local foo = require(\"./foo\")\n").expect("write main.lua");
+    fs::write(directory.path().join("foo.luau"), "return {}\n").expect("write foo.luau");
+    let main_path = directory.path().join("main.luau");
+    fs::write(&main_path, "local foo = require(\"./foo\")\n").expect("write main.luau");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let mut client = Client::start();
@@ -724,8 +724,8 @@ fn document_link_resolves_require_path() {
     );
     let target = links[0].target.as_ref().expect("link should have a target");
     assert!(
-        target.path().as_str().ends_with("foo.lua"),
-        "link should resolve to foo.lua: {}",
+        target.path().as_str().ends_with("foo.luau"),
+        "link should resolve to foo.luau: {}",
         target.as_str()
     );
 }
@@ -736,17 +736,17 @@ fn document_link_resolves_require_path() {
 fn a_module_created_on_disk_links_once_the_watcher_reports_it() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
-    let main_path = directory.path().join("main.lua");
+    let main_path = directory.path().join("main.luau");
     let text = "local late = require(\"./late\")\n";
-    fs::write(&main_path, text).expect("write main.lua");
+    fs::write(&main_path, text).expect("write main.luau");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let mut client = Client::start();
     client.open(&uri, text);
-    assert!(document_links(&mut client, &uri).is_empty(), "`late.lua` doesn't exist yet");
+    assert!(document_links(&mut client, &uri).is_empty(), "`late.luau` doesn't exist yet");
 
-    let late = directory.path().join("late.lua");
-    fs::write(&late, "return {}\n").expect("write late.lua");
+    let late = directory.path().join("late.luau");
+    fs::write(&late, "return {}\n").expect("write late.luau");
     assert!(document_links(&mut client, &uri).is_empty(), "the resolver answers from its cache");
     client.file_changed(&late, FileChangeType::CREATED);
     let links = document_links(&mut client, &uri);
@@ -768,7 +768,7 @@ fn a_luaurc_change_reaches_the_project_s_resolver() {
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let mut client = Client::start();
-    client.open_as(&uri, "luau", source);
+    client.open(&uri, source);
     assert!(document_links(&mut client, &uri).is_empty(), "no alias `shared` yet");
 
     fs::write(&luaurc, json!({ "aliases": { "shared": "./shared" } }).to_string())
@@ -790,7 +790,7 @@ fn document_link_resolves_a_relative_require() {
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let mut client = Client::start();
-    client.open_as(&uri, "luau", source);
+    client.open(&uri, source);
     let links = document_links(&mut client, &uri);
     assert_eq!(links.len(), 1, "exactly one require link expected");
     let target = links[0].target.as_ref().expect("link should have a target");
@@ -822,7 +822,7 @@ fn document_link_resolves_an_alias_require() {
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let mut client = Client::start();
-    client.open_as(&uri, "luau", source);
+    client.open(&uri, source);
     let links = document_links(&mut client, &uri);
     assert_eq!(links.len(), 1, "exactly one require link expected");
     let target = links[0].target.as_ref().expect("link should have a target");
@@ -852,7 +852,7 @@ fn code_action_offers_lint_fix() {
         r#"{ "lint": { "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("write luck.json");
-    let file_path = directory.path().join("nilinit.lua");
+    let file_path = directory.path().join("nilinit.luau");
     fs::write(&file_path, "local x = nil\n").expect("write luau file");
     let uri = Uri::from_file_path(&file_path).expect("file path URI");
 
@@ -881,14 +881,14 @@ fn code_action_offers_lint_fix() {
 #[test]
 fn syntax_tree_request_dumps_ast() {
     let mut client = Client::start();
-    let uri = workspace_uri("tree.lua");
+    let uri = workspace_uri("tree.luau");
     client.open(&uri, "local x = 1\n");
     let dump = client.request::<SyntaxTree>(json!({ "textDocument": { "uri": uri.as_str() } }));
     assert!(
         dump.contains("LocalAssignment"),
         "the AST dump should contain the parsed statement node: {dump}"
     );
-    let unopened = workspace_uri("unopened.lua");
+    let unopened = workspace_uri("unopened.luau");
     let unopened_dump =
         client.request::<SyntaxTree>(json!({ "textDocument": { "uri": unopened.as_str() } }));
     assert_eq!(unopened_dump, "", "a document that isn't open has no tree");
@@ -902,7 +902,7 @@ fn syntax_tree_request_dumps_ast() {
 #[test]
 fn goto_definition_jumps_to_declaration() {
     let mut client = Client::start();
-    let uri = workspace_uri("definition.lua");
+    let uri = workspace_uri("definition.luau");
     client.open(
         &uri,
         "\
@@ -928,7 +928,7 @@ print(value)
 #[test]
 fn goto_definition_returns_none_for_a_global() {
     let mut client = Client::start();
-    let uri = workspace_uri("definition_global.lua");
+    let uri = workspace_uri("definition_global.luau");
     client.open(&uri, "print(1)\n");
 
     let response = client.request::<GotoDefinition>(GotoDefinitionParams {
@@ -942,7 +942,7 @@ fn goto_definition_returns_none_for_a_global() {
 #[test]
 fn references_are_scope_exact_for_shadowed_names() {
     let mut client = Client::start();
-    let uri = workspace_uri("references.lua");
+    let uri = workspace_uri("references.luau");
     client.open(
         &uri,
         "\
@@ -971,7 +971,7 @@ print(x)
 #[test]
 fn references_exclude_declaration_when_not_requested() {
     let mut client = Client::start();
-    let uri = workspace_uri("references_no_decl.lua");
+    let uri = workspace_uri("references_no_decl.luau");
     client.open(
         &uri,
         "\
@@ -990,7 +990,7 @@ count = count + 1
 #[test]
 fn prepare_rename_accepts_local_and_rejects_global() {
     let mut client = Client::start();
-    let uri = workspace_uri("prepare_rename.lua");
+    let uri = workspace_uri("prepare_rename.luau");
     client.open(
         &uri,
         "\
@@ -1014,7 +1014,7 @@ print(count)
 #[test]
 fn rename_updates_declaration_and_references() {
     let mut client = Client::start();
-    let uri = workspace_uri("rename.lua");
+    let uri = workspace_uri("rename.luau");
     client.open(
         &uri,
         "\
@@ -1039,7 +1039,7 @@ count = count + 1
 #[test]
 fn rename_rejects_keywords_used_names_and_builtins() {
     let mut client = Client::start();
-    let uri = workspace_uri("rename_reject.lua");
+    let uri = workspace_uri("rename_reject.luau");
     client.open(
         &uri,
         "\
@@ -1059,7 +1059,7 @@ local other = count
 #[test]
 fn prepare_rename_handles_utf16_offsets() {
     let mut client = Client::start();
-    let uri = workspace_uri("rename_utf16.lua");
+    let uri = workspace_uri("rename_utf16.luau");
     // The crab emoji is two UTF-16 units; positions after it require
     // real UTF-16 conversion, not byte arithmetic.
     client.open(
@@ -1096,8 +1096,8 @@ fn workspace_symbols(client: &mut Client, query: &str) -> Vec<ls_types::SymbolIn
 #[test]
 fn workspace_symbols_filter_across_open_documents() {
     let mut client = Client::start();
-    let first = workspace_uri("ws_first.lua");
-    let second = workspace_uri("ws_second.lua");
+    let first = workspace_uri("ws_first.luau");
+    let second = workspace_uri("ws_second.luau");
     client.open(
         &first,
         "\
@@ -1125,7 +1125,7 @@ teardown()
 #[test]
 fn semantic_tokens_range_returns_subset() {
     let mut client = Client::start();
-    let uri = workspace_uri("tokens_range.lua");
+    let uri = workspace_uri("tokens_range.luau");
     client.open(
         &uri,
         "\
@@ -1161,7 +1161,7 @@ print(3)
 #[test]
 fn completion_offers_collectgarbage_options_inside_the_string() {
     let mut client = Client::start();
-    let uri = workspace_uri("gc.lua");
+    let uri = workspace_uri("gc.luau");
     let text = "collectgarbage('c')";
     client.open(&uri, text);
 
@@ -1188,7 +1188,7 @@ fn completion_offers_collectgarbage_options_inside_the_string() {
 #[test]
 fn formatting_unparsable_file_warns_and_returns_none() {
     let mut client = Client::start();
-    let uri = workspace_uri("unparsable.lua");
+    let uri = workspace_uri("unparsable.luau");
     client.open(&uri, "local x =\n");
 
     let formatted = client.request::<Formatting>(formatting_params(&uri));
@@ -1213,7 +1213,7 @@ fn formatting_unparsable_file_warns_and_returns_none() {
 #[test]
 fn did_change_applies_multi_change_batch_with_shifted_ranges() {
     let mut client = Client::start();
-    let uri = workspace_uri("batch.lua");
+    let uri = workspace_uri("batch.luau");
     client.open(
         &uri,
         "\
@@ -1269,7 +1269,7 @@ local aa = 11"
 #[test]
 fn a_change_whose_range_does_not_fit_drops_the_document() {
     let mut client = Client::start();
-    let uri = workspace_uri("desync.lua");
+    let uri = workspace_uri("desync.luau");
     client.open(&uri, "local a = 1\n");
     let _opened = client.diagnostics(&uri, Some(1));
     client.change(
@@ -1294,10 +1294,10 @@ fn fix_all_workspace_collects_fixes_from_open_documents() {
         r#"{ "lint": { "categories": { "correctness": "off" }, "rules": { "redundant_nil_init": "warn" } } }"#,
     )
     .expect("write luck.json");
-    let fixable_path = directory.path().join("fixable.lua");
-    let clean_path = directory.path().join("clean.lua");
-    fs::write(&fixable_path, "local x = nil\n").expect("write fixable.lua");
-    fs::write(&clean_path, "return 1\n").expect("write clean.lua");
+    let fixable_path = directory.path().join("fixable.luau");
+    let clean_path = directory.path().join("clean.luau");
+    fs::write(&fixable_path, "local x = nil\n").expect("write fixable.luau");
+    fs::write(&clean_path, "return 1\n").expect("write clean.luau");
     let fixable = Uri::from_file_path(&fixable_path).expect("file path URI");
     let clean = Uri::from_file_path(&clean_path).expect("file path URI");
 
@@ -1318,7 +1318,7 @@ fn fix_all_workspace_collects_fixes_from_open_documents() {
 #[test]
 fn did_change_with_no_changes_stores_the_new_version() {
     let mut client = Client::start();
-    let uri = workspace_uri("empty_change.lua");
+    let uri = workspace_uri("empty_change.luau");
     client.open(&uri, "local a = 1\n");
     let _opened = client.diagnostics(&uri, Some(1));
 
@@ -1425,8 +1425,8 @@ fn vscode_windows_uri(path: &Path) -> Uri {
 fn a_vscode_windows_uri_finds_its_project_settings() {
     let directory = tempfile::tempdir().expect("tempdir");
     project_with_excluded_directory(directory.path());
-    let included = vscode_windows_uri(&directory.path().join("kept.lua"));
-    let excluded = vscode_windows_uri(&directory.path().join("gen").join("a.lua"));
+    let included = vscode_windows_uri(&directory.path().join("kept.luau"));
+    let excluded = vscode_windows_uri(&directory.path().join("gen").join("a.luau"));
 
     let mut client = Client::start();
     client.open(&included, "local x = nil\n");
@@ -1446,8 +1446,8 @@ fn rename_refuses_a_configured_extra_global() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(directory.path().join("luck.json"), r#"{ "lint": { "extra_globals": ["app"] } }"#)
         .expect("write luck.json");
-    let path = directory.path().join("main.lua");
-    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let path = directory.path().join("main.luau");
+    fs::write(&path, "local count = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let mut client = Client::start();
@@ -1463,8 +1463,8 @@ fn watched_config_change_reseeds_open_documents_with_extra_globals() {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join("luck.json");
     fs::write(&config_path, "{}").expect("write luck.json");
-    let path = directory.path().join("main.lua");
-    fs::write(&path, "local count = 1\n").expect("write main.lua");
+    let path = directory.path().join("main.luau");
+    fs::write(&path, "local count = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let mut client = Client::start();
@@ -1483,10 +1483,10 @@ fn a_std_definition_reaches_lints_and_hover_and_an_edit_to_it_reseeds_them() {
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
-[globals.app.members.graphics.members.print]
+[globals.app.members.net.members.send]
 kind = "function"
 params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
 "#;
@@ -1495,26 +1495,26 @@ params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
         .expect("write luck.json");
     let std_path = directory.path().join("app.toml");
     fs::write(&std_path, app).expect("write app.toml");
-    let path = directory.path().join("main.lua");
-    let text = "app.graphics.print('hello')\n";
-    fs::write(&path, text).expect("write main.lua");
+    let path = directory.path().join("main.luau");
+    let text = "app.net.send('hello')\n";
+    fs::write(&path, text).expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
     let mut client = Client::start();
     client.open(&uri, text);
     let diags = client.diagnostics(&uri, Some(1));
-    let arity = "`app.graphics.print` requires at least 3 argument(s), got 1";
+    let arity = "`app.net.send` requires at least 3 argument(s), got 1";
     assert!(diags.iter().any(|diag| diag.message == arity), "{diags:?}");
     let hover = client
         .request::<HoverRequest>(HoverParams {
-            text_document_position_params: position_params(&uri, 0, 16),
+            text_document_position_params: position_params(&uri, 0, 10),
             work_done_progress_params: WorkDoneProgressParams::default(),
         })
-        .expect("cursor on app.graphics.print should hover");
+        .expect("cursor on app.net.send should hover");
     let HoverContents::Markup(markup) = hover.contents else {
         panic!("hover should return markup contents");
     };
-    assert!(markup.value.contains("app.graphics.print"), "{}", markup.value);
+    assert!(markup.value.contains("app.net.send"), "{}", markup.value);
 
     fs::write(&std_path, app.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
         .expect("rewrite app.toml");
@@ -1526,7 +1526,7 @@ params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
 #[test]
 fn a_change_sent_right_after_the_open_is_not_lost() {
     let mut client = Client::start();
-    let uri = workspace_uri("quick.lua");
+    let uri = workspace_uri("quick.luau");
     client.open(&uri, "local before = 1\n");
     client.replace_all(&uri, 2, "local after = 2\n");
     assert_eq!(document_symbols(&mut client, &uri), ["after"]);
@@ -1535,7 +1535,7 @@ fn a_change_sent_right_after_the_open_is_not_lost() {
 #[test]
 fn a_close_leaves_no_diagnostics() {
     let mut client = Client::start();
-    let uri = workspace_uri("closed.lua");
+    let uri = workspace_uri("closed.luau");
     client.open(&uri, "local x =\n");
     client.replace_all(&uri, 2, "local y =\n");
     client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
@@ -1562,7 +1562,7 @@ fn a_close_leaves_no_diagnostics() {
 #[test]
 fn publishes_follow_the_versions_in_order() {
     let mut client = Client::start();
-    let uri = workspace_uri("versions.lua");
+    let uri = workspace_uri("versions.luau");
     client.open(&uri, "local one = 1\n");
     client.replace_all(&uri, 2, "local two = 2\n");
     client.replace_all(&uri, 3, "local three = 3\n");

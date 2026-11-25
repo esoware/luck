@@ -302,13 +302,13 @@ mod tests {
 kind = "property"
 shape = "DataModel"
 
-[globals.io]
+[globals.fs]
 kind = "namespace"
 
-[globals.io.members.open]
+[globals.fs.members.open]
 kind = "function"
 params = [{ kind = "string" }, { kind = "string", is_required = false }]
-returns = "file"
+returns = "File"
 
 [globals.string]
 kind = "namespace"
@@ -331,7 +331,7 @@ kind = "function"
 is_method = true
 params = [{ kind = "string" }, { kind = "bool", is_required = false }]
 
-[shapes.file.members.read]
+[shapes.File.members.read]
 kind = "function"
 is_method = true
 params = [{ kind = "vararg" }]
@@ -354,7 +354,7 @@ params = [{ kind = "vararg" }]
 
     #[test]
     fn local_from_shaped_call_gets_shape() {
-        assert_eq!(shape_of("local f = io.open('x')", "f").as_deref(), Some("file"));
+        assert_eq!(shape_of("local f = fs.open('x')", "f").as_deref(), Some("File"));
     }
 
     #[test]
@@ -375,7 +375,7 @@ local again = players:FindFirstChild('x')";
     #[test]
     fn reassigned_local_has_no_shape() {
         let source = "\
-local f = io.open('x')
+local f = fs.open('x')
 f = 1";
         assert_eq!(shape_of(source, "f"), None);
     }
@@ -402,7 +402,7 @@ local g = game";
 
     #[test]
     fn locals_without_one_value_each_have_no_shape() {
-        let source = "local a, b = io.open('x')";
+        let source = "local a, b = fs.open('x')";
         assert_eq!(shape_of(source, "a"), None);
         assert_eq!(shape_of(source, "b"), None);
     }

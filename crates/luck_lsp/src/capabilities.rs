@@ -108,7 +108,7 @@ pub(crate) fn watcher_registration() -> Request {
         "**/*.toml",
         "**/.editorconfig",
         "**/.luaurc",
-        "**/*.{lua,luau}",
+        "**/*.{luau,lua}",
     ]
     .map(|glob| FileSystemWatcher {
         glob_pattern: GlobPattern::String(glob.to_owned()),

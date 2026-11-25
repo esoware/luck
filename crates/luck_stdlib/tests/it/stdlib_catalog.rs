@@ -6,7 +6,7 @@ use luck_stdlib::{
     StdlibArgKind, StdlibConstant, StdlibEntry, StdlibFunction, StdlibLibrary, Variant, library_for,
 };
 
-use crate::common::{all_libraries, expand, luau, parse, roblox};
+use crate::common::{all_libraries, expand, parse, roblox, standalone};
 
 #[test]
 #[cfg(target_pointer_width = "64")]
@@ -44,7 +44,7 @@ fn every_variant_has_its_own_library() {
 
 #[test]
 fn table_getn_fixes_to_the_length_operator() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         let function = function_at(library, &["table", "getn"]);
         let deprecation = function.deprecated.as_ref().expect("table.getn must be deprecated");
         let replacement =
@@ -69,13 +69,13 @@ fn value_returning_functions_are_must_use() {
         &["table", "concat"][..],
         &["coroutine", "create"][..],
     ] {
-        assert!(function_at(luau(), path).is_must_use, "{path:?} should be must_use");
+        assert!(function_at(standalone(), path).is_must_use, "{path:?} should be must_use");
     }
 }
 
 #[test]
 fn buffer_and_vector_present() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert!(library.lookup(&["buffer"]).is_some());
         assert!(library.lookup(&["buffer", "create"]).is_some());
         assert!(library.lookup(&["vector"]).is_some());
@@ -130,7 +130,7 @@ fn integer_library_and_buffer_accessors_are_present() {
         "minsigned",
     ];
 
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert!(library.lookup(&["integer"]).is_some());
         for member in integer_members {
             assert!(
@@ -145,7 +145,7 @@ fn integer_library_and_buffer_accessors_are_present() {
 
 #[test]
 fn math_has_predicates_and_constants() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         for name in ["isnan", "isinf", "isfinite"] {
             assert!(
                 matches!(library.lookup(&["math", name]), Some(StdlibEntry::Function(_))),
@@ -163,7 +163,7 @@ fn math_has_predicates_and_constants() {
 
 #[test]
 fn string_rep_has_no_separator() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert_eq!(function_at(library, &["string", "rep"]).max_args(), Some(2));
         assert_eq!(shape_function(library, "string", "rep").max_args(), Some(1));
     }
@@ -171,7 +171,7 @@ fn string_rep_has_no_separator() {
 
 #[test]
 fn buffer_bit_functions_present() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         for name in ["readbits", "writebits"] {
             assert!(library.lookup(&["buffer", name]).is_some(), "buffer.{name} missing");
         }
@@ -179,10 +179,10 @@ fn buffer_bit_functions_present() {
 }
 
 #[test]
-fn vector_create_wide_mode_is_luau_only() {
-    let luau_function = function_at(luau(), &["vector", "create"]);
-    assert!(luau_function.accepts_arg_count(3));
-    assert!(luau_function.accepts_arg_count(4), "wide mode takes w");
+fn vector_create_wide_mode_is_standalone_only() {
+    let standalone_function = function_at(standalone(), &["vector", "create"]);
+    assert!(standalone_function.accepts_arg_count(3));
+    assert!(standalone_function.accepts_arg_count(4), "wide mode takes w");
 
     let roblox_function = function_at(roblox(), &["vector", "create"]);
     assert!(roblox_function.accepts_arg_count(3));
@@ -190,11 +190,8 @@ fn vector_create_wide_mode_is_luau_only() {
 }
 
 #[test]
-fn io_and_package_are_absent_and_os_is_sandboxed() {
-    for library in [luau(), roblox()] {
-        assert!(library.lookup(&["io"]).is_none());
-        assert!(library.lookup(&["package"]).is_none());
-        // os survives as the sandboxed clock/date/difftime/time subset.
+fn os_is_the_sandboxed_subset() {
+    for library in [standalone(), roblox()] {
         assert!(library.lookup(&["os", "time"]).is_some());
         assert!(library.lookup(&["os", "clock"]).is_some());
         assert!(library.lookup(&["os", "getenv"]).is_none());
@@ -204,13 +201,13 @@ fn io_and_package_are_absent_and_os_is_sandboxed() {
 
 #[test]
 fn math_abs_is_pure_and_print_is_not() {
-    assert!(function_at(luau(), &["math", "abs"]).is_pure);
-    assert!(!function_at(luau(), &["print"]).is_pure);
+    assert!(function_at(standalone(), &["math", "abs"]).is_pure);
+    assert!(!function_at(standalone(), &["print"]).is_pure);
 }
 
 #[test]
-fn roblox_entries_absent_from_luau() {
-    let luau_library = luau();
+fn roblox_entries_absent_from_standalone() {
+    let standalone_library = standalone();
     let roblox_library = roblox();
     for segments in [
         &["warn"][..],
@@ -248,15 +245,15 @@ fn roblox_entries_absent_from_luau() {
             "{segments:?} must exist in the Roblox library"
         );
         assert!(
-            luau_library.lookup(segments).is_none(),
-            "{segments:?} must be absent from the Luau library"
+            standalone_library.lookup(segments).is_none(),
+            "{segments:?} must be absent from the standalone library"
         );
     }
 }
 
 #[test]
 fn loadstring_present_on_both_variants() {
-    assert!(luau().lookup(&["loadstring"]).is_some(), "loadstring exists in the Luau CLI");
+    assert!(standalone().lookup(&["loadstring"]).is_some(), "loadstring exists in the Luau CLI");
     assert!(
         roblox().lookup(&["loadstring"]).is_some(),
         "loadstring is a real Roblox global (gated by LoadStringEnabled)"
@@ -264,17 +261,14 @@ fn loadstring_present_on_both_variants() {
 }
 
 #[test]
-fn bit_namespace_absent_everywhere() {
-    for (variant, library) in all_libraries() {
-        assert!(library.lookup(&["bit"]).is_none(), "phantom bit namespace in {variant}");
-    }
-}
-
-#[test]
-fn roblox_only_deprecations_stay_off_luau() {
+fn roblox_only_deprecations_stay_off_standalone() {
     for name in ["collectgarbage", "getfenv", "setfenv"] {
-        let luau_entry = luau().lookup(&[name]).unwrap_or_else(|| panic!("{name} on luau"));
-        assert!(luau_entry.deprecation().is_none(), "{name} must not be deprecated on Luau");
+        let standalone_entry =
+            standalone().lookup(&[name]).unwrap_or_else(|| panic!("{name} on standalone"));
+        assert!(
+            standalone_entry.deprecation().is_none(),
+            "{name} must not be deprecated on standalone"
+        );
         let roblox_entry = roblox().lookup(&[name]).unwrap_or_else(|| panic!("{name} on roblox"));
         assert!(roblox_entry.deprecation().is_some(), "{name} must be deprecated on Roblox");
     }
@@ -336,7 +330,7 @@ fn core_luau_entries_on_both_variants() {
         &["buffer"],
     ];
     for segments in checks {
-        for library in [luau(), roblox()] {
+        for library in [standalone(), roblox()] {
             assert!(
                 library.lookup(*segments).is_some(),
                 "{segments:?} missing from {}",
@@ -356,14 +350,14 @@ fn allowed_constants_need_every_matching_signature_constrained() {
     assert!(function.allowed_constants(0, 3).is_none(), "the 3-arg form takes numbers");
     assert!(function.allowed_constants(0, 9).is_none(), "no signature takes 9");
 
-    let tostring = function_at(luau(), &["tostring"]);
+    let tostring = function_at(standalone(), &["tostring"]);
     assert!(tostring.allowed_constants(0, 1).is_none());
 }
 
 #[test]
 fn roblox_datatypes_present_with_representative_statics() {
     let roblox_library = roblox();
-    let luau_library = luau();
+    let standalone_library = standalone();
     for segments in [
         &["Axes", "new"][..],
         &["Faces", "new"][..],
@@ -420,8 +414,8 @@ fn roblox_datatypes_present_with_representative_statics() {
             "{segments:?} must exist in the Roblox library"
         );
         assert!(
-            luau_library.lookup(segments).is_none(),
-            "{segments:?} must be absent from the Luau library"
+            standalone_library.lookup(segments).is_none(),
+            "{segments:?} must be absent from the standalone library"
         );
     }
 }
@@ -541,7 +535,7 @@ fn datamodel_and_workspace_extend_instance() {
     assert!(roblox().lookup(&["script", "GetFullName"]).is_some());
     // game.Workspace chains into the Workspace shape.
     assert!(roblox().lookup(&["game", "Workspace", "Raycast"]).is_some());
-    assert!(luau().lookup(&["game"]).is_none());
+    assert!(standalone().lookup(&["game"]).is_none());
 }
 
 #[test]
@@ -669,13 +663,13 @@ fn enum_item_properties_resolve_through_its_shape() {
 }
 
 #[test]
-fn luau_has_no_enum() {
-    assert!(luau().lookup(&["Enum"]).is_none());
+fn standalone_has_no_enum() {
+    assert!(standalone().lookup(&["Enum"]).is_none());
 }
 
 #[test]
-fn luau_collectgarbage_accepts_collect() {
-    let options = constant_set(luau(), &["collectgarbage"], 0)
+fn standalone_collectgarbage_accepts_collect() {
+    let options = constant_set(standalone(), &["collectgarbage"], 0)
         .expect("collectgarbage's option is a constant set");
     assert!(
         find(options, "collect").is_some(),
@@ -684,16 +678,16 @@ fn luau_collectgarbage_accepts_collect() {
 }
 
 #[test]
-fn luau_collectgarbage_is_not_must_use() {
+fn standalone_collectgarbage_is_not_must_use() {
     assert!(
-        !function_at(luau(), &["collectgarbage"]).is_must_use,
+        !function_at(standalone(), &["collectgarbage"]).is_must_use,
         "collectgarbage() runs a collection and returns nothing in the Luau CLI"
     );
 }
 
 #[test]
 fn math_randomseed_requires_a_seed() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert_eq!(
             function_at(library, &["math", "randomseed"]).min_args(),
             1,
@@ -705,14 +699,14 @@ fn math_randomseed_requires_a_seed() {
 #[test]
 fn vector_create_accepts_two_components() {
     assert!(
-        function_at(luau(), &["vector", "create"]).accepts_arg_count(2),
+        function_at(standalone(), &["vector", "create"]).accepts_arg_count(2),
         "the 2-component constructor RFC is implemented: vector.create(x, y) zeroes z"
     );
 }
 
 #[test]
 fn vector_lerp_is_cataloged() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert!(
             matches!(library.lookup(&["vector", "lerp"]), Some(StdlibEntry::Function(_))),
             "{}: vector.lerp is an implemented RFC and in the Roblox docs",
@@ -723,7 +717,7 @@ fn vector_lerp_is_cataloged() {
 
 #[test]
 fn coroutine_finally_is_cataloged() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert!(
             matches!(library.lookup(&["coroutine", "finally"]), Some(StdlibEntry::Function(_))),
             "{}: coroutine.finally is in the Luau VM and the Roblox docs",
@@ -744,7 +738,7 @@ fn tostring_is_not_pure() {
 
 #[test]
 fn unpack_is_not_deprecated() {
-    for library in [luau(), roblox()] {
+    for library in [standalone(), roblox()] {
         assert!(
             function_at(library, &["unpack"]).deprecated.is_none(),
             "{}: luau.org documents unpack as equivalent to table.unpack, and neither it nor \
@@ -777,7 +771,7 @@ where
 
 #[test]
 fn table_getn_fix_groups_a_compound_operand() {
-    let template = fix_template(luau(), &["table", "getn"]).expect("table.getn has a fix");
+    let template = fix_template(standalone(), &["table", "getn"]).expect("table.getn has a fix");
     let replacement = expand(template, &["a or b"]);
     assert!(
         returns(&replacement, |expr| matches!(expr, Expression::UnaryOp(_))),

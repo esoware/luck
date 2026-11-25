@@ -285,14 +285,14 @@ mod tests {
             "luck.json",
             r#"{ "overrides": [
                 { "files": ["spec/**"], "lint": { "extra_globals": ["it"] } },
-                { "files": ["**/*.lua"], "format": { "line_width": 80 } }
+                { "files": ["**/*.luau"], "format": { "line_width": 80 } }
             ] }"#,
         )]);
         let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
         let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
-        assert!(Arc::ptr_eq(&linter_at("src/a.lua"), &project.linter));
-        let spec = linter_at("spec/a.lua");
+        assert!(Arc::ptr_eq(&linter_at("src/a.luau"), &project.linter));
+        let spec = linter_at("spec/a.luau");
         assert!(!Arc::ptr_eq(&spec, &project.linter));
-        assert!(Arc::ptr_eq(&spec, &linter_at("spec/b.lua")));
+        assert!(Arc::ptr_eq(&spec, &linter_at("spec/b.luau")));
     }
 }

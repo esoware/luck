@@ -60,7 +60,7 @@ pub(crate) struct OverrideConfig {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LuckConfig {
-    /// Where every `.lua` and `.luau` file runs (default `standalone`):
+    /// Where every `.luau` and `.lua` file runs (default `standalone`):
     /// `"standalone"` for standalone Luau, or `"roblox"` for Roblox, whose globals,
     /// services, and enums join Luau's standard library.
     pub variant: Option<Variant>,
@@ -78,7 +78,7 @@ pub(crate) struct LuckConfig {
     /// overrides an earlier one, and this file overrides them all.
     pub extends: Option<Vec<String>>,
     /// Globs of the files `lint`, `fmt`, and `check` take, relative to the
-    /// `luck.json` directory (default every `.lua` and `.luau` file). `*`
+    /// `luck.json` directory (default every `.luau` and `.lua` file). `*`
     /// stops at `/`, and `**/` crosses directories.
     #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
     pub include: Option<Vec<Glob>>,
@@ -291,16 +291,16 @@ mod tests {
         let config = parsed(
             r#"{
             "entries": [
-                {"entry": "src/main.lua", "output": "dist/main.lua"},
-                {"entry": "src/other.lua", "output": "dist/other.lua"}
+                {"entry": "src/main.luau", "output": "dist/main.luau"},
+                {"entry": "src/other.luau", "output": "dist/other.luau"}
             ],
             "profiles": { "release": { "minify": true } }
         }"#,
         );
         let Entries(entries) = config.entries.expect("entries present");
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].entry, "src/main.lua");
-        assert_eq!(entries[0].output, "dist/main.lua");
+        assert_eq!(entries[0].entry, "src/main.luau");
+        assert_eq!(entries[0].output, "dist/main.luau");
         let profiles = config.profiles.expect("profiles present");
         assert_eq!(profiles.get("release").and_then(|release| release.minify), Some(true));
     }

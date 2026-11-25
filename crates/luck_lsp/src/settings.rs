@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn a_document_with_no_config_takes_the_defaults_rooted_at_its_directory() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let file = directory.path().join("foo.lua");
+        let file = directory.path().join("foo.luau");
         let cache = SettingsCache::default();
         let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
@@ -306,8 +306,8 @@ mod tests {
         let config_path = directory.path().join("luck.json");
         fs::write(&config_path, r#"{ "variant": "roblox" }"#).expect("write luck.json");
         fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
-        let first = directory.path().join("first.lua");
-        let nested = directory.path().join("sub/nested.lua");
+        let first = directory.path().join("first.luau");
+        let nested = directory.path().join("sub/nested.luau");
         let cache = SettingsCache::default();
 
         let (project, _) = cache.project_for(Some(&first), None);
@@ -329,7 +329,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), r#"{ "variant": "bogus" }"#)
             .expect("write luck.json");
-        let file = directory.path().join("a.lua");
+        let file = directory.path().join("a.luau");
         let cache = SettingsCache::default();
 
         let (project, first_error) = cache.project_for(Some(&file), None);
@@ -356,7 +356,7 @@ mod tests {
         let shared = directory.path().join("shared.json");
         assert!(!cache.is_settings_file(&shared));
 
-        let _ = cache.project_for(Some(&directory.path().join("a.lua")), None);
+        let _ = cache.project_for(Some(&directory.path().join("a.luau")), None);
         assert!(cache.is_settings_file(&shared));
         assert!(cache.is_settings_file(&directory.path().join("luck.json")));
         assert!(cache.is_settings_file(&directory.path().join(".editorconfig")));
@@ -371,14 +371,14 @@ mod tests {
     fn a_project_resolves_through_one_resolver_until_its_cache_is_cleared() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
-        let main = directory.path().join("main.lua");
+        let main = directory.path().join("main.luau");
         let cache = SettingsCache::default();
         let (project, _) = cache.project_for(Some(&main), None);
         let resolver = project.resolver();
         assert!(ptr::eq(resolver, cache.project_for(Some(&main), None).0.resolver()));
         assert!(resolver.resolve(&main, "./late").is_err(), "nothing named `late` exists yet");
 
-        fs::write(directory.path().join("late.lua"), "return {}\n").expect("write late.lua");
+        fs::write(directory.path().join("late.luau"), "return {}\n").expect("write late.luau");
         assert!(resolver.resolve(&main, "./late").is_err(), "the listing is cached");
         cache.clear_resolvers();
         assert!(resolver.resolve(&main, "./late").is_ok(), "the cleared resolver reads the disk");

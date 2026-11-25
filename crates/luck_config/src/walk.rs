@@ -157,7 +157,7 @@ where
                 }
                 if !path
                     .extension()
-                    .is_some_and(|extension| extension == "lua" || extension == "luau")
+                    .is_some_and(|extension| extension == "luau" || extension == "lua")
                 {
                     return WalkState::Continue;
                 }
@@ -269,21 +269,22 @@ mod tests {
     fn takes_the_source_files_the_project_includes_past_luckignore() {
         let files = [
             ("luck.json", r#"{ "exclude": ["gen/**"] }"#),
-            (".luckignore", "ignored.lua\n"),
+            (".luckignore", "ignored.luau\n"),
             ("a.lua", ""),
             ("sub/b.luau", ""),
             ("c.txt", ""),
             ("sub/.lua", ""),
-            ("ignored.lua", ""),
-            ("gen/d.lua", ""),
+            ("ignored.luau", ""),
+            ("gen/d.luau", ""),
         ];
         assert_eq!(walked(&files, usize::MAX), ["a.lua", "sub/b.luau"]);
     }
 
     #[test]
     fn leaves_out_a_directory_its_visitor_does_not_enter() {
-        let files = [("luck.json", "{}"), ("a.lua", ""), ("sub/b.lua", ""), ("sub/deep/c.lua", "")];
-        assert_eq!(walked(&files, 1), ["a.lua", "sub/b.lua"]);
+        let files =
+            [("luck.json", "{}"), ("a.luau", ""), ("sub/b.luau", ""), ("sub/deep/c.luau", "")];
+        assert_eq!(walked(&files, 1), ["a.luau", "sub/b.luau"]);
     }
 
     /// A symlink is taken as its project's globs see it where it is, and read
@@ -291,12 +292,12 @@ mod tests {
     #[test]
     fn takes_a_symlink_its_project_includes_where_it_is() {
         let directory =
-            project_with(&[("luck.json", r#"{ "include": ["src/**"] }"#), ("src/a.lua", "")]);
+            project_with(&[("luck.json", r#"{ "include": ["src/**"] }"#), ("src/a.luau", "")]);
         let elsewhere = tempfile::tempdir().expect("tempdir");
-        let target = elsewhere.path().join("b.lua");
-        fs::write(&target, "").expect("write b.lua");
+        let target = elsewhere.path().join("b.luau");
+        fs::write(&target, "").expect("write b.luau");
         // Windows lets only an administrator or developer mode make one.
-        if symlink_file(&target, directory.path().join("src/b.lua")).is_err() {
+        if symlink_file(&target, directory.path().join("src/b.luau")).is_err() {
             return;
         }
         let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
@@ -316,8 +317,8 @@ mod tests {
         assert_eq!(
             taken,
             [
-                ("src/a.lua".to_owned(), canonical.join("src").join("a.lua")),
-                ("src/b.lua".to_owned(), target)
+                ("src/a.luau".to_owned(), canonical.join("src").join("a.luau")),
+                ("src/b.luau".to_owned(), target)
             ]
         );
     }

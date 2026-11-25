@@ -9,6 +9,7 @@
 //! Everything lands in the gitignored `cache/` directory and is pinned to a
 //! commit SHA, so an input changes only when its pin does.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -98,7 +99,7 @@ fn collect_source_files(root: &Path) -> Vec<ProjectFile> {
                 pending_directories.push(path);
                 continue;
             }
-            if path.extension().is_none_or(|extension| extension != "lua") {
+            if !matches!(path.extension().and_then(OsStr::to_str), Some("luau" | "lua")) {
                 continue;
             }
             let relative_path = path

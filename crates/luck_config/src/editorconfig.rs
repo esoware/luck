@@ -209,14 +209,14 @@ mod tests {
         let directory = project_with(&[(
             ".editorconfig",
             "\
-[*.lua]
+[*.luau]
 indent_style = space
 indent_size = 2
 end_of_line = lf
 max_line_length = 80
 ",
         )]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert_eq!(config.indent_style, Some(IndentStyle::Spaces));
         assert_eq!(config.indent_width, Some(2));
         assert_eq!(config.line_endings, Some(LineEndings::Unix));
@@ -234,7 +234,7 @@ indent_style = tab
 end_of_line = crlf
 ",
         )]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert_eq!(config.indent_style, Some(IndentStyle::Tabs));
         assert_eq!(config.line_endings, Some(LineEndings::Windows));
     }
@@ -258,7 +258,7 @@ indent_size = 2
 ",
             ),
         ]);
-        let config = format_config_for(&parent.path().join("project/main.lua"));
+        let config = format_config_for(&parent.path().join("project/main.luau"));
         assert_eq!(config.indent_width, Some(2));
     }
 
@@ -294,7 +294,7 @@ indent_size = 2
 ",
             ),
         ]);
-        let config = format_config_for(&parent.path().join("project/main.lua"));
+        let config = format_config_for(&parent.path().join("project/main.luau"));
         assert_eq!(config.indent_width, Some(2));
         assert_eq!(config.line_width, Some(100));
     }
@@ -306,11 +306,11 @@ indent_size = 2
             "\
 [*]
 indent_size = 4
-[*.lua]
+[*.luau]
 indent_size = 2
 ",
         )]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert_eq!(config.indent_width, Some(2));
     }
 
@@ -323,14 +323,14 @@ indent_size = 2
 max_line_length = off
 ",
         )]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert!(config.line_width.is_none());
     }
 
     #[test]
     fn editorconfig_that_sets_nothing_yields_all_none() {
         let directory = project_with(&[(".editorconfig", "root = true\n")]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert!(config.indent_style.is_none());
         assert!(config.indent_width.is_none());
         assert!(config.line_endings.is_none());
@@ -346,7 +346,7 @@ max_line_length = off
 tab_width = 6
 ",
         )]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert_eq!(config.indent_width, Some(6));
     }
 
@@ -360,7 +360,7 @@ not a pair
 indent_size = 2
 ",
         )]);
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert_eq!(config.indent_width, Some(2));
     }
 
@@ -382,7 +382,7 @@ indent_size = unset
 ",
             ),
         ]);
-        let config = format_config_for(&parent.path().join("project/main.lua"));
+        let config = format_config_for(&parent.path().join("project/main.luau"));
         assert!(config.indent_width.is_none());
     }
 
@@ -402,14 +402,14 @@ root = true
 # comment
 ; also comment
 
-[*.lua]
+[*.luau]
 
 indent_size = 5 # inline kept as value? no
 ",
         )]);
         // The inline `# ...` is part of the value, and `5 # ...` doesn't
         // parse as a number, so indent_width stays None.
-        let config = format_config_for(&directory.path().join("main.lua"));
+        let config = format_config_for(&directory.path().join("main.luau"));
         assert!(config.indent_width.is_none());
     }
 }

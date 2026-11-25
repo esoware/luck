@@ -43,7 +43,7 @@ pub fn fixture_files() -> Vec<PathBuf> {
     files
 }
 
-/// Every `.lua` and `.luau` file in the shared fixture tree, in path order.
+/// Every `.luau` and `.lua` file in the shared fixture tree, in path order.
 ///
 /// # Panics
 ///
@@ -52,7 +52,7 @@ pub fn source_fixtures() -> Vec<SourceFixture> {
     let root = root();
     fixture_files()
         .into_iter()
-        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
+        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("luau" | "lua")))
         .map(|path| {
             let relative_path =
                 path.strip_prefix(&root).expect("a walked path is under the root").to_path_buf();

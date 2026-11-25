@@ -1,11 +1,12 @@
+use luck_token::MAX_ACTIVE_LOCALS;
+
 use crate::rng::Rng;
 
 const MAX_STMT_DEPTH: usize = 4;
 
-/// Module-scope locals to stop at. Luau's compiler rejects a function with
-/// more than 200 active locals, and the blocks nested below module scope add
-/// their own on top.
-const MAX_MODULE_LOCALS: usize = 150;
+/// Module-scope locals to stop at, short of [`MAX_ACTIVE_LOCALS`], since the
+/// blocks nested below module scope add their own on top.
+const MAX_MODULE_LOCALS: usize = MAX_ACTIVE_LOCALS - 50;
 
 /// A small pool of stems forces shadowing, the bug class a flat name-based
 /// analysis gets wrong.

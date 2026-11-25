@@ -26,29 +26,28 @@ fn a_definition_declares_new_globals_with_their_members() {
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
-[globals.app.members.graphics.members.newImage]
+[globals.app.members.net.members.connect]
 kind = "function"
 is_must_use = true
 params = [{ kind = "string" }]
-returns = "Image"
+returns = "Socket"
 
-[shapes.Image.members.getWidth]
+[shapes.Socket.members.isOpen]
 kind = "function"
 is_method = true
 "#,
     );
     let library = stdlib.library();
     assert_eq!(library.variant, Variant::Standalone);
-    let Some(StdlibEntry::Function(new_image)) = library.lookup(["app", "graphics", "newImage"])
-    else {
-        panic!("app.graphics.newImage should be a function");
+    let Some(StdlibEntry::Function(connect)) = library.lookup(["app", "net", "connect"]) else {
+        panic!("app.net.connect should be a function");
     };
-    assert_eq!((new_image.min_args(), new_image.max_args()), (1, Some(1)));
-    assert_eq!(new_image.returns_shape, Some("Image"));
-    assert!(library.shape_member("Image", "getWidth").is_some());
+    assert_eq!((connect.min_args(), connect.max_args()), (1, Some(1)));
+    assert_eq!(connect.returns_shape, Some("Socket"));
+    assert!(library.shape_member("Socket", "isOpen").is_some());
     assert!(library.lookup(["print"]).is_some(), "the built-in library stays under it");
 }
 
@@ -249,18 +248,18 @@ fn a_definition_names_its_own_constant_set() {
     let stdlib = layered(
         Variant::Standalone,
         r#"
-[constant_sets.modes]
-values = ["fill", { value = "line", is_common = true }]
+[constant_sets.protocols]
+values = ["udp", { value = "tcp", is_common = true }]
 
-[globals.draw]
+[globals.listen]
 kind = "function"
-params = [{ kind = "constant", set = "modes" }]
+params = [{ kind = "constant", set = "protocols" }]
 "#,
     );
-    let StdlibArgKind::Constant(modes) = first_param_kind(&stdlib, &["draw"]) else {
+    let StdlibArgKind::Constant(protocols) = first_param_kind(&stdlib, &["listen"]) else {
         panic!("the param should take the set");
     };
-    let values: Vec<&str> = modes.iter().map(|mode| mode.value).collect();
-    assert_eq!(values, ["fill", "line"]);
-    assert!(stdlib.library().constant_sets.contains_key("modes"));
+    let values: Vec<&str> = protocols.iter().map(|protocol| protocol.value).collect();
+    assert_eq!(values, ["udp", "tcp"]);
+    assert!(stdlib.library().constant_sets.contains_key("protocols"));
 }

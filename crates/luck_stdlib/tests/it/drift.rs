@@ -9,7 +9,7 @@ use luck_stdlib::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibLibrary, StdlibParam, StdlibSignature,
 };
 
-use crate::common::{all_libraries, luau, roblox};
+use crate::common::{all_libraries, roblox, standalone};
 
 fn global_paths(
     library: &'static StdlibLibrary<'static>,
@@ -135,45 +135,48 @@ fn deprecation_fingerprint(entry: &StdlibEntry<'_>) -> String {
 
 #[test]
 fn roblox_changes_only_the_allowlisted_luau_entries() {
-    // Signature divergence: Roblox vectors are 3-wide, while Luau also has
-    // the 4-arg form of LUA_VECTOR_SIZE=4 builds. And the Luau CLI's
+    // Signature divergence: Roblox vectors are 3-wide, while standalone Luau
+    // also has the 4-arg form of LUA_VECTOR_SIZE=4 builds. And the Luau CLI's
     // collectgarbage also accepts "collect", which returns nothing.
     const SIGNATURE_ALLOWLIST: [&str; 2] = ["vector.create", "collectgarbage"];
     // Deprecation divergence: Roblox deprecates these while they stay fully
-    // supported in Luau.
+    // supported in standalone Luau.
     const DEPRECATION_ALLOWLIST: [&str; 3] = ["collectgarbage", "getfenv", "setfenv"];
 
-    let luau_globals = global_paths(luau());
+    let standalone_globals = global_paths(standalone());
     let roblox_globals = global_paths(roblox());
     let mut mismatches = Vec::new();
-    for (path, luau_entry) in &luau_globals {
+    for (path, standalone_entry) in &standalone_globals {
         let roblox_entry = roblox_globals[path];
-        let luau_fingerprint = fingerprint(luau_entry);
+        let standalone_fingerprint = fingerprint(standalone_entry);
         let roblox_fingerprint = fingerprint(roblox_entry);
-        if luau_fingerprint != roblox_fingerprint && !SIGNATURE_ALLOWLIST.contains(&path.as_str()) {
-            mismatches.push(format!(
-                "{path}:\n  luau:   {luau_fingerprint}\n  roblox: {roblox_fingerprint}"
-            ));
-        }
-        let luau_deprecation = deprecation_fingerprint(luau_entry);
-        let roblox_deprecation = deprecation_fingerprint(roblox_entry);
-        if luau_deprecation != roblox_deprecation && !DEPRECATION_ALLOWLIST.contains(&path.as_str())
+        if standalone_fingerprint != roblox_fingerprint
+            && !SIGNATURE_ALLOWLIST.contains(&path.as_str())
         {
             mismatches.push(format!(
-                "{path} deprecation:\n  luau:   {luau_deprecation}\n  roblox: {roblox_deprecation}"
+                "{path}:\n  standalone: {standalone_fingerprint}\n  roblox:     {roblox_fingerprint}"
+            ));
+        }
+        let standalone_deprecation = deprecation_fingerprint(standalone_entry);
+        let roblox_deprecation = deprecation_fingerprint(roblox_entry);
+        if standalone_deprecation != roblox_deprecation
+            && !DEPRECATION_ALLOWLIST.contains(&path.as_str())
+        {
+            mismatches.push(format!(
+                "{path} deprecation:\n  standalone: {standalone_deprecation}\n  roblox:     {roblox_deprecation}"
             ));
         }
     }
 
-    // The derived string receiver is Luau's only shape, so this catches a
-    // Roblox override of one of its methods.
+    // The derived string receiver is the standalone library's only shape, so
+    // this catches a Roblox override of one of its methods.
     let roblox_shapes = shape_paths(roblox());
-    for (path, luau_entry) in &shape_paths(luau()) {
-        let luau_fingerprint = fingerprint(luau_entry);
+    for (path, standalone_entry) in &shape_paths(standalone()) {
+        let standalone_fingerprint = fingerprint(standalone_entry);
         let roblox_fingerprint = fingerprint(roblox_shapes[path]);
-        if luau_fingerprint != roblox_fingerprint {
+        if standalone_fingerprint != roblox_fingerprint {
             mismatches.push(format!(
-                "shape {path}:\n  luau:   {luau_fingerprint}\n  roblox: {roblox_fingerprint}"
+                "shape {path}:\n  standalone: {standalone_fingerprint}\n  roblox:     {roblox_fingerprint}"
             ));
         }
     }
@@ -305,13 +308,11 @@ fn shape_references_resolve_and_templates_fit_arity() {
 }
 
 /// The derived string receiver mirrors each file's string namespace:
-/// every subject-first member becomes a method, the two non-receiver
-/// members are excluded, and nothing else appears.
+/// every subject-first member becomes a method, `string.char`, which builds
+/// a string from byte values, doesn't, and nothing else appears.
 #[test]
 fn string_shape_mirrors_string_namespace() {
-    // string.char builds from byte values and string.dump takes a
-    // function; neither has a string subject.
-    const NON_RECEIVER_MEMBERS: [&str; 2] = ["char", "dump"];
+    const NON_RECEIVER_MEMBERS: [&str; 1] = ["char"];
     for (variant, library) in all_libraries() {
         let Some(StdlibEntry::Namespace(namespace)) = library.globals.get("string") else {
             panic!("{variant}: string namespace missing");
@@ -349,7 +350,7 @@ fn string_shape_mirrors_string_namespace() {
 
 #[test]
 fn environment_surfaces_do_not_leak() {
-    // Representative Roblox-only surface; none of it may appear in Luau.
+    // Representative Roblox-only surface, none of which the standalone library has.
     const ROBLOX_ONLY_GLOBALS: [&str; 24] = [
         "game",
         "workspace",
@@ -377,7 +378,7 @@ fn environment_surfaces_do_not_leak() {
         "settings",
     ];
     for name in ROBLOX_ONLY_GLOBALS {
-        assert!(!luau().globals.contains_key(name), "{name} leaked into luau");
+        assert!(!standalone().globals.contains_key(name), "{name} leaked into standalone");
         assert!(roblox().globals.contains_key(name), "{name} missing from roblox");
     }
 }

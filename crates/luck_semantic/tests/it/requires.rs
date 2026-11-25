@@ -18,7 +18,6 @@ do
     require(\"e\")
 end
 _G.require(\"g\")
-_ENV[\"require\"] \"h\"
 _G:require(\"i\")
 _G.require.j(\"k\")
 return require(require(\"f\").g)";

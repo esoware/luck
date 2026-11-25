@@ -12,12 +12,12 @@ use crate::stdlib_model::{
 };
 use crate::variant::Variant;
 
-static LUAU: StdlibLibrary<'static> = include!("stdlib_catalog/luau.rs");
+static STANDALONE: StdlibLibrary<'static> = include!("stdlib_catalog/standalone.rs");
 static ROBLOX: StdlibLibrary<'static> = include!("stdlib_catalog/roblox.rs");
 
 pub const fn library_for(variant: Variant) -> &'static StdlibLibrary<'static> {
     match variant {
-        Variant::Standalone => &LUAU,
+        Variant::Standalone => &STANDALONE,
         Variant::Roblox => &ROBLOX,
     }
 }
@@ -72,7 +72,7 @@ mod tests {
     }
 
     const LIBRARIES: [LibrarySpec; 2] = [
-        LibrarySpec { module: "luau", sources: &["luau.toml"], variant: Variant::Standalone },
+        LibrarySpec { module: "standalone", sources: &["luau.toml"], variant: Variant::Standalone },
         LibrarySpec {
             module: "roblox",
             sources: &["luau.toml", "roblox_api.toml", "roblox.toml", "roblox_enums.toml"],

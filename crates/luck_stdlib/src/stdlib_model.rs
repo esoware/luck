@@ -20,7 +20,7 @@ impl<'lib> StdlibEntry<'lib> {
         }
     }
 
-    /// A namespace is always read-only, even when some members (`package.path`) aren't.
+    /// A namespace is always read-only, even when a member isn't.
     pub const fn is_read_only(&self) -> bool {
         match self {
             Self::Function(function) => function.is_read_only,
@@ -179,7 +179,7 @@ pub enum StdlibArgKind<'lib> {
     String,
     Function,
     Table,
-    /// A type with no variant of its own, e.g. "file" or "buffer". The
+    /// A type with no variant of its own, e.g. "buffer" or "thread". The
     /// string is only a display label.
     Display(&'lib str),
     /// A fixed set of string literals, e.g. the options of
@@ -235,9 +235,8 @@ pub struct StdlibNamespace<'lib> {
     pub deprecated: Option<StdlibDeprecation<'lib>>,
 }
 
-/// The members of a kind of value, such as a file handle, a string, or a
-/// Roblox instance. Members with `is_method` are colon-callable; the rest
-/// are dot accesses.
+/// The members of a kind of value, such as a string or a Roblox instance.
+/// Members with `is_method` are colon-callable; the rest are dot accesses.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibShape<'lib> {
     pub members: StdlibMap<'lib, StdlibEntry<'lib>>,

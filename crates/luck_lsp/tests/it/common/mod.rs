@@ -213,14 +213,10 @@ impl Client {
     }
 
     pub(crate) fn open(&self, uri: &Uri, text: &str) {
-        self.open_as(uri, "lua", text);
-    }
-
-    pub(crate) fn open_as(&self, uri: &Uri, language_id: &str, text: &str) {
         self.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri: uri.clone(),
-                language_id: language_id.to_owned(),
+                language_id: "luau".to_owned(),
                 version: 1,
                 text: text.to_owned(),
             },

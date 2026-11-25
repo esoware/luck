@@ -8,7 +8,7 @@ fn minify_discovers_transforms_from_the_input_s_project() {
     let project = TempDir::new().expect("project");
     let elsewhere = TempDir::new().expect("cwd");
     write_file(project.path(), "luck.json", r#"{"transforms":{"fold_constants":false}}"#);
-    let source = write_file(project.path(), "main.lua", "return 1 + 2");
+    let source = write_file(project.path(), "main.luau", "return 1 + 2");
     luck_in(elsewhere.path()).arg("minify").arg(source).assert().success().stdout("return 1+2");
 }
 
@@ -103,21 +103,21 @@ return someGlobalName",
 #[test]
 fn bundle_minification_uses_discovered_and_explicit_config() {
     let directory = TempDir::new().expect("directory");
-    write_file(directory.path(), "main.lua", "return 1 + 2");
+    write_file(directory.path(), "main.luau", "return 1 + 2");
     write_file(directory.path(), "luck.json", r#"{"transforms":{"fold_constants":false}}"#);
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "--minify"])
+        .args(["bundle", "main.luau", "--minify"])
         .assert()
         .success()
         .stdout(predicate::str::contains("1+2"));
     write_file(directory.path(), "enabled.json", r#"{"transforms":{"fold_constants":true}}"#);
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "--minify", "-c", "enabled.json"])
+        .args(["bundle", "main.luau", "--minify", "-c", "enabled.json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("1+2").not());
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "--minify", "-c", "enabled.json", "--no-fold-constants"])
+        .args(["bundle", "main.luau", "--minify", "-c", "enabled.json", "--no-fold-constants"])
         .assert()
         .success()
         .stdout(predicate::str::contains("1+2"));
@@ -126,16 +126,16 @@ fn bundle_minification_uses_discovered_and_explicit_config() {
 #[test]
 fn minify_and_bundle_reject_an_invalid_or_missing_config() {
     let directory = TempDir::new().expect("directory");
-    write_file(directory.path(), "main.lua", "return 1");
+    write_file(directory.path(), "main.luau", "return 1");
     write_file(directory.path(), "luck.json", r#"{"transforms":{"fold_constnats":false}}"#);
     for operation in ["minify", "bundle"] {
         luck_in(directory.path())
-            .args([operation, "main.lua"])
+            .args([operation, "main.luau"])
             .assert()
             .code(2)
             .stderr(predicate::str::contains("fold_constnats"));
         luck_in(directory.path())
-            .args([operation, "main.lua", "-c", "missing.json"])
+            .args([operation, "main.luau", "-c", "missing.json"])
             .assert()
             .code(2);
     }

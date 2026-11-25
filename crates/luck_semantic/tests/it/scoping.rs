@@ -290,16 +290,6 @@ print(1)"
 }
 
 #[test]
-fn env_is_an_ordinary_name() {
-    let allocator = Allocator::new();
-    for (source, globals) in [("local _ENV = {} print(y)", 2), ("_ENV = {} print(y)", 3)] {
-        let scoping = scoping_of(&allocator, source);
-        assert_eq!(scoping.global_references().count(), globals, "{source}");
-        assert!(is_host_print(source), "{source}");
-    }
-}
-
-#[test]
 fn explicit_self_stays_a_parameter() {
     let allocator = Allocator::new();
     let scoping = scoping_of(

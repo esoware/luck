@@ -25,7 +25,7 @@
 //! [globals.app]
 //! kind = "namespace"
 //!
-//! [globals.app.members.load]
+//! [globals.app.members.onStart]
 //! kind = "function"
 //! is_read_only = false
 //! "#,

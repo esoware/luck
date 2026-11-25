@@ -275,17 +275,17 @@ mod tests {
 
     #[test]
     fn a_name_without_a_separator_matches_at_any_depth() {
-        assert!(glob_matches("*.lua", "main.lua"));
-        assert!(glob_matches("*.lua", "src/deep/main.lua"));
+        assert!(glob_matches("*.luau", "main.luau"));
+        assert!(glob_matches("*.luau", "src/deep/main.luau"));
         assert!(!glob_matches("*.lua", "main.luau"));
     }
 
     #[test]
     fn a_name_with_a_separator_is_anchored() {
-        for name in ["src/*.lua", "/src/*.lua"] {
-            assert!(glob_matches(name, "src/a.lua"), "{name}");
-            assert!(!glob_matches(name, "other/src/a.lua"), "{name}");
-            assert!(!glob_matches(name, "src/nested/a.lua"), "{name}");
+        for name in ["src/*.luau", "/src/*.luau"] {
+            assert!(glob_matches(name, "src/a.luau"), "{name}");
+            assert!(!glob_matches(name, "other/src/a.luau"), "{name}");
+            assert!(!glob_matches(name, "src/nested/a.luau"), "{name}");
         }
     }
 
@@ -306,33 +306,33 @@ mod tests {
 
     #[test]
     fn classes_support_ranges_negation_and_escapes() {
-        assert!(glob_matches("[a-c].lua", "b.lua"));
-        assert!(!glob_matches("[a-c].lua", "d.lua"));
-        assert!(glob_matches("[!a-c].lua", "d.lua"));
-        assert!(glob_matches(r"[\]].lua", "].lua"));
-        assert!(glob_matches("[a-].lua", "-.lua"));
+        assert!(glob_matches("[a-c].luau", "b.luau"));
+        assert!(!glob_matches("[a-c].luau", "d.luau"));
+        assert!(glob_matches("[!a-c].luau", "d.luau"));
+        assert!(glob_matches(r"[\]].luau", "].luau"));
+        assert!(glob_matches("[a-].luau", "-.luau"));
     }
 
     #[test]
     fn a_bracket_that_does_not_close_or_holds_a_separator_is_literal() {
-        assert!(glob_matches("[a.lua", "[a.lua"));
+        assert!(glob_matches("[a.luau", "[a.luau"));
         assert!(glob_matches("ab[e/]cd", "ab[e/]cd"));
         assert!(!glob_matches("ab[e/]cd", "abecd"));
     }
 
     #[test]
     fn alternatives_may_nest_and_each_alternative_is_tried() {
-        assert!(glob_matches("{a,{b,c}}.lua", "c.lua"));
-        assert!(glob_matches("{a*b,xb}.lua", "xb.lua"));
-        assert!(glob_matches("{a*b,xb}.lua", "ab.lua"));
-        assert!(glob_matches("{,a}.lua", ".lua"));
+        assert!(glob_matches("{a,{b,c}}.luau", "c.luau"));
+        assert!(glob_matches("{a*b,xb}.luau", "xb.luau"));
+        assert!(glob_matches("{a*b,xb}.luau", "ab.luau"));
+        assert!(glob_matches("{,a}.luau", ".luau"));
     }
 
     #[test]
     fn braces_without_a_comma_or_a_closer_are_literal() {
-        assert!(glob_matches("{a}.lua", "{a}.lua"));
-        assert!(!glob_matches("{a}.lua", "a.lua"));
-        assert!(glob_matches("{a,b.lua", "{a,b.lua"));
+        assert!(glob_matches("{a}.luau", "{a}.luau"));
+        assert!(!glob_matches("{a}.luau", "a.luau"));
+        assert!(glob_matches("{a,b.luau", "{a,b.luau"));
         assert!(glob_matches("a,b}", "a,b}"));
     }
 
@@ -348,13 +348,13 @@ mod tests {
 
     #[test]
     fn backslash_escapes_a_special_character() {
-        assert!(glob_matches(r"\*.lua", "*.lua"));
-        assert!(!glob_matches(r"\*.lua", "a.lua"));
+        assert!(glob_matches(r"\*.luau", "*.luau"));
+        assert!(!glob_matches(r"\*.luau", "a.luau"));
     }
 
     #[test]
     fn exponential_alternation_finishes() {
-        let name = format!("b{}.lua", "{a,aa}".repeat(40));
-        assert!(!glob_matches(&name, &format!("{}.lua", "a".repeat(60))));
+        let name = format!("b{}.luau", "{a,aa}".repeat(40));
+        assert!(!glob_matches(&name, &format!("{}.luau", "a".repeat(60))));
     }
 }

@@ -12,7 +12,7 @@ Each tool defines the type of its own section, so `transforms`, `dynamic_require
 
 A project gives every file one variant and standard library, and each file the rest of its settings:
 
-- `variant` gives the `Variant` the `variant` key names, standalone Luau or Roblox, which every `.lua` and `.luau` file runs on, and `stdlib` its standard library with the `std` definitions layered over it, which the linter and the language server read.
+- `variant` gives the `Variant` the `variant` key names, standalone Luau or Roblox, which every `.luau` and `.lua` file runs on, and `stdlib` its standard library with the `std` definitions layered over it, which the linter and the language server read.
 - `linter_for` gives the `luck_linter::Linter` of the `lint` section with the `overrides` the file's path matches layered over it, in order, as oxlint's `overrides` do. The section compiles once at load, and each set of overrides with `lint` settings compiles once, for the first file that matches it, so every file it covers shares that linter. `overlay_lint` layers command-line flags over every file's, overrides included.
 - `format_options` layers the defaults, then `.editorconfig`, then the `format` section, then the matching `overrides`.
 - `filter` holds `include` and `exclude`, and `bundle_options` resolves modules from the project's root.
@@ -20,7 +20,7 @@ A project gives every file one variant and standard library, and each file the r
 
 Every glob matches relative to the `luck.json` directory, whichever file in an `extends` chain sets it, and `*` stops at `/` while `**/` crosses directories. A directory with no `luck.json` above it gets `Project::defaults`, rooted where discovery started.
 
-`walk_source_files` finds the `.lua` and `.luau` files under a directory, past what `.gitignore` and `.luckignore` hide, so `lint`, `fmt`, and `check` take the same files the language server's workspace holds. The caller's `WalkVisitor` says which project each directory and file is in, whose `exclude` leaves a whole directory out and whose `include` and `exclude` take each file or leave it. A file's globs, as its `overrides`, match it under its directory's canonical path, as `located_path` gives it, so a symlink goes by where it is, the same place its project comes from, and is read where it leads.
+`walk_source_files` finds the `.luau` and `.lua` files under a directory, past what `.gitignore` and `.luckignore` hide, so `lint`, `fmt`, and `check` take the same files the language server's workspace holds. The caller's `WalkVisitor` says which project each directory and file is in, whose `exclude` leaves a whole directory out and whose `include` and `exclude` take each file or leave it. A file's globs, as its `overrides`, match it under its directory's canonical path, as `located_path` gives it, so a symlink goes by where it is, the same place its project comes from, and is read where it leads.
 
 The VS Code extension's schema is generated from the config types, with the doc comments as its descriptions.
 

@@ -13,15 +13,15 @@ Luau language support powered by the luck toolchain:
 - **JS/TS-style highlighting**: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough
 - **Document highlights**, folding ranges, selection ranges, document links
 - **Snippets** for common Luau patterns
-- **TextMate grammar** for Luau, in `.lua` and `.luau` files alike (type annotations, string interpolation, attributes, generics)
+- **TextMate grammar** for Luau, in `.luau` and `.lua` files alike (type annotations, string interpolation, attributes, generics)
 - Status bar item, dedicated output channels, restart-server command
 
-Supports Luau, standalone or with the Roblox API. Every `.lua` and `.luau` file is read as Luau.
+Supports Luau, standalone or with the Roblox API. Every `.luau` and `.lua` file is read as Luau.
 
 ## Quick start
 
 1. Install the extension.
-2. Open a `.lua` or `.luau` file. Parse errors show up right away.
+2. Open a `.luau` or `.lua` file. Parse errors show up right away.
 3. Format with `Shift+Alt+F` or enable `editor.formatOnSave`.
 4. Configure the variant, formatter style, and lint rules by running `Luck: Create luck.json` from the command palette.
 

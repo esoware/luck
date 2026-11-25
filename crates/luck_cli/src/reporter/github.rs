@@ -91,7 +91,7 @@ print(a)";
         .with_label(Span::new(6, 7), "a label")
         .with_help("prefix with `_` to suppress this warning");
         let mut output = Vec::new();
-        let source = SourceFile { label: r"src\a.lua", text: Some(text.as_bytes()) };
+        let source = SourceFile { label: r"src\a.luau", text: Some(text.as_bytes()) };
         GithubReporter.render(source, &[diag], &mut output);
         let lines = String::from_utf8(output).expect("annotations are UTF-8");
         let (file, rest) = lines
@@ -101,7 +101,7 @@ print(a)";
         let working_directory = env::current_dir().expect("current directory");
         assert_eq!(
             file,
-            annotation_property(&to_slash_lossy(&working_directory.join(r"src\a.lua")))
+            annotation_property(&to_slash_lossy(&working_directory.join(r"src\a.luau")))
         );
         assert_eq!(
             rest,
@@ -113,6 +113,6 @@ print(a)";
     #[test]
     fn escapes_what_the_runner_would_parse() {
         assert_eq!(annotation_data("50% of a\r\nb"), "50%25 of a%0D%0Ab");
-        assert_eq!(annotation_property("C:/a,b.lua"), "C%3A/a%2Cb.lua");
+        assert_eq!(annotation_property("C:/a,b.luau"), "C%3A/a%2Cb.luau");
     }
 }

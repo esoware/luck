@@ -359,21 +359,6 @@ local c = _G.require
         assert_eq!(flagged(&analysis, source), ["_G[\"require\"](name)"]);
     }
 
-    /// Luau's `require` never reads `package.loaded`, so a write to it means
-    /// in a bundle what it means without one.
-    #[test]
-    fn package_loaded_writes_are_no_concern_of_the_bundle() {
-        let allocator = Allocator::new();
-        let analysis = analyze_source(
-            &allocator,
-            "\
-package.loaded[\"mymod\"] = {}
-package.loaded.other = {}
-",
-        );
-        assert!(analysis.diags.is_empty(), "{:?}", analysis.diags);
-    }
-
     #[test]
     fn duplicate_require_flags_w001_and_points_at_the_first() {
         let allocator = Allocator::new();

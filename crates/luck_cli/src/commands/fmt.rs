@@ -329,8 +329,8 @@ mod tests {
     #[test]
     fn fmt_is_top_level_command_with_oxfmt_flags() {
         let FmtArgs { paths, check, list_different, write, config, .. } =
-            fmt_args(&["src", "main.lua", "--check", "-c", "luck.json"]);
-        assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
+            fmt_args(&["src", "main.luau", "--check", "-c", "luck.json"]);
+        assert_eq!(paths, vec!["src".to_owned(), "main.luau".to_owned()]);
         assert!(check);
         assert!(!list_different);
         assert!(!write);
@@ -347,8 +347,8 @@ mod tests {
     #[test]
     fn fmt_stdin_filepath_parses() {
         assert_eq!(
-            fmt_args(&["--stdin-filepath", "buf.lua"]).stdin_filepath.as_deref(),
-            Some("buf.lua")
+            fmt_args(&["--stdin-filepath", "buf.luau"]).stdin_filepath.as_deref(),
+            Some("buf.luau")
         );
     }
 
@@ -363,13 +363,13 @@ mod tests {
             directory.path().join(".editorconfig"),
             "\
 root = true
-[*.lua]
+[*.luau]
 indent_style = space
 indent_size = 2
 ",
         )
         .expect("write .editorconfig");
-        let source_path = directory.path().join("main.lua");
+        let source_path = directory.path().join("main.luau");
         fs::write(
             &source_path,
             "\
@@ -406,13 +406,13 @@ end
             directory.path().join(".editorconfig"),
             "\
 root = true
-[*.lua]
+[*.luau]
 indent_style = space
 indent_size = 2
 ",
         )
         .expect("write .editorconfig");
-        let source_path = directory.path().join("main.lua");
+        let source_path = directory.path().join("main.luau");
         fs::write(
             &source_path,
             "\
@@ -451,7 +451,7 @@ end
             directory.path().join(".editorconfig"),
             "\
 root = true
-[*.lua]
+[*.luau]
 indent_style = space
 indent_size = 2
 ",
@@ -464,7 +464,7 @@ local function f()
 return 1
 end
 ",
-            &directory.path().join("main.lua"),
+            &directory.path().join("main.luau"),
         );
         let FormatOutcome::Changed(formatted) = outcome else {
             panic!("unindented source should reformat to Changed");
@@ -481,7 +481,7 @@ end
         // The shared per-document formatter helper backs both the file-walk and
         // the --stdin-filepath paths, so cover its three outcomes directly.
         let format = |source: &str| {
-            formatted_document(&["--no-editorconfig"], source, Path::new("stdin.lua"))
+            formatted_document(&["--no-editorconfig"], source, Path::new("stdin.luau"))
         };
 
         let FormatOutcome::Changed(formatted) = format("local  x=1\n") else {
@@ -499,7 +499,7 @@ end
     fn an_unreadable_file_reports_e010() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
-        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+        let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let outcome =
             fmt_args(&[]).format_file(&Allocator::new(), &Editorconfigs::default(), &file);

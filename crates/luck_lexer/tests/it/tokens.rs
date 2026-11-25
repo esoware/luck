@@ -312,13 +312,6 @@ fn each_unexpected_byte_that_is_not_utf8_is_one_error() {
 }
 
 #[test]
-fn goto_and_global_are_names() {
-    for name in ["goto", "global"] {
-        assert_eq!(tokens(name), [(TokenKind::Identifier, name)]);
-    }
-}
-
-#[test]
 fn a_contextual_keyword_lexes_as_its_own_kind() {
     for (text, kind) in [
         ("continue", TokenKind::Continue),

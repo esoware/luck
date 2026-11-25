@@ -10,8 +10,8 @@ fn project_with_generated_code(config: &str) -> TempDir {
     fs::create_dir_all(project.path().join("src")).expect("create src");
     fs::create_dir_all(project.path().join("gen")).expect("create gen");
     write_file(project.path(), "luck.json", config);
-    write_file(project.path(), "src/main.lua", "print(1)\n");
-    write_file(project.path(), "gen/bad.lua", "local = 1\n");
+    write_file(project.path(), "src/main.luau", "print(1)\n");
+    write_file(project.path(), "gen/bad.luau", "local = 1\n");
     project
 }
 
@@ -27,7 +27,7 @@ fn bare_config_name_applies_a_relative_exclude() {
 
 #[test]
 fn bare_config_name_applies_a_relative_include() {
-    let project = project_with_generated_code(r#"{"include":["src/**/*.lua"]}"#);
+    let project = project_with_generated_code(r#"{"include":["src/**/*.luau"]}"#);
     luck_in(project.path())
         .args(["check", "-c", "luck.json"])
         .assert()
@@ -40,7 +40,7 @@ fn bare_config_name_loads_a_root_config_with_extends() {
     let project = TempDir::new().expect("project");
     write_file(project.path(), "base.json", r#"{"variant":"standalone"}"#);
     write_file(project.path(), "luck.json", r#"{"root":true,"extends":["base.json"]}"#);
-    write_file(project.path(), "main.lua", "print(1)\n");
+    write_file(project.path(), "main.luau", "print(1)\n");
     luck_in(project.path()).args(["check", "-c", "luck.json"]).assert().success();
 }
 
@@ -51,15 +51,15 @@ fn bundle_and_graph_resolve_through_the_project_s_aliases() {
     let project = TempDir::new().expect("project");
     write_file(project.path(), "luck.json", "{}");
     write_file(project.path(), ".luaurc", r#"{"aliases":{"lib":"./lib"}}"#);
-    write_file(project.path(), "src/main.lua", "return require(\"@lib/util\").answer\n");
-    write_file(project.path(), "lib/util.lua", "return { answer = 42 }\n");
+    write_file(project.path(), "src/main.luau", "return require(\"@lib/util\").answer\n");
+    write_file(project.path(), "lib/util.luau", "return { answer = 42 }\n");
     for command in ["bundle", "graph"] {
-        luck_in(&project.path().join("src")).args([command, "main.lua"]).assert().success();
-        luck_in(project.path()).args([command, "src/main.lua"]).assert().success();
+        luck_in(&project.path().join("src")).args([command, "main.luau"]).assert().success();
+        luck_in(project.path()).args([command, "src/main.luau"]).assert().success();
     }
     write_file(project.path(), ".luaurc", "{}");
     luck_in(project.path())
-        .args(["bundle", "src/main.lua"])
+        .args(["bundle", "src/main.luau"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("E004"));
@@ -69,12 +69,12 @@ fn bundle_and_graph_resolve_through_the_project_s_aliases() {
 fn graph_resolves_modules_next_to_the_entry_as_bundle_does() {
     let directory = TempDir::new().unwrap();
     fs::create_dir_all(directory.path().join("sources")).unwrap();
-    write_file(directory.path(), "sources/main.lua", TWO_MODULE_ENTRY);
-    write_file(directory.path(), "sources/helper.lua", HELPER_MODULE);
-    let bundled = run(directory.path(), &["bundle", "sources/main.lua", "-o", "bundle.lua"]);
+    write_file(directory.path(), "sources/main.luau", TWO_MODULE_ENTRY);
+    write_file(directory.path(), "sources/helper.luau", HELPER_MODULE);
+    let bundled = run(directory.path(), &["bundle", "sources/main.luau", "-o", "bundle.luau"]);
     assert_eq!(bundled.status.code(), Some(0), "{}", stderr_text(&bundled));
 
-    let output = run(directory.path(), &["graph", "sources/main.lua"]);
+    let output = run(directory.path(), &["graph", "sources/main.luau"]);
 
     assert_eq!(
         output.status.code(),
@@ -92,8 +92,8 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
         "luck.json",
         r#"{"overrides":[{"files":["spec/**"],"lint":{"rules":{"unused_variable":"off"}}}]}"#,
     );
-    write_file(project.path(), "src/a.lua", "local unused = 1\n");
-    write_file(project.path(), "spec/a_spec.lua", "local unused = 1\n");
+    write_file(project.path(), "src/a.luau", "local unused = 1\n");
+    write_file(project.path(), "spec/a_spec.luau", "local unused = 1\n");
     luck_in(project.path()).args(["lint", "--deny-warnings", "spec"]).assert().success();
     luck_in(project.path()).args(["lint", "--deny-warnings", "src"]).assert().code(1);
     luck_in(project.path())
@@ -116,12 +116,16 @@ if x then
 print(1)
 end
 ";
-    write_file(project.path(), "a.lua", source);
-    write_file(project.path(), "vendor/b.lua", source);
+    write_file(project.path(), "a.luau", source);
+    write_file(project.path(), "vendor/b.luau", source);
     luck_in(project.path()).arg("fmt").assert().success();
     let formatted = |name: &str| fs::read_to_string(project.path().join(name)).expect("read");
-    assert!(formatted("a.lua").contains("\n  print(1)"), "{}", formatted("a.lua"));
-    assert!(formatted("vendor/b.lua").contains("\n    print(1)"), "{}", formatted("vendor/b.lua"));
+    assert!(formatted("a.luau").contains("\n  print(1)"), "{}", formatted("a.luau"));
+    assert!(
+        formatted("vendor/b.luau").contains("\n    print(1)"),
+        "{}",
+        formatted("vendor/b.luau")
+    );
 }
 
 #[test]
@@ -134,14 +138,14 @@ fn fmt_applies_a_path_scoped_editorconfig_section_from_a_subdirectory() {
         ".editorconfig",
         "\
 root = true
-[sources/*.lua]
+[sources/*.luau]
 indent_style = space
 indent_size = 3
 ",
     );
     let path = write_file(
         &sources,
-        "main.lua",
+        "main.luau",
         "\
 local function f()
 return 1
@@ -149,7 +153,7 @@ end
 ",
     );
 
-    run(&sources, &["fmt", "main.lua"]);
+    run(&sources, &["fmt", "main.luau"]);
     let formatted = fs::read_to_string(path).unwrap();
 
     assert!(
@@ -166,9 +170,9 @@ fn print_config_shows_the_overrides_a_file_matches() {
         "luck.json",
         r#"{"overrides":[{"files":["spec/**"],"lint":{"extra_globals":["describe"]}}]}"#,
     );
-    write_file(project.path(), "spec/a_spec.lua", "");
+    write_file(project.path(), "spec/a_spec.luau", "");
     luck_in(project.path())
-        .args(["lint", "--print-config", "spec/a_spec.lua"])
+        .args(["lint", "--print-config", "spec/a_spec.luau"])
         .assert()
         .success()
         .stdout(predicate::str::contains("describe"));
@@ -191,7 +195,7 @@ fn a_config_error_names_the_place_in_the_file() {
 }
 ",
     );
-    write_file(project.path(), "a.lua", "print(1)\n");
+    write_file(project.path(), "a.luau", "print(1)\n");
     luck_in(project.path())
         .arg("lint")
         .assert()
@@ -212,34 +216,34 @@ fn lint_reads_the_std_definitions_a_config_names() {
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
-[globals.app.members.graphics.members.print]
+[globals.app.members.net.members.send]
 kind = "function"
 params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
 
-[globals.app.members.draw]
+[globals.app.members.onMessage]
 kind = "function"
 is_read_only = false
 "#,
     );
     write_file(
         project.path(),
-        "main.lua",
+        "main.luau",
         "\
-function app.draw()
-  app.graphics.print('hello', 0, 0)
+function app.onMessage()
+  app.net.send('hello', 0, 0)
 end
 ",
     );
     luck_in(project.path()).arg("lint").assert().success();
-    write_file(project.path(), "main.lua", "app.graphics.print('hello')\n");
+    write_file(project.path(), "main.luau", "app.net.send('hello')\n");
     luck_in(project.path())
         .arg("lint")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("`app.graphics.print` requires at least 3 argument(s)"));
+        .stderr(predicate::str::contains("`app.net.send` requires at least 3 argument(s)"));
 }
 
 #[test]
@@ -254,7 +258,7 @@ kind = "namespace"
 shape = 1
 "#,
     );
-    write_file(project.path(), "a.lua", "print(1)\n");
+    write_file(project.path(), "a.luau", "print(1)\n");
     luck_in(project.path())
         .arg("lint")
         .assert()

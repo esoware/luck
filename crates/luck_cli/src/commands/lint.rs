@@ -597,7 +597,7 @@ mod tests {
     fn lint_is_top_level_command_with_oxlint_flags() {
         let LintArgs { paths, levels, fix, config, .. } = lint_args(&[
             "src",
-            "main.lua",
+            "main.luau",
             "-D",
             "undefined_variable",
             "-A",
@@ -608,7 +608,7 @@ mod tests {
             "-c",
             "luck.json",
         ]);
-        assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
+        assert_eq!(paths, vec!["src".to_owned(), "main.luau".to_owned()]);
         assert_eq!(levels.0.rules.level(RuleId::UndefinedVariable), Some(RuleLevel::Error));
         assert_eq!(levels.0.categories.level(Category::Style), Some(RuleLevel::Off));
         assert_eq!(levels.0.rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
@@ -760,7 +760,7 @@ local unused = 1
 print(undefined_var)";
         let diags = lint_source(source, Variant::Standalone, &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
-        let file = SourceFile { label: "a.lua", text: Some(source.as_bytes()) };
+        let file = SourceFile { label: "a.luau", text: Some(source.as_bytes()) };
         let lines_when = |verbosity: Verbosity| {
             let shown = diags.iter().map(|message| message.diagnostic.clone());
             let rendered = args.rendered(file, shown, verbosity);
@@ -779,7 +779,7 @@ print(undefined_var)";
         let linter = Linter::new(LintConfig::default());
         let diags = lint_source("print(undefined_var)", Variant::Standalone, &linter);
         assert!(!diags.is_empty(), "{diags:?}");
-        let file = SourceFile { label: "a.lua", text: Some(b"print(undefined_var)") };
+        let file = SourceFile { label: "a.luau", text: Some(b"print(undefined_var)") };
         let shown = diags.into_iter().map(|message| message.diagnostic);
         let rendered = lint_args(&["--silent"]).rendered(file, shown, Verbosity::Normal);
         assert!(rendered.is_empty(), "{}", String::from_utf8_lossy(&rendered));
@@ -791,7 +791,7 @@ print(undefined_var)";
     fn an_unreadable_file_reports_e010_in_the_run_format() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
-        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+        let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let outcome =
             lint_args(&["-f", "json"]).lint_file(&Allocator::new(), &file, None, Verbosity::Normal);

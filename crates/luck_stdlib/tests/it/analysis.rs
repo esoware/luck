@@ -35,11 +35,11 @@ fn extra_globals_are_known_globals() {
 fn roblox_globals_are_known_only_on_roblox() {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, "print(game, bit32)");
-    let (luau, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone));
+    let (standalone, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone));
     let (roblox, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Roblox));
-    assert!(!luau.is_known_global("game"));
+    assert!(!standalone.is_known_global("game"));
     assert!(roblox.is_known_global("game"));
-    assert!(luau.is_known_global("bit32"));
+    assert!(standalone.is_known_global("bit32"));
     assert!(roblox.is_known_global("bit32"));
 }
 

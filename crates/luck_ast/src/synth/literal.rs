@@ -14,13 +14,12 @@ pub enum InterpolatedStringPart<'text, 'ast> {
 }
 
 impl<'ast> Synth<'ast> {
-    /// An `f64` as a numeric expression, assuming the target uses IEEE-754
-    /// doubles.
+    /// An `f64` as a numeric expression.
     ///
     /// Finite values and infinities round-trip, signed zero included.
     /// Negatives use unary minus. NaN becomes `0/0` and deliberately loses
-    /// its sign, payload, and signaling state, since only a target-specific
-    /// runtime construction can rebuild a bit-exact NaN.
+    /// its sign, payload, and signaling state, which no constant expression
+    /// can rebuild.
     pub fn number_f64(&self, value: f64) -> Expression<'ast> {
         if value.is_nan() {
             let zero = || self.number(0.0);

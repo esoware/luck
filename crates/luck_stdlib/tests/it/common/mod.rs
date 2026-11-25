@@ -16,7 +16,7 @@ pub(crate) fn expand(template: &str, args: &[&str]) -> String {
     String::from_utf8(expand_replace_template(template, &arg_bytes)).expect("text expands to text")
 }
 
-pub(crate) fn luau() -> &'static StdlibLibrary<'static> {
+pub(crate) fn standalone() -> &'static StdlibLibrary<'static> {
     library_for(Variant::Standalone)
 }
 

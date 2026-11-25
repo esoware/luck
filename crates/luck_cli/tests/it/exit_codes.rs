@@ -13,19 +13,19 @@ use crate::common::{luck_in, run, stderr_text, write_file};
 #[test]
 fn lint_clean_file_exits_success() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "clean.lua", "print(\"hello world\")\n");
+    write_file(directory.path(), "clean.luau", "print(\"hello world\")\n");
 
-    luck_in(directory.path()).args(["lint", "clean.lua"]).assert().code(0);
+    luck_in(directory.path()).args(["lint", "clean.luau"]).assert().code(0);
 }
 
 #[test]
 fn lint_undefined_variable_exits_failure() {
     let directory = TempDir::new().unwrap();
     // `undefined_variable` is on by default as an error.
-    write_file(directory.path(), "bad.lua", "return missingglobal\n");
+    write_file(directory.path(), "bad.luau", "return missingglobal\n");
 
     luck_in(directory.path())
-        .args(["lint", "bad.lua"])
+        .args(["lint", "bad.luau"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("undefined_variable"));
@@ -34,11 +34,11 @@ fn lint_undefined_variable_exits_failure() {
 #[test]
 fn threads_takes_a_count_of_one_or_more() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "bad.lua", "return missingglobal\n");
+    write_file(directory.path(), "bad.luau", "return missingglobal\n");
 
-    luck_in(directory.path()).args(["--threads", "1", "lint", "bad.lua"]).assert().code(1);
+    luck_in(directory.path()).args(["--threads", "1", "lint", "bad.luau"]).assert().code(1);
     luck_in(directory.path())
-        .args(["lint", "bad.lua", "--threads", "0"])
+        .args(["lint", "bad.luau", "--threads", "0"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("--threads"));
@@ -47,9 +47,9 @@ fn threads_takes_a_count_of_one_or_more() {
 #[test]
 fn check_parse_error_exits_failure() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "broken.lua", "local x = 1 +\n");
+    write_file(directory.path(), "broken.luau", "local x = 1 +\n");
 
-    luck_in(directory.path()).args(["check", "broken.lua"]).assert().code(1);
+    luck_in(directory.path()).args(["check", "broken.luau"]).assert().code(1);
 }
 
 #[test]
@@ -57,35 +57,35 @@ fn check_valid_file_exits_success() {
     let directory = TempDir::new().unwrap();
     write_file(
         directory.path(),
-        "ok.lua",
+        "ok.luau",
         "\
 local x = 1
 return x
 ",
     );
 
-    luck_in(directory.path()).args(["check", "ok.lua"]).assert().code(0);
+    luck_in(directory.path()).args(["check", "ok.luau"]).assert().code(0);
 }
 
 #[test]
 fn fmt_check_unformatted_exits_failure() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "messy.lua", "local    x=1\n");
+    write_file(directory.path(), "messy.luau", "local    x=1\n");
 
-    luck_in(directory.path()).args(["fmt", "--check", "messy.lua"]).assert().code(1);
+    luck_in(directory.path()).args(["fmt", "--check", "messy.luau"]).assert().code(1);
 }
 
 #[test]
 fn fmt_check_formatted_exits_success() {
     let directory = TempDir::new().unwrap();
-    let path = write_file(directory.path(), "tidy.lua", "local    x=1\n");
+    let path = write_file(directory.path(), "tidy.luau", "local    x=1\n");
 
     // Format with luck first, so the check doesn't depend on the formatter's
     // style choices.
-    luck_in(directory.path()).args(["fmt", "tidy.lua"]).assert().code(0);
+    luck_in(directory.path()).args(["fmt", "tidy.luau"]).assert().code(0);
     assert!(fs::read_to_string(&path).unwrap().contains("local x = 1"));
 
-    luck_in(directory.path()).args(["fmt", "--check", "tidy.lua"]).assert().code(0);
+    luck_in(directory.path()).args(["fmt", "--check", "tidy.luau"]).assert().code(0);
 }
 
 #[test]
@@ -102,10 +102,10 @@ fn unknown_subcommand_exits_usage() {
 #[test]
 fn invalid_flag_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "clean.lua", "print(\"hi\")\n");
+    write_file(directory.path(), "clean.luau", "print(\"hi\")\n");
 
     luck_in(directory.path())
-        .args(["lint", "--nonexistent-flag", "clean.lua"])
+        .args(["lint", "--nonexistent-flag", "clean.luau"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("--nonexistent-flag"));
@@ -115,10 +115,10 @@ fn invalid_flag_exits_usage() {
 fn invalid_config_unknown_key_exits_usage() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
-    write_file(directory.path(), "clean.lua", "print(\"hi\")\n");
+    write_file(directory.path(), "clean.luau", "print(\"hi\")\n");
 
     luck_in(directory.path())
-        .args(["check", "clean.lua"])
+        .args(["check", "clean.luau"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("E014"))
@@ -132,7 +132,7 @@ fn invalid_config_unknown_key_exits_usage() {
 /// The timeout turns that hang into a failure.
 fn write_bad_variant_project(directory: &Path) {
     write_file(directory, "luck.json", "{ \"variant\": \"bogus\" }\n");
-    for name in ["a.lua", "b.lua", "c.lua", "d.lua"] {
+    for name in ["a.luau", "b.luau", "c.luau", "d.luau"] {
         write_file(directory, name, "return 1\n");
     }
 }
@@ -198,11 +198,11 @@ fn build_empty_entries_exits_usage() {
 #[test]
 fn build_rejects_release_with_dev() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "return 1\n");
+    write_file(directory.path(), "main.luau", "return 1\n");
     write_file(
         directory.path(),
         "luck.json",
-        r#"{"entry":"main.lua","output":"bundle.lua","profiles":{"dev":{},"release":{}}}"#,
+        r#"{"entry":"main.luau","output":"bundle.luau","profiles":{"dev":{},"release":{}}}"#,
     );
 
     let output = run(directory.path(), &["build", "--release", "--dev", "--dry-run"]);
@@ -218,7 +218,7 @@ fn build_rejects_release_with_dev() {
 fn minify_missing_input_exits_usage() {
     let directory = TempDir::new().unwrap();
 
-    let output = run(directory.path(), &["minify", "missing.lua"]);
+    let output = run(directory.path(), &["minify", "missing.luau"]);
 
     assert_eq!(
         output.status.code(),
@@ -232,11 +232,11 @@ fn minify_missing_input_exits_usage() {
 fn bad_dynamic_require_flag_is_reported_before_the_config() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
-    write_file(directory.path(), "main.lua", "return 1\n");
+    write_file(directory.path(), "main.luau", "return 1\n");
 
     for command in ["bundle", "graph"] {
         luck_in(directory.path())
-            .args([command, "main.lua", "--dynamic-require", "maybe"])
+            .args([command, "main.luau", "--dynamic-require", "maybe"])
             .assert()
             .code(2)
             .stderr(predicate::str::contains(
@@ -252,10 +252,10 @@ fn bad_dynamic_require_flag_is_reported_before_the_config() {
 #[test]
 fn bundle_with_dynamic_require_succeeds_and_warns() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "helper.lua", "return { value = 1 }\n");
+    write_file(directory.path(), "helper.luau", "return { value = 1 }\n");
     write_file(
         directory.path(),
-        "main.lua",
+        "main.luau",
         "\
 local helper = require(\"./helper\")
 local name = \"./helper\"
@@ -264,7 +264,7 @@ return helper.value + require(name).value
     );
 
     let assert = luck_in(directory.path())
-        .args(["bundle", "main.lua"])
+        .args(["bundle", "main.luau"])
         .assert()
         .code(0)
         .stderr(predicate::str::contains("W007"));
@@ -275,10 +275,10 @@ return helper.value + require(name).value
 #[test]
 fn bundle_with_dynamic_require_fails_in_error_mode() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "helper.lua", "return { value = 1 }\n");
+    write_file(directory.path(), "helper.luau", "return { value = 1 }\n");
     write_file(
         directory.path(),
-        "main.lua",
+        "main.luau",
         "\
 local helper = require(\"./helper\")
 local name = \"./helper\"
@@ -287,7 +287,7 @@ return helper.value + require(name).value
     );
 
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "--dynamic-require", "error"])
+        .args(["bundle", "main.luau", "--dynamic-require", "error"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("E002"));
@@ -295,30 +295,30 @@ return helper.value + require(name).value
     // The project setting reaches the one-shot command too.
     write_file(directory.path(), "luck.json", "{ \"dynamic_require\": \"error\" }\n");
     luck_in(directory.path())
-        .args(["bundle", "main.lua"])
+        .args(["bundle", "main.luau"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("E002"));
 }
 
-/// `luck bundle main.lua` passes the entry's parent as the project root.
+/// `luck bundle main.luau` passes the entry's parent as the project root.
 ///
 /// For a bare file name that root is empty, and no emitted path may then be
 /// absolute, or the bundle would ship the build host's directory layout.
 #[test]
 fn bundle_of_a_bare_entry_name_emits_no_absolute_paths() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "helper.lua", "return { value = 1 }\n");
+    write_file(directory.path(), "helper.luau", "return { value = 1 }\n");
     write_file(
         directory.path(),
-        "main.lua",
+        "main.luau",
         "\
 local helper = require(\"./helper\")
 return helper.value
 ",
     );
 
-    let assert = luck_in(directory.path()).args(["bundle", "main.lua"]).assert().code(0);
+    let assert = luck_in(directory.path()).args(["bundle", "main.luau"]).assert().code(0);
     let bundle = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
     let native_root = directory.path().to_string_lossy().to_string();
@@ -327,5 +327,5 @@ return helper.value
         !bundle.contains(&native_root) && !bundle.contains(&slash_root),
         "absolute path leaked into the bundle:\n{bundle}"
     );
-    assert!(bundle.contains("-- module #1: helper.lua"), "{bundle}");
+    assert!(bundle.contains("-- module #1: helper.luau"), "{bundle}");
 }

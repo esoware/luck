@@ -314,7 +314,7 @@ string.format([==[
         r#"os.date("%Q")"#,
         // `os.date` takes only the C89 specifiers.
         r#"os.date("%F")"#,
-        // There's no `%a` or `%p` conversion.
+        // `string.format` takes neither `%a` nor `%p`.
         r#"local s = string.format("%a", 1)"#,
         r#"local s = string.format("%p", {})"#,
         // The argument of `:match` is the pattern.

@@ -31,10 +31,12 @@ impl FromStr for Variant {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "standalone" => Ok(Self::Standalone),
-            "roblox" => Ok(Self::Roblox),
-            _ => Err(format!("invalid variant `{s}`: expected `standalone` or `roblox`")),
+        if s.eq_ignore_ascii_case("standalone") {
+            Ok(Self::Standalone)
+        } else if s.eq_ignore_ascii_case("roblox") {
+            Ok(Self::Roblox)
+        } else {
+            Err(format!("invalid variant `{s}`: expected `standalone` or `roblox`"))
         }
     }
 }

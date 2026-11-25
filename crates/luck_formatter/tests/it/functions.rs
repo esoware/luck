@@ -269,7 +269,7 @@ fn function_call_flat() {
 
 #[test]
 fn bare_string_gets_parens() {
-    assert_format("require \"module\"\n", "require(\"module\")\n");
+    assert_format("require \"./module\"\n", "require(\"./module\")\n");
 }
 
 #[test]

@@ -10,7 +10,6 @@
     "theme": "dark"
   },
   "keywords": [
-    "lua",
     "luau",
     "roblox",
     "linter",
@@ -40,8 +39,8 @@
   "activationEvents": [
     "workspaceContains:luck.json",
     "workspaceContains:.luaurc",
-    "workspaceContains:**/*.lua",
-    "workspaceContains:**/*.luau"
+    "workspaceContains:**/*.luau",
+    "workspaceContains:**/*.lua"
   ],
   "contributes": {
     "languages": [

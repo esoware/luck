@@ -90,37 +90,37 @@ pub(crate) fn run(chunk_name: &str, verdict_path: &Path) -> io::Result<()> {
 /// without the host functions single tests register.
 fn execute(chunk_name: &str, program: Vec<u8>) -> Verdict {
     // SAFETY: The suites need the `debug` library, which mlua counts as
-    // unsafe because Lua code can use it to break mlua's invariants. The
+    // unsafe because Luau code can use it to break mlua's invariants. The
     // programs are the suites' own tests and luck's output for them, and each
     // runs alone in this process, so one that breaks the state takes down only
     // its own run, which the parent reports.
     #[expect(unsafe_code, reason = "the suites' tests need the `debug` library")]
-    let lua = unsafe { Lua::unsafe_new_with(StdLib::ALL, LuaOptions::default()) };
-    let ran = lua.set_memory_limit(MEMORY_LIMIT_BYTES).and_then(|_unlimited| {
-        let main = lua.load(program).set_name(chunk_name);
-        let globals = lua.globals();
+    let vm = unsafe { Lua::unsafe_new_with(StdLib::ALL, LuaOptions::default()) };
+    let ran = vm.set_memory_limit(MEMORY_LIMIT_BYTES).and_then(|_unlimited| {
+        let main = vm.load(program).set_name(chunk_name);
+        let globals = vm.globals();
         // The runner's native-code helpers, as they answer with native code
         // generation off.
-        globals.set("is_native", lua.create_function(|_, ()| Ok(false))?)?;
-        globals.set("is_native_if_supported", lua.create_function(|_, ()| Ok(true))?)?;
-        globals.set("loadstring", lua.create_function(loadstring)?)?;
+        globals.set("is_native", vm.create_function(|_, ()| Ok(false))?)?;
+        globals.set("is_native_if_supported", vm.create_function(|_, ()| Ok(true))?)?;
+        globals.set("loadstring", vm.create_function(loadstring)?)?;
         // The test gets globals of its own over the shared ones, as
         // `luaL_sandboxthread` gives it, which `_G` names. A thread starts
         // with the globals of the one that made it.
-        let environment = lua.create_table()?;
-        environment.set_metatable(Some(lua.create_table_from([("__index", &globals)])?))?;
+        let environment = vm.create_table()?;
+        environment.set_metatable(Some(vm.create_table_from([("__index", &globals)])?))?;
         environment.set("_G", &environment)?;
         globals.get::<Function>("setfenv")?.call::<()>((0, &environment))?;
         // Luau's runner resumes each test as a thread, so its main chunk can
         // yield to it.
-        let thread = lua.create_thread(main.set_environment(environment).into_function()?)?;
+        let thread = vm.create_thread(main.set_environment(environment).into_function()?)?;
         let values: MultiValue = thread.resume(())?;
         if thread.status() == ThreadStatus::Resumable {
             return Err(mlua::Error::runtime("thread yielded unexpectedly"));
         }
         Ok(values)
     });
-    // The values are only readable while `lua` lives.
+    // The values are only readable while `vm` lives.
     match ran {
         Ok(values) => Verdict::Returned(values.iter().map(render).collect::<Vec<_>>().join("\n")),
         Err(error) => Verdict::Failed(message(&error)),
@@ -131,15 +131,15 @@ fn execute(chunk_name: &str, program: Vec<u8>) -> Verdict {
 /// it's given a name, and returns `nil` and the message when the source
 /// doesn't compile.
 fn loadstring(
-    lua: &Lua,
+    vm: &Lua,
     (source, chunk_name): (LuaString, Option<LuaString>),
 ) -> mlua::Result<(Value, Value)> {
     let name = chunk_name.as_ref().unwrap_or(&source).to_string_lossy();
     let bytes = source.as_bytes();
-    match lua.load(bytes.as_ref()).set_name(name).into_function() {
+    match vm.load(bytes.as_ref()).set_name(name).into_function() {
         Ok(function) => Ok((Value::Function(function), Value::Nil)),
         Err(mlua::Error::SyntaxError { message, .. }) => {
-            Ok((Value::Nil, Value::String(lua.create_string(message)?)))
+            Ok((Value::Nil, Value::String(vm.create_string(message)?)))
         }
         Err(error) => Err(error),
     }

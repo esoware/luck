@@ -4,7 +4,7 @@ expression: snapshot
 input_file: tests/fixtures/idiomatic/module_pattern.luau
 ---
 -- line_width = 1
--- The canonical Lua module pattern. A linter that warns anywhere in this
+-- The canonical Luau module pattern. A linter that warns anywhere in this
 -- file with default settings has a false-positive bug.
 local M = {}
 
@@ -48,7 +48,7 @@ M.Counter = Counter
 return M
 
 -- line_width = 40
--- The canonical Lua module pattern. A linter that warns anywhere in this
+-- The canonical Luau module pattern. A linter that warns anywhere in this
 -- file with default settings has a false-positive bug.
 local M = {}
 
@@ -84,7 +84,7 @@ M.Counter = Counter
 return M
 
 -- line_width = 80, 100, 120
--- The canonical Lua module pattern. A linter that warns anywhere in this
+-- The canonical Luau module pattern. A linter that warns anywhere in this
 -- file with default settings has a false-positive bug.
 local M = {}
 

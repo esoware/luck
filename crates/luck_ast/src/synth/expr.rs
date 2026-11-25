@@ -548,8 +548,8 @@ mod tests {
         let synth = fixture.synth();
         let valid = synth.field_or_index(synth.name_expr("t"), "valid_name");
         assert!(matches!(chain(&valid).suffixes.last(), Suffix::Field(_)));
-        let goto = synth.field_or_index(synth.name_expr("t"), "goto");
-        assert!(matches!(chain(&goto).suffixes.last(), Suffix::Field(_)));
+        let contextual = synth.field_or_index(synth.name_expr("t"), "continue");
+        assert!(matches!(chain(&contextual).suffixes.last(), Suffix::Field(_)));
         for bad in ["not an ident", "1st", "", "end"] {
             let bracketed = synth.field_or_index(synth.name_expr("t"), bad);
             assert!(

@@ -106,9 +106,9 @@ mod tests {
 
     #[test]
     fn a_leading_dot_slash_names_the_config_directory() {
-        let set = compiled(&[glob("./src/*.lua").unwrap()]).unwrap();
-        assert!(set.is_match("src/a.lua"));
-        assert!(!set.is_match("src/nested/a.lua"));
+        let set = compiled(&[glob("./src/*.luau").unwrap()]).unwrap();
+        assert!(set.is_match("src/a.luau"));
+        assert!(!set.is_match("src/nested/a.luau"));
     }
 
     #[test]

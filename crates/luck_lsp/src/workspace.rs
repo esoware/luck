@@ -405,8 +405,8 @@ mod tests {
     fn a_file_the_watcher_reported_changed_is_not_read() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
-        let spelled = directory.path().join("a.lua");
-        fs::write(&spelled, "return {}\n").expect("write a.lua");
+        let spelled = directory.path().join("a.luau");
+        fs::write(&spelled, "return {}\n").expect("write a.luau");
         let path = FileSystemOs.canonicalize(&spelled).expect("canonicalize");
         let session = session();
         let workspace = session.workspace();

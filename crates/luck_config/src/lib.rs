@@ -18,7 +18,7 @@
 //! it, so it layers over `.editorconfig`. `overrides` layer `lint` and `format`
 //! settings over the files their globs match.
 //!
-//! [`walk_source_files`] finds the `.lua` and `.luau` files a directory holds,
+//! [`walk_source_files`] finds the `.luau` and `.lua` files a directory holds,
 //! past what `.gitignore` and `.luckignore` hide, each taken or left out by
 //! the `include` and `exclude` of the project a [`WalkVisitor`] says it's in,
 //! so the path commands and the language server's workspace find the same

@@ -44,7 +44,7 @@ pub(crate) fn document_linted_by(text: &str, lint: LintConfig) -> DocumentState 
 
 /// The URI the tests open their documents at.
 pub(crate) fn uri() -> Uri {
-    "file:///main.lua".parse().expect("valid URI")
+    "file:///main.luau".parse().expect("valid URI")
 }
 
 /// A session with no workspace folders, in UTF-16 positions, whose tasks

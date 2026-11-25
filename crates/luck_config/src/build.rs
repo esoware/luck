@@ -143,11 +143,11 @@ mod tests {
 
     #[test]
     fn output_paths_collide_through_a_directory_not_on_disk() {
-        let directory = project_with(&[("main.lua", "return 1")]);
-        let entry = directory.path().join("main.lua");
-        let same_as_entry = directory.path().join("gone/../main.lua");
+        let directory = project_with(&[("main.luau", "return 1")]);
+        let entry = directory.path().join("main.luau");
+        let same_as_entry = directory.path().join("gone/../main.luau");
         assert!(check_output_paths([&entry], [&same_as_entry]).is_err());
-        let spare = directory.path().join("out/bundle.lua");
+        let spare = directory.path().join("out/bundle.luau");
         check_output_paths([&entry], [&spare]).expect("a spare output doesn't collide");
         assert!(check_output_paths([&entry], [&spare, &spare]).is_err());
     }

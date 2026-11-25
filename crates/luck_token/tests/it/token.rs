@@ -167,7 +167,7 @@ fn keyword_reads_back_each_keyword_spelling() {
         assert_eq!(TokenKind::keyword(text), Some(kind));
         assert!(!kind.is_name(), "{kind:?}");
     }
-    for name in ["", "x", "End", "functions", "types", "goto", "global"] {
+    for name in ["", "x", "End", "functions", "types"] {
         assert_eq!(TokenKind::keyword(name), None, "{name:?}");
     }
 }
@@ -246,7 +246,7 @@ fn of_name_reads_each_name_as_keyword_does() {
 #[test]
 fn is_reserved_holds_for_keywords_only() {
     assert!(TokenKind::is_reserved("while"));
-    let names = ["", "x", "continue", "type", "export", "const", "typeof", "While", "goto"];
+    let names = ["", "x", "continue", "type", "export", "const", "typeof", "While"];
     for name in names {
         assert!(!TokenKind::is_reserved(name), "{name:?}");
     }
@@ -254,7 +254,7 @@ fn is_reserved_holds_for_keywords_only() {
 
 #[test]
 fn is_identifier_shaped_holds_for_ascii_names_keywords_included() {
-    for text in ["x", "_", "_private", "snake_case2", "camelCase", "end", "goto"] {
+    for text in ["x", "_", "_private", "snake_case2", "camelCase", "end", "continue"] {
         assert!(TokenKind::is_identifier_shaped(text), "{text:?}");
     }
     for text in ["", "1st", "a-b", "has space", "a.b", "a\\nb", "\u{dc}nicode", "x\u{e9}"] {

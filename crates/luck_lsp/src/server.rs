@@ -424,7 +424,7 @@ impl Server {
             };
             is_settings_change |= self.session.settings().is_settings_file(&path);
             let is_module =
-                path.extension().is_some_and(|extension| extension == "lua" || extension == "luau");
+                path.extension().is_some_and(|extension| extension == "luau" || extension == "lua");
             let is_module_added_or_removed = is_module && change.typ != FileChangeType::CHANGED;
             // A `.luaurc` edited, or a module created or deleted, can change
             // what a require resolves to.
@@ -817,7 +817,7 @@ mod tests {
     fn only_a_file_uri_has_a_file_path() {
         let untitled = Uri::from_str("untitled:Untitled-1").expect("valid URI");
         assert_eq!(file_path(&untitled), None);
-        let saved = Uri::from_str("FILE:///tmp/main.lua").expect("valid URI");
-        assert!(file_path(&saved).is_some_and(|path| path.ends_with("main.lua")));
+        let saved = Uri::from_str("FILE:///tmp/main.luau").expect("valid URI");
+        assert!(file_path(&saved).is_some_and(|path| path.ends_with("main.luau")));
     }
 }

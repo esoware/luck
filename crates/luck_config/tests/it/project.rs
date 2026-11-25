@@ -31,9 +31,10 @@ fn the_variant_key_picks_the_library_every_file_gets() {
     assert_eq!(roblox.variant(), Variant::Roblox);
     assert!(roblox.stdlib().library().lookup(["game"]).is_some());
 
-    let (_luau_directory, luau) = loaded(&[("luck.json", r#"{ "variant": "standalone" }"#)]);
-    assert_eq!(luau.variant(), Variant::Standalone);
-    assert!(luau.stdlib().library().lookup(["game"]).is_none());
+    let (_standalone_directory, standalone) =
+        loaded(&[("luck.json", r#"{ "variant": "standalone" }"#)]);
+    assert_eq!(standalone.variant(), Variant::Standalone);
+    assert!(standalone.stdlib().library().lookup(["game"]).is_none());
 }
 
 #[test]
@@ -53,7 +54,7 @@ fn rejects_a_variant_on_its_value() {
 fn rejects_entry_beside_entries() {
     let directory = project_with(&[(
         "luck.json",
-        r#"{ "entry": "a.lua", "entries": [{ "entry": "b.lua", "output": "c.lua" }] }"#,
+        r#"{ "entry": "a.luau", "entries": [{ "entry": "b.luau", "output": "c.luau" }] }"#,
     )]);
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
@@ -87,19 +88,19 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
     )]);
     let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
 
-    let base = linter_at("src/a.lua");
+    let base = linter_at("src/a.luau");
     assert_eq!(base.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
 
-    let spec = linter_at("spec/a.lua");
+    let spec = linter_at("spec/a.luau");
     assert_eq!(spec.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Off));
     assert_eq!(spec.config().extra_globals, ["a", "it"]);
     assert_eq!(spec.config().categories.level(Category::Style), None);
 
-    let slow = linter_at("spec/slow/a.lua");
+    let slow = linter_at("spec/slow/a.luau");
     assert_eq!(slow.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Off));
     assert_eq!(slow.config().categories.level(Category::Style), Some(RuleLevel::Error));
 
-    let fixture = linter_at("spec/fixtures/a.lua");
+    let fixture = linter_at("spec/fixtures/a.luau");
     assert_eq!(fixture.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
 }
 
@@ -112,7 +113,7 @@ fn an_extended_override_matches_from_the_loaded_config_s_directory() {
         ),
         ("luck.json", r#"{ "extends": ["shared/base.json"] }"#),
     ]);
-    let linter = project.linter_for(Some(&directory.path().join("spec/a.lua")));
+    let linter = project.linter_for(Some(&directory.path().join("spec/a.luau")));
     assert_eq!(linter.config().extra_globals, ["it"]);
 }
 
@@ -128,10 +129,10 @@ fn a_symlink_matches_the_globs_where_it_is_and_not_where_it_leads() {
         }"#,
     )]);
     let elsewhere = tempfile::tempdir().expect("tempdir");
-    let target = elsewhere.path().join("b.lua");
-    fs::write(&target, "").expect("write b.lua");
+    let target = elsewhere.path().join("b.luau");
+    fs::write(&target, "").expect("write b.luau");
     fs::create_dir_all(directory.path().join("src")).expect("mkdir src");
-    let link = directory.path().join("src/b.lua");
+    let link = directory.path().join("src/b.luau");
     // Windows lets only an administrator or developer mode make one.
     if symlink_file(&target, &link).is_err() {
         return;
@@ -151,7 +152,7 @@ fn an_overlay_wins_over_every_override() {
     overlay.rules.set_level(RuleId::Shadowing, RuleLevel::Error);
     overlay.extra_globals.push("app".to_owned());
     project.overlay_lint(&overlay);
-    for relative in ["src/a.lua", "spec/a.lua"] {
+    for relative in ["src/a.luau", "spec/a.luau"] {
         let linter = project.linter_for(Some(&directory.path().join(relative)));
         let lint = linter.config();
         assert_eq!(lint.rules.level(RuleId::Shadowing), Some(RuleLevel::Error), "{relative}");
@@ -172,7 +173,7 @@ fn format_layers_defaults_then_editorconfig_then_the_section_then_overrides() {
         (
             ".editorconfig",
             "\
-[*.lua]
+[*.luau]
 indent_style = space
 indent_size = 2
 max_line_length = 90
@@ -184,13 +185,13 @@ max_line_length = 90
         project.format_options(Some(&directory.path().join(relative)), Some(&editorconfigs))
     };
 
-    let source = options_at("src/a.lua");
+    let source = options_at("src/a.luau");
     assert_eq!(source.indent_style, IndentStyle::Spaces);
     assert_eq!(source.indent_width, 3);
     assert_eq!(source.line_width, 90);
-    assert_eq!(options_at("spec/a.lua").line_width, 80);
+    assert_eq!(options_at("spec/a.luau").line_width, 80);
 
-    let without_editorconfig = project.format_options(Some(&directory.path().join("a.lua")), None);
+    let without_editorconfig = project.format_options(Some(&directory.path().join("a.luau")), None);
     assert_eq!(without_editorconfig.indent_style, FormatOptions::default().indent_style);
     assert_eq!(without_editorconfig.indent_width, 3);
     assert_eq!(project.format_options(None, Some(&editorconfigs)).indent_width, 3);
@@ -209,7 +210,7 @@ const APP: &str = r#"
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.draw]
+[globals.app.members.onMessage]
 kind = "function"
 is_read_only = false
 "#;
@@ -222,7 +223,7 @@ fn std_definitions_layer_over_the_variant_s_library() {
     ]);
     let stdlib = project.stdlib();
     assert_eq!(stdlib.variant(), Variant::Roblox);
-    assert!(stdlib.library().lookup(["app", "draw"]).is_some());
+    assert!(stdlib.library().lookup(["app", "onMessage"]).is_some());
     assert!(stdlib.library().lookup(["game"]).is_some());
     assert!(stdlib.library().lookup(["print"]).is_some());
     let std_file =
@@ -286,11 +287,11 @@ shape = "Sceen"
 #[test]
 fn builds_resolve_entries_profiles_and_outputs() {
     let (directory, project) = loaded(&[
-        ("src/main.lua", "return 1"),
+        ("src/main.luau", "return 1"),
         (
             "luck.json",
             r#"{
-                "entry": "src/main.lua", "output_dir": "dist", "minify": false,
+                "entry": "src/main.luau", "output_dir": "dist", "minify": false,
                 "profiles": { "release": { "minify": true } }
             }"#,
         ),
@@ -298,7 +299,7 @@ fn builds_resolve_entries_profiles_and_outputs() {
     let builds = project.builds(Some("release")).expect("builds");
     let [build] = builds.as_slice() else { panic!("one build: {builds:?}") };
     assert!(build.minify);
-    assert_eq!(build.output, directory.path().join("dist").join("main.lua"));
+    assert_eq!(build.output, directory.path().join("dist").join("main.luau"));
     let error = project.builds(Some("nightly")).unwrap_err();
     assert_eq!(error, "profile `nightly` isn't defined in `luck.json`");
 }
@@ -306,8 +307,8 @@ fn builds_resolve_entries_profiles_and_outputs() {
 #[test]
 fn rejects_an_output_that_overwrites_the_entry() {
     let (_directory, project) = loaded(&[
-        ("main.lua", "return 1"),
-        ("luck.json", r#"{ "entry": "main.lua", "output_dir": "." }"#),
+        ("main.luau", "return 1"),
+        ("luck.json", r#"{ "entry": "main.luau", "output_dir": "." }"#),
     ]);
     let builds = project.builds(None);
     assert!(builds.is_err(), "a bundle written over its own entry destroys it: {builds:?}");
@@ -316,13 +317,13 @@ fn rejects_an_output_that_overwrites_the_entry() {
 #[test]
 fn rejects_two_entries_writing_the_same_output() {
     let (_directory, project) = loaded(&[
-        ("a.lua", "return 1"),
-        ("b.lua", "return 2"),
+        ("a.luau", "return 1"),
+        ("b.luau", "return 2"),
         (
             "luck.json",
             r#"{ "entries": [
-                { "entry": "a.lua", "output": "bundle.lua" },
-                { "entry": "b.lua", "output": "bundle.lua" }
+                { "entry": "a.luau", "output": "bundle.luau" },
+                { "entry": "b.luau", "output": "bundle.luau" }
             ] }"#,
         ),
     ]);

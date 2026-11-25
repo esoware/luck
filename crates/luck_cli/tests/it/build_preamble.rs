@@ -7,15 +7,15 @@ use crate::common::{run, write_file};
 #[test]
 fn build_keeps_every_preamble_line_inside_its_comment() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "print(1)\n");
+    write_file(directory.path(), "main.luau", "print(1)\n");
     write_file(
         directory.path(),
         "luck.json",
-        r#"{"entry":"main.lua","output":"bundle.lua","preamble":"one\rerror(\"escaped\")\r\ntwo"}"#,
+        r#"{"entry":"main.luau","output":"bundle.luau","preamble":"one\rerror(\"escaped\")\r\ntwo"}"#,
     );
 
     run(directory.path(), &["build", "--quiet"]);
-    let bundle = fs::read_to_string(directory.path().join("bundle.lua")).unwrap();
+    let bundle = fs::read_to_string(directory.path().join("bundle.luau")).unwrap();
 
     assert!(
         bundle.split(['\r', '\n']).all(|line| !line.starts_with("error(")),
@@ -38,7 +38,7 @@ fn build_preamble_stays_after_a_shebang() {
     let directory = TempDir::new().unwrap();
     write_file(
         directory.path(),
-        "main.lua",
+        "main.luau",
         "\
 #!/usr/bin/env luau
 print(1)
@@ -47,11 +47,11 @@ print(1)
     write_file(
         directory.path(),
         "luck.json",
-        r#"{"entry":"main.lua","output":"bundle.lua","preamble":"hello"}"#,
+        r#"{"entry":"main.luau","output":"bundle.luau","preamble":"hello"}"#,
     );
 
     run(directory.path(), &["build", "--quiet"]);
-    let bundle = fs::read_to_string(directory.path().join("bundle.lua")).unwrap();
+    let bundle = fs::read_to_string(directory.path().join("bundle.luau")).unwrap();
 
     assert!(
         bundle.starts_with("#!"),

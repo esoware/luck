@@ -1,4 +1,4 @@
--- The canonical Lua module pattern. A linter that warns anywhere in this
+-- The canonical Luau module pattern. A linter that warns anywhere in this
 -- file with default settings has a false-positive bug.
 local M = {}
 

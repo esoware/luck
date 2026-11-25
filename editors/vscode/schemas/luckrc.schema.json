@@ -64,7 +64,7 @@
       ]
     },
     "include": {
-      "description": "Globs of the files `lint`, `fmt`, and `check` take, relative to the\n`luck.json` directory (default every `.lua` and `.luau` file). `*`\nstops at `/`, and `**/` crosses directories.",
+      "description": "Globs of the files `lint`, `fmt`, and `check` take, relative to the\n`luck.json` directory (default every `.luau` and `.lua` file). `*`\nstops at `/`, and `**/` crosses directories.",
       "type": [
         "array",
         "null"
@@ -165,7 +165,7 @@
       ]
     },
     "variant": {
-      "description": "Where every `.lua` and `.luau` file runs (default `standalone`):\n`\"standalone\"` for standalone Luau, or `\"roblox\"` for Roblox, whose globals,\nservices, and enums join Luau's standard library.",
+      "description": "Where every `.luau` and `.lua` file runs (default `standalone`):\n`\"standalone\"` for standalone Luau, or `\"roblox\"` for Roblox, whose globals,\nservices, and enums join Luau's standard library.",
       "anyOf": [
         {
           "$ref": "#/$defs/Variant"

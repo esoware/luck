@@ -53,14 +53,14 @@ mod tests {
     use super::*;
     use crate::fixtures::document_at;
 
-    /// `text` as `main.lua` under the defaults rooted at `directory`.
+    /// `text` as `main.luau` under the defaults rooted at `directory`.
     ///
     /// That's what a document with no `luck.json` above it gets. Going
     /// through `SettingsCache` instead would let discovery walk above the
     /// temp directory and pick up whatever `luck.json` sits there.
     fn main_beside(text: &str, directory: &Path) -> DocumentState {
-        let main_path = directory.join("main.lua");
-        fs::write(&main_path, text).expect("write main.lua");
+        let main_path = directory.join("main.luau");
+        fs::write(&main_path, text).expect("write main.luau");
         let project = Project::defaults(directory.to_path_buf());
         document_at(text, project, &main_path)
     }
@@ -68,12 +68,12 @@ mod tests {
     #[test]
     fn a_relative_sibling_resolves_against_the_requiring_file() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        fs::write(directory.path().join("foo.luau"), "return {}\n").expect("write foo.luau");
         let links =
             document_links(&main_beside("local foo = require(\"./foo\")\n", directory.path()));
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
-        assert!(target.path().as_str().ends_with("foo.lua"), "{}", target.as_str());
+        assert!(target.path().as_str().ends_with("foo.luau"), "{}", target.as_str());
     }
 
     #[test]
@@ -81,24 +81,24 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(directory.path().join("lib")).expect("mkdir lib");
         fs::create_dir_all(directory.path().join("src")).expect("mkdir src");
-        fs::write(directory.path().join("lib/dep.lua"), "return {}\n").expect("write dep.lua");
+        fs::write(directory.path().join("lib/dep.luau"), "return {}\n").expect("write dep.luau");
         fs::write(directory.path().join(".luaurc"), r#"{ "aliases": { "lib": "./lib" } }"#)
             .expect("write .luaurc");
-        let main_path = directory.path().join("src/main.lua");
+        let main_path = directory.path().join("src/main.luau");
         let text = "local dep = require(\"@lib/dep\")\n";
-        fs::write(&main_path, text).expect("write main.lua");
+        fs::write(&main_path, text).expect("write main.luau");
 
         let project = Project::defaults(directory.path().to_path_buf());
         let links = document_links(&document_at(text, project, &main_path));
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
-        assert!(target.path().as_str().ends_with("lib/dep.lua"), "{}", target.as_str());
+        assert!(target.path().as_str().ends_with("lib/dep.luau"), "{}", target.as_str());
     }
 
     #[test]
     fn target_at_resolves_the_require_string_under_the_position() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        fs::write(directory.path().join("foo.luau"), "return {}\n").expect("write foo.luau");
         let text = "\
 local foo = require(\"./foo\")
 local x = 1
@@ -109,7 +109,7 @@ local x = 1
         for utf16_column in [20, 27] {
             let target = target_at(&document, Position::new(0, utf16_column))
                 .expect("the require string resolves");
-            assert!(target.path().as_str().ends_with("foo.lua"), "{}", target.as_str());
+            assert!(target.path().as_str().ends_with("foo.luau"), "{}", target.as_str());
         }
         assert_eq!(target_at(&document, Position::new(0, 19)), None);
         assert_eq!(target_at(&document, Position::new(1, 6)), None);
@@ -117,7 +117,7 @@ local x = 1
 
     fn links_beside_foo(text: &str) -> Vec<DocumentLink> {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
+        fs::write(directory.path().join("foo.luau"), "return {}\n").expect("write foo.luau");
         document_links(&main_beside(text, directory.path()))
     }
 

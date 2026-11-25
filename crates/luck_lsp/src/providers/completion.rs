@@ -418,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn luau_s_keywords_are_offered() {
+    fn keywords_and_contextual_keywords_are_offered() {
         let items = items_at(&document(""), 0, 0);
         let keywords = keywords_of(&items);
         assert!(keywords.contains(&"while"), "{keywords:?}");

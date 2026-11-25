@@ -561,10 +561,10 @@ params = [{ kind = "string" }, { kind = "vararg" }]
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
-[globals.app.members.graphics.members.print]
+[globals.app.members.net.members.listen]
 kind = "function"
 params = [{ kind = "string" }, { kind = "numbr" }]
 "#;

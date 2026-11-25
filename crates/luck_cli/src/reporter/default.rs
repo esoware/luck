@@ -156,7 +156,7 @@ mod tests {
             "expected `end` to close `function`, found end of file",
         )
         .with_label(Span::new(6, 14), "unclosed `function`");
-        let text = rendered("test.lua", Some(b"local function f()"), &[diag]);
+        let text = rendered("test.luau", Some(b"local function f()"), &[diag]);
         assert!(text.contains("E008"), "{text}");
         assert!(text.contains("expected `end` to close `function`"), "{text}");
         assert!(text.contains("unclosed `function`"), "{text}");
@@ -170,13 +170,13 @@ mod tests {
         let offset = huge.len() - 1;
         let diag = Diagnostic::e008(Span::from_indices(offset, offset + 1), "boom")
             .with_label(Span::new(0, 5), "here");
-        let text = rendered("big.lua", Some(huge.as_bytes()), &[diag]);
+        let text = rendered("big.luau", Some(huge.as_bytes()), &[diag]);
         assert_eq!(
             text,
             format!(
                 "\
-[E008] error: boom (big.lua: byte {offset})
-  here (big.lua: byte 0)
+[E008] error: boom (big.luau: byte {offset})
+  here (big.luau: byte 0)
 "
             ),
             "{text}"
@@ -186,12 +186,12 @@ mod tests {
     #[test]
     fn unreadable_file_uses_compact_rendering_with_its_help() {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "no such file");
-        let diag = Diagnostic::e010("gone.lua", &io_error);
-        let text = rendered("gone.lua", None, &[diag]);
+        let diag = Diagnostic::e010("gone.luau", &io_error);
+        let text = rendered("gone.luau", None, &[diag]);
         assert_eq!(
             text,
             "\
-[E010] error: cannot read file `gone.lua`: no such file (gone.lua)
+[E010] error: cannot read file `gone.luau`: no such file (gone.luau)
 help: check that the file exists and is readable
 ",
             "{text}"
@@ -210,14 +210,14 @@ help: check that the file exists and is readable
     fn a_byte_that_is_not_utf8_renders_as_one_mark_at_its_offset() {
         assert_eq!(renderable(b"-- caf\xE9\x0B\xC2\n\xFF\xE2\x80"), "-- caf? ?\n???");
         let diag = Diagnostic::e008(Span::new(17, 22), "boom");
-        let text = rendered("latin1.lua", Some(b"local s = 'caf\xE9' local"), &[diag]);
-        assert!(text.contains("latin1.lua:1:18"), "{text}");
+        let text = rendered("latin1.luau", Some(b"local s = 'caf\xE9' local"), &[diag]);
+        assert!(text.contains("latin1.luau:1:18"), "{text}");
     }
 
     #[test]
     fn a_short_line_renders_its_snippet() {
         let diag = Diagnostic::e008(Span::new(6, 7), "boom");
-        let text = rendered("small.lua", Some(b"local x = 1\n"), &[diag]);
-        assert!(text.contains("small.lua:1:7"), "{text}");
+        let text = rendered("small.luau", Some(b"local x = 1\n"), &[diag]);
+        assert!(text.contains("small.luau:1:7"), "{text}");
     }
 }

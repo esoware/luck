@@ -90,8 +90,8 @@ fn edits(edit: &WorkspaceEdit) -> Vec<(&str, Position, &str)> {
 
 #[test]
 fn a_member_goes_to_where_its_module_defines_it() {
-    let directory = project(&[("util.lua", UTIL), ("main.lua", MAIN)]);
-    let main = uri_of(directory.path(), "main.lua");
+    let directory = project(&[("util.luau", UTIL), ("main.luau", MAIN)]);
+    let main = uri_of(directory.path(), "main.luau");
     let mut client = Client::start_in(directory.path());
     client.open(&main, MAIN);
 
@@ -101,18 +101,18 @@ fn a_member_goes_to_where_its_module_defines_it() {
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         })
-        .expect("`greet` is defined in `util.lua`");
+        .expect("`greet` is defined in `util.luau`");
     let GotoDefinitionResponse::Scalar(location) = response else {
         panic!("one definition: {response:?}");
     };
-    assert_eq!(file_name(&location.uri), "util.lua");
+    assert_eq!(file_name(&location.uri), "util.luau");
     assert_eq!(location.range, Range::new(Position::new(1, 11), Position::new(1, 16)));
 }
 
 #[test]
 fn a_member_s_references_include_files_that_are_not_open() {
-    let directory = project(&[("util.lua", UTIL), ("main.lua", MAIN)]);
-    let util = uri_of(directory.path(), "util.lua");
+    let directory = project(&[("util.luau", UTIL), ("main.luau", MAIN)]);
+    let util = uri_of(directory.path(), "util.luau");
     let mut client = Client::start_in(directory.path());
     client.open(&util, UTIL);
 
@@ -120,9 +120,9 @@ fn a_member_s_references_include_files_that_are_not_open() {
     assert_eq!(
         places(&found),
         [
-            ("main.lua", Position::new(1, 5)),
-            ("util.lua", Position::new(1, 11)),
-            ("util.lua", Position::new(4, 30)),
+            ("main.luau", Position::new(1, 5)),
+            ("util.luau", Position::new(1, 11)),
+            ("util.luau", Position::new(4, 30)),
         ]
     );
     let reads = references(&mut client, &util, Position::new(1, 12), false);
@@ -131,8 +131,8 @@ fn a_member_s_references_include_files_that_are_not_open() {
 
 #[test]
 fn a_member_renames_in_every_file_that_names_it() {
-    let directory = project(&[("util.lua", UTIL), ("main.lua", MAIN)]);
-    let main = uri_of(directory.path(), "main.lua");
+    let directory = project(&[("util.luau", UTIL), ("main.luau", MAIN)]);
+    let main = uri_of(directory.path(), "main.luau");
     let mut client = Client::start_in(directory.path());
     client.open(&main, MAIN);
 
@@ -148,9 +148,9 @@ fn a_member_renames_in_every_file_that_names_it() {
     assert_eq!(
         edits(&edit),
         [
-            ("main.lua", Position::new(1, 5), "welcome"),
-            ("util.lua", Position::new(1, 11), "welcome"),
-            ("util.lua", Position::new(4, 30), "welcome"),
+            ("main.luau", Position::new(1, 5), "welcome"),
+            ("util.luau", Position::new(1, 11), "welcome"),
+            ("util.luau", Position::new(4, 30), "welcome"),
         ]
     );
     let refusal = rename(&mut client, &main, Position::new(1, 7), "shout").unwrap_err();
@@ -158,7 +158,7 @@ fn a_member_renames_in_every_file_that_names_it() {
 }
 
 #[test]
-fn a_luau_export_renames_in_its_module_and_its_readers() {
+fn an_exported_local_renames_in_its_module_and_its_readers() {
     let version = "\
 export local version = 1
 export function describe() return version end
@@ -170,7 +170,7 @@ print(info.version, info.describe())
     let directory = project(&[("version.luau", version), ("main.luau", main)]);
     let main_uri = uri_of(directory.path(), "main.luau");
     let mut client = Client::start_in(directory.path());
-    client.open_as(&main_uri, "luau", main);
+    client.open(&main_uri, main);
 
     let edit = rename(&mut client, &main_uri, Position::new(1, 12), "release").expect("renames");
     assert_eq!(
@@ -187,8 +187,8 @@ print(info.version, info.describe())
 
 #[test]
 fn a_member_of_a_module_outside_the_workspace_is_not_renamed() {
-    let directory = project(&[("util.lua", UTIL), ("main.lua", MAIN)]);
-    let main = uri_of(directory.path(), "main.lua");
+    let directory = project(&[("util.luau", UTIL), ("main.luau", MAIN)]);
+    let main = uri_of(directory.path(), "main.luau");
     let mut client = Client::start();
     client.open(&main, MAIN);
 
@@ -200,31 +200,32 @@ fn a_member_of_a_module_outside_the_workspace_is_not_renamed() {
 
 #[test]
 fn a_file_changed_on_disk_is_read_again() {
-    let directory = project(&[("util.lua", UTIL), ("main.lua", MAIN)]);
-    let util = uri_of(directory.path(), "util.lua");
+    let directory = project(&[("util.luau", UTIL), ("main.luau", MAIN)]);
+    let util = uri_of(directory.path(), "util.luau");
     let mut client = Client::start_in(directory.path());
     client.open(&util, UTIL);
     assert_eq!(references(&mut client, &util, Position::new(1, 12), false).len(), 2);
 
-    let main_path = directory.path().join("main.lua");
-    fs::write(&main_path, format!("{MAIN}util.greet(\"again\")\n")).expect("rewrite main.lua");
+    let main_path = directory.path().join("main.luau");
+    fs::write(&main_path, format!("{MAIN}util.greet(\"again\")\n")).expect("rewrite main.luau");
     client.file_changed(&main_path, FileChangeType::CHANGED);
     assert_eq!(references(&mut client, &util, Position::new(1, 12), false).len(), 3);
 
-    let other_path = directory.path().join("other.lua");
-    fs::write(&other_path, "require(\"./util\").greet()\n").expect("write other.lua");
+    let other_path = directory.path().join("other.luau");
+    fs::write(&other_path, "require(\"./util\").greet()\n").expect("write other.luau");
     client.file_changed(&other_path, FileChangeType::CREATED);
     let found = references(&mut client, &util, Position::new(1, 12), false);
-    assert!(places(&found).contains(&("other.lua", Position::new(0, 18))), "{found:?}");
+    assert!(places(&found).contains(&("other.luau", Position::new(0, 18))), "{found:?}");
 }
 
 #[test]
 fn a_folder_added_to_the_workspace_is_walked() {
-    let directory = project(&[("util.lua", UTIL)]);
+    let directory = project(&[("util.luau", UTIL)]);
     let sub = directory.path().join("sub");
     fs::create_dir_all(&sub).expect("mkdir sub");
-    fs::write(sub.join("main.lua"), MAIN.replace("./util", "../util")).expect("write sub/main.lua");
-    let util = uri_of(directory.path(), "util.lua");
+    fs::write(sub.join("main.luau"), MAIN.replace("./util", "../util"))
+        .expect("write sub/main.luau");
+    let util = uri_of(directory.path(), "util.luau");
     let mut client = Client::start();
     client.open(&util, UTIL);
     assert_eq!(references(&mut client, &util, Position::new(1, 12), false).len(), 1);
@@ -239,7 +240,7 @@ fn a_folder_added_to_the_workspace_is_walked() {
         },
     });
     let found = references(&mut client, &util, Position::new(1, 12), false);
-    assert!(places(&found).contains(&("main.lua", Position::new(1, 5))), "{found:?}");
+    assert!(places(&found).contains(&("main.luau", Position::new(1, 5))), "{found:?}");
 }
 
 /// The walk loads each config on a thread of its own, which a nesting past
@@ -256,7 +257,7 @@ fn the_walk_reports_a_config_nested_past_the_limit() {
         "]".repeat(nesting)
     );
     fs::write(&config_path, config).expect("write luck.json");
-    fs::write(directory.path().join("main.lua"), "print(1)\n").expect("write main.lua");
+    fs::write(directory.path().join("main.luau"), "print(1)\n").expect("write main.luau");
 
     let mut client = Client::start_in(directory.path());
     let config_uri = Uri::from_file_path(&config_path).expect("file path URI");
@@ -272,8 +273,8 @@ fn a_require_that_does_not_resolve_is_reported_until_its_module_exists() {
 local missing = require(\"./missing\")
 print(missing)
 ";
-    let directory = project(&[("main.lua", text)]);
-    let main = uri_of(directory.path(), "main.lua");
+    let directory = project(&[("main.luau", text)]);
+    let main = uri_of(directory.path(), "main.luau");
     let mut client = Client::start();
     client.open(&main, text);
 
@@ -283,8 +284,8 @@ print(missing)
     assert_eq!(diag.message.lines().next(), Some("module not found: `./missing`"));
     assert_eq!(diag.range, Range::new(Position::new(0, 24), Position::new(0, 35)));
 
-    let missing = directory.path().join("missing.lua");
-    fs::write(&missing, "return {}\n").expect("write missing.lua");
+    let missing = directory.path().join("missing.luau");
+    fs::write(&missing, "return {}\n").expect("write missing.luau");
     client.file_changed(&missing, FileChangeType::CREATED);
     let republished = client.next_published(&main);
     assert_eq!(republished.version, Some(1));

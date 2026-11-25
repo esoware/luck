@@ -83,7 +83,7 @@ fn long_extends_chain_does_not_overflow_the_stack() {
 #[test]
 fn find_config_walks_above_a_relative_start_directory() {
     let project =
-        project_with(&[("luck.json", r#"{ "variant": "standalone" }"#), ("sub/keep.lua", "")]);
+        project_with(&[("luck.json", r#"{ "variant": "standalone" }"#), ("sub/keep.luau", "")]);
     let found = in_directory(&project.path().join("sub"), || find_config(Path::new(".")))
         .expect("discovery from `.` must find the `luck.json` in its parent");
     assert_eq!(

@@ -571,28 +571,28 @@ mod tests {
         let base = r#"{
             "rules": {
                 "cyclomatic_complexity": ["warn", { "max": 10 }],
-                "restricted_module_paths": ["warn", { "paths": ["secret.*"] }]
+                "restricted_module_paths": ["warn", { "paths": ["@secret/*"] }]
             }
         }"#;
         let raised = lint_config(r#"{ "rules": { "cyclomatic_complexity": "error" } }"#)
             .merge_onto(lint_config(base));
         assert_eq!(
             rules_json(&raised),
-            r#"{"restricted_module_paths":["warn",{"paths":["secret.*"]}],"cyclomatic_complexity":["error",{"max":10}]}"#
+            r#"{"restricted_module_paths":["warn",{"paths":["@secret/*"]}],"cyclomatic_complexity":["error",{"max":10}]}"#
         );
 
         let extended = lint_config(
             r#"{
                 "rules": {
                     "cyclomatic_complexity": ["warn", { "max": 4 }],
-                    "restricted_module_paths": ["error", { "paths": ["legacy", "secret.*"] }]
+                    "restricted_module_paths": ["error", { "paths": ["./legacy", "@secret/*"] }]
                 }
             }"#,
         )
         .merge_onto(lint_config(base));
         assert_eq!(
             rules_json(&extended),
-            r#"{"restricted_module_paths":["error",{"paths":["secret.*","legacy"]}],"cyclomatic_complexity":["warn",{"max":4}]}"#
+            r#"{"restricted_module_paths":["error",{"paths":["@secret/*","./legacy"]}],"cyclomatic_complexity":["warn",{"max":4}]}"#
         );
     }
 

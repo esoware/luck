@@ -44,7 +44,7 @@ mod tests {
     fn serve_every_request(source: &str) {
         let uri = uri();
         let project = Project::defaults(PathBuf::from("."));
-        let document = document_at(source, project, Path::new("main.lua"));
+        let document = document_at(source, project, Path::new("main.luau"));
         let session = session();
         let workspace = WorkspaceView::new(&session, &[], &|| false);
         let lints = document.lint(&|| false).expect("nothing cancels it");

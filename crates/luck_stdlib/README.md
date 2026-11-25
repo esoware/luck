@@ -26,7 +26,7 @@ let definition = StdlibDefinition::parse(
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.load]
+[globals.app.members.onStart]
 kind = "function"
 is_read_only = false
 "#,
@@ -52,39 +52,39 @@ A std definition is a TOML file. A project names its own in `luck.json`'s `std`,
 [globals.app]
 kind = "namespace"
 
-[globals.app.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
 # A function's params, required ones first, then optional ones, then at most one vararg.
-[globals.app.members.graphics.members.newImage]
+[globals.app.members.net.members.connect]
 kind = "function"
 is_must_use = true
 params = [{ kind = "string" }, { kind = "table", is_required = false }]
-returns = "Image"
+returns = "Socket"
 
 # A callback the code defines, which is why it isn't read-only.
-[globals.app.members.draw]
+[globals.app.members.onMessage]
 kind = "function"
 is_read_only = false
 
-[globals.app.members.graphics.members.setColor]
+[globals.app.members.net.members.send]
 kind = "function"
 overloads = [
-  { params = [{ kind = "number" }, { kind = "number" }, { kind = "number" }, { kind = "number", is_required = false }] },
+  { params = [{ kind = "string" }, { kind = "string" }, { kind = "number", is_required = false }] },
   { params = [{ kind = "table" }] },
 ]
 
-[shapes.Image.members.getWidth]
+[shapes.Socket.members.isOpen]
 kind = "function"
 is_method = true
 is_must_use = true
 
-[constant_sets.draw_modes]
-values = ["fill", { value = "line", is_common = true }]
+[constant_sets.protocols]
+values = ["udp", { value = "tcp", is_common = true }]
 
-[globals.app.members.graphics.members.rectangle]
+[globals.app.members.net.members.listen]
 kind = "function"
-params = [{ kind = "constant", set = "draw_modes" }, { kind = "number" }, { kind = "number" }, { kind = "number" }, { kind = "number" }]
+params = [{ kind = "constant", set = "protocols" }, { kind = "number" }]
 ```
 
 - `[globals.<name>]` declares a global, and a namespace's `members` declare its fields, each with a `kind`: `function`, `constant`, `property`, or `namespace`. Every kind takes `deprecated = { message = "...", replacement = { template = "...", is_exact = true } }`, whose template names the old call's arguments `%1` to `%9`, and whose fix applies without asking only when it's exact.
