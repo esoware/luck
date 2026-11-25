@@ -507,7 +507,7 @@ impl<'ast> Compressor<'_, 'ast> {
     /// empty `then` under the negated condition, or with the `then` of a
     /// negated condition.
     fn trade_branches(&mut self, if_stmt: &mut IfStatement<'ast>) {
-        if !if_stmt.elseif_clauses.is_empty() || if_stmt.binding.is_some() {
+        if !if_stmt.elseif_clauses.is_empty() {
             return;
         }
         let Some(else_clause) = &mut if_stmt.else_clause else {
@@ -516,6 +516,9 @@ impl<'ast> Compressor<'_, 'ast> {
         if else_clause.block.stmts.is_empty() {
             if_stmt.else_clause = None;
             self.has_changed = true;
+            return;
+        }
+        if if_stmt.binding.is_some() {
             return;
         }
         // The `not` nests the condition a level deeper.
@@ -912,6 +915,8 @@ mod tests {
             ),
             ("if a then f() elseif local x = nil then g(x) end", "if a then f()end"),
             ("if local x = a then else f() end", "if local x=a then else f()end"),
+            ("if local x = a then f(x) else end", "if local x=a then f(x)end"),
+            ("local a = ... if local x = a then else end", ""),
             ("if local x = not a then f(x) else g() end", "if local x=not a then f(x)else g()end"),
             ("local a = ... if local b: typeof(a) = nil then f(b) end", ""),
             ("while local x = nil do f(x) end", ""),
