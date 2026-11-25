@@ -849,8 +849,8 @@ type T =
     );
     // An instantiation's comments go inside its doubled brackets.
     assert_format_with(
-        "local x = convert --[[a]] < --[[b]] < integer > --[[e]] > (current)\n",
-        "local x = convert --[[a]]<<--[[b]] integer --[[e]]>>(current)\n",
+        "local x = convert --[[a]] < --[[b]] < number > --[[e]] > (current)\n",
+        "local x = convert --[[a]]<<--[[b]] number --[[e]]>>(current)\n",
         &options,
     );
 }
@@ -1932,6 +1932,75 @@ x =
 --[[a
 b]]
 local x
+",
+    );
+}
+
+#[test]
+fn a_comment_in_any_gap_of_a_binding_stays_there() {
+    assert_format(
+        "\
+if --[[a]] local --[[b]] user: T? --[[c]] = --[[d]] find(1) --[[e]] then
+	print(user)
+end
+local y = if --[[a]] local --[[b]] u --[[c]] = --[[d]] f() --[[e]] then u elseif --[[f]] const --[[g]] v = g() then v else nil
+while --[[h]] local --[[i]] item: T --[[j]] = --[[k]] pop() do
+	print(item)
+end
+",
+        "\
+if --[[a]] local --[[b]] user: T? --[[c]] = --[[d]] find(1) --[[e]] then
+	print(user)
+end
+local y = if --[[a]] local --[[b]] u --[[c]] = --[[d]] f() --[[e]]
+	then u
+	elseif --[[f]] const --[[g]] v = g() then v
+	else nil
+while --[[h]] local --[[i]] item: T --[[j]] = --[[k]] pop() do
+	print(item)
+end
+",
+    );
+}
+
+#[test]
+fn a_line_comment_after_an_if_expressions_if_indents_the_condition() {
+    assert_format(
+        "\
+local y = if -- c
+g() then v else nil
+local z = if local v = -- d
+g() then v else nil
+",
+        "\
+local y = if -- c
+	g()
+	then v
+	else nil
+local z = if local v = -- d
+	g()
+	then v
+	else nil
+",
+    );
+}
+
+#[test]
+fn a_line_comment_in_an_elseif_binding_goes_above_the_elseif() {
+    assert_format(
+        "\
+local y = if a then b elseif local v = -- c
+	g() then v elseif local -- d
+	w = h() then w else nil
+",
+        "\
+local y = if a
+	then b
+	-- c
+	elseif local v = g() then v
+	-- d
+	elseif local w = h() then w
+	else nil
 ",
     );
 }

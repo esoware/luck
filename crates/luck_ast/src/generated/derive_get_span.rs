@@ -4,11 +4,11 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
-    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
-    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
-    GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
+    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, IfExpression,
+    IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
     LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
     ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
     StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
@@ -25,7 +25,6 @@ impl GetSpan for Expression<'_> {
             | Self::VarArg(span)
             | Self::Error(span) => *span,
             Self::Number(number_literal) => number_literal.span(),
-            Self::Integer(integer_literal) => integer_literal.span(),
             Self::StringLiteral(string_literal) => string_literal.span(),
             Self::FunctionDef(function_def) => function_def.span(),
             Self::Name(name) => name.span(),
@@ -211,13 +210,6 @@ impl GetSpan for NumberLiteral<'_> {
     }
 }
 
-impl GetSpan for IntegerLiteral<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
-    }
-}
-
 impl GetSpan for StringLiteral<'_> {
     #[inline]
     fn span(&self) -> Span {
@@ -269,6 +261,13 @@ impl GetSpan for DoBlock<'_> {
 }
 
 impl GetSpan for WhileLoop<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for ConditionalBinding<'_> {
     #[inline]
     fn span(&self) -> Span {
         self.span

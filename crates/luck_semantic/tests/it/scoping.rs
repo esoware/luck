@@ -665,3 +665,72 @@ print(a, b, a, b, a)",
     scoping.retain_resolved_references(|_| false);
     assert_eq!((starts(&scoping, a), starts(&scoping, b)), (Vec::new(), Vec::new()));
 }
+
+/// The symbol each read of `name` resolves to, in source order, `None` for
+/// a global.
+fn resolutions(scoping: &Scoping, name: &str) -> Vec<Option<SymbolId>> {
+    references(scoping, name).iter().map(|reference| reference.resolved).collect()
+}
+
+#[test]
+fn a_binding_holds_only_the_block_its_condition_guards() {
+    let allocator = Allocator::new();
+    let scoping = scoping_of(
+        &allocator,
+        "\
+local x = 0
+if local x = x then
+    print(x)
+elseif local y = x then
+    print(x, y)
+else
+    print(x, y)
+end
+print(x, y)",
+    );
+    let outer = symbol(&scoping, "x").id;
+    let bound = scoping.symbols().iter().filter(|symbol| scoping.name(symbol.name) == "x").nth(1);
+    let bound = bound.expect("the `if` binds a second `x`").id;
+    let y = symbol(&scoping, "y").id;
+    assert_eq!(
+        resolutions(&scoping, "x"),
+        [Some(outer), Some(bound), Some(outer), Some(outer), Some(outer), Some(outer)]
+    );
+    assert_eq!(resolutions(&scoping, "y"), [Some(y), None, None]);
+    assert_eq!(scoping.symbol(bound).kind, SymbolKind::Local);
+    assert_eq!(scoping.scope(scoping.symbol(bound).scope).kind, ScopeKind::Block);
+}
+
+#[test]
+fn a_while_binding_holds_its_body_and_not_its_condition() {
+    let allocator = Allocator::new();
+    let scoping = scoping_of(
+        &allocator,
+        "\
+local line = 0
+while local line = line + 1 do
+    print(line)
+end
+print(line)",
+    );
+    let symbols: Vec<SymbolId> = scoping.symbols().iter().map(|symbol| symbol.id).collect();
+    let [outer, bound] = symbols[..] else {
+        panic!("{symbols:?}");
+    };
+    assert_eq!(resolutions(&scoping, "line"), [Some(outer), Some(bound), Some(outer)]);
+    assert_eq!(scoping.scope(scoping.symbol(bound).scope).kind, ScopeKind::Loop);
+}
+
+#[test]
+fn an_if_expression_binding_holds_only_its_branch() {
+    let allocator = Allocator::new();
+    let scoping = scoping_of(
+        &allocator,
+        "return if local a = f() then a elseif local b = a then a + b else a + b",
+    );
+    let a = symbol(&scoping, "a").id;
+    let b = symbol(&scoping, "b").id;
+    assert_eq!(resolutions(&scoping, "a"), [Some(a), None, None, None]);
+    assert_eq!(resolutions(&scoping, "b"), [Some(b), None]);
+    assert_ne!(scoping.symbol(a).scope, scoping.symbol(b).scope);
+}

@@ -11,7 +11,7 @@ use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    Expression, LocalAssignment, MAX_NESTING_DEPTH, Name, Statement, VisitMut as _,
+    Expression, LocalAssignment, MAX_NESTING_DEPTH, Name, Statement, Visit as _, VisitMut as _,
     expr_nesting_depth,
 };
 use luck_semantic::{ReferenceId, SymbolId};
@@ -20,9 +20,9 @@ use luck_value::IsLiteralValue as _;
 
 use super::remove_dead_code::is_nil_initialized;
 use super::simplify_parens::Place;
-use super::{Compressor, remove_stmts};
+use super::{Compressor, Dropper, remove_stmts};
 use crate::binding::has_fixed_binding;
-use crate::expr::{MAX_ADDED_DEPTH, parenthesize};
+use crate::expr::MAX_ADDED_DEPTH;
 
 /// A symbol's place in the compressor's held values while it holds none.
 pub(super) const NOT_HELD: u32 = u32::MAX;
@@ -149,8 +149,7 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     /// The value of the local `name` reads, to put in its place, if it
-    /// waits for this read and fits where it lands. An integer it is lands in
-    /// parentheses under `-`.
+    /// waits for this read and fits where it lands.
     pub(super) fn take_held(&mut self, name: &Name<'_>) -> Option<Expression<'ast>> {
         let depth = self.depth;
         let held = self.waiting_value(name)?;
@@ -223,6 +222,8 @@ impl<'ast> Compressor<'_, 'ast> {
             if held.state == HeldState::Waiting {
                 debug_assert!(self.dropped.contains(held.read.index()), "the walk missed a read");
                 self.waiting -= 1;
+                Dropper { scoping: self.scoping, dropped: &mut self.dropped }
+                    .visit_expr(&held.value);
             }
         }
     }
@@ -235,13 +236,7 @@ impl<'ast> Compressor<'_, 'ast> {
             && let Some(value) = self.take_held(name)
         {
             self.has_landed_run |= matches!(value, Expression::BinaryOp(_));
-            // `-1i` is a negative integer literal, while `-x` negates the
-            // integer `x` holds, which raises.
-            *operand = if place == Place::Negated && matches!(value, Expression::Integer(_)) {
-                parenthesize(self.allocator, value)
-            } else {
-                value
-            };
+            *operand = value;
             return;
         }
         self.visit_expr_in(operand, place);
@@ -368,6 +363,17 @@ mod tests {
     }
 
     #[test]
+    fn drops_the_types_of_a_value_whose_read_goes() {
+        let both = TransformConfig { remove_dead_code: true, ..INLINING };
+        for source in [
+            "local a = ... local v = 1 :: typeof(a) if false then print(v) end",
+            "local a = ... local v = if local x: typeof(a) = 1 then 2 else 3 if false then print(v) end",
+        ] {
+            assert_eq!(minify_with(source, &both), "", "{source}");
+        }
+    }
+
+    #[test]
     fn parenthesizes_a_value_that_would_regroup_where_it_lands() {
         assert_outputs(
             inline,
@@ -448,9 +454,6 @@ mod tests {
                 ("local s = -1 return s<<T>>", "return(-1)<<T>>"),
                 ("local s = \"x\" :: T return s<<U>>", "return(\"x\"::T)<<U>>"),
                 ("local s = \"x\" return s<<T>><<U>>", "return(\"x\")<<T>><<U>>"),
-                // `-1i` is a literal, while negating an integer raises.
-                ("local s = 1i return -s", "return-(1i)"),
-                ("local s = 1i return not s", "return not 1i"),
                 ("local s = (\"x\")<<T>> return s .. \"y\"", "return(\"x\")<<T>>..\"y\""),
             ],
         );

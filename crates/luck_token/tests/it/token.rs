@@ -24,7 +24,6 @@ fn display_names_each_kind_without_its_text() {
     for (kind, expected) in [
         (TokenKind::Identifier, "identifier"),
         (TokenKind::Number, "number"),
-        (TokenKind::Integer, "integer"),
         (TokenKind::StringLiteral, "string"),
         (TokenKind::InterpolatedStringBegin, "interpolated string start"),
         (TokenKind::InterpolatedStringMiddle, "interpolated string middle"),
@@ -47,15 +46,14 @@ fn display_quotes_symbols_and_keywords() {
 
 #[test]
 fn token_display_shows_name_and_numeral_text_but_not_string_text() {
-    let source = "foo 42 1i \"secret\" }secret{ type";
+    let source = "foo 42 \"secret\" }secret{ type";
     for (kind, start, end, expected) in [
         (TokenKind::Identifier, 0, 3, "identifier `foo`"),
-        (TokenKind::Type, 28, 32, "identifier `type`"),
+        (TokenKind::Type, 25, 29, "identifier `type`"),
         (TokenKind::Number, 4, 6, "number `42`"),
-        (TokenKind::Integer, 7, 9, "integer `1i`"),
-        (TokenKind::StringLiteral, 10, 18, "string"),
-        (TokenKind::InterpolatedStringMiddle, 19, 27, "interpolated string middle"),
-        (TokenKind::Eof, 27, 27, "end of file"),
+        (TokenKind::StringLiteral, 7, 15, "string"),
+        (TokenKind::InterpolatedStringMiddle, 16, 24, "interpolated string middle"),
+        (TokenKind::Eof, 24, 24, "end of file"),
     ] {
         assert_eq!(token(kind, start, end).display(source.as_bytes()).to_string(), expected);
     }
@@ -68,7 +66,6 @@ fn static_text_is_none_only_for_kinds_whose_text_varies_and_eof() {
     for kind in [
         TokenKind::Identifier,
         TokenKind::Number,
-        TokenKind::Integer,
         TokenKind::StringLiteral,
         TokenKind::InterpolatedStringBegin,
         TokenKind::InterpolatedStringMiddle,

@@ -146,8 +146,24 @@ pub struct DoBlock<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct WhileLoop<'ast> {
     pub span: Span,
+    pub binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
     pub condition: Expression<'ast>,
     pub block: Block<'ast>,
+}
+
+/// The `local name` or `const name` that opens the condition of an `if`,
+/// an `elseif`, or a `while`, as in `if local name = condition then`.
+///
+/// The condition is its initializer. The name holds the condition's value
+/// where that's truthy: in the block or expression the condition guards, or
+/// the loop body, which binds it afresh each iteration. The condition itself
+/// can't see it.
+#[derive(Debug, PartialEq, Eq, Ast)]
+pub struct ConditionalBinding<'ast> {
+    /// From the keyword to the name or its annotation.
+    pub span: Span,
+    pub name: TypedName<'ast>,
+    pub is_const: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Ast)]
@@ -160,6 +176,7 @@ pub struct RepeatLoop<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct IfStatement<'ast> {
     pub span: Span,
+    pub binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
     pub condition: Expression<'ast>,
     pub block: Block<'ast>,
     pub elseif_clauses: List<'ast, ElseIfClause<'ast>>,
@@ -169,6 +186,7 @@ pub struct IfStatement<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct ElseIfClause<'ast> {
     pub span: Span,
+    pub binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
     pub condition: Expression<'ast>,
     pub block: Block<'ast>,
 }

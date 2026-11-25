@@ -47,7 +47,6 @@ const NOT_RUNNABLE: &[Skip] = &[
     Skip { file: "cyield.luau", reason: HOST_FUNCTIONS },
     Skip { file: "debugger.luau", reason: HOST_FUNCTIONS },
     Skip { file: "gc.luau", reason: HOST_FUNCTIONS },
-    Skip { file: "integers_regspill.luau", reason: NATIVE_CODE },
     Skip { file: "iter.luau", reason: HOST_FUNCTIONS },
     Skip {
         file: "move.luau",
@@ -81,6 +80,7 @@ const KNOWN_DIFFERENCES: &[KnownDifference] = &[
     KnownDifference { file: "basic.luau", rewrites: BOTH, reason: LINES },
     KnownDifference { file: "closure.luau", rewrites: BOTH, reason: LINES },
     KnownDifference { file: "debug.luau", rewrites: MINIFIED, reason: NAMES },
+    KnownDifference { file: "lazyload.luau", rewrites: BOTH, reason: LINES },
     KnownDifference { file: "tmerror.luau", rewrites: BOTH, reason: LINES },
 ];
 

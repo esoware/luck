@@ -8,7 +8,7 @@ use ls_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionResponse, CompletionTextEdit,
     Documentation, InsertTextFormat, MarkupContent, MarkupKind, Position, TextEdit,
 };
-use luck_ast::{AstKind, Block, Call, Expression, FunctionArgs, StringLiteral};
+use luck_ast::{AstKind, Block, Call, Expression, FunctionArgs, GetSpan as _, StringLiteral};
 use luck_stdlib::{StdlibEntry, StdlibFunction};
 use luck_token::{Span, Token, TokenKind, index_to_offset};
 use rustc_hash::FxHashSet;
@@ -55,6 +55,7 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
         opener.is_none_or(|token| token.span.end <= offset)
             && tokens.get(closer).is_none_or(|token| offset <= token.span.start)
     };
+    let is_in = |span: Span| span.start <= offset && offset <= span.end;
     let nodes = document.nodes();
     #[expect(
         clippy::wildcard_enum_match_arm,
@@ -70,6 +71,9 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
                     AstKind::FunctionBody(body) => is_in_block(&body.block),
                     AstKind::NumericFor(numeric_for) => is_in_block(&numeric_for.block),
                     AstKind::GenericFor(generic_for) => is_in_block(&generic_for.block),
+                    // An if-expression's binding holds only its branch.
+                    AstKind::IfExpression(if_expr) => is_in(if_expr.then_expr.span()),
+                    AstKind::ElseIfExprClause(clause) => is_in(clause.expr.span()),
                     // The `until` condition is in the body's scope.
                     AstKind::RepeatLoop(repeat_loop) => {
                         is_in_block(&repeat_loop.block)
@@ -717,5 +721,21 @@ math.";
         let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
         assert!(items.iter().any(|item| item.label == "format"), "{items:?}");
+    }
+
+    #[test]
+    fn a_binding_is_offered_only_where_it_holds() {
+        let document = document(
+            "\
+if local found = f() then
+
+end
+local label = if local name = g() then name else nil
+",
+        );
+        assert!(variables_of(&items_at(&document, 1, 0)).contains(&"found"), "in its block");
+        assert!(!variables_of(&items_at(&document, 2, 3)).contains(&"found"), "after its `end`");
+        assert!(variables_of(&items_at(&document, 3, 39)).contains(&"name"), "in its branch");
+        assert!(!variables_of(&items_at(&document, 3, 49)).contains(&"name"), "in the `else`");
     }
 }

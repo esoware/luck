@@ -63,8 +63,7 @@ use crate::leaf::Name;
 ///   spelling, which the formatter prints as is.
 /// - **Numbers no literal holds.** [`Synth::number_f64`] builds any double:
 ///   a negative one as a unary minus, and NaN as `0/0`, whose sign and
-///   payload aren't preserved. [`Synth::integer_i64`] builds any integer, a
-///   negative one as its bit pattern in hex.
+///   payload aren't preserved.
 /// - **Loud failure on invalid names.** [`Synth::name`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of

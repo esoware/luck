@@ -28,3 +28,9 @@ warning: `if` and `else` branches have identical bodies
  --> Standalone:1:1
 1 | if a then f() elseif b then g() else f() end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `if` and `else` branches have identical bodies
+ --> Standalone:1:1
+1 | if local x = f() then print(1) else print(1) end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the condition has no effect, so remove the `if`

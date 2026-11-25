@@ -69,7 +69,7 @@ impl FullGenerator {
     }
 
     fn number_literal(&mut self) -> String {
-        match self.rng.below(10) {
+        match self.rng.below(8) {
             0 => self.rng.below(10_000).to_string(),
             1 => format!("{}.{}", self.rng.below(100), self.rng.below(100)),
             2 => format!("0x{:X}", self.rng.below(0xFFFF)),
@@ -77,12 +77,6 @@ impl FullGenerator {
             4 => format!("{}.5e-{}", self.rng.below(50), self.rng.one_through(3)),
             6 => format!("0b{:b}", self.rng.below(256)),
             7 => "1_000_000".to_owned(),
-            8 => "1_000_000i".to_owned(),
-            9 => match self.rng.below(3) {
-                0 => format!("{}i", self.rng.below(10_000)),
-                1 => format!("0x{:X}i", self.rng.below(0xFFFF)),
-                _ => format!("0b{:b}i", self.rng.below(256)),
-            },
             _ => self.rng.below(100).to_string(),
         }
     }
@@ -192,10 +186,11 @@ impl FullGenerator {
                 format!("(({operand}) :: {annotation})")
             }
             1 => {
+                let binding = self.binding();
                 let condition = self.condition();
                 let then_value = self.expr(inner_depth);
                 let else_value = self.expr(inner_depth);
-                format!("(if {condition} then {then_value} else {else_value})")
+                format!("(if {binding}{condition} then {then_value} else {else_value})")
             }
             2 => {
                 // Leaf expressions only: a `{`-starting table would form
@@ -218,10 +213,11 @@ impl FullGenerator {
             _ => {
                 let condition = self.condition();
                 let then_value = self.expr(0);
+                let elseif_binding = self.binding();
                 let middle = self.expr(0);
                 let else_value = self.expr(0);
                 format!(
-                    "(if {condition} then {then_value} elseif {condition} then {middle} else {else_value})"
+                    "(if {condition} then {then_value} elseif {elseif_binding}{condition} then {middle} else {else_value})"
                 )
             }
         }

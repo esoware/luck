@@ -1,8 +1,8 @@
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute, FunctionBody,
-    FunctionDecl, GenericFor, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
-    LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement, TypeDeclaration,
-    TypeDeclarationValue, TypedName, WhileLoop,
+    Assignment, Block, CompoundAssignment, ConditionalBinding, DoBlock, Expression,
+    FunctionAttribute, FunctionBody, FunctionDecl, GenericFor, IfStatement, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement,
+    TypeDeclaration, TypeDeclarationValue, TypedName, WhileLoop,
 };
 
 use super::Printer;
@@ -60,7 +60,7 @@ impl Printer {
 
     fn print_while_loop(&mut self, while_loop: &WhileLoop<'_>) {
         self.piece("while");
-        self.print_free_expr(&while_loop.condition);
+        self.print_condition(while_loop.binding.as_deref(), &while_loop.condition);
         self.piece("do");
         self.print_block(&while_loop.block);
         self.piece("end");
@@ -75,12 +75,12 @@ impl Printer {
 
     fn print_if_stmt(&mut self, if_stmt: &IfStatement<'_>) {
         self.piece("if");
-        self.print_free_expr(&if_stmt.condition);
+        self.print_condition(if_stmt.binding.as_deref(), &if_stmt.condition);
         self.piece("then");
         self.print_block(&if_stmt.block);
         for clause in &if_stmt.elseif_clauses {
             self.piece("elseif");
-            self.print_free_expr(&clause.condition);
+            self.print_condition(clause.binding.as_deref(), &clause.condition);
             self.piece("then");
             self.print_block(&clause.block);
         }
@@ -185,6 +185,19 @@ impl Printer {
             }
             TypeDeclarationValue::TypeFunction(body) => self.print_function_body(body),
         }
+    }
+
+    pub(super) fn print_condition(
+        &mut self,
+        binding: Option<&ConditionalBinding<'_>>,
+        condition: &Expression<'_>,
+    ) {
+        if let Some(binding) = binding {
+            self.piece(if binding.is_const { "const" } else { "local" });
+            self.print_typed_name(&binding.name);
+            self.piece("=");
+        }
+        self.print_free_expr(condition);
     }
 
     fn print_typed_name(&mut self, typed_name: &TypedName<'_>) {

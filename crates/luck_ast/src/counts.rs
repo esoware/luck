@@ -5,6 +5,8 @@
 /// from it grow as needed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TreeCounts {
+    /// Blocks, and if-expression branches a binding holds, each of which
+    /// opens a scope.
     pub blocks: u32,
     /// Names a declaration binds: locals, parameters, loop variables, and a
     /// method's `self`.

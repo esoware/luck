@@ -28,7 +28,7 @@ Trees compare with `luck_testgen::tree_shape`.
 
 It is mlua's vendored build of Luau, which the harness checks is the release the suite is pinned to. Each program runs in a child process of this binary, so a test that exits, loops, changes the locale, or crashes takes nothing else down, and one that runs past a minute is killed.
 
-The child sets up what Luau's `runConformance` does: its `loadstring`, its native-code helpers as they answer without native code, and globals of the test's own, resumed as a thread. Luau's flags for what luck reads ahead of the pinned release, integer literals and their library and exported values, are on.
+The child sets up what Luau's `runConformance` does: its `loadstring`, its native-code helpers as they answer without native code, and globals of the test's own, resumed as a thread. Luau's flags for what luck reads ahead of the pinned release, exported values and conditional bindings, are on, and so is the one for the `buffer` vector functions `buffers.luau` calls.
 
 ## Status
 

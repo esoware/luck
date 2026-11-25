@@ -9,13 +9,10 @@
 use std::iter;
 
 use luck_ast::{
-    BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, IntegerLiteral,
-    InterpolatedString, NumberLiteral, Slot, StringLiteral, Suffix, SuffixedExpression, UnaryOp,
-    Var,
+    BinaryOp, Expression, FunctionDef, GetSpan as _, IfExpression, InterpolatedString,
+    NumberLiteral, Slot, StringLiteral, Suffix, SuffixedExpression, UnaryOp, Var,
 };
-use luck_token::{
-    Span, TokenKind, UnOp, spell_integer, spell_number, spell_string, write_interpolated_text,
-};
+use luck_token::{Span, TokenKind, UnOp, spell_number, spell_string, write_interpolated_text};
 
 use crate::format_table::TablePlacement;
 use crate::ir::Formatter;
@@ -43,7 +40,6 @@ const fn is_operator_expr(expr: &Expression<'_>) -> bool {
         | Expression::False(_)
         | Expression::True(_)
         | Expression::Number(_)
-        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::VarArg(_)
         | Expression::FunctionDef(_)
@@ -165,7 +161,6 @@ impl<'ast> Formatter<'ast> {
                 | Expression::False(_)
                 | Expression::True(_)
                 | Expression::Number(_)
-                | Expression::Integer(_)
                 | Expression::StringLiteral(_)
                 | Expression::VarArg(_)
                 | Expression::FunctionDef(_)
@@ -195,7 +190,6 @@ impl<'ast> Formatter<'ast> {
             Expression::True(_) => self.token("true"),
             Expression::VarArg(_) => self.token("..."),
             Expression::Number(literal) => self.write_number(literal),
-            Expression::Integer(literal) => self.write_integer(literal),
             Expression::StringLiteral(literal) => self.write_string(literal),
             Expression::Name(name) => self.ascii(name.text.as_bytes()),
             Expression::Suffixed(chain) => self.write_suffixed(chain),
@@ -238,16 +232,6 @@ impl<'ast> Formatter<'ast> {
             raw.as_bytes()
         } else {
             &*self.allocator().alloc_slice_copy(spell_number(literal.value).as_str().as_bytes())
-        };
-        self.write_numeral(text);
-    }
-
-    /// An integer, as [`Self::write_number`] writes a number.
-    fn write_integer(&mut self, literal: &IntegerLiteral<'ast>) {
-        let text = if let Some(raw) = literal.raw {
-            raw.as_bytes()
-        } else {
-            &*self.allocator().alloc_slice_copy(spell_integer(literal.value).as_str().as_bytes())
         };
         self.write_numeral(text);
     }
@@ -481,7 +465,13 @@ impl<'ast> Formatter<'ast> {
         self.group(|grouped| {
             grouped.token("if");
             grouped.space();
-            grouped.write_expr(&if_expr.condition);
+            grouped.indent(|f| {
+                if let Some(binding) = &if_expr.binding {
+                    f.write_conditional_binding(binding);
+                    f.space();
+                }
+                f.write_expr(&if_expr.condition);
+            });
             grouped.indent(|f| {
                 f.soft_line_or_space();
                 f.write_hoisted_comments(f.extent(&if_expr.then_expr).start);
@@ -493,6 +483,10 @@ impl<'ast> Formatter<'ast> {
                     f.write_hoisted_comments(f.extent(&clause.condition).start);
                     f.token("elseif");
                     f.space();
+                    if let Some(binding) = &clause.binding {
+                        f.write_conditional_binding(binding);
+                        f.space();
+                    }
                     f.write_expr(&clause.condition);
                     f.space();
                     f.token("then");

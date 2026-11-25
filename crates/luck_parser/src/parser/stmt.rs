@@ -1,8 +1,9 @@
 use std::{fmt, mem};
 
-use luck_allocator::{List, ThinStr};
+use luck_allocator::{Box, List, ThinStr};
 use luck_ast::{
-    Block, ElseClause, ElseIfClause, Expression, GetSpan as _, Statement, TypedName, Var,
+    Block, ConditionalBinding, ElseClause, ElseIfClause, Expression, GetSpan as _, Statement,
+    TypedName, Var,
 };
 use luck_token::{CompoundOp, Span, TokenKind};
 
@@ -45,7 +46,6 @@ pub(super) const fn is_stmt_start(kind: TokenKind) -> bool {
                 | TokenKind::At
         ) => true,
         TokenKind::Number
-        | TokenKind::Integer
         | TokenKind::StringLiteral
         | TokenKind::And
         | TokenKind::Else
@@ -332,10 +332,40 @@ impl<'ast> Parser<'ast> {
         Statement::new_return(span, exprs, self.allocator)
     }
 
+    /// The `local name =` or `const name =` that opens a condition after the
+    /// `keyword` just read, if one does. A `const` before anything but a name
+    /// is a variable named `const`, as in `if const then`.
+    pub(super) fn parse_conditional_binding(
+        &mut self,
+        keyword: &str,
+    ) -> Option<Box<'ast, ConditionalBinding<'ast>>> {
+        let is_const = self.is_at(TokenKind::Const);
+        let is_binding = self.is_at(TokenKind::Local) || (is_const && self.peek_next().is_name());
+        if !is_binding {
+            return None;
+        }
+        let binding_keyword = self.advance();
+        let name = self.expect_identifier_recover();
+        let typed_name = self.parse_typed_name(name);
+        let span = binding_keyword.merge(self.previous_span);
+        if self.is_at(TokenKind::Comma) {
+            let local = if is_const { "const" } else { "local" };
+            let comma = self.token.span;
+            self.error(comma, format!("`{keyword} {local}` binds a single name"));
+            while self.eat(TokenKind::Comma) {
+                self.expect_identifier_recover();
+                self.try_parse_type_annotation();
+            }
+        }
+        self.expect(TokenKind::Equal);
+        Some(ConditionalBinding::boxed(span, typed_name, is_const, self.allocator))
+    }
+
     fn parse_if_stmt(&mut self) -> Statement<'ast> {
         let if_span = self.advance();
         self.open(Closer::BlockEnd);
         self.open(Closer::Else);
+        let binding = self.parse_conditional_binding("if");
         let condition = self.parse_expr(0);
         self.expect_keyword(TokenKind::Then, Construct::IfStatement);
         let Some(block) = self.parse_block() else {
@@ -345,6 +375,7 @@ impl<'ast> Parser<'ast> {
         let start = self.scratch.elseif_clauses.len();
         while self.is_at(TokenKind::ElseIf) {
             let elseif_span = self.advance();
+            let clause_binding = self.parse_conditional_binding("elseif");
             let clause_condition = self.parse_expr(0);
             self.expect_keyword(TokenKind::Then, Construct::IfStatement);
             let Some(clause_block) = self.parse_block() else {
@@ -352,7 +383,7 @@ impl<'ast> Parser<'ast> {
                 return Statement::Error(if_span);
             };
             let span = elseif_span.merge(clause_block.span);
-            let clause = ElseIfClause::new(span, clause_condition, clause_block);
+            let clause = ElseIfClause::new(span, clause_binding, clause_condition, clause_block);
             self.scratch.elseif_clauses.push(clause);
         }
         let elseif_clauses =
@@ -373,12 +404,21 @@ impl<'ast> Parser<'ast> {
         let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, if_span);
         let span = if_span.merge(end_span);
 
-        Statement::new_if_stmt(span, condition, block, elseif_clauses, else_clause, self.allocator)
+        Statement::new_if_stmt(
+            span,
+            binding,
+            condition,
+            block,
+            elseif_clauses,
+            else_clause,
+            self.allocator,
+        )
     }
 
     fn parse_while_loop(&mut self) -> Statement<'ast> {
         let while_span = self.advance();
         self.open(Closer::BlockEnd);
+        let binding = self.parse_conditional_binding("while");
         let condition = self.parse_expr(0);
         self.expect_keyword(TokenKind::Do, Construct::WhileLoop);
         let Some(block) = self.parse_loop_block() else {
@@ -386,7 +426,7 @@ impl<'ast> Parser<'ast> {
         };
         let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, while_span);
         let span = while_span.merge(end_span);
-        Statement::new_while_loop(span, condition, block, self.allocator)
+        Statement::new_while_loop(span, binding, condition, block, self.allocator)
     }
 
     fn parse_do_block(&mut self) -> Statement<'ast> {
@@ -497,7 +537,6 @@ impl<'ast> Parser<'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
@@ -577,7 +616,6 @@ impl<'ast> Parser<'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)

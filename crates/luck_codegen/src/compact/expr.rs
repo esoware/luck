@@ -23,7 +23,6 @@ impl Printer {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
@@ -53,7 +52,6 @@ impl Printer {
         match expr {
             Expression::Name(name) => self.name(name.text.as_str()),
             Expression::Number(literal) => self.print_number(literal),
-            Expression::Integer(literal) => self.print_integer(literal),
             Expression::StringLiteral(literal) => self.print_string(literal),
             Expression::Nil(_) => self.piece("nil"),
             Expression::False(_) => self.piece("false"),
@@ -107,12 +105,12 @@ impl Printer {
     /// the `else` branch.
     fn print_if_expr(&mut self, if_expr: &IfExpression<'_>) {
         self.piece("if");
-        self.print_free_expr(&if_expr.condition);
+        self.print_condition(if_expr.binding.as_deref(), &if_expr.condition);
         self.piece("then");
         self.print_free_expr(&if_expr.then_expr);
         for clause in &if_expr.elseif_clauses {
             self.piece("elseif");
-            self.print_free_expr(&clause.condition);
+            self.print_condition(clause.binding.as_deref(), &clause.condition);
             self.piece("then");
             self.print_free_expr(&clause.expr);
         }
@@ -152,7 +150,6 @@ impl Printer {
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
-            | Expression::Integer(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)
             | Expression::Suffixed(_)

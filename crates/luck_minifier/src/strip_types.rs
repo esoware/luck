@@ -57,7 +57,6 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
             | Expression::False(_)
             | Expression::True(_)
             | Expression::Number(_)
-            | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::VarArg(_)
             | Expression::FunctionDef(_)

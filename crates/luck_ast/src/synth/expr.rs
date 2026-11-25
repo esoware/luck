@@ -388,10 +388,11 @@ impl<'ast> Synth<'ast> {
     {
         let span = self.next_span();
         let elseif_clauses = self.list(elseifs.into_iter().map(|(elseif_condition, expr)| {
-            ElseIfExprClause::new(self.next_span(), elseif_condition, expr)
+            ElseIfExprClause::new(self.next_span(), None, elseif_condition, expr)
         }));
         Expression::new_if_expr(
             span,
+            None,
             condition,
             then_expr,
             elseif_clauses,
@@ -645,7 +646,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let instantiated =
-            synth.type_instantiation(synth.name_expr("f"), [synth.ty_named("integer")]);
+            synth.type_instantiation(synth.name_expr("f"), [synth.ty_named("number")]);
         let Suffix::TypeInstantiation { type_args, .. } = chain(&instantiated).suffixes.last()
         else {
             panic!("expected type instantiation");

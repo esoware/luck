@@ -1,10 +1,11 @@
 use std::mem;
 
 use luck_ast::{
-    Assignment, AstKind, Block, Call, CompoundAssignment, DoBlock, Expression, FunctionBody,
-    FunctionDecl, FunctionDef, GenericFor, GetSpan as _, IfStatement, LocalAssignment,
-    LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement, SuffixedExpression,
-    TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, TypedName, Var, Visit, WhileLoop,
+    Assignment, AstKind, Block, Call, CompoundAssignment, ConditionalBinding, DoBlock, Expression,
+    FunctionBody, FunctionDecl, FunctionDef, GenericFor, GetSpan as _, IfExpression, IfStatement,
+    LocalAssignment, LocalFunction, LocalFunctionKind, Name, NumericFor, RepeatLoop, Statement,
+    SuffixedExpression, TreeCounts, Type, TypeDeclaration, TypeDeclarationValue, TypedName, Var,
+    Visit, WhileLoop,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::Span;
@@ -468,6 +469,22 @@ impl<'ast> Builder<'ast> {
         }
     }
 
+    fn bound_expr(
+        &mut self,
+        opener: NodeId,
+        binding: Option<(&'ast ConditionalBinding<'ast>, NodeId)>,
+        expr: &'ast Expression<'ast>,
+    ) {
+        if binding.is_none() {
+            self.visit_expr(expr);
+            return;
+        }
+        self.push_scope(ScopeKind::Block, opener);
+        self.declare_binding(binding);
+        self.visit_expr(expr);
+        self.pop_scope();
+    }
+
     /// The statements of a block whose scope is open.
     fn walk_stmts(&mut self, block: &'ast Block<'ast>) {
         self.record_type_names(block);
@@ -500,10 +517,38 @@ impl<'ast> Builder<'ast> {
         self.leave();
     }
 
-    /// A block that opens a scope of its own.
-    fn scoped_block(&mut self, kind: ScopeKind, block: &'ast Block<'ast>) {
+    /// A condition's binding, if it has one, and the node of the name it
+    /// declares once the condition is read.
+    fn binding_node(
+        &mut self,
+        binding: Option<&'ast ConditionalBinding<'ast>>,
+    ) -> Option<(&'ast ConditionalBinding<'ast>, NodeId)> {
+        let binding = binding?;
+        self.enter(AstKind::ConditionalBinding(binding));
+        let node = self.typed_name_node(&binding.name);
+        self.leave();
+        Some((binding, node))
+    }
+
+    fn declare_binding(&mut self, binding: Option<(&'ast ConditionalBinding<'ast>, NodeId)>) {
+        if let Some((binding, node)) = binding
+            && let Some(symbol) = self.declare_name(&binding.name.name, SymbolKind::Local, node)
+        {
+            symbol.is_read_only = binding.is_const;
+        }
+    }
+
+    /// A block that opens a scope of its own, which holds the binding of the
+    /// condition that guards it, if one does.
+    fn scoped_block(
+        &mut self,
+        kind: ScopeKind,
+        binding: Option<(&'ast ConditionalBinding<'ast>, NodeId)>,
+        block: &'ast Block<'ast>,
+    ) {
         let node = self.enter(AstKind::Block(block));
         self.push_scope(kind, node);
+        self.declare_binding(binding);
         self.walk_stmts(block);
         self.pop_scope();
         self.leave();
@@ -735,15 +780,16 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
 
     fn visit_do_block(&mut self, do_block: &'ast DoBlock<'ast>) {
         self.enter(AstKind::DoBlock(do_block));
-        self.scoped_block(ScopeKind::Block, &do_block.block);
+        self.scoped_block(ScopeKind::Block, None, &do_block.block);
         self.leave();
     }
 
     fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
         self.enter(AstKind::WhileLoop(while_loop));
+        let binding = self.binding_node(while_loop.binding.as_deref());
         self.visit_expr(&while_loop.condition);
         self.loops.push(LoopFrame::WhileOrFor);
-        self.scoped_block(ScopeKind::Loop, &while_loop.block);
+        self.scoped_block(ScopeKind::Loop, binding, &while_loop.block);
         self.loops.pop();
         self.leave();
     }
@@ -774,19 +820,39 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
 
     fn visit_if_stmt(&mut self, if_stmt: &'ast IfStatement<'ast>) {
         self.enter(AstKind::IfStatement(if_stmt));
+        let binding = self.binding_node(if_stmt.binding.as_deref());
         self.visit_expr(&if_stmt.condition);
-        self.scoped_block(ScopeKind::Block, &if_stmt.block);
+        self.scoped_block(ScopeKind::Block, binding, &if_stmt.block);
         for clause in &if_stmt.elseif_clauses {
             self.enter(AstKind::ElseIfClause(clause));
+            let clause_binding = self.binding_node(clause.binding.as_deref());
             self.visit_expr(&clause.condition);
-            self.scoped_block(ScopeKind::Block, &clause.block);
+            self.scoped_block(ScopeKind::Block, clause_binding, &clause.block);
             self.leave();
         }
         if let Some(else_clause) = &if_stmt.else_clause {
             self.enter(AstKind::ElseClause(else_clause));
-            self.scoped_block(ScopeKind::Block, &else_clause.block);
+            self.scoped_block(ScopeKind::Block, None, &else_clause.block);
             self.leave();
         }
+        self.leave();
+    }
+
+    /// A binding holds only its own branch's expression, in a scope that
+    /// branch's node opens.
+    fn visit_if_expr(&mut self, if_expr: &'ast IfExpression<'ast>) {
+        let node = self.enter(AstKind::IfExpression(if_expr));
+        let binding = self.binding_node(if_expr.binding.as_deref());
+        self.visit_expr(&if_expr.condition);
+        self.bound_expr(node, binding, &if_expr.then_expr);
+        for clause in &if_expr.elseif_clauses {
+            let clause_node = self.enter(AstKind::ElseIfExprClause(clause));
+            let clause_binding = self.binding_node(clause.binding.as_deref());
+            self.visit_expr(&clause.condition);
+            self.bound_expr(clause_node, clause_binding, &clause.expr);
+            self.leave();
+        }
+        self.visit_expr(&if_expr.else_expr);
         self.leave();
     }
 

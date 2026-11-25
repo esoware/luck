@@ -71,7 +71,7 @@ fn table_key<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Optio
             let key = if number == 0.0 { 0.0 } else { number };
             Some(Key::Number(key.to_bits()))
         }
-        ConstantValue::Nil | ConstantValue::Boolean(_) | ConstantValue::Integer(_) => None,
+        ConstantValue::Nil | ConstantValue::Boolean(_) => None,
     }
 }
 

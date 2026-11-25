@@ -1,7 +1,7 @@
 use super::FullGenerator;
 
-const BUILTIN_TYPES: [&str; 8] =
-    ["number", "integer", "string", "boolean", "any", "unknown", "thread", "never"];
+const BUILTIN_TYPES: [&str; 7] =
+    ["number", "string", "boolean", "any", "unknown", "thread", "never"];
 
 impl FullGenerator {
     pub(super) fn type_alias_stmt(&mut self) {

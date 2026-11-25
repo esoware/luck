@@ -77,7 +77,6 @@ impl Expression<'_> {
             | Self::False(_)
             | Self::True(_)
             | Self::Number(_)
-            | Self::Integer(_)
             | Self::StringLiteral(_)
             | Self::VarArg(_)
             | Self::FunctionDef(_)

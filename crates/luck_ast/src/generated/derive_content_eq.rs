@@ -2,13 +2,13 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ContentEq, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
-    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NamedType,
-    NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, ContentEq,
+    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
+    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
+    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
+    IfExpression, IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType,
+    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name,
+    NamedType, NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
     RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
     TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
     TypeField, TypeFieldAccess, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var,
@@ -24,7 +24,6 @@ impl ContentEq for Expression<'_> {
             | (Self::VarArg(_), Self::VarArg(_))
             | (Self::Error(_), Self::Error(_)) => true,
             (Self::Number(lhs), Self::Number(rhs)) => ContentEq::content_eq(lhs, rhs),
-            (Self::Integer(lhs), Self::Integer(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::StringLiteral(lhs), Self::StringLiteral(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::FunctionDef(lhs), Self::FunctionDef(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::Name(lhs), Self::Name(rhs)) => ContentEq::content_eq(lhs, rhs),
@@ -45,7 +44,6 @@ impl ContentEq for Expression<'_> {
                 | Self::False(_)
                 | Self::True(_)
                 | Self::Number(_)
-                | Self::Integer(_)
                 | Self::StringLiteral(_)
                 | Self::VarArg(_)
                 | Self::FunctionDef(_)
@@ -203,7 +201,8 @@ impl ContentEq for FunctionDef<'_> {
 
 impl ContentEq for IfExpression<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.condition, &other.condition)
+        ContentEq::content_eq(&self.binding, &other.binding)
+            && ContentEq::content_eq(&self.condition, &other.condition)
             && ContentEq::content_eq(&self.then_expr, &other.then_expr)
             && ContentEq::content_eq(&self.elseif_clauses, &other.elseif_clauses)
             && ContentEq::content_eq(&self.else_expr, &other.else_expr)
@@ -212,7 +211,8 @@ impl ContentEq for IfExpression<'_> {
 
 impl ContentEq for ElseIfExprClause<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.condition, &other.condition)
+        ContentEq::content_eq(&self.binding, &other.binding)
+            && ContentEq::content_eq(&self.condition, &other.condition)
             && ContentEq::content_eq(&self.expr, &other.expr)
     }
 }
@@ -267,12 +267,6 @@ impl ContentEq for Name<'_> {
 }
 
 impl ContentEq for NumberLiteral<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.value, &other.value)
-    }
-}
-
-impl ContentEq for IntegerLiteral<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.value, &other.value)
     }
@@ -355,8 +349,16 @@ impl ContentEq for DoBlock<'_> {
 
 impl ContentEq for WhileLoop<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.condition, &other.condition)
+        ContentEq::content_eq(&self.binding, &other.binding)
+            && ContentEq::content_eq(&self.condition, &other.condition)
             && ContentEq::content_eq(&self.block, &other.block)
+    }
+}
+
+impl ContentEq for ConditionalBinding<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name)
+            && ContentEq::content_eq(&self.is_const, &other.is_const)
     }
 }
 
@@ -369,7 +371,8 @@ impl ContentEq for RepeatLoop<'_> {
 
 impl ContentEq for IfStatement<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.condition, &other.condition)
+        ContentEq::content_eq(&self.binding, &other.binding)
+            && ContentEq::content_eq(&self.condition, &other.condition)
             && ContentEq::content_eq(&self.block, &other.block)
             && ContentEq::content_eq(&self.elseif_clauses, &other.elseif_clauses)
             && ContentEq::content_eq(&self.else_clause, &other.else_clause)
@@ -378,7 +381,8 @@ impl ContentEq for IfStatement<'_> {
 
 impl ContentEq for ElseIfClause<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.condition, &other.condition)
+        ContentEq::content_eq(&self.binding, &other.binding)
+            && ContentEq::content_eq(&self.condition, &other.condition)
             && ContentEq::content_eq(&self.block, &other.block)
     }
 }

@@ -82,6 +82,12 @@ print(x)",
 local x = 1
 for _ = 1, 3 do print(x)
 x = 2 end",
+        "\
+while local x = f() do
+  print(x)
+  x = 2
+  print(x)
+end",
     ];
 
     const FAIL: &[&str] = &[
@@ -99,6 +105,22 @@ return x",
 local x = 1
 if c then x = 2 else x = 3 end
 return x",
+        "\
+if local x = f() then
+  x = 2
+  print(x)
+end",
+        "\
+if c then
+elseif local x = f() then
+  x = 2
+  print(x)
+end",
+        "\
+while local x = f() do
+  x = 2
+  print(x)
+end",
     ];
 
     #[test]

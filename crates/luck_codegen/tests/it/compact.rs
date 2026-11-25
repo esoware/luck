@@ -1,5 +1,5 @@
 use luck_allocator::Allocator;
-use luck_ast::{Expression, SpanCounter, Synth, block_nesting_depth};
+use luck_ast::{Expression, SpanCounter, Statement, Synth, block_nesting_depth};
 use luck_codegen::LiteralSpelling;
 use luck_token::{BinOp, UnOp};
 
@@ -192,9 +192,39 @@ end",
         ("for  k , v  in  pairs ( t )  do  end", "for k,v in pairs(t)do end"),
         ("return", "return"),
         ("return  1 , 2", "return 1,2"),
+        ("if  local  x  =  f ( )  then  end", "if local x=f()then end"),
+        (
+            "if local x: Foo<T> = f() then elseif const y = g() then end",
+            "if local x:Foo<T> =f()then elseif const y=g()then end",
+        ),
+        ("while  const  x : number  =  f ( )  do  end", "while const x:number=f()do end"),
+        (
+            "return if local a = f() then a elseif const b = g() then b else c",
+            "return if local a=f()then a elseif const b=g()then b else c",
+        ),
+        ("if const then end", "if const then end"),
     ] {
         assert_compacts_to(source, expected);
     }
+}
+
+#[test]
+fn a_built_binding_prints_before_its_condition() {
+    let allocator = Allocator::new();
+    let spans = SpanCounter::new();
+    let synth = Synth::new(&allocator, &spans);
+    let mut stmt = synth.while_(synth.call(synth.name_expr("f"), []), synth.block([]));
+    let Statement::WhileLoop(while_loop) = &mut stmt else {
+        panic!("expected a while loop");
+    };
+    let name = synth.typed_name("x", Some(synth.ty_named("T")));
+    while_loop.binding = Some(synth.conditional_binding(name, true));
+    let chunk = synth.block([stmt]);
+    assert_eq!(
+        luck_codegen::compact(&chunk, LiteralSpelling::AsWritten),
+        b"while const x:T=f()do end"
+    );
+    assert_reprints(&chunk);
 }
 
 #[test]
@@ -318,18 +348,14 @@ local called = t.f<<number, string>>(value)",
         ),
         ("local  x  =  ( y  ::  number )  ::  string", "local x=(y::number)::string"),
         (
-            "return 1i, 1_000_000i, 0xffffffffffffffffi, -123i",
-            "return 1i,1_000_000i,0xffffffffffffffffi,-123i",
-        ),
-        (
             "\
-export local seen = 0i
-export const MAX = 2i
+export local seen = 0
+export const MAX = 2
 @native
 export function run()
 return seen
 end",
-            "export local seen=0i export const MAX=2i@native export function run()return seen end",
+            "export local seen=0 export const MAX=2@native export function run()return seen end",
         ),
         ("@native @checked function f() end", "@native@checked function f()end"),
         ("@[deprecated()] function f() end", "@[deprecated()]function f()end"),

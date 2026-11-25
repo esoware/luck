@@ -73,7 +73,8 @@ pub enum ScopeKind {
     Module,
     /// Function body, which introduces an upvalue boundary.
     Function,
-    /// `do` block, or an `if`, `elseif`, or `else` body.
+    /// `do` block, an `if`, `elseif`, or `else` body, or the branch of an
+    /// if-expression whose condition binds a name.
     Block,
     /// `while`, `repeat`, or `for` body.
     Loop,

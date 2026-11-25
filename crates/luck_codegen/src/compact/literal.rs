@@ -1,7 +1,6 @@
-use luck_ast::{IntegerLiteral, NumberLiteral, StringLiteral};
+use luck_ast::{NumberLiteral, StringLiteral};
 use luck_token::{
-    StringSpelling, spell_integer, spell_number, spell_string, spell_string_shorter_than,
-    write_interpolated_text,
+    StringSpelling, spell_number, spell_string, spell_string_shorter_than, write_interpolated_text,
 };
 
 use super::Printer;
@@ -18,18 +17,6 @@ impl Printer {
             return;
         }
         let spelling = spell_number(literal.value);
-        self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
-    }
-
-    /// An integer, as [`Self::print_number`] prints a number.
-    pub(super) fn print_integer(&mut self, literal: &IntegerLiteral<'_>) {
-        if let Some(raw) = literal.raw
-            && !self.is_shortest
-        {
-            self.number(raw.as_str());
-            return;
-        }
-        let spelling = spell_integer(literal.value);
         self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
     }
 

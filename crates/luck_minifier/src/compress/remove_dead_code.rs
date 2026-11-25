@@ -13,8 +13,8 @@ use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
-    IfStatement, LocalAssignment, NumericFor, OneOrMore, Statement, VisitMut as _,
+    BinaryOp, Block, ConditionalBinding, ContentEq as _, ElseClause, ElseIfClause, Expression,
+    GetSpan as _, IfStatement, LocalAssignment, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
 use luck_token::{BinOp, UnOp};
 use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _};
@@ -323,12 +323,22 @@ impl<'ast> Compressor<'_, 'ast> {
 
     /// Walks the condition of an `if`'s arm, and says whether it's truthy
     /// when that's known and it can go, which it then does, dropped: the arm
-    /// runs whenever the `if` reaches it, or never.
-    fn visit_arm_condition(&mut self, condition: &mut Expression<'ast>) -> Option<bool> {
+    /// runs whenever the `if` reaches it, or never. A binding holds only its
+    /// own arm, so a bound arm can go only as one that never runs.
+    fn visit_arm_condition(
+        &mut self,
+        binding: Option<&ConditionalBinding<'ast>>,
+        condition: &mut Expression<'ast>,
+    ) -> Option<bool> {
         self.visit_expr(condition);
-        let truthiness = condition.get_side_free_boolean_value(&self.names());
+        let truthiness = condition
+            .get_side_free_boolean_value(&self.names())
+            .filter(|&is_truthy| !is_truthy || binding.is_none());
         if truthiness.is_some() {
             self.drop_expr(condition);
+            if let Some(binding) = binding {
+                self.drop_annotation(&binding.name);
+            }
         }
         truthiness
     }
@@ -340,6 +350,9 @@ impl<'ast> Compressor<'_, 'ast> {
         else_clause: Option<&ElseClause<'ast>>,
     ) {
         for clause in clauses {
+            if let Some(binding) = &clause.binding {
+                self.drop_annotation(&binding.name);
+            }
             self.drop_expr(&clause.condition);
             self.drop_block(&clause.block);
         }
@@ -368,8 +381,10 @@ impl<'ast> Compressor<'_, 'ast> {
             }
             return true;
         }
-        let IfStatement { condition, block, elseif_clauses, else_clause, .. } = &mut **if_stmt;
-        let mut has_head = match self.visit_arm_condition(condition) {
+        let IfStatement { binding, condition, block, elseif_clauses, else_clause, .. } =
+            &mut **if_stmt;
+        self.visit_binding(binding.as_deref_mut());
+        let mut has_head = match self.visit_arm_condition(binding.as_deref(), condition) {
             Some(true) => {
                 self.visit_run_block(block, holds_run);
                 // The `if`s under it left their merge to this one, which goes.
@@ -386,7 +401,10 @@ impl<'ast> Compressor<'_, 'ast> {
                 false
             }
             None => {
+                let registers = usize::from(binding.is_some());
+                self.live_registers += registers;
                 self.visit_run_block(block, holds_run);
+                self.live_registers -= registers;
                 true
             }
         };
@@ -396,7 +414,9 @@ impl<'ast> Compressor<'_, 'ast> {
         let mut taken_index = None;
         for index in 0..elseif_clauses.len() {
             let clause = &mut elseif_clauses[index];
-            let truthiness = self.visit_arm_condition(&mut clause.condition);
+            self.visit_binding(clause.binding.as_deref_mut());
+            let truthiness =
+                self.visit_arm_condition(clause.binding.as_deref(), &mut clause.condition);
             has_dropped_arm |= truthiness.is_some();
             match truthiness {
                 Some(false) => self.drop_block(&clause.block),
@@ -406,15 +426,16 @@ impl<'ast> Compressor<'_, 'ast> {
                     break;
                 }
                 None if has_head => {
-                    self.visit_block(&mut clause.block);
+                    self.visit_bound_block(clause.binding.is_some(), &mut clause.block);
                     elseif_clauses.swap(kept, index);
                     kept += 1;
                 }
                 // The first arm left takes the dropped head's place.
                 None => {
                     has_head = true;
+                    *binding = clause.binding.take();
                     *condition = clause.condition.take();
-                    self.visit_block(&mut clause.block);
+                    self.visit_bound_block(binding.is_some(), &mut clause.block);
                     *block = clause.block.take();
                 }
             }
@@ -466,11 +487,16 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     fn walk_if(&mut self, if_stmt: &mut IfStatement<'ast>, holds_run: bool) {
+        self.visit_binding(if_stmt.binding.as_deref_mut());
         self.visit_expr(&mut if_stmt.condition);
+        let registers = usize::from(if_stmt.binding.is_some());
+        self.live_registers += registers;
         self.visit_run_block(&mut if_stmt.block, holds_run);
+        self.live_registers -= registers;
         for clause in &mut if_stmt.elseif_clauses {
+            self.visit_binding(clause.binding.as_deref_mut());
             self.visit_expr(&mut clause.condition);
-            self.visit_block(&mut clause.block);
+            self.visit_bound_block(clause.binding.is_some(), &mut clause.block);
         }
         if let Some(else_clause) = &mut if_stmt.else_clause {
             self.visit_block(&mut else_clause.block);
@@ -490,6 +516,9 @@ impl<'ast> Compressor<'_, 'ast> {
         if else_clause.block.stmts.is_empty() {
             if_stmt.else_clause = None;
             self.has_changed = true;
+            return;
+        }
+        if if_stmt.binding.is_some() {
             return;
         }
         // The `not` nests the condition a level deeper.
@@ -865,6 +894,35 @@ mod tests {
         ] {
             let result = remove_dead(&format!("local unused = {initializer} return 1"));
             assert!(result.contains("local unused"), "`{initializer}` must stay: {result}");
+        }
+    }
+
+    #[test]
+    fn a_bound_arm_goes_only_as_one_that_never_runs() {
+        for (source, expected) in [
+            ("if local x = 1 then f(x) end", "if local x=1 then f(x)end"),
+            ("if local x = 1 then f(x) else g() end", "if local x=1 then f(x)else g()end"),
+            ("if local x = nil then f(x) end", ""),
+            ("if local x = false then f(x) else g() end", "do g()end"),
+            ("if local x = 1 then end", ""),
+            (
+                "if a then f() elseif local x = 1 then g(x) else h() end",
+                "if a then f()elseif local x=1 then g(x)else h()end",
+            ),
+            (
+                "if false then f() elseif local x = y then g(x) else h() end",
+                "if local x=y then g(x)else h()end",
+            ),
+            ("if a then f() elseif local x = nil then g(x) end", "if a then f()end"),
+            ("if local x = a then else f() end", "if local x=a then else f()end"),
+            ("if local x = a then f(x) else end", "if local x=a then f(x)end"),
+            ("local a = ... if local x = a then else end", ""),
+            ("if local x = not a then f(x) else g() end", "if local x=not a then f(x)else g()end"),
+            ("local a = ... if local b: typeof(a) = nil then f(b) end", ""),
+            ("while local x = nil do f(x) end", ""),
+            ("while local x = f() do end", "while local x=f()do end"),
+        ] {
+            assert_eq!(remove_dead(source), expected, "source: {source}");
         }
     }
 }

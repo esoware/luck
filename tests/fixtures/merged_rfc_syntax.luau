@@ -1,13 +1,13 @@
-export type Identifier = integer | string
+export type Identifier = number | string
 type NonNil = number | string
 
-export const MAX_ID: integer = 0x7fffffffffffffffi
-export local current: Identifier = 1i
+export const MAX_ID: number = 0x1fffffffffffff
+export local current: Identifier = 1
 
 export function convert<T>(value: T): T
     return value
 end
 
-local converted = convert<<integer>>(current)
-local mapped = converter:map<<integer, string>>(converted)
+local converted = convert<<number>>(current)
+local mapped = converter:map<<number, string>>(converted)
 current = converted

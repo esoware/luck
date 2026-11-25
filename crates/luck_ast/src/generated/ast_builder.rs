@@ -5,10 +5,10 @@ use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
 use luck_token::{BinOp, CompoundOp, Span, UnOp};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
-    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
-    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
-    GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement, IntegerLiteral,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
+    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
     InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
     LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NameIndex, NamedType,
     NumberLiteral, NumericFor, OneOrMore, OptionalType, ParenthesizedExpression, ParenthesizedType,
@@ -28,16 +28,6 @@ impl<'ast> Expression<'ast> {
         allocator: &'ast Allocator,
     ) -> Self {
         Self::Number(NumberLiteral::boxed(value, raw, span, is_exact, allocator))
-    }
-
-    #[inline]
-    pub fn new_integer(
-        value: i64,
-        raw: Option<ThinStr<'ast>>,
-        span: Span,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::Integer(IntegerLiteral::boxed(value, raw, span, allocator))
     }
 
     #[inline]
@@ -118,6 +108,7 @@ impl<'ast> Expression<'ast> {
     #[inline]
     pub fn new_if_expr(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Self,
         then_expr: Self,
         elseif_clauses: List<'ast, ElseIfExprClause<'ast>>,
@@ -126,6 +117,7 @@ impl<'ast> Expression<'ast> {
     ) -> Self {
         Self::IfExpression(IfExpression::boxed(
             span,
+            binding,
             condition,
             then_expr,
             elseif_clauses,
@@ -370,31 +362,41 @@ impl<'ast> IfExpression<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         then_expr: Expression<'ast>,
         elseif_clauses: List<'ast, ElseIfExprClause<'ast>>,
         else_expr: Expression<'ast>,
     ) -> Self {
-        Self { span, condition, then_expr, elseif_clauses, else_expr }
+        Self { span, binding, condition, then_expr, elseif_clauses, else_expr }
     }
 
     #[inline]
     pub fn boxed(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         then_expr: Expression<'ast>,
         elseif_clauses: List<'ast, ElseIfExprClause<'ast>>,
         else_expr: Expression<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, condition, then_expr, elseif_clauses, else_expr), allocator)
+        Box::new_in(
+            Self::new(span, binding, condition, then_expr, elseif_clauses, else_expr),
+            allocator,
+        )
     }
 }
 
 impl<'ast> ElseIfExprClause<'ast> {
     #[inline]
-    pub const fn new(span: Span, condition: Expression<'ast>, expr: Expression<'ast>) -> Self {
-        Self { span, condition, expr }
+    pub const fn new(
+        span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
+        condition: Expression<'ast>,
+        expr: Expression<'ast>,
+    ) -> Self {
+        Self { span, binding, condition, expr }
     }
 }
 
@@ -532,23 +534,6 @@ impl<'ast> NumberLiteral<'ast> {
     }
 }
 
-impl<'ast> IntegerLiteral<'ast> {
-    #[inline]
-    pub const fn new(value: i64, raw: Option<ThinStr<'ast>>, span: Span) -> Self {
-        Self { value, raw, span }
-    }
-
-    #[inline]
-    pub fn boxed(
-        value: i64,
-        raw: Option<ThinStr<'ast>>,
-        span: Span,
-        allocator: &'ast Allocator,
-    ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(value, raw, span), allocator)
-    }
-}
-
 impl<'ast> StringLiteral<'ast> {
     #[inline]
     pub const fn new(value: ThinBytes<'ast>, raw: Option<ThinBytes<'ast>>, span: Span) -> Self {
@@ -602,11 +587,12 @@ impl<'ast> Statement<'ast> {
     #[inline]
     pub fn new_while_loop(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::WhileLoop(WhileLoop::boxed(span, condition, block, allocator))
+        Self::WhileLoop(WhileLoop::boxed(span, binding, condition, block, allocator))
     }
 
     #[inline]
@@ -622,6 +608,7 @@ impl<'ast> Statement<'ast> {
     #[inline]
     pub fn new_if_stmt(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         block: Block<'ast>,
         elseif_clauses: List<'ast, ElseIfClause<'ast>>,
@@ -630,6 +617,7 @@ impl<'ast> Statement<'ast> {
     ) -> Self {
         Self::IfStatement(IfStatement::boxed(
             span,
+            binding,
             condition,
             block,
             elseif_clauses,
@@ -780,18 +768,41 @@ impl<'ast> DoBlock<'ast> {
 
 impl<'ast> WhileLoop<'ast> {
     #[inline]
-    pub const fn new(span: Span, condition: Expression<'ast>, block: Block<'ast>) -> Self {
-        Self { span, condition, block }
+    pub const fn new(
+        span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
+        condition: Expression<'ast>,
+        block: Block<'ast>,
+    ) -> Self {
+        Self { span, binding, condition, block }
     }
 
     #[inline]
     pub fn boxed(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, condition, block), allocator)
+        Box::new_in(Self::new(span, binding, condition, block), allocator)
+    }
+}
+
+impl<'ast> ConditionalBinding<'ast> {
+    #[inline]
+    pub const fn new(span: Span, name: TypedName<'ast>, is_const: bool) -> Self {
+        Self { span, name, is_const }
+    }
+
+    #[inline]
+    pub fn boxed(
+        span: Span,
+        name: TypedName<'ast>,
+        is_const: bool,
+        allocator: &'ast Allocator,
+    ) -> Box<'ast, Self> {
+        Box::new_in(Self::new(span, name, is_const), allocator)
     }
 }
 
@@ -816,31 +827,41 @@ impl<'ast> IfStatement<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         block: Block<'ast>,
         elseif_clauses: List<'ast, ElseIfClause<'ast>>,
         else_clause: Option<Box<'ast, ElseClause<'ast>>>,
     ) -> Self {
-        Self { span, condition, block, elseif_clauses, else_clause }
+        Self { span, binding, condition, block, elseif_clauses, else_clause }
     }
 
     #[inline]
     pub fn boxed(
         span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
         condition: Expression<'ast>,
         block: Block<'ast>,
         elseif_clauses: List<'ast, ElseIfClause<'ast>>,
         else_clause: Option<Box<'ast, ElseClause<'ast>>>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, condition, block, elseif_clauses, else_clause), allocator)
+        Box::new_in(
+            Self::new(span, binding, condition, block, elseif_clauses, else_clause),
+            allocator,
+        )
     }
 }
 
 impl<'ast> ElseIfClause<'ast> {
     #[inline]
-    pub const fn new(span: Span, condition: Expression<'ast>, block: Block<'ast>) -> Self {
-        Self { span, condition, block }
+    pub const fn new(
+        span: Span,
+        binding: Option<Box<'ast, ConditionalBinding<'ast>>>,
+        condition: Expression<'ast>,
+        block: Block<'ast>,
+    ) -> Self {
+        Self { span, binding, condition, block }
     }
 }
 

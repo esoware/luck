@@ -88,8 +88,6 @@ enum ValueType {
     String,
     Table,
     Function,
-    /// A 64-bit integer, which no arithmetic operator takes.
-    Integer,
     /// Any type: a variable's value, or a metamethod's result.
     Undetermined,
 }
@@ -100,7 +98,6 @@ impl ValueType {
             ConstantValue::Nil => Self::Nil,
             ConstantValue::Boolean(_) => Self::Boolean,
             ConstantValue::Number(_) => Self::Number,
-            ConstantValue::Integer(_) => Self::Integer,
             ConstantValue::String(_) => Self::String,
         }
     }
@@ -109,9 +106,7 @@ impl ValueType {
     const fn truthiness(self) -> Option<bool> {
         match self {
             Self::Nil => Some(false),
-            Self::Number | Self::String | Self::Table | Self::Function | Self::Integer => {
-                Some(true)
-            }
+            Self::Number | Self::String | Self::Table | Self::Function => Some(true),
             Self::Boolean | Self::Undetermined => None,
         }
     }
@@ -121,12 +116,7 @@ impl ValueType {
     const fn may_have_eq_metamethod(self) -> bool {
         match self {
             Self::Table | Self::Undetermined => true,
-            Self::Nil
-            | Self::Boolean
-            | Self::Number
-            | Self::String
-            | Self::Function
-            | Self::Integer => false,
+            Self::Nil | Self::Boolean | Self::Number | Self::String | Self::Function => false,
         }
     }
 }
@@ -220,16 +210,10 @@ impl<'ast> Outcome<'ast> {
         match self.value {
             Some(ConstantValue::Nil) => false,
             Some(ConstantValue::Number(number)) => !number.is_nan(),
-            Some(
-                ConstantValue::Boolean(_) | ConstantValue::Integer(_) | ConstantValue::String(_),
-            ) => true,
+            Some(ConstantValue::Boolean(_) | ConstantValue::String(_)) => true,
             None => matches!(
                 self.ty,
-                ValueType::Boolean
-                    | ValueType::String
-                    | ValueType::Table
-                    | ValueType::Function
-                    | ValueType::Integer
+                ValueType::Boolean | ValueType::String | ValueType::Table | ValueType::Function
             ),
         }
     }
@@ -241,7 +225,6 @@ fn analyze<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Outcome
         Expression::False(_) => Outcome::constant(ConstantValue::Boolean(false)),
         Expression::True(_) => Outcome::constant(ConstantValue::Boolean(true)),
         Expression::Number(literal) => Outcome::constant(ConstantValue::Number(literal.value)),
-        Expression::Integer(literal) => Outcome::constant(ConstantValue::Integer(literal.value)),
         Expression::StringLiteral(literal) => {
             Outcome::constant(ConstantValue::String(literal.value.as_bytes()))
         }
@@ -321,12 +304,7 @@ fn unary_outcome(op: UnOp, operand: Outcome<'_>) -> Outcome<'_> {
                 Some(ConstantValue::String(bytes)) => {
                     u32::try_from(bytes.len()).ok().map(f64::from)
                 }
-                Some(
-                    ConstantValue::Nil
-                    | ConstantValue::Boolean(_)
-                    | ConstantValue::Number(_)
-                    | ConstantValue::Integer(_),
-                )
+                Some(ConstantValue::Nil | ConstantValue::Boolean(_) | ConstantValue::Number(_))
                 | None => None,
             };
             (length, operand.ty == ValueType::String)

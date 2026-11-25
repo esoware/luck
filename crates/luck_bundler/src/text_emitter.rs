@@ -675,11 +675,11 @@ print(d)
     fn value_exports_are_lowered_inside_bundle_wrappers() {
         let allocator = Allocator::new();
         let dependency = "\
-export type Public = integer
-export local value = 129312i
-export const LIMIT = 0xffffffffffffffffi
+export type Public = number
+export local value = 129312
+export const LIMIT = 0xffff
 @native
-export function get(): integer
+export function get(): number
     return value
 end
 ";
@@ -698,8 +698,8 @@ print(dep.get())
         let output = bundle(&allocator, modules);
 
         assert!(!output.contains("export "), "{output}");
-        assert!(output.contains("local value = 129312i"), "{output}");
-        assert!(output.contains("const LIMIT = 0xffffffffffffffffi"), "{output}");
+        assert!(output.contains("local value = 129312"), "{output}");
+        assert!(output.contains("const LIMIT = 0xffff"), "{output}");
         assert!(
             output.contains(
                 "\

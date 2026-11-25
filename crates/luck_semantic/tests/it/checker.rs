@@ -246,3 +246,22 @@ fn valid_sources_check_clean() {
         assert!(errors.is_empty(), "{errors:?}\n{source}");
     });
 }
+
+#[test]
+fn a_const_binding_is_read_only_where_it_holds() {
+    for source in [
+        "if const x = f() then x = 2 end",
+        "if a then elseif const x = f() then x += 1 end",
+        "while const x = f() do x = nil end",
+        "local g = if const x = f() then function() x = 1 end else nil",
+    ] {
+        assert_has_errors(&check(source), source);
+    }
+    for source in [
+        "if local x = f() then x = 2 end",
+        "while local x = f() do x = nil end",
+        "local x = 0 if const x = f() then print(x) end x = 1",
+    ] {
+        assert_no_errors(&check(source));
+    }
+}

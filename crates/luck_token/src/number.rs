@@ -124,21 +124,6 @@ fn digits_value(digits: &[u8], radix: u32) -> Option<u64> {
     })
 }
 
-/// The integer an `i` literal such as `0xFFi` spells, its `_`s dropped.
-///
-/// `None` when it's past 64 bits: a decimal must fit an `i64`, and hex and
-/// binary digits a `u64`, as a bit pattern.
-pub fn read_integer(text: &str) -> Option<i64> {
-    without_separators(text, |separated| {
-        let body = separated.strip_suffix('i').unwrap_or(separated);
-        match body.as_bytes() {
-            [b'0', b'x' | b'X', digits @ ..] => digits_value(digits, 16).map(u64::cast_signed),
-            [b'0', b'b' | b'B', digits @ ..] => digits_value(digits, 2).map(u64::cast_signed),
-            digits => i64::try_from(decimal_integer(digits)?).ok(),
-        }
-    })
-}
-
 /// A numeral's spelling, on the stack, since none takes more than 32 bytes.
 #[derive(Clone, Copy)]
 pub struct NumberSpelling {
@@ -220,21 +205,6 @@ pub fn spell_number(value: f64) -> NumberSpelling {
     let digits = digit_text.as_bytes();
     let layout = shortest_layout(magnitude, digits, exponent);
     write_layout(layout, magnitude, digits, exponent, &mut spelling);
-    spelling
-}
-
-/// The shortest integer literal for `value`, which is in hex when it's
-/// negative.
-pub fn spell_integer(value: i64) -> NumberSpelling {
-    let mut spelling = NumberSpelling::EMPTY;
-    let bits = value.cast_unsigned();
-    let decimal_length = (value >= 0).then(|| decimal_length(bits));
-    // Plain digits win a tie.
-    let _ = if decimal_length.is_some_and(|length| length <= hex_length(bits)) {
-        write!(spelling, "{value}i")
-    } else {
-        write!(spelling, "0x{bits:x}i")
-    };
     spelling
 }
 

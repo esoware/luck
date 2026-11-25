@@ -126,9 +126,9 @@ fn type_comparison<'ast>(
     None
 }
 
-const PRIMITIVE_TYPE_NAMES: [&str; 11] = [
+const PRIMITIVE_TYPE_NAMES: [&str; 10] = [
     "nil", "boolean", "number", "string", "table", "function", "thread", "userdata", "buffer",
-    "vector", "integer",
+    "vector",
 ];
 
 #[cfg(test)]

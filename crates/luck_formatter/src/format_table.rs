@@ -26,7 +26,6 @@ fn is_fillable(table: &TableConstructor<'_>) -> bool {
                 | Expression::False(_)
                 | Expression::True(_)
                 | Expression::Number(_)
-                | Expression::Integer(_)
                 | Expression::StringLiteral(_)
                 | Expression::VarArg(_)
                 | Expression::Name(_)

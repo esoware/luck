@@ -2,7 +2,7 @@ use luck_allocator::ThinBytes;
 use luck_token::{BinOp, UnOp, write_long_string};
 
 use crate::expr::{Expression, InterpolatedSegment};
-use crate::leaf::{IntegerLiteral, NumberLiteral, StringLiteral};
+use crate::leaf::{NumberLiteral, StringLiteral};
 use crate::synth::Synth;
 
 /// One piece of a [`Synth::interpolated_string`]: literal text or an
@@ -27,12 +27,6 @@ impl<'ast> Synth<'ast> {
         }
         let literal = self.number(value.abs());
         if value.is_sign_negative() { self.unary_op(UnOp::Neg, literal) } else { literal }
-    }
-
-    /// An exact 64-bit integer literal, which prints as hex when it's
-    /// negative, as the bit pattern a literal can't carry a sign for.
-    pub fn integer_i64(&self, value: i64) -> Expression<'ast> {
-        Expression::Integer(self.boxed(IntegerLiteral::new(value, None, self.next_span())))
     }
 
     fn number(&self, value: f64) -> Expression<'ast> {
@@ -163,18 +157,6 @@ mod tests {
             assert_eq!(link.op, BinOp::Div);
             assert_eq!(number_value(&division.first).to_bits(), 0.0f64.to_bits());
             assert_eq!(number_value(&link.operand).to_bits(), 0.0f64.to_bits());
-        }
-    }
-
-    #[test]
-    fn integer_i64_keeps_every_bit_pattern() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth();
-        for value in [0, 0x20_0000_0000_0001, -1, i64::MIN] {
-            let Expression::Integer(integer) = synth.integer_i64(value) else {
-                panic!("expected integer literal");
-            };
-            assert_eq!(integer.value, value);
         }
     }
 

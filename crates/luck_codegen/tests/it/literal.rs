@@ -28,7 +28,7 @@ fn each_literal_prints_as_written() {
     for (source, expected) in [
         (r#"x = "\65\066" .. [[hello]]"#, r#"x="\65\066"..[[hello]]"#),
         ("x = 0x10, 1.50, 0.5, 1e2, 007, 1.0", "x=0x10,1.50,0.5,1e2,007,1.0"),
-        ("x = 1_000, 0b11, 0xFFi, 1_0i", "x=1_000,0b11,0xFFi,1_0i"),
+        ("x = 1_000, 0b11, 0xFF, 1_0", "x=1_000,0b11,0xFF,1_0"),
         (r"x = `a\x41{b}\u{42}`", r"x=`a\x41{b}\u{42}`"),
     ] {
         assert_compacts_to(source, expected);
@@ -55,7 +55,7 @@ fn each_literal_takes_the_shortest_spelling_of_its_value() {
         // A spelling as long as the shortest stays.
         ("x = 1e999, 9007199254740993", "x=1e999,9007199254740993"),
         ("x = 1e9999, 100000000000000000000", "x=1e999,1e20"),
-        ("x = 0xFFi, 0b11i, 1_0i", "x=255i,3i,10i"),
+        ("x = 0xFF, 0b11, 1_0", "x=255,3,10"),
         (r"x = `a\x41{b}\u{42}`", "x=`aA{b}B`"),
     ] {
         assert_spells(source, expected, LiteralSpelling::Shortest);

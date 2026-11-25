@@ -33,7 +33,6 @@ pub(super) fn is_bare_local(stmt: &Statement<'_>) -> bool {
 const fn is_single_register_value(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::Number(_)
-        | Expression::Integer(_)
         | Expression::StringLiteral(_)
         | Expression::Nil(_)
         | Expression::True(_)

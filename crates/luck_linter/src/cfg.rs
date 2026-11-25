@@ -5,7 +5,9 @@
 use std::cell::OnceCell;
 use std::mem;
 
-use luck_ast::{Block, GetSpan as _, IfStatement, RepeatLoop, Statement, WhileLoop};
+use luck_ast::{
+    Block, ConditionalBinding, GetSpan as _, IfStatement, RepeatLoop, Statement, WhileLoop,
+};
 use luck_token::Span;
 use luck_value::ToBoolean as _;
 
@@ -386,8 +388,16 @@ impl<'ast> GraphBuilder<'_, 'ast> {
         entry
     }
 
+    fn bind(&mut self, binding: Option<&ConditionalBinding<'_>>, node: usize, scope_end: u32) {
+        if let Some(binding) = binding {
+            let name_span = binding.name.name.span;
+            self.graph.locals.push(LocalDeclaration { name_span, node, scope_end });
+        }
+    }
+
     fn while_loop(&mut self, node: &'ast WhileLoop<'ast>) {
         let head = self.code(Span::new(node.span.start, node.block.span.start));
+        self.bind(node.binding.as_deref(), head, node.block.span.end);
         let after = self.new_node();
         let truth = node.condition.to_boolean(self.host);
         if truth == Some(false) {
@@ -430,12 +440,14 @@ impl<'ast> GraphBuilder<'_, 'ast> {
 
     fn if_stmt(&mut self, node: &'ast IfStatement<'ast>) {
         let mut test = self.code(Span::new(node.span.start, node.block.span.start));
+        self.bind(node.binding.as_deref(), test, node.block.span.end);
         let join = self.new_node();
         self.block(&node.block);
         self.close_into(join);
         for clause in &node.elseif_clauses {
             self.cursor = Some(test);
             test = self.code(Span::new(clause.span.start, clause.block.span.start));
+            self.bind(clause.binding.as_deref(), test, clause.block.span.end);
             self.block(&clause.block);
             self.close_into(join);
         }

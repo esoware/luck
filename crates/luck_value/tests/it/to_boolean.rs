@@ -17,7 +17,6 @@ fn only_nil_and_false_are_falsy() {
         ("false", Some(false)),
         ("true", Some(true)),
         ("0", Some(true)),
-        ("0i", Some(true)),
         ("''", Some(true)),
         ("`text`", Some(true)),
         ("{}", Some(true)),

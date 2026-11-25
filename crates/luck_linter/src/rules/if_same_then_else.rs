@@ -25,6 +25,15 @@ impl Rule for IfSameThenElse {
         let Some(else_clause) = &if_stmt.else_clause else {
             return;
         };
+        // A name the condition binds reads differently in each branch.
+        let tree = context.scoping();
+        if let Some(binding) = &if_stmt.binding
+            && tree
+                .symbol_of(&binding.name.name)
+                .is_none_or(|symbol| !tree.resolved_references(symbol).is_empty())
+        {
+            return;
+        }
         if !if_stmt.block.stmts.is_empty() && if_stmt.block.content_eq(&else_clause.block) {
             let finding =
                 Finding::new("`if` and `else` branches have identical bodies", if_stmt.span);
@@ -46,6 +55,7 @@ mod tests {
     const PASS: &[&str] = &[
         "if a then print(1) else print(2) end",
         "if a then print(1) end",
+        "if local x = f() then print(x) else print(x) end",
         "\
 if a then
   -- nothing
@@ -66,6 +76,7 @@ end",
         // The condition decides whether `elseif` runs, so removing the `if` isn't
         // safe.
         "if a then f() elseif b then g() else f() end",
+        "if local x = f() then print(1) else print(1) end",
     ];
 
     #[test]

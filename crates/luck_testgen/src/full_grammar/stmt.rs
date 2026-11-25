@@ -109,13 +109,34 @@ impl FullGenerator {
         }
     }
 
+    /// `local name = ` or `const name = `, sometimes, to open a condition.
+    pub(super) fn binding(&mut self) -> String {
+        if !self.rng.chance(20) {
+            return String::new();
+        }
+        let name = self.fresh_name();
+        match self.rng.below(10) {
+            0..=2 => {
+                self.read_only_names.push(name.clone());
+                format!("const {name} = ")
+            }
+            3..=4 => {
+                let annotation = self.type_expr(1);
+                format!("local {name}: {annotation} = ")
+            }
+            _ => format!("local {name} = "),
+        }
+    }
+
     fn if_stmt(&mut self) {
+        let binding = self.binding();
         let condition = self.condition();
-        self.line(&format!("if {condition} then"));
+        self.line(&format!("if {binding}{condition} then"));
         self.block(|generator| generator.small_body(2));
         if self.rng.chance(40) {
+            let elseif_binding = self.binding();
             let elseif_condition = self.condition();
-            self.line(&format!("elseif {elseif_condition} then"));
+            self.line(&format!("elseif {elseif_binding}{elseif_condition} then"));
             self.block(|generator| generator.small_body(1));
         }
         if self.rng.chance(45) {
@@ -153,8 +174,9 @@ impl FullGenerator {
     }
 
     fn while_stmt(&mut self) {
+        let binding = self.binding();
         let condition = self.condition();
-        self.line(&format!("while {condition} do"));
+        self.line(&format!("while {binding}{condition} do"));
         self.loop_body();
         self.line("end");
     }

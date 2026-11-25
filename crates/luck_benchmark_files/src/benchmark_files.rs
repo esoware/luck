@@ -1,6 +1,7 @@
 //! Pinned inputs, two kinds:
 //!
-//! - three single files and a 40-module tree for the bundler in
+//! - three single files, Penlight 1.15.0's modules (portable Lua 5.1 that
+//!   reads as Luau, ~40 files), and a 40-module tree for the bundler in
 //!   esoware/luck-benchmark-files, fetched as one tarball;
 //! - two real multi-file projects fetched as pinned upstream tarballs:
 //!   Roact (Roblox Luau, ~80 files) and rbx-cryptography (hashing,
@@ -73,7 +74,7 @@ fn parse_cleanly<'ast>(
     parse_result
 }
 
-const BENCHMARK_FILES_SHA: &str = "44602811fec92e0ddee0a711113abd852fbc4a8e"; // esoware/luck-benchmark-files
+const BENCHMARK_FILES_SHA: &str = "6579702412aee193a82f3f69bd67ff98a0c106cf"; // esoware/luck-benchmark-files
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const CRYPTOGRAPHY_SHA: &str = "26226eeecbb7314b91095f3dea4d4b4444495247"; // daily3014/rbx-cryptography v4.1.2
 
@@ -144,10 +145,11 @@ pub struct BundleProject {
     pub entry: PathBuf,
 }
 
-/// Roact requires Roblox instances, which no bundle can resolve, so beside
-/// rbx-cryptography, whose requires are all relative, the bundler measures
-/// the programs of `gen_full.luau` split into a 40-module diamond DAG, in
-/// which each module requires the next one and the third one on.
+/// Roact requires Roblox instances, and Penlight its modules by dotted name,
+/// which no bundle can resolve, so beside rbx-cryptography, whose requires
+/// are all relative, the bundler measures the programs of `gen_full.luau`
+/// split into a 40-module diamond DAG, in which each module requires the next
+/// one and the third one on.
 pub fn bundle_projects() -> Vec<BundleProject> {
     let generated = benchmark_files_root().join("gen_bundle");
     let cryptography = cryptography_root();
@@ -173,6 +175,11 @@ pub fn test_projects() -> Vec<TestProject> {
             name: "rbx_cryptography",
             files: collect_source_files(&cryptography_root().join("src")),
             variant: Variant::Roblox,
+        },
+        TestProject {
+            name: "penlight",
+            files: collect_source_files(&benchmark_files_root().join("penlight")),
+            variant: Variant::Standalone,
         },
     ]
 }

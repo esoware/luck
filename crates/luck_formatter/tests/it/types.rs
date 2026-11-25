@@ -222,26 +222,26 @@ fn merged_rfc_syntax_roundtrips() {
 export function convert<T>(value: T): T
 return value
 end
-export local seen: integer = 0i
-export const MAX: integer = 0XFF_FFi
+export local seen: number = 0
+export const MAX: number = 0XFF_FF
 type NonNil = number | string
 type Closed = (string | nil)
-local partial = convert<<integer>>
-local value = convert<<integer>>(MAX)
-local mapped = values:map<<integer, string>>(convert)
+local partial = convert<<number>>
+local value = convert<<number>>(MAX)
+local mapped = values:map<<number, string>>(convert)
 ",
         "\
 @native
 export function convert<T>(value: T): T
 \treturn value
 end
-export local seen: integer = 0i
-export const MAX: integer = 0xFF_FFi
+export local seen: number = 0
+export const MAX: number = 0xFF_FF
 type NonNil = number | string
 type Closed = (string | nil)
-local partial = convert<<integer>>
-local value = convert<<integer>>(MAX)
-local mapped = values:map<<integer, string>>(convert)
+local partial = convert<<number>>
+local value = convert<<number>>(MAX)
+local mapped = values:map<<number, string>>(convert)
 ",
     );
 }
