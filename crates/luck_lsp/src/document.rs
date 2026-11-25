@@ -10,7 +10,7 @@ use luck_parser::ParseResult;
 use luck_resolver::{Resolution, ResolveError};
 use luck_semantic::{AstNodes, Scoping};
 use luck_stdlib::SemanticAnalysis;
-use luck_token::{LuaVersion, Span, Token};
+use luck_token::{Span, Token};
 
 use crate::analyzed::{Analyzed, Arena};
 use crate::line_index::{LineIndex, PositionEncoding, Positions};
@@ -184,7 +184,8 @@ impl DocumentState {
         line_index: Arc<LineIndex>,
         arena: Arena,
     ) -> Self {
-        let analyzed = Analyzed::new(text, settings.stdlib.clone(), &settings.linter, arena);
+        let stdlib = settings.project.project().stdlib().clone();
+        let analyzed = Analyzed::new(text, stdlib, &settings.linter, arena);
         Self {
             settings,
             line_index,
@@ -225,10 +226,6 @@ impl DocumentState {
         self.semantic().semantic().nodes()
     }
 
-    pub(crate) fn version(&self) -> LuaVersion {
-        self.parse().chunk.version
-    }
-
     /// What the parse read, which the cursor's surroundings are read from
     /// where the tree has nothing, as in a comment, a string, or a member
     /// still being typed, and which the formatter reads too.
@@ -258,7 +255,7 @@ impl DocumentState {
     /// a document with no file, which no relative path starts from.
     pub(crate) fn resolve(&self, require: &Require) -> Option<Result<Resolution, ResolveError>> {
         let path = self.settings.path.as_deref()?;
-        Some(self.settings.project.resolver(self.version()).resolve(path, &require.module))
+        Some(self.settings.project.resolver().resolve(path, &require.module))
     }
 
     pub(crate) fn position(&self, offset: u32) -> Position {

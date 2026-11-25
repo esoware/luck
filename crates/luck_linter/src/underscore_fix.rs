@@ -1,6 +1,5 @@
 use luck_diagnostics::Tag;
-use luck_semantic::Symbol;
-use luck_stdlib::SemanticAnalysis;
+use luck_semantic::{Scoping, Symbol};
 
 use crate::context::ContextHost;
 use crate::diagnostic::Finding;
@@ -15,7 +14,7 @@ pub(crate) fn unused_binding(
         .with_tag(Tag::Unnecessary)
         .with_help("prefix with `_` to suppress this warning")
         .with_fix(context, FixKind::Suggestion, |fixer| {
-            prefix_underscore(fixer, context.semantic, symbol)
+            prefix_underscore(fixer, context.scoping(), symbol)
         })
 }
 
@@ -24,21 +23,12 @@ pub(crate) fn unused_binding(
 ///
 /// The chunk's names are every name it spells, declared or referenced, so a
 /// rename to any of them is refused, wherever it sits.
-fn prefix_underscore(
-    fixer: RuleFixer,
-    semantic: &SemanticAnalysis<'_>,
-    symbol: &Symbol,
-) -> Option<Fix> {
-    let tree = semantic.scoping();
+fn prefix_underscore(fixer: RuleFixer, tree: &Scoping, symbol: &Symbol) -> Option<Fix> {
     if !tree.resolved_references(symbol.id).is_empty() {
         return None;
     }
     let name = tree.name(symbol.name);
     let renamed = format!("_{name}");
-    // Lua 5.2+: a binding named `_ENV` redirects every global in scope.
-    if semantic.version().has_env_upvalue() && renamed == "_ENV" {
-        return None;
-    }
     tree.name_id(&renamed).is_none().then(|| {
         fixer.replace(
             format!("prefix `{name}` with `_`"),

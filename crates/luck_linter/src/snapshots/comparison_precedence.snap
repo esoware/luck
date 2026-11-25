@@ -2,49 +2,49 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 error: chained comparison on the left side parses as `(a op b) op c`, not as a math-style chain
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = a < b == c
   |           ^^^^^^^^^^
 help: split into two boolean expressions joined with `and`, or parenthesize to make intent explicit
 
 error: chained comparison on the left side parses as `(a op b) op c`, not as a math-style chain
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = a == b == c
   |           ^^^^^^^^^^^
 help: split into two boolean expressions joined with `and`, or parenthesize to make intent explicit
 
 error: chained comparison on the left side parses as `(a op b) op c`, not as a math-style chain
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = a < b < c
   |           ^^^^^^^^^
 help: split into two boolean expressions joined with `and`, or parenthesize to make intent explicit
 
 error: `not` applies only to the left operand, so this parses as `(not x) == y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = not a == b
   |           ^^^^^^^^^^
 help: consider `x ~= y`, or add parentheses to make intent explicit
 
 error: `not` applies only to the left operand, so this parses as `(not x) < y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = not a < b
   |           ^^^^^^^^^
 help: add parentheses to clarify intent
 
 error: `not` applies only to the left operand, so this parses as `(not x) <= y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = not a <= b
   |           ^^^^^^^^^^
 help: add parentheses to clarify intent
 
 error: `not` applies only to the left operand, so this parses as `(not x) > y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = not a > b
   |           ^^^^^^^^^
 help: add parentheses to clarify intent
 
 error: `not` applies only to the left operand, so this parses as `(not x) >= y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local x = not a >= b
   |           ^^^^^^^^^^
 help: add parentheses to clarify intent

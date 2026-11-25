@@ -1,4 +1,4 @@
-use luck_ast::{AstKind, AstType, Expression, Suffix, is_valid_identifier_in};
+use luck_ast::{AstKind, AstType, Expression, Suffix, is_valid_identifier};
 use luck_semantic::{AstNode, AstTypesBitset};
 
 use crate::context::LintContext;
@@ -40,7 +40,7 @@ fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_, '_>) -> Option<Fin
     };
     // The key is its value, however it's spelled.
     let name = literal.as_str()?;
-    if !is_valid_identifier_in(name, context.semantic.version()) {
+    if !is_valid_identifier(name) {
         return None;
     }
 
@@ -60,34 +60,31 @@ fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_, '_>) -> Option<Fin
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (r#"local x = t["end"]"#, LuaTarget::Lua54),
-        // Lua 5.5 builds without `LUA_COMPAT_GLOBAL` reserve `global`.
-        (r#"local x = t["global"]"#, LuaTarget::Lua55),
-        (r#"local x = t["with space"]"#, LuaTarget::Lua54),
-        (r#"local x = t["1bad"]"#, LuaTarget::Lua54),
-        (r#"local x = t["a\nb"]"#, LuaTarget::Lua54),
+    const PASS: &[&str] = &[
+        r#"local x = t["end"]"#,
+        r#"local x = t["with space"]"#,
+        r#"local x = t["1bad"]"#,
+        r#"local x = t["a\nb"]"#,
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (r#"local x = t["foo"]"#, LuaTarget::Lua54),
-        ("local x = t['foo']", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        r#"local x = t["foo"]"#,
+        "local x = t['foo']",
         // No fix, since it would delete the comment.
-        (r#"local x = t[--[[why]] "foo"]"#, LuaTarget::Lua54),
-        // Luau reads `continue` as a name wherever a name goes, a field included.
-        (r#"local x = t["continue"]"#, LuaTarget::Luau),
-        ("local x = (t)['a'] .. (t.u)['b']", LuaTarget::Lua54),
-        (r#"local x = t["a"]["b"]"#, LuaTarget::Lua54),
-        (r#"t["a"]["b"], u["c"] = 1, 2"#, LuaTarget::Lua54),
-        (r#"t["count"] += 1"#, LuaTarget::Luau),
-        (r#"local x = t["\102oo"] + t[ [[bar]] ]"#, LuaTarget::Lua54),
+        r#"local x = t[--[[why]] "foo"]"#,
+        // `continue` is a name wherever a name goes, a field included.
+        r#"local x = t["continue"]"#,
+        r#"local x = t["global"]"#,
+        "local x = (t)['a'] .. (t.u)['b']",
+        r#"local x = t["a"]["b"]"#,
+        r#"t["a"]["b"], u["c"] = 1, 2"#,
+        r#"t["count"] += 1"#,
+        r#"local x = t["\102oo"] + t[ [[bar]] ]"#,
         // A leading `_` is valid in an identifier.
-        (r#"local x = t["_priv"]"#, LuaTarget::Lua54),
+        r#"local x = t["_priv"]"#,
     ];
 
     #[test]

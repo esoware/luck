@@ -171,15 +171,13 @@ impl Linter {
         timings: Option<&RuleTimings>,
         budget: usize,
     ) -> Result<Fixed<'ast>, FixError> {
-        let version = stdlib.target.version();
-        let mut parse = luck_parser::parse(allocator, source, version);
+        let mut parse = luck_parser::parse(allocator, source);
         for round in 1..=budget {
             let messages = self.run(&parse, stdlib, fixes, timings);
             let Some(text) = apply(parse.source, &messages, fixes) else {
                 return Ok(Fixed { parse, messages });
             };
-            let mut reparse =
-                luck_parser::parse(allocator, allocator.alloc_slice_copy(&text), version);
+            let mut reparse = luck_parser::parse(allocator, allocator.alloc_slice_copy(&text));
             if !reparse.errors.is_empty() {
                 return Err(FixError::ReparseFailed {
                     round,
@@ -262,8 +260,7 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 #[cfg(test)]
 mod tests {
     use luck_diagnostics::Severity;
-    use luck_stdlib::library_for;
-    use luck_token::LuaTarget;
+    use luck_stdlib::{Variant, library_for};
 
     use super::*;
     use crate::config::{LintConfig, RuleLevel};
@@ -302,7 +299,7 @@ mod tests {
 
     fn fixed_within(source: &str, linter: &Linter, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
-        let stdlib = library_for(LuaTarget::Lua54);
+        let stdlib = library_for(Variant::Standalone);
         linter
             .fix_within(&allocator, source.as_bytes(), stdlib, FixKind::Fix, None, budget)
             .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())

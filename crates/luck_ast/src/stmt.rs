@@ -2,26 +2,15 @@ use std::mem;
 
 use luck_allocator::{Box, List};
 use luck_ast_macros::Ast;
-use luck_token::{CompoundOp, LuaVersion, Span};
+use luck_token::{CompoundOp, Span};
 
 use crate::expr::{Expression, SuffixedExpression, Var};
-use crate::function::{FunctionAttribute, FunctionBody, Parameter};
+use crate::function::{FunctionAttribute, FunctionBody};
 use crate::leaf::Name;
 use crate::types::{GenericTypeList, Type};
 
-/// A whole chunk, the root of every tree, and the dialect it's in.
-///
-/// Every dialect's source reads into the same shape. The version says which
-/// one the tree is written in, so whatever reads or prints it takes it from
-/// here.
-#[derive(Debug, PartialEq, Eq, Ast)]
-pub struct Chunk<'ast> {
-    pub version: LuaVersion,
-    pub block: Block<'ast>,
-}
-
-/// A statement that [has to end its block](Statement::has_to_end_block) in
-/// the chunk's version ends it.
+/// A statement that [has to end its block](Statement::has_to_end_block) ends
+/// it.
 ///
 /// The parser reports one that doesn't, luck's rewrites keep it so, and the
 /// printers print a block's statements as they are, so code that builds a
@@ -44,8 +33,7 @@ impl Block<'_> {
 
 /// Two words, like [`Expression`].
 ///
-/// A `;` isn't one. It does nothing in any dialect, as a separator in Lua
-/// 5.1 and Luau and an empty statement in 5.2+, so the tree leaves it out,
+/// A `;` isn't one. It only separates statements, so the tree leaves it out,
 /// as it does a list's commas.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[expect(
@@ -67,13 +55,7 @@ pub enum Statement<'ast> {
     LocalAssignment(Box<'ast, LocalAssignment<'ast>>),
     Return(Box<'ast, ReturnStatement<'ast>>),
     Break(Span),
-    /// Luau: `continue`.
     Continue(Span),
-    Goto(Box<'ast, GotoStatement<'ast>>),
-    Label(Box<'ast, LabelStatement<'ast>>),
-    GlobalDeclaration(Box<'ast, GlobalDeclaration<'ast>>),
-    GlobalFunction(Box<'ast, GlobalFunction<'ast>>),
-    GlobalStar(Box<'ast, GlobalStar<'ast>>),
     CompoundAssignment(Box<'ast, CompoundAssignment<'ast>>),
     TypeDeclaration(Box<'ast, TypeDeclaration<'ast>>),
     Error(Span),
@@ -100,7 +82,6 @@ impl<'ast> Statement<'ast> {
                 Var::Name(_) => return None,
                 Var::Suffixed(chain) => &chain.prefix,
             },
-            // Luau
             Self::CompoundAssignment(compound) => match &compound.var {
                 Var::Name(_) => return None,
                 Var::Suffixed(chain) => &chain.prefix,
@@ -117,11 +98,6 @@ impl<'ast> Statement<'ast> {
             | Self::Return(_)
             | Self::Break(_)
             | Self::Continue(_)
-            | Self::Goto(_)
-            | Self::Label(_)
-            | Self::GlobalDeclaration(_)
-            | Self::GlobalFunction(_)
-            | Self::GlobalStar(_)
             | Self::TypeDeclaration(_)
             | Self::Error(_) => return None,
         };
@@ -131,13 +107,11 @@ impl<'ast> Statement<'ast> {
         Some(current)
     }
 
-    /// Whether `version`'s grammar takes the statement only as the last of
-    /// its block: a `return`, a `continue`, or a `break` where it has
-    /// [`has_last_stmt_break`](LuaVersion::has_last_stmt_break).
-    pub const fn has_to_end_block(&self, version: LuaVersion) -> bool {
+    /// Whether the grammar takes the statement only as the last of its block:
+    /// a `return`, a `break`, or a `continue`.
+    pub const fn has_to_end_block(&self) -> bool {
         match self {
-            Self::Return(_) | Self::Continue(_) => true,
-            Self::Break(_) => version.has_last_stmt_break(),
+            Self::Return(_) | Self::Break(_) | Self::Continue(_) => true,
             Self::Assignment(_)
             | Self::FunctionCall(_)
             | Self::DoBlock(_)
@@ -149,11 +123,6 @@ impl<'ast> Statement<'ast> {
             | Self::FunctionDecl(_)
             | Self::LocalFunction(_)
             | Self::LocalAssignment(_)
-            | Self::Goto(_)
-            | Self::Label(_)
-            | Self::GlobalDeclaration(_)
-            | Self::GlobalFunction(_)
-            | Self::GlobalStar(_)
             | Self::CompoundAssignment(_)
             | Self::TypeDeclaration(_)
             | Self::Error(_) => false,
@@ -213,8 +182,7 @@ pub struct ElseClause<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct NumericFor<'ast> {
     pub span: Span,
-    pub name: Name<'ast>,
-    pub type_annotation: Option<Box<'ast, Type<'ast>>>,
+    pub variable: TypedName<'ast>,
     pub start: Expression<'ast>,
     pub limit: Expression<'ast>,
     pub step: Option<Expression<'ast>>,
@@ -224,7 +192,7 @@ pub struct NumericFor<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct GenericFor<'ast> {
     pub span: Span,
-    pub names: List<'ast, Parameter<'ast>>,
+    pub names: List<'ast, TypedName<'ast>>,
     pub exprs: List<'ast, Expression<'ast>>,
     pub block: Block<'ast>,
 }
@@ -240,7 +208,7 @@ pub struct FunctionName<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct FunctionDecl<'ast> {
     pub span: Span,
-    /// Luau: `@attr` list preceding `function`. Empty outside Luau.
+    /// The `@attr` list preceding `function`.
     pub attributes: List<'ast, FunctionAttribute<'ast>>,
     pub name: FunctionName<'ast>,
     pub body: FunctionBody<'ast>,
@@ -249,7 +217,7 @@ pub struct FunctionDecl<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct LocalFunction<'ast> {
     pub span: Span,
-    /// Luau: `@attr` list preceding `local function`. Empty outside Luau.
+    /// The `@attr` list preceding `local function`.
     pub attributes: List<'ast, FunctionAttribute<'ast>>,
     pub name: Name<'ast>,
     pub body: FunctionBody<'ast>,
@@ -265,9 +233,9 @@ pub struct LocalFunction<'ast> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub enum LocalFunctionKind {
     Local,
-    /// Luau: `const function`.
+    /// `const function`.
     Const,
-    /// Luau: `export function`, whose binding is read-only too.
+    /// `export function`, whose binding is read-only too.
     Export,
 }
 
@@ -287,43 +255,19 @@ impl LocalFunctionKind {
     }
 }
 
-/// Lua 5.4+: `<const>` or `<close>`. The name is whatever identifier the
-/// parser finds there, after it reports any other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
-pub struct Attribute<'ast> {
-    pub span: Span,
-    pub name: Name<'ast>,
-}
-
+/// A name a function parameter, a `local`, or a `for` declares, with its
+/// `: T` annotation. It spans from its name, so it holds no span of its own.
 #[derive(Debug, PartialEq, Eq, Ast)]
-pub struct AttributedName<'ast> {
+pub struct TypedName<'ast> {
     pub name: Name<'ast>,
-    /// Luau: `: T` annotation. The parser never sets both this and
-    /// `attribute`, since attributes are Lua 5.4+ only.
     pub type_annotation: Option<Box<'ast, Type<'ast>>>,
-    /// The attribute after the name, which replaces the list's leading one.
-    pub attribute: Option<Box<'ast, Attribute<'ast>>>,
-}
-
-impl<'ast> AttributedName<'ast> {
-    /// The attribute that applies to the name: its own, or else `leading`,
-    /// the one before the first name of its list.
-    pub fn attribute_or(
-        &'ast self,
-        leading: Option<&'ast Attribute<'ast>>,
-    ) -> Option<&'ast Attribute<'ast>> {
-        self.attribute.as_deref().or(leading)
-    }
 }
 
 /// `exprs` is empty for a declaration with no `=`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct LocalAssignment<'ast> {
     pub span: Span,
-    /// Lua 5.5: `local <const> a, b`, an attribute before the first name,
-    /// which applies to every name without one of its own.
-    pub attribute: Option<Box<'ast, Attribute<'ast>>>,
-    pub names: List<'ast, AttributedName<'ast>>,
+    pub names: List<'ast, TypedName<'ast>>,
     pub exprs: List<'ast, Expression<'ast>>,
     pub kind: LocalAssignmentKind,
 }
@@ -333,11 +277,11 @@ pub struct LocalAssignment<'ast> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub enum LocalAssignmentKind {
     Local,
-    /// Luau: `const`, which makes every name in the list read-only.
+    /// `const`, which makes every name in the list read-only.
     Const,
-    /// Luau: `export local`.
+    /// `export local`.
     ExportLocal,
-    /// Luau: `export const`.
+    /// `export const`.
     ExportConst,
 }
 
@@ -357,27 +301,14 @@ impl LocalAssignmentKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
-pub struct GotoStatement<'ast> {
-    pub span: Span,
-    pub name: Name<'ast>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
-pub struct LabelStatement<'ast> {
-    pub span: Span,
-    pub name: Name<'ast>,
-}
-
-/// The span takes in a `;` that ends it, which Lua 5.2+ reads as part of a
-/// `return`.
+/// The span takes in a `;` that ends it.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct ReturnStatement<'ast> {
     pub span: Span,
     pub exprs: List<'ast, Expression<'ast>>,
 }
 
-/// Luau: `var op= expr`.
+/// `var op= expr`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct CompoundAssignment<'ast> {
     pub span: Span,
@@ -386,7 +317,7 @@ pub struct CompoundAssignment<'ast> {
     pub expr: Expression<'ast>,
 }
 
-/// Luau: `type Name<T> = T` or `type function Name funcbody`.
+/// `type Name<T> = T` or `type function Name funcbody`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct TypeDeclaration<'ast> {
     pub span: Span,
@@ -402,30 +333,4 @@ pub enum TypeDeclarationValue<'ast> {
     /// `type function Name funcbody`, a compile-time function evaluated
     /// during type checking. Its body is ordinary Luau.
     TypeFunction(Box<'ast, FunctionBody<'ast>>),
-}
-
-/// Lua 5.5: `global names [= exprs]`. `exprs` is empty when there's no `=`.
-#[derive(Debug, PartialEq, Eq, Ast)]
-pub struct GlobalDeclaration<'ast> {
-    pub span: Span,
-    /// `global <const> a, b`, which applies to every name without one of its
-    /// own.
-    pub attribute: Option<Box<'ast, Attribute<'ast>>>,
-    pub names: List<'ast, AttributedName<'ast>>,
-    pub exprs: List<'ast, Expression<'ast>>,
-}
-
-/// Lua 5.5: `global function Name funcbody`.
-#[derive(Debug, PartialEq, Eq, Ast)]
-pub struct GlobalFunction<'ast> {
-    pub span: Span,
-    pub name: Name<'ast>,
-    pub body: FunctionBody<'ast>,
-}
-
-/// Lua 5.5: `global *`, with an optional attribute before the `*`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
-pub struct GlobalStar<'ast> {
-    pub span: Span,
-    pub attribute: Option<Attribute<'ast>>,
 }

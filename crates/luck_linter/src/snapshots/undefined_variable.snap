@@ -2,7 +2,13 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 error: undefined variable `missing`
- --> Lua54:1:7
+ --> Standalone:1:7
 1 | print(missing)
   |       ^^^^^^^
+help: declare it with `local`, or add it to `extra_globals` or a `std` definition
+
+error: undefined variable `arg`
+ --> Standalone:1:30
+1 | local function f(...) return arg end
+  |                              ^^^
 help: declare it with `local`, or add it to `extra_globals` or a `std` definition

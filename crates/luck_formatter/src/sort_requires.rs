@@ -4,8 +4,8 @@
 //! A run is two or more sortable statements a block prints one after another, outside any
 //! `-- luck: format off` region, with no blank line or comment line between them. A statement is
 //! sortable only if its lines hold nothing that can't move with it. A statement under
-//! `luck: ignore`, a `<close>` binding, a trailing comment that spans lines, or any other statement
-//! ends a run, and a run whose members read each other's bindings stays as written.
+//! `luck: ignore`, a trailing comment that spans lines, or any other statement ends a run, and a
+//! run whose members read each other's bindings stays as written.
 //!
 //! The block emitter decides that as it prints, from the lines it writes, which are the lines a
 //! second format reads, so it keeps the order the first one chose. It then moves each member's
@@ -31,20 +31,14 @@ pub(crate) struct Require<'ast> {
     path_root: Option<&'ast str>,
 }
 
-/// Matches a `local` with one name bound to one require or `GetService` call,
-/// in any dialect.
+/// Matches a `local` with one name bound to one require or `GetService` call.
 pub(crate) fn sortable_require<'ast>(stmt: &Statement<'ast>) -> Option<Require<'ast>> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
-    // A `<close>` binding's declaration order sets the order things close in.
     let [binding] = &*local.names else {
         return None;
     };
-    let attribute = binding.attribute_or(local.attribute.as_deref());
-    if attribute.is_some_and(|given| given.name.text == "close") {
-        return None;
-    }
     let [value] = &*local.exprs else {
         return None;
     };

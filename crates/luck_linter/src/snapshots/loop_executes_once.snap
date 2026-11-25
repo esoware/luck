@@ -2,51 +2,51 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `while` loop body always returns, so the loop executes at most once
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | local x = 1
 2 | while x do return 1 end
   | ^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: numeric `for` loop body always breaks, so the loop executes at most once
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | for i = 1, 10 do break end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: `repeat` loop body always errors, so the loop executes at most once
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | repeat error("x") until true
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: generic `for` loop body always returns, so the loop executes at most once
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | for k, v in pairs(t) do return v end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: `while` loop body always returns, so the loop executes at most once
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | local c = 1
 2 | while c do if c then return 1 else return 2 end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: `while` loop body always returns, so the loop executes at most once
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | while true do for i = 1, 2 do break end return end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: numeric `for` loop body always breaks, so the loop executes at most once
- --> Lua54:1:15
+ --> Standalone:1:15
 1 | while true do for i = 1, 2 do break end return end
   |               ^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block
 
 warning: numeric `for` loop body always exits, so the loop executes at most once
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | for i = 1, 3 do if i then break else return end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: if a single execution is intended, use a `do ... end` block

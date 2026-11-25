@@ -1,3 +1,8 @@
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink as symlink_file;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_file;
 use std::path::{Path, PathBuf};
 
 use luck_bundler::DynamicRequire;
@@ -5,51 +10,51 @@ use luck_config::{Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::{LuaTarget, LuaVersion};
+use luck_stdlib::Variant;
 
 use crate::common::{load_error, loaded, project_with};
 
 #[test]
-fn defaults_take_every_lua_file_in_the_dialect_of_its_extension() {
+fn defaults_take_every_lua_and_luau_file_as_luau() {
     let project = Project::defaults(PathBuf::from("."));
-    assert_eq!(project.target_for(Some(Path::new("a.lua"))), LuaTarget::Lua54);
-    assert_eq!(project.target_for(Some(Path::new("a.luau"))), LuaTarget::Luau);
-    assert_eq!(project.target_for(Some(Path::new("a"))), LuaTarget::Lua54);
-    assert_eq!(project.target_for(None), LuaTarget::Lua54);
+    assert_eq!(project.variant(), Variant::Standalone);
+    assert_eq!(project.stdlib().variant(), Variant::Standalone);
     assert!(project.filter().is_included(Path::new("src/a.lua")));
+    assert!(project.filter().is_included(Path::new("src/a.luau")));
     assert_eq!(*project.linter_for(None).config(), LintConfig::default());
     assert_eq!(project.files(), Vec::<PathBuf>::new());
 }
 
-/// Extension and dialect are independent, so a Roblox or Rojo tree that
-/// keeps Luau in `.lua` files can say so.
 #[test]
-fn either_key_names_any_dialect() {
-    let (_roblox_directory, project) = loaded(&[("luck.json", r#"{ "lua": "roblox" }"#)]);
-    assert_eq!(project.target_for(Some(Path::new("init.lua"))), LuaTarget::LuauRoblox);
-    assert_eq!(project.target_for(Some(Path::new("init.luau"))), LuaTarget::Luau);
+fn the_variant_key_picks_the_library_every_file_gets() {
+    let (_roblox_directory, roblox) = loaded(&[("luck.json", r#"{ "variant": "roblox" }"#)]);
+    assert_eq!(roblox.variant(), Variant::Roblox);
+    assert!(roblox.stdlib().library().lookup(["game"]).is_some());
 
-    let (_swapped_directory, swapped) =
-        loaded(&[("luck.json", r#"{ "lua": "luau", "luau": "lua51" }"#)]);
-    assert_eq!(swapped.target_for(Some(Path::new("a.lua"))), LuaTarget::Luau);
-    assert_eq!(swapped.target_for(Some(Path::new("a.luau"))), LuaTarget::Lua51);
+    let (_standalone_directory, standalone) =
+        loaded(&[("luck.json", r#"{ "variant": "standalone" }"#)]);
+    assert_eq!(standalone.variant(), Variant::Standalone);
+    assert!(standalone.stdlib().library().lookup(["game"]).is_none());
 }
 
 #[test]
-fn rejects_a_dialect_on_its_value() {
-    let text = r#"{ "luau": "lua99" }"#;
+fn rejects_a_variant_on_its_value() {
+    let text = r#"{ "variant": "bogus" }"#;
     let directory = project_with(&[("luck.json", text)]);
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
-    assert!(diag.message.contains("unknown variant `lua99`, expected one of"), "{diag:?}");
-    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""lua99""#[..]));
+    assert!(
+        diag.message.contains("unknown variant `bogus`, expected `standalone` or `roblox`"),
+        "{diag:?}"
+    );
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""bogus""#[..]));
 }
 
 #[test]
 fn rejects_entry_beside_entries() {
     let directory = project_with(&[(
         "luck.json",
-        r#"{ "entry": "a.lua", "entries": [{ "entry": "b.lua", "output": "c.lua" }] }"#,
+        r#"{ "entry": "a.luau", "entries": [{ "entry": "b.luau", "output": "c.luau" }] }"#,
     )]);
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
@@ -83,19 +88,19 @@ fn an_override_layers_its_lint_settings_over_the_files_it_matches() {
     )]);
     let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
 
-    let base = linter_at("src/a.lua");
+    let base = linter_at("src/a.luau");
     assert_eq!(base.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
 
-    let spec = linter_at("spec/a.lua");
+    let spec = linter_at("spec/a.luau");
     assert_eq!(spec.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Off));
     assert_eq!(spec.config().extra_globals, ["a", "it"]);
     assert_eq!(spec.config().categories.level(Category::Style), None);
 
-    let slow = linter_at("spec/slow/a.lua");
+    let slow = linter_at("spec/slow/a.luau");
     assert_eq!(slow.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Off));
     assert_eq!(slow.config().categories.level(Category::Style), Some(RuleLevel::Error));
 
-    let fixture = linter_at("spec/fixtures/a.lua");
+    let fixture = linter_at("spec/fixtures/a.luau");
     assert_eq!(fixture.config().rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
 }
 
@@ -108,8 +113,33 @@ fn an_extended_override_matches_from_the_loaded_config_s_directory() {
         ),
         ("luck.json", r#"{ "extends": ["shared/base.json"] }"#),
     ]);
-    let linter = project.linter_for(Some(&directory.path().join("spec/a.lua")));
+    let linter = project.linter_for(Some(&directory.path().join("spec/a.luau")));
     assert_eq!(linter.config().extra_globals, ["it"]);
+}
+
+/// A symlink takes the project of its own directory, so its `include` and
+/// `overrides` globs match it there too, wherever it leads.
+#[test]
+fn a_symlink_matches_the_globs_where_it_is_and_not_where_it_leads() {
+    let (directory, project) = loaded(&[(
+        "luck.json",
+        r#"{
+            "include": ["src/**"],
+            "overrides": [{ "files": ["src/**"], "lint": { "extra_globals": ["it"] } }]
+        }"#,
+    )]);
+    let elsewhere = tempfile::tempdir().expect("tempdir");
+    let target = elsewhere.path().join("b.luau");
+    fs::write(&target, "").expect("write b.luau");
+    fs::create_dir_all(directory.path().join("src")).expect("mkdir src");
+    let link = directory.path().join("src/b.luau");
+    // Windows lets only an administrator or developer mode make one.
+    if symlink_file(&target, &link).is_err() {
+        return;
+    }
+    assert!(project.filter().is_included(&link));
+    assert!(!project.filter().is_included(&target));
+    assert_eq!(project.linter_for(Some(&link)).config().extra_globals, ["it"]);
 }
 
 #[test]
@@ -120,13 +150,13 @@ fn an_overlay_wins_over_every_override() {
     )]);
     let mut overlay = LintConfig::default();
     overlay.rules.set_level(RuleId::Shadowing, RuleLevel::Error);
-    overlay.extra_globals.push("vim".to_owned());
+    overlay.extra_globals.push("app".to_owned());
     project.overlay_lint(&overlay);
-    for relative in ["src/a.lua", "spec/a.lua"] {
+    for relative in ["src/a.luau", "spec/a.luau"] {
         let linter = project.linter_for(Some(&directory.path().join(relative)));
         let lint = linter.config();
         assert_eq!(lint.rules.level(RuleId::Shadowing), Some(RuleLevel::Error), "{relative}");
-        assert_eq!(lint.extra_globals, ["vim"], "{relative}");
+        assert_eq!(lint.extra_globals, ["app"], "{relative}");
     }
 }
 
@@ -143,7 +173,7 @@ fn format_layers_defaults_then_editorconfig_then_the_section_then_overrides() {
         (
             ".editorconfig",
             "\
-[*.lua]
+[*.luau]
 indent_style = space
 indent_size = 2
 max_line_length = 90
@@ -155,13 +185,13 @@ max_line_length = 90
         project.format_options(Some(&directory.path().join(relative)), Some(&editorconfigs))
     };
 
-    let source = options_at("src/a.lua");
+    let source = options_at("src/a.luau");
     assert_eq!(source.indent_style, IndentStyle::Spaces);
     assert_eq!(source.indent_width, 3);
     assert_eq!(source.line_width, 90);
-    assert_eq!(options_at("spec/a.lua").line_width, 80);
+    assert_eq!(options_at("spec/a.luau").line_width, 80);
 
-    let without_editorconfig = project.format_options(Some(&directory.path().join("a.lua")), None);
+    let without_editorconfig = project.format_options(Some(&directory.path().join("a.luau")), None);
     assert_eq!(without_editorconfig.indent_style, FormatOptions::default().indent_style);
     assert_eq!(without_editorconfig.indent_width, 3);
     assert_eq!(project.format_options(None, Some(&editorconfigs)).indent_width, 3);
@@ -176,41 +206,39 @@ fn records_every_config_file_it_read() {
     assert_eq!(project.files(), [canonical("luck.json"), canonical("base.json")]);
 }
 
-const LOVE: &str = r#"
-[globals.love]
+const APP: &str = r#"
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.draw]
+[globals.app.members.onMessage]
 kind = "function"
 is_read_only = false
 "#;
 
 #[test]
-fn std_definitions_layer_over_the_library_of_each_dialect() {
+fn std_definitions_layer_over_the_variant_s_library() {
     let (directory, project) = loaded(&[
-        ("std/love.toml", LOVE),
-        ("luck.json", r#"{ "lua": "lua51", "luau": "roblox", "std": ["std/love.toml"] }"#),
+        ("std/app.toml", APP),
+        ("luck.json", r#"{ "variant": "roblox", "std": ["std/app.toml"] }"#),
     ]);
-    for (file, target) in [("main.lua", LuaTarget::Lua51), ("main.luau", LuaTarget::LuauRoblox)] {
-        let stdlib = project.stdlib_for(Some(Path::new(file)));
-        assert_eq!(stdlib.target(), target);
-        assert!(stdlib.library().lookup(["love", "draw"]).is_some(), "{file}");
-        assert!(stdlib.library().lookup(["print"]).is_some(), "{file}");
-    }
+    let stdlib = project.stdlib();
+    assert_eq!(stdlib.variant(), Variant::Roblox);
+    assert!(stdlib.library().lookup(["app", "onMessage"]).is_some());
+    assert!(stdlib.library().lookup(["game"]).is_some());
+    assert!(stdlib.library().lookup(["print"]).is_some());
     let std_file =
-        FileSystemOs.canonicalize(&directory.path().join("std/love.toml")).expect("exists");
+        FileSystemOs.canonicalize(&directory.path().join("std/app.toml")).expect("exists");
     assert!(project.files().contains(&std_file), "{:?}", project.files());
 }
 
 #[test]
 fn a_std_path_is_relative_to_the_file_that_names_it() {
     let (_directory, project) = loaded(&[
-        ("shared/love.toml", LOVE),
-        ("shared/base.json", r#"{ "std": ["love.toml"] }"#),
-        ("luck.json", r#"{ "extends": ["shared/base.json"], "std": ["shared/love.toml"] }"#),
+        ("shared/app.toml", APP),
+        ("shared/base.json", r#"{ "std": ["app.toml"] }"#),
+        ("luck.json", r#"{ "extends": ["shared/base.json"], "std": ["shared/app.toml"] }"#),
     ]);
-    let stdlib = project.stdlib_for(None);
-    assert!(stdlib.library().lookup(["love"]).is_some());
+    assert!(project.stdlib().library().lookup(["app"]).is_some());
     assert_eq!(project.files().len(), 3, "one std file, read once: {:?}", project.files());
 }
 
@@ -227,13 +255,13 @@ fn a_std_file_that_cannot_be_read_is_reported_on_its_name() {
 #[test]
 fn an_invalid_std_definition_is_reported_in_it() {
     let definition = r#"
-[globals.love]
+[globals.app]
 kind = "namspace"
 "#;
     let directory =
-        project_with(&[("love.toml", definition), ("luck.json", r#"{ "std": ["love.toml"] }"#)]);
+        project_with(&[("app.toml", definition), ("luck.json", r#"{ "std": ["app.toml"] }"#)]);
     let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("love.toml"), "{path:?}");
+    assert!(path.ends_with("app.toml"), "{path:?}");
     assert_eq!(diag.code, "E014");
     assert!(diag.message.contains("unknown variant `namspace`"), "{diag:?}");
     assert!(diag.span.is_some(), "{diag:?}");
@@ -247,9 +275,9 @@ kind = "property"
 shape = "Sceen"
 "#;
     let directory =
-        project_with(&[("love.toml", definition), ("luck.json", r#"{ "std": ["love.toml"] }"#)]);
+        project_with(&[("app.toml", definition), ("luck.json", r#"{ "std": ["app.toml"] }"#)]);
     let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("love.toml"), "{path:?}");
+    assert!(path.ends_with("app.toml"), "{path:?}");
     assert_eq!(
         diag.message,
         "invalid config: `screen` names the shape `Sceen`, which no library declares"
@@ -259,11 +287,11 @@ shape = "Sceen"
 #[test]
 fn builds_resolve_entries_profiles_and_outputs() {
     let (directory, project) = loaded(&[
-        ("src/main.lua", "return 1"),
+        ("src/main.luau", "return 1"),
         (
             "luck.json",
             r#"{
-                "entry": "src/main.lua", "output_dir": "dist", "minify": false,
+                "entry": "src/main.luau", "output_dir": "dist", "minify": false,
                 "profiles": { "release": { "minify": true } }
             }"#,
         ),
@@ -271,8 +299,7 @@ fn builds_resolve_entries_profiles_and_outputs() {
     let builds = project.builds(Some("release")).expect("builds");
     let [build] = builds.as_slice() else { panic!("one build: {builds:?}") };
     assert!(build.minify);
-    assert_eq!(build.output, directory.path().join("dist").join("main.lua"));
-    assert_eq!(build.target, LuaTarget::Lua54);
+    assert_eq!(build.output, directory.path().join("dist").join("main.luau"));
     let error = project.builds(Some("nightly")).unwrap_err();
     assert_eq!(error, "profile `nightly` isn't defined in `luck.json`");
 }
@@ -280,8 +307,8 @@ fn builds_resolve_entries_profiles_and_outputs() {
 #[test]
 fn rejects_an_output_that_overwrites_the_entry() {
     let (_directory, project) = loaded(&[
-        ("main.lua", "return 1"),
-        ("luck.json", r#"{ "entry": "main.lua", "output_dir": "." }"#),
+        ("main.luau", "return 1"),
+        ("luck.json", r#"{ "entry": "main.luau", "output_dir": "." }"#),
     ]);
     let builds = project.builds(None);
     assert!(builds.is_err(), "a bundle written over its own entry destroys it: {builds:?}");
@@ -290,13 +317,13 @@ fn rejects_an_output_that_overwrites_the_entry() {
 #[test]
 fn rejects_two_entries_writing_the_same_output() {
     let (_directory, project) = loaded(&[
-        ("a.lua", "return 1"),
-        ("b.lua", "return 2"),
+        ("a.luau", "return 1"),
+        ("b.luau", "return 2"),
         (
             "luck.json",
             r#"{ "entries": [
-                { "entry": "a.lua", "output": "bundle.lua" },
-                { "entry": "b.lua", "output": "bundle.lua" }
+                { "entry": "a.luau", "output": "bundle.luau" },
+                { "entry": "b.luau", "output": "bundle.luau" }
             ] }"#,
         ),
     ]);
@@ -305,13 +332,9 @@ fn rejects_two_entries_writing_the_same_output() {
 }
 
 #[test]
-fn bundle_options_carry_the_root_search_paths_and_dynamic_require() {
-    let (directory, project) = loaded(&[(
-        "luck.json",
-        r#"{ "search_paths": ["src/?.lua"], "dynamic_require": "error" }"#,
-    )]);
-    let options = project.bundle_options(LuaVersion::Lua54);
-    assert_eq!(options.search_paths, ["src/?.lua"]);
+fn bundle_options_carry_the_root_and_dynamic_require() {
+    let (directory, project) = loaded(&[("luck.json", r#"{ "dynamic_require": "error" }"#)]);
+    let options = project.bundle_options();
     assert_eq!(options.dynamic_require, DynamicRequire::Error);
     assert_eq!(
         FileSystemOs.canonicalize_existing(options.project_root),

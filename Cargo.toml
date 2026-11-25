@@ -6,10 +6,10 @@ resolver = "2"
 version      = "0.6.0"
 authors      = ["Esoware"]
 categories   = ["compilers", "command-line-utilities"]
-description  = "Lua 5.1-5.5 and Luau parser, formatter, linter, bundler, and minifier"
+description  = "Luau parser, formatter, linter, bundler, and minifier"
 edition      = "2024"
 homepage     = "https://github.com/esoware/luck"
-keywords     = ["lua", "luau", "bundler", "minifier", "parser"]
+keywords     = ["luau", "roblox", "bundler", "minifier", "parser"]
 license      = "MIT"
 repository   = "https://github.com/esoware/luck"
 rust-version = "1.91"
@@ -55,7 +55,7 @@ ls-types              = "0.0.6"
 lsp-server            = "0.10"
 memchr                = "2"
 mimalloc-safe         = "0.1.70"
-mlua                  = { version = "0.12", features = ["vendored"] }
+mlua                  = { version = "0.12", features = ["luau"] }
 notify-debouncer-mini = "0.7"
 parking_lot           = "0.12"
 petgraph              = { version = "0.8", default-features = false, features = ["std"] }

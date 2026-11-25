@@ -21,7 +21,7 @@ pub enum Expression<'ast> {
     False(Span),
     True(Span),
     Number(Box<'ast, NumberLiteral<'ast>>),
-    /// Luau: exact 64-bit integer literal with an `i` suffix.
+    /// An exact 64-bit integer literal with an `i` suffix.
     Integer(Box<'ast, IntegerLiteral<'ast>>),
     StringLiteral(Box<'ast, StringLiteral<'ast>>),
     VarArg(Span),
@@ -75,8 +75,8 @@ impl Expression<'_> {
     }
 
     /// What's inside every [`Expression::Parenthesized`] around this, for a
-    /// place where taking one value, or reading a Luau integer as a value,
-    /// changes nothing.
+    /// place where taking one value, or reading an integer literal as a
+    /// value, changes nothing.
     pub fn unwrap_parentheses(&self) -> &Self {
         let mut current = self;
         while let Self::Parenthesized(parenthesized) = current {
@@ -95,7 +95,7 @@ pub enum Var<'ast> {
 }
 
 /// A name or a parenthesized expression and the run of fields, indexes,
-/// calls, and Luau instantiations after it, as one node however long the
+/// calls, and type instantiations after it, as one node however long the
 /// run: `a.b[c]:d(e)` is `a` and three suffixes.
 ///
 /// The last suffix decides what the whole is: a call, or a [`Var`] that can
@@ -123,14 +123,14 @@ pub enum Suffix<'ast> {
     Call(FunctionArgs<'ast>),
     /// `:name(args)`.
     MethodCall(Box<'ast, MethodCall<'ast>>),
-    /// Luau: `<<T>>`, where `span` covers the outer angle brackets.
+    /// `<<T>>`, where `span` covers the outer angle brackets.
     TypeInstantiation { span: Span, type_args: Box<'ast, TypeArgs<'ast>> },
 }
 
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct MethodCall<'ast> {
     pub name: Name<'ast>,
-    /// Luau: `receiver:method<<T>>()`. A plain call's instantiation is a
+    /// `receiver:method<<T>>()`. A plain call's instantiation is a
     /// [`Suffix::TypeInstantiation`] instead.
     pub type_args: Option<Box<'ast, TypeArgs<'ast>>>,
     pub args: FunctionArgs<'ast>,
@@ -189,7 +189,7 @@ pub struct UnaryOp<'ast> {
 
 /// Parentheses that change what they hold, the only ones the tree keeps.
 ///
-/// They truncate a call or `...` to one value, and stop a `-` before a Luau
+/// They truncate a call or `...` to one value, and stop a `-` before an
 /// integer literal from reading with it as a negative literal, so it negates
 /// the value instead. The parser leaves every other pair out of the tree, and
 /// the printers write the ones an expression needs where it goes, as
@@ -231,12 +231,12 @@ pub enum Field<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct FunctionDef<'ast> {
     pub span: Span,
-    /// Luau: `@attr` list preceding `function`. Empty outside Luau.
+    /// The `@attr` list preceding `function`.
     pub attributes: List<'ast, FunctionAttribute<'ast>>,
     pub body: FunctionBody<'ast>,
 }
 
-/// Luau: `if condition then expr elseif ... else expr`.
+/// `if condition then expr elseif ... else expr`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct IfExpression<'ast> {
@@ -254,7 +254,7 @@ pub struct ElseIfExprClause<'ast> {
     pub expr: Expression<'ast>,
 }
 
-/// Luau: `` `text{expr}text` ``. Each piece of text spans only itself, not
+/// `` `text{expr}text` ``. Each piece of text spans only itself, not
 /// its delimiters, and its spelling leaves them out too.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
@@ -272,7 +272,7 @@ pub struct InterpolatedSegment<'ast> {
     pub expr: Expression<'ast>,
 }
 
-/// Luau: `expr :: T`.
+/// `expr :: T`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct TypeCast<'ast> {

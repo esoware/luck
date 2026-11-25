@@ -1,6 +1,6 @@
 //! The files of the client's folders, and what each holds for the others.
 //!
-//! The workspace's files are the Lua files `luck lint` takes in the folders:
+//! The workspace's files are the Luau files `luck lint` takes in the folders:
 //! each under the nearest `luck.json` above it, whose `include` and
 //! `exclude` decide, past what `.gitignore` and `.luckignore` hide.
 //!
@@ -19,10 +19,9 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use ls_types::{Position, Uri};
-use luck_config::{ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor, walk_lua_files};
+use luck_config::{ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor, walk_source_files};
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_semantic::SemanticBuilder;
-use luck_token::LuaVersion;
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -63,7 +62,6 @@ pub(crate) struct DiskFile {
 struct FileRecord {
     uri: Uri,
     project: Arc<LoadedProject>,
-    version: LuaVersion,
     record: ModuleRecord,
 }
 
@@ -94,7 +92,7 @@ impl Workspace {
     }
 
     /// Forgets every file read and starts a new walk, as new settings need,
-    /// since they decide the files and each one's dialect.
+    /// since they decide the files and each one's project.
     pub(crate) fn clear(&self) {
         self.files.write().clear();
         self.walk_again();
@@ -149,12 +147,11 @@ impl DiskFile {
             path: &self.path,
             record: &read.record,
             project: &read.project,
-            version: read.version,
         })
     }
 }
 
-/// Every Lua file under `folders` that its project takes, canonical and
+/// Every Luau file under `folders` that its project takes, canonical and
 /// sorted. A directory that can't be read is passed over.
 fn files_under(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
     let visitor = FolderVisitor {
@@ -169,7 +166,7 @@ fn files_under(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
         .iter()
         .map(|(canonical, _)| WalkRoot { path: canonical, canonical })
         .collect();
-    let Ok(walked) = walk_lua_files(&roots, None, &visitor);
+    let Ok(walked) = walk_source_files(&roots, None, &visitor);
     let mut files: Vec<PathBuf> = walked.into_iter().map(|file| file.canonical).collect();
     files.sort_unstable();
     files.dedup();
@@ -227,23 +224,21 @@ impl Deref for ProjectFilterOf {
     }
 }
 
-/// The file at `path`, parsed in its project's dialect, or `None` when it
-/// can't be read or no URI names it. A file that isn't UTF-8 reads as an
-/// editor would show it.
+/// The file at `path`, parsed, or `None` when it can't be read or no URI
+/// names it. A file that isn't UTF-8 reads as an editor would show it.
 fn read_record(session: &Session, path: &Path) -> Option<FileRecord> {
     let project = session.project_for(Some(path), None);
-    let version = project.project().target_for(Some(path)).version();
     let bytes = FileSystemOs.read(path).ok()?;
     let text = String::from_utf8_lossy(&bytes);
     let allocator = session.allocators().get();
-    let parsed = luck_parser::parse(&allocator, text.as_bytes(), version);
+    let parsed = luck_parser::parse(&allocator, text.as_bytes());
     let chunk = allocator.alloc(parsed.chunk);
     let semantic =
         SemanticBuilder::new().with_counts(parsed.counts).with_requires(true).build(chunk).semantic;
     let line_index = LineIndex::new(&text, session.encoding());
     let mut positions = line_index.positions(&text);
     let record = ModuleRecord::new(chunk, &semantic, |span| positions.range(span));
-    Some(FileRecord { uri: Uri::from_file_path(path)?, project, version, record })
+    Some(FileRecord { uri: Uri::from_file_path(path)?, project, record })
 }
 
 /// A file's record, with what resolves its requires.
@@ -254,7 +249,6 @@ pub(crate) struct Source<'file> {
     path: &'file Path,
     pub record: &'file ModuleRecord,
     project: &'file LoadedProject,
-    pub version: LuaVersion,
 }
 
 impl<'file> Source<'file> {
@@ -267,7 +261,6 @@ impl<'file> Source<'file> {
             path: settings.path.as_deref()?,
             record: document.record(),
             project: &settings.project,
-            version: document.version(),
         })
     }
 
@@ -277,7 +270,7 @@ impl<'file> Source<'file> {
         match table {
             Table::Returned | Table::Exported => Some(self.path.to_path_buf()),
             Table::Required(i) => {
-                let resolver = self.project.resolver(self.version);
+                let resolver = self.project.resolver();
                 Some(resolver.resolve(self.path, &self.record.requires()[i].module).ok()?.path)
             }
         }
@@ -412,8 +405,8 @@ mod tests {
     fn a_file_the_watcher_reported_changed_is_not_read() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
-        let spelled = directory.path().join("a.lua");
-        fs::write(&spelled, "return {}\n").expect("write a.lua");
+        let spelled = directory.path().join("a.luau");
+        fs::write(&spelled, "return {}\n").expect("write a.luau");
         let path = FileSystemOs.canonicalize(&spelled).expect("canonicalize");
         let session = session();
         let workspace = session.workspace();

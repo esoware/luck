@@ -789,25 +789,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lua-src"
-version = "551.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d400ffef0e3d4d29287092bdc5a276d0bf468b2c69709d5bab0d469312d9f947"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "luajit-src"
-version = "210.7.5+63c8f1a"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a98fb6f037124098f4c2283286a0431a4bb0b1d243b90ca1a4d34dd268ea5b96"
-dependencies = [
- "cc",
- "which",
-]
-
-[[package]]
 name = "luau0-src"
 version = "0.22.0+luau740"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -887,7 +868,6 @@ dependencies = [
  "luck_parser",
  "luck_semantic",
  "luck_stdlib",
- "luck_token",
  "mimalloc-safe",
  "rayon",
 ]
@@ -899,7 +879,7 @@ dependencies = [
  "flate2",
  "luck_allocator",
  "luck_parser",
- "luck_token",
+ "luck_stdlib",
  "tar",
  "tempfile",
  "ureq",
@@ -917,7 +897,6 @@ dependencies = [
  "luck_parser",
  "luck_resolver",
  "luck_semantic",
- "luck_stdlib",
  "luck_testgen",
  "luck_token",
  "memchr",
@@ -1205,6 +1184,7 @@ dependencies = [
  "luck_parser",
  "luck_semantic",
  "luck_token",
+ "schemars",
  "self_cell",
  "serde",
  "serde_json",
@@ -1228,10 +1208,7 @@ dependencies = [
 name = "luck_token"
 version = "0.6.0"
 dependencies = [
- "luck_token",
  "memchr",
- "schemars",
- "serde",
 ]
 
 [[package]]
@@ -1305,8 +1282,6 @@ dependencies = [
  "cc",
  "cfg-if",
  "libc",
- "lua-src",
- "luajit-src",
  "luau0-src",
  "pkg-config",
 ]
@@ -2097,15 +2072,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "which"
-version = "8.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
-dependencies = [
- "libc",
 ]
 
 [[package]]

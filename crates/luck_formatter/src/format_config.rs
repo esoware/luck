@@ -41,8 +41,8 @@ pub struct FormatConfig {
     /// When true, a trailing comma in a table constructor keeps the table
     /// broken, as in Black and Prettier: one field per line, or still packed
     /// when it's a list the source packed several to a line. Defaults to
-    /// `true`. Argument lists can't carry one, since no dialect allows a comma
-    /// after the last argument.
+    /// `true`. Argument lists can't carry one, since the grammar allows no
+    /// comma after the last argument.
     pub magic_trailing_comma: Option<bool>,
 }
 

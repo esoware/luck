@@ -28,8 +28,10 @@ declare_lint_rule!(
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub(crate) struct RestrictedModulePathsOptions {
-    /// Modules that can't be required. A trailing `.*` also covers
-    /// submodules: `forbidden.*` matches `forbidden` and `forbidden.sub`.
+    /// Modules that can't be required, each a require path as written, such
+    /// as `@pkg/internal` or `./legacy`. A trailing `/*` also covers every
+    /// path under one: `@pkg/*` matches `@pkg` and `@pkg/sub/x`. An alias
+    /// matches in any case.
     paths: Vec<String>,
 }
 
@@ -65,62 +67,71 @@ impl Rule for RestrictedModulePaths {
     }
 }
 
-/// Exact match, except that a pattern ending in `.*` matches the module and
-/// every submodule: `forbidden.*` covers `forbidden` and `forbidden.sub`.
+/// Whether `path` is `pattern`, component by component, or a path under it
+/// when `pattern` ends in `/*`: `@pkg/*` covers `@pkg` and `@pkg/sub/x`.
+///
+/// Luau reads a `\` in a require path as a `/`, and an alias's name in any
+/// ASCII case.
 fn path_matches(path: &str, pattern: &str) -> bool {
-    let Some(prefix) = pattern.strip_suffix(".*") else {
-        return path == pattern;
-    };
-    path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.'))
+    let (pattern, covers_subpaths) =
+        pattern.strip_suffix("/*").map_or((pattern, false), |prefix| (prefix, true));
+    let mut components = path.split(['/', '\\']);
+    let mut is_alias = path.starts_with('@');
+    for expected in pattern.split(['/', '\\']) {
+        let Some(component) = components.next() else {
+            return false;
+        };
+        let is_same =
+            if is_alias { component.eq_ignore_ascii_case(expected) } else { component == expected };
+        if !is_same {
+            return false;
+        }
+        is_alias = false;
+    }
+    covers_subpaths || components.next().is_none()
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget, Option<&str>)] = &[
-        (r#"require("ok.lib")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.lib"]}"#)),
-        (r#"require("anything")"#, LuaTarget::Lua54, Some(r#"{"paths": []}"#)),
+    const PASS: &[(&str, Option<&str>)] = &[
+        (r#"require("./ok/lib")"#, Some(r#"{"paths": ["./forbidden/lib"]}"#)),
+        (r#"require("@anything")"#, Some(r#"{"paths": []}"#)),
         (
             "\
 local x = {}
-x:require(\"forbidden.lib\")",
-            LuaTarget::Lua54,
-            Some(r#"{"paths": ["forbidden.lib"]}"#),
+x:require(\"./forbidden/lib\")",
+            Some(r#"{"paths": ["./forbidden/lib"]}"#),
         ),
         // A variable's value can't be resolved statically.
         (
             "\
-local p = \"forbidden.lib\"
+local p = \"./forbidden/lib\"
 require(p)",
-            LuaTarget::Lua54,
-            Some(r#"{"paths": ["forbidden.lib"]}"#),
+            Some(r#"{"paths": ["./forbidden/lib"]}"#),
         ),
-        (r#"require("forbiddenly")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+        (r#"require("@forbiddenly")"#, Some(r#"{"paths": ["@forbidden/*"]}"#)),
+        // Without `/*`, a pattern covers no path under it.
+        (r#"require("./forbidden/lib")"#, Some(r#"{"paths": ["./forbidden"]}"#)),
+        // Only an alias matches in any case.
+        (r#"require("./Forbidden")"#, Some(r#"{"paths": ["./forbidden"]}"#)),
     ];
 
-    const FAIL: &[(&str, LuaTarget, Option<&str>)] = &[
-        (r#"require("forbidden.lib")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.lib"]}"#)),
+    const FAIL: &[(&str, Option<&str>)] = &[
+        (r#"require("./forbidden/lib")"#, Some(r#"{"paths": ["./forbidden/lib"]}"#)),
         // `require"x"` is a call with one string argument and no parentheses.
-        (r#"require"forbidden.lib""#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.lib"]}"#)),
-        (
-            r#"_G.require("forbidden.lib")"#,
-            LuaTarget::Lua54,
-            Some(r#"{"paths": ["forbidden.lib"]}"#),
-        ),
-        (
-            r#"_ENV["require"]("forbidden.lib")"#,
-            LuaTarget::Lua54,
-            Some(r#"{"paths": ["forbidden.lib"]}"#),
-        ),
-        (r#"require("forbidden")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
-        (r#"require("forbidden.sub")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
-        (r#"require("forbidden\46sub")"#, LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
-        ("require[[forbidden]]", LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
-        (r"require'\x66orbidden'", LuaTarget::Lua54, Some(r#"{"paths": ["forbidden.*"]}"#)),
+        (r#"require"./forbidden/lib""#, Some(r#"{"paths": ["./forbidden/lib"]}"#)),
+        (r#"_G.require("./forbidden/lib")"#, Some(r#"{"paths": ["./forbidden/lib"]}"#)),
+        (r#"_G["require"]("./forbidden/lib")"#, Some(r#"{"paths": ["./forbidden/lib"]}"#)),
+        (r#"require("@forbidden")"#, Some(r#"{"paths": ["@forbidden/*"]}"#)),
+        (r#"require("@forbidden/sub/x")"#, Some(r#"{"paths": ["@forbidden/*"]}"#)),
+        (r#"require("@Forbidden/sub")"#, Some(r#"{"paths": ["@forbidden/*"]}"#)),
+        (r#"require("@forbidden\\sub")"#, Some(r#"{"paths": ["@forbidden/sub"]}"#)),
+        (r#"require("@forbidden\47sub")"#, Some(r#"{"paths": ["@forbidden/*"]}"#)),
+        ("require[[@forbidden]]", Some(r#"{"paths": ["@forbidden/*"]}"#)),
+        (r"require'\x40forbidden'", Some(r#"{"paths": ["@forbidden/*"]}"#)),
     ];
 
     #[test]

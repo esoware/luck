@@ -2,8 +2,8 @@ use luck_ast::{AstKind, AstType, FunctionBody};
 use luck_semantic::{AstNode, AstNodes, AstTypesBitset};
 use luck_token::Span;
 
-/// A `function`, `local function`, `global function`, or `type function`
-/// statement, or a function expression.
+/// A `function`, `local function`, or `type function` statement, or a
+/// function expression.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FunctionNode<'ast> {
     pub body: &'ast FunctionBody<'ast>,
@@ -27,11 +27,7 @@ impl<'ast> FunctionNode<'ast> {
             (decl.span, Some(decl.name.span), decl.name.method.is_some())
         } else if let AstKind::LocalFunction(local_function) = parent {
             (local_function.span, Some(local_function.name.span), false)
-        } else if let AstKind::GlobalFunction(global_function) = parent {
-            // Lua 5.5
-            (global_function.span, Some(global_function.name.span), false)
         } else if let AstKind::TypeDeclaration(type_declaration) = parent {
-            // Luau
             (type_declaration.span, Some(type_declaration.name.span), false)
         } else {
             (parent.as_function_def()?.span, None, false)

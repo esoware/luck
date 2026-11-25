@@ -1,5 +1,4 @@
 use luck_formatter::FormatOptions;
-use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_with};
 
@@ -29,7 +28,7 @@ end)
 ";
     for width in [60, 80, 120] {
         let options = FormatOptions { line_width: width, ..FormatOptions::default() };
-        assert_format_with(source, expected, LuaVersion::Lua54, &options);
+        assert_format_with(source, expected, &options);
     }
 }
 
@@ -71,7 +70,6 @@ local frame = create(\"Frame\", {
 \tOrder = 3,
 })
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -87,7 +85,6 @@ local self = setmetatable({
 \tother = other,
 }, MyClass)
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -98,7 +95,7 @@ fn args_break_when_the_suffixes_after_them_overflow_the_line() {
     // columns.
     let source = "someFunction(argumentOne, argumentTwo).field()\n";
     let width = |line_width| FormatOptions { line_width, ..FormatOptions::default() };
-    assert_format_with(source, source, LuaVersion::Lua54, &width(46));
+    assert_format_with(source, source, &width(46));
     assert_format_with(
         source,
         "\
@@ -107,7 +104,6 @@ someFunction(
 \targumentTwo
 ).field()
 ",
-        LuaVersion::Lua54,
         &width(45),
     );
 }
@@ -190,7 +186,6 @@ local element = createElement(\"Frame\", {
 \tBody = body,
 })
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -227,7 +222,6 @@ subscribe(
 \tend
 )
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -246,7 +240,6 @@ run(
 \tanother_one
 )
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -276,7 +269,7 @@ fn function_call_flat() {
 
 #[test]
 fn bare_string_gets_parens() {
-    assert_format("require \"module\"\n", "require(\"module\")\n");
+    assert_format("require \"./module\"\n", "require(\"./module\")\n");
 }
 
 #[test]
@@ -332,7 +325,6 @@ foo
 \t:baz()
 \t:qux()
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -394,7 +386,6 @@ end)
 \t.to
 \t.throw()
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -421,7 +412,6 @@ foo({
 \tanother_key = 2,
 })
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }

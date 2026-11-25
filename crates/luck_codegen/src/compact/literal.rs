@@ -1,7 +1,7 @@
 use luck_ast::{IntegerLiteral, NumberLiteral, StringLiteral};
 use luck_token::{
-    LuaVersion, StringSpelling, spell_integer, spell_number, spell_string,
-    spell_string_shorter_than, write_interpolated_text,
+    StringSpelling, spell_integer, spell_number, spell_string, spell_string_shorter_than,
+    write_interpolated_text,
 };
 
 use super::Printer;
@@ -12,16 +12,16 @@ impl Printer {
     /// value, as written on a tie.
     pub(super) fn print_number(&mut self, literal: &NumberLiteral<'_>) {
         if let Some(raw) = literal.raw
-            && (!self.is_shortest || is_shortest_numeral(raw.as_str(), self.version))
+            && (!self.is_shortest || is_shortest_numeral(raw.as_str()))
         {
             self.number(raw.as_str());
             return;
         }
-        let spelling = spell_number(literal.value, self.version);
+        let spelling = spell_number(literal.value);
         self.number(shorter(literal.raw.as_deref(), spelling.as_str()));
     }
 
-    /// Luau: an integer, as [`Self::print_number`] prints a number.
+    /// An integer, as [`Self::print_number`] prints a number.
     pub(super) fn print_integer(&mut self, literal: &IntegerLiteral<'_>) {
         if let Some(raw) = literal.raw
             && !self.is_shortest
@@ -51,8 +51,7 @@ impl Printer {
         }
     }
 
-    /// Luau: a piece of an interpolated string's text, which nothing merges
-    /// with.
+    /// A piece of an interpolated string's text, which nothing merges with.
     pub(super) fn print_interpolated_text(&mut self, text: &StringLiteral<'_>) {
         if let Some(raw) = text.raw
             && (!self.is_shortest || !raw.contains(&b'\\'))
@@ -70,12 +69,15 @@ impl Printer {
         }
     }
 
-    /// Starts with a digit or a `.`.
+    /// Starts with a digit or a `.`. The lexer reads a `.` into a numeral
+    /// only before its first letter, so one with a radix prefix, an exponent,
+    /// or a suffix ends as a name does.
     #[expect(clippy::inline_always, reason = "see `emit`")]
     #[inline(always)]
     fn number(&mut self, text: &str) {
         let merges = if text.starts_with('.') { NUMBER | DOT_DOT } else { WORD | NUMBER };
-        self.emit(text.as_bytes(), merges, NUMBER);
+        let class = if text.bytes().any(|b| b.is_ascii_alphabetic()) { WORD } else { NUMBER };
+        self.emit(text.as_bytes(), merges, class);
     }
 
     /// Starts with a quote or a long bracket's `[`, and ends with nothing
@@ -100,15 +102,13 @@ impl Printer {
 /// as most numerals are.
 ///
 /// That's twelve digits at most, which hex can't shorten, no leading zero,
-/// and, where every number is a float, too few trailing zeros for an
-/// exponent to pay off.
-fn is_shortest_numeral(raw: &str, version: LuaVersion) -> bool {
+/// and too few trailing zeros for an exponent to pay off.
+fn is_shortest_numeral(raw: &str) -> bool {
     let bytes = raw.as_bytes();
     bytes.len() <= 12
         && bytes.iter().all(u8::is_ascii_digit)
         && (bytes.len() == 1 || bytes.first() != Some(&b'0'))
-        && (version.has_integer_subtype()
-            || bytes.iter().rev().take_while(|&&b| b == b'0').count() < 3)
+        && bytes.iter().rev().take_while(|&&b| b == b'0').count() < 3
 }
 
 /// `raw` when it's no longer than `spelling`.

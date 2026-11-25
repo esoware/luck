@@ -7,7 +7,7 @@ use crate::line_index::Positions;
 
 pub(crate) fn folding_ranges(document: &DocumentState) -> Vec<FoldingRange> {
     let mut folder = Folder { document, starts: document.positions(), ranges: Vec::new() };
-    folder.visit_block(&document.parse().chunk.block);
+    folder.visit_block(&document.parse().chunk);
     folder.ranges
 }
 
@@ -52,11 +52,6 @@ impl<'ast> Visit<'ast> for Folder<'_> {
             | Statement::LocalFunction(_)
             | Statement::LocalAssignment(_)
             | Statement::Return(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
@@ -66,8 +61,8 @@ impl<'ast> Visit<'ast> for Folder<'_> {
         self.walk_stmt(stmt);
     }
 
-    // Every function form reaches this: declarations, `local` and `global`
-    // functions, Luau type functions, and anonymous functions.
+    // Every function form reaches this: declarations, `local` functions, type
+    // functions, and anonymous functions.
     fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
         self.push(function_body.span);
         self.walk_function_body(function_body);
@@ -81,13 +76,11 @@ impl<'ast> Visit<'ast> for Folder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use super::*;
     use crate::fixtures::document;
 
-    fn folded_lines(text: &str, target: LuaTarget) -> Vec<(u32, u32)> {
-        let document = document(text, target);
+    fn folded_lines(text: &str) -> Vec<(u32, u32)> {
+        let document = document(text);
         folding_ranges(&document).iter().map(|fold| (fold.start_line, fold.end_line)).collect()
     }
 
@@ -99,34 +92,19 @@ setup {
   a = 1,
 }
 ",
-            LuaTarget::Lua54,
         );
         assert_eq!(folds, vec![(0, 2)], "`f {{...}}` is a table constructor like any other");
     }
 
     #[test]
-    fn a_luau_type_function_folds() {
+    fn a_type_function_folds() {
         let folds = folded_lines(
             "\
 type function f(t)
   return t
 end
 ",
-            LuaTarget::Luau,
         );
         assert_eq!(folds, vec![(0, 2)], "a `type function` body folds like any other");
-    }
-
-    #[test]
-    fn a_lua55_global_function_folds() {
-        let folds = folded_lines(
-            "\
-global function f()
-  return 1
-end
-",
-            LuaTarget::Lua55,
-        );
-        assert_eq!(folds, vec![(0, 2)], "a `global function` body folds like any other");
     }
 }

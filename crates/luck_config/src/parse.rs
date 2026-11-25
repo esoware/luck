@@ -156,18 +156,18 @@ mod tests {
     fn rejects_invalid_json5_at_the_place_it_stops() {
         let diag = parse(
             r#"{
-  lua: "lua54" "luau"
+  variant: "standalone" "roblox"
 }"#,
         )
         .unwrap_err();
         assert_eq!(diag.code, "E014");
         assert_eq!(diag.message, "invalid config: expected comma");
-        assert_eq!(diag.span, Some(Span::new(17, 23)));
+        assert_eq!(diag.span, Some(Span::new(26, 34)));
     }
 
     #[test]
     fn places_an_unknown_key_on_the_key() {
-        let text = "{\r\n  \"lua\": \"lua54\",\r\n  unknown_key: true\r\n}";
+        let text = "{\r\n  \"variant\": \"standalone\",\r\n  unknown_key: true\r\n}";
         let diag = parse(text).unwrap_err();
         assert!(
             diag.message.starts_with("invalid config: unknown field `unknown_key`"),
@@ -178,10 +178,10 @@ mod tests {
 
     #[test]
     fn places_a_bad_value_on_the_value() {
-        let text = "{ \"lua\": 'lua99' }";
+        let text = "{ \"variant\": 'bogus' }";
         let diag = parse(text).unwrap_err();
-        assert!(diag.message.contains("unknown variant `lua99`"), "{diag:?}");
-        assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"'lua99'"[..]));
+        assert!(diag.message.contains("unknown variant `bogus`"), "{diag:?}");
+        assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"'bogus'"[..]));
     }
 
     #[test]
@@ -200,7 +200,7 @@ mod tests {
         let config = parse(
             r#"{
             // this is a comment
-            lua: "lua54",
+            variant: "roblox",
             minify: true, // trailing comma
         }"#,
         )
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn counts_no_bracket_in_a_string_or_a_comment() {
         let brackets = "[".repeat(200);
-        let text = format!("{{ // {brackets}\n /* {brackets} */ lua: '{brackets}' }}");
+        let text = format!("{{ // {brackets}\n /* {brackets} */ variant: '{brackets}' }}");
         let diag = parse(&text).unwrap_err();
         assert!(diag.message.contains("unknown variant"), "{diag:?}");
     }

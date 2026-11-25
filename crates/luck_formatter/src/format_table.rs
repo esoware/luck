@@ -43,13 +43,11 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return false;
         };
-        let version = self.version();
         let fields = &table.fields;
         let (Some(first), Some(last)) = (fields.first(), fields.last()) else {
             return false;
         };
-        let has_break =
-            |start: u32, end: u32| has_line_break(Span::new(start, end).text(source), version);
+        let has_break = |start: u32, end: u32| has_line_break(Span::new(start, end).text(source));
 
         let mut has_shared_line = false;
         let mut is_multi_line = has_break(table.span.start, first.span().start)

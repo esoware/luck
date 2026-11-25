@@ -1,6 +1,6 @@
 use std::{iter, mem::MaybeUninit};
 
-/// Bytes, as a Lua source is, so a printer copies a string or a comment that
+/// Bytes, as a Luau source is, so a printer copies a string or a comment that
 /// isn't UTF-8 as it was written.
 #[derive(Debug, Default)]
 pub struct CodeBuffer {

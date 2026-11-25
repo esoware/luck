@@ -16,29 +16,19 @@ use luck_ast::{
     BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
     IfStatement, LocalAssignment, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
-use luck_token::{BinOp, LuaNumber, UnOp};
-use luck_value::{
-    ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _, ValueContext as _,
-};
+use luck_token::{BinOp, UnOp};
+use luck_value::{ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _};
 
 use super::simplify_parens::Place;
 use super::simplify_statements::{has_no_else, holds_nested_if};
 use super::{Compressor, remove_stmts};
-use crate::binding::{
-    ResolvedNames, has_attributed_or_env_name, has_fixed_binding, is_droppable_function,
-};
+use crate::binding::{ResolvedNames, has_fixed_binding};
 use crate::expr::{fits_at_depth, truncate_multi_value};
 
-/// A step of integer 1 is the default. On Lua 5.3+ a float step makes the
-/// loop a float one, so `1.0` isn't, but where every number is a float, it is.
+/// A step of 1 is the default.
 pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, names: ResolvedNames<'_>) -> bool {
-    let default = if names.version().has_integer_subtype() {
-        LuaNumber::Int(1)
-    } else {
-        LuaNumber::Float(1.0)
-    };
     numeric_for.step.as_ref().and_then(|step| step.evaluate_value(&names))
-        == Some(ConstantValue::Number(default))
+        == Some(ConstantValue::Number(1.0))
 }
 
 /// Drops the `return` that ends `block`, a function's or the chunk's, when
@@ -72,15 +62,10 @@ fn has_loop_exit(block: &Block<'_>) -> bool {
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
-        | Statement::GlobalFunction(_)
         | Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::LocalAssignment(_)
         | Statement::Return(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalStar(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
@@ -132,8 +117,8 @@ pub(super) fn unused_local_action(
     local: &LocalAssignment<'_>,
     names: ResolvedNames<'_>,
 ) -> UnusedLocalAction {
-    // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0) {
+    // An export is never dead.
+    if local.kind.is_exported() {
         return UnusedLocalAction::Keep;
     }
     let is_pure = |expr: &Expression<'_>| !expr.may_have_side_effects(&names);
@@ -216,16 +201,14 @@ impl<'ast> Compressor<'_, 'ast> {
     fn drop_unused_from(&mut self, stmt: &mut Statement<'ast>, index: usize) -> Dropped {
         match stmt {
             Statement::LocalFunction(local_function) => {
-                if is_droppable_function(local_function, self.scoping)
-                    && !self.is_used(&local_function.name)
-                {
+                if !local_function.kind.is_exported() && !self.is_used(&local_function.name) {
                     self.drop_stmt(stmt);
                     return Dropped::Whole;
                 }
                 Dropped::Nothing
             }
             Statement::LocalAssignment(local) => {
-                if local.names.iter().all(|attributed| !self.is_used(&attributed.name)) {
+                if local.names.iter().all(|local_name| !self.is_used(&local_name.name)) {
                     match unused_local_action(local, self.names()) {
                         UnusedLocalAction::Keep => {}
                         UnusedLocalAction::Remove => {
@@ -240,17 +223,16 @@ impl<'ast> Compressor<'_, 'ast> {
                 }
                 // Dropping a name and its value keeps every other name's
                 // value only when each name has its own.
-                if has_fixed_binding(local, self.scoping) || local.names.len() != local.exprs.len()
-                {
+                if has_fixed_binding(local) || local.names.len() != local.exprs.len() {
                     return Dropped::Nothing;
                 }
                 let mut kept = 0;
                 for i in 0..local.names.len() {
-                    let (attributed, value) = (&local.names[i], &local.exprs[i]);
-                    if !self.is_used(&attributed.name)
+                    let (local_name, value) = (&local.names[i], &local.exprs[i]);
+                    if !self.is_used(&local_name.name)
                         && !value.may_have_side_effects(&self.names())
                     {
-                        self.drop_annotation(attributed);
+                        self.drop_annotation(local_name);
                         self.drop_expr(value);
                     } else {
                         local.names.swap(kept, i);
@@ -279,11 +261,6 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::Return(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => Dropped::Nothing,
@@ -296,8 +273,8 @@ impl<'ast> Compressor<'_, 'ast> {
         let Statement::LocalAssignment(local) = stmt else {
             return;
         };
-        for attributed in &local.names {
-            self.drop_annotation(attributed);
+        for local_name in &local.names {
+            self.drop_annotation(local_name);
         }
         let mut first_call = None;
         let calls_start = self.late_calls.len();
@@ -572,15 +549,13 @@ impl<'ast> Compressor<'_, 'ast> {
 mod tests {
     use std::fmt::Write as _;
 
-    use luck_token::LuaVersion;
-
     use crate::fixtures::{NO_PASSES, assert_outputs, minify_with, walk_once};
     use crate::transform_config::TransformConfig;
 
     const DEAD_CODE: TransformConfig = TransformConfig { remove_dead_code: true, ..NO_PASSES };
 
     fn remove_dead(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &DEAD_CODE)
+        minify_with(source, &DEAD_CODE)
     }
 
     #[test]
@@ -607,16 +582,6 @@ mod tests {
     #[test]
     fn keeps_the_semicolon_a_leading_paren_needs() {
         assert_eq!(remove_dead("f(); (g or h)()"), "f();(g or h)()");
-    }
-
-    /// Every Lua skips a `;` to see whether a label ends its block, which
-    /// lets a `goto` jump past a `local` to it.
-    #[test]
-    fn removes_a_semicolon_after_a_label_that_ends_its_block() {
-        assert_eq!(
-            remove_dead("do goto done local x = f() print(x) ::done:: ; end"),
-            "do goto done local x=f()print(x)::done::end"
-        );
     }
 
     #[test]
@@ -715,11 +680,7 @@ mod tests {
     fn negating_a_condition_drops_the_truncation_it_no_longer_needs() {
         let config = TransformConfig { fold_constants: true, simplify_parens: true, ..DEAD_CODE };
         for source in ["if (f()) then else g() end", "if {} and (f()) then else g() end"] {
-            assert_eq!(
-                minify_with(source, LuaVersion::Lua54, &config),
-                "if not f()then g()end",
-                "source: {source}"
-            );
+            assert_eq!(minify_with(source, &config), "if not f()then g()end", "source: {source}");
         }
     }
 
@@ -740,9 +701,11 @@ mod tests {
             ("return ... and 1 or 1\n", "return 1"),
             ("return ... and -2 ^ 3 or -2 ^ 3\n", "return-2^3"),
             ("return ... and {1, x = \"a\"} or {1, x = \"a\"}\n", "return{1,x=\"a\"}"),
-            // Lua leaves unspecified whether two closures created apart are
+            // The language leaves unspecified whether two closures created apart are
             // the same value, so a program can't tell these apart.
             ("return ... and function() end or function() end\n", "return function()end"),
+            // Every number is a double, so `1` and `1.0` are one value.
+            ("return ... and 1 or 1.0\n", "return 1"),
             ("return a and ... or ...\n", "return a and...or..."),
             ("return true and ... or ...\n", "return(...)"),
         ] {
@@ -754,7 +717,6 @@ mod tests {
     fn keeps_a_ternary_whose_branches_differ() {
         for source in [
             "return ... and 1 or 2\n",
-            "return ... and 1 or 1.0\n",
             "return ... and {1} or {2}\n",
             "return ... and function() end or function(x) end\n",
         ] {
@@ -805,16 +767,7 @@ mod tests {
             ("local a = ... local b: typeof(a) = f()", "f()"),
             ("local a = ... local b: typeof(a), c = 1, g print(c)", "local c=g print(c)"),
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Luau, &DEAD_CODE), expected, "{source}");
-        }
-    }
-
-    #[test]
-    fn keeps_unused_env_only_where_it_redirects_globals() {
-        let source = "local _ENV = {} return 1";
-        assert_eq!(remove_dead(source), "local _ENV={}return 1");
-        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-            assert_eq!(minify_with(source, version, &DEAD_CODE), "return 1", "{version:?}");
+            assert_eq!(minify_with(source, &DEAD_CODE), expected, "{source}");
         }
     }
 
@@ -902,8 +855,6 @@ mod tests {
     fn keeps_unused_locals_whose_initializer_can_raise_or_read() {
         for initializer in [
             "g",
-            "1 // 0",
-            "1 % 0",
             "nil + 1",
             "#nil",
             "\"a\" .. nil",

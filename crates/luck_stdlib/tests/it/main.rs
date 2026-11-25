@@ -10,3 +10,4 @@ mod replace_template;
 mod roblox_api;
 mod stdlib_catalog;
 mod stdlib_definition;
+mod variant;

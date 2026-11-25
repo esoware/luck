@@ -1,9 +1,0 @@
-parser_lua53 Summary:
-AST Parsed     : 26/26 (100.00%)
-Positive Passed: 26/26 (100.00%)
-Negative Passed: 0/2 (0.00%)
-
-Expect Syntax Error: lua-5.3.4-tests/all.lua
-
-Expect Syntax Error: lua-5.3.4-tests/main.lua
-

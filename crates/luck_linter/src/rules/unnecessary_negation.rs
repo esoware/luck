@@ -110,7 +110,7 @@ fn needs_parentheses(node: &AstNode<'_>, unary: &UnaryOp<'_>, context: &ContextH
             Expression::UnaryOp(prefix) if ptr::eq(&raw const **prefix, unary)
         );
     }
-    // Luau: a cast's operand.
+    // A cast's operand.
     matches!(kind, AstKind::UnaryOp(_) | AstKind::TypeCast(_))
 }
 
@@ -132,12 +132,7 @@ const fn opposite_comparison(op: BinOp) -> Option<BinOp> {
         | BinOp::Pow
         | BinOp::Concat
         | BinOp::And
-        | BinOp::Or
-        | BinOp::BitAnd
-        | BinOp::BitOr
-        | BinOp::BitXor
-        | BinOp::Shl
-        | BinOp::Shr => None,
+        | BinOp::Or => None,
     }
 }
 

@@ -8,8 +8,8 @@ use std::mem;
 use luck_diagnostics::Diagnostic;
 use luck_simd::DynCpu;
 use luck_token::{
-    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
-    chunk_start, has_line_break, has_shebang,
+    Comment, CommentContent, CommentKind, CommentPosition, Span, Token, TokenKind, has_line_break,
+    has_shebang,
 };
 
 use crate::cursor::Cursor;
@@ -27,8 +27,8 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
 /// tokens.
-pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
-    let mut lexer = match Lexer::new(source, version) {
+pub fn lex(source: &[u8]) -> LexResult {
+    let mut lexer = match Lexer::new(source) {
         Ok(lexer) => lexer,
         Err(error) => return LexResult { errors: vec![error], ..LexResult::default() },
     };
@@ -57,7 +57,6 @@ pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
 #[derive(Debug)]
 pub struct Lexer<'source> {
     cursor: Cursor<'source>,
-    version: LuaVersion,
     /// Whether a line break came since the last token. The start of the
     /// source counts as one.
     has_line_break: bool,
@@ -68,8 +67,7 @@ pub struct Lexer<'source> {
     attached_comment_count: usize,
     errors: Vec<Diagnostic>,
     /// Unmatched `{` count for each open interpolation expression, innermost
-    /// last (Luau). A `}` at depth 0 closes the expression and resumes the
-    /// string.
+    /// last. A `}` at depth 0 closes the expression and resumes the string.
     interpolation_brace_depths: Vec<u32>,
     /// Whether a block comment ran to the end of the source without its
     /// closer, which the `Eof` token after it says.
@@ -87,15 +85,15 @@ pub struct Lexer<'source> {
 }
 
 impl<'source> Lexer<'source> {
-    /// A lexer positioned past a UTF-8 BOM `version` skips, with a shebang
-    /// first line already captured as a comment.
+    /// A lexer of `source` up to its first NUL, where Luau's lexer stops,
+    /// with a shebang first line already captured as a comment.
     ///
     /// # Errors
     ///
     /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
-    pub fn new(source: &'source [u8], version: LuaVersion) -> Result<Self, Diagnostic> {
-        Self::with_cpu(source, version, DynCpu::detect())
+    pub fn new(source: &'source [u8]) -> Result<Self, Diagnostic> {
+        Self::with_cpu(source, DynCpu::detect())
     }
 
     /// [`Self::new`] with the feature set `cpu`, which a test picks so it
@@ -105,11 +103,7 @@ impl<'source> Lexer<'source> {
     ///
     /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
-    pub fn with_cpu(
-        source: &'source [u8],
-        version: LuaVersion,
-        cpu: DynCpu,
-    ) -> Result<Self, Diagnostic> {
+    pub fn with_cpu(source: &'source [u8], cpu: DynCpu) -> Result<Self, Diagnostic> {
         if u32::try_from(source.len()).is_err() {
             return Err(Diagnostic::e008(
                 Span::new(0, 0),
@@ -120,15 +114,9 @@ impl<'source> Lexer<'source> {
             ));
         }
 
-        let source_end = if version.has_nul_source_end() {
-            memchr::memchr(0, source).unwrap_or(source.len())
-        } else {
-            source.len()
-        };
-
+        let source_end = memchr::memchr(0, source).unwrap_or(source.len());
         let mut lexer = Self {
             cursor: Cursor::new(&source[..source_end]),
-            version,
             has_line_break: true,
             last_token_start: 0,
             comments: Vec::new(),
@@ -144,9 +132,7 @@ impl<'source> Lexer<'source> {
             taken: 0,
         };
 
-        lexer.cursor.advance_by(chunk_start(source, version));
-
-        if has_shebang(lexer.cursor.rest(), version) {
+        if has_shebang(lexer.cursor.rest()) {
             lexer.lex_shebang();
         }
 
@@ -203,7 +189,7 @@ impl<'source> Lexer<'source> {
             // whole name.
             if matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'_') {
                 let name = self.cursor.eat_name();
-                let kind = TokenKind::keyword(name, self.version).unwrap_or(TokenKind::Identifier);
+                let kind = TokenKind::keyword(name).unwrap_or(TokenKind::Identifier);
                 return self.token(kind, start);
             }
             self.cursor.bump();
@@ -229,7 +215,7 @@ impl<'source> Lexer<'source> {
                             TokenKind::DotDotDot
                         } else {
                             let following = self.cursor.peek().unwrap_or(0);
-                            self.compound_or(following, TokenKind::DotDotEqual, TokenKind::DotDot)
+                            self.either(following, b'=', TokenKind::DotDotEqual, TokenKind::DotDot)
                         }
                     }
                     _ => TokenKind::Dot,
@@ -242,7 +228,7 @@ impl<'source> Lexer<'source> {
                     TokenKind::LeftBrace
                 }
                 b'}' => match self.interpolation_brace_depths.last_mut() {
-                    // Luau: a `}` at depth 0 closes the expression and resumes the string.
+                    // A `}` at depth 0 closes the expression and resumes the string.
                     Some(0) => return self.lex_interpolated_string_continuation(start),
                     Some(depth) => {
                         *depth -= 1;
@@ -260,10 +246,7 @@ impl<'source> Lexer<'source> {
                     self.lex_comment(start);
                     continue;
                 }
-                // Luau
-                b'`' if self.version.has_interpolated_strings() => {
-                    return self.lex_interpolated_string(start);
-                }
+                b'`' => return self.lex_interpolated_string(start),
                 _ => match self.lex_operator(start, byte, next) {
                     Some(kind) => kind,
                     None => continue,
@@ -291,15 +274,10 @@ impl<'source> Lexer<'source> {
 
     #[inline]
     fn skip_whitespace(&mut self) {
-        let is_lfcr_line_break = self.version.has_lfcr_line_break();
         self.cursor.eat_while(|byte| match byte {
-            b' ' | b'\t' | 0x0B | 0x0C => true,
+            b' ' | b'\t' | b'\r' | 0x0B | 0x0C => true,
             b'\n' => {
                 self.has_line_break = true;
-                true
-            }
-            b'\r' => {
-                self.has_line_break |= is_lfcr_line_break;
                 true
             }
             _ => false,
@@ -338,8 +316,8 @@ impl<'source> Lexer<'source> {
 
     fn lex_shebang(&mut self) {
         let start = self.cursor.position();
-        // Every loader skips this line up to LF, so a lone CR stays in the
-        // comment and only a CRLF's CR is left out of it.
+        // Luau's loader skips this line up to its LF, so a lone CR stays in
+        // the comment and only a CRLF's CR is left out of it.
         let rest = self.cursor.rest();
         let line_length = memchr::memchr(b'\n', rest).unwrap_or(rest.len());
         let line = &rest[..line_length];
@@ -349,7 +327,7 @@ impl<'source> Lexer<'source> {
             attached_to: 0,
             kind: CommentKind::Shebang,
             position: CommentPosition::Leading,
-            is_followed_by_newline: self.cursor.is_at_line_end(self.version),
+            is_followed_by_newline: self.cursor.is_at_line_end(),
             content: CommentContent::Plain,
         });
     }
@@ -367,7 +345,7 @@ impl<'source> Lexer<'source> {
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only
             // the body.
-            if has_line_break(self.cursor.text_since(start), self.version) {
+            if has_line_break(self.cursor.text_since(start)) {
                 CommentKind::MultiLineBlock
             } else {
                 CommentKind::SingleLineBlock
@@ -390,8 +368,8 @@ impl<'source> Lexer<'source> {
             attached_to,
             kind,
             position,
-            is_followed_by_newline: self.cursor.is_at_line_end(self.version),
-            content: CommentContent::of(self.cursor.text_since(start), kind, self.version),
+            is_followed_by_newline: self.cursor.is_at_line_end(),
+            content: CommentContent::of(self.cursor.text_since(start), kind),
         });
         if position == CommentPosition::Trailing {
             self.attached_comment_count = self.comments.len();
@@ -409,83 +387,48 @@ impl<'source> Lexer<'source> {
             b';' => TokenKind::Semicolon,
             b'#' => TokenKind::Hash,
             b'-' => {
-                // Luau
-                if self.version.has_type_syntax() && next == b'>' {
+                if next == b'>' {
                     self.cursor.bump();
                     TokenKind::Arrow
                 } else {
-                    self.compound_or(next, TokenKind::MinusEqual, TokenKind::Minus)
+                    self.either(next, b'=', TokenKind::MinusEqual, TokenKind::Minus)
                 }
             }
-            b'+' => self.compound_or(next, TokenKind::PlusEqual, TokenKind::Plus),
-            b'*' => self.compound_or(next, TokenKind::StarEqual, TokenKind::Star),
+            b'+' => self.either(next, b'=', TokenKind::PlusEqual, TokenKind::Plus),
+            b'*' => self.either(next, b'=', TokenKind::StarEqual, TokenKind::Star),
             b'/' => {
-                if self.version.has_floor_div() && next == b'/' {
+                if next == b'/' {
                     self.cursor.bump();
                     let following = self.cursor.peek().unwrap_or(0);
-                    self.compound_or(following, TokenKind::FloorDivEqual, TokenKind::FloorDiv)
+                    self.either(following, b'=', TokenKind::FloorDivEqual, TokenKind::FloorDiv)
                 } else {
-                    self.compound_or(next, TokenKind::SlashEqual, TokenKind::Slash)
+                    self.either(next, b'=', TokenKind::SlashEqual, TokenKind::Slash)
                 }
             }
-            b'%' => self.compound_or(next, TokenKind::PercentEqual, TokenKind::Percent),
-            b'^' => self.compound_or(next, TokenKind::CaretEqual, TokenKind::Caret),
-            b'<' => {
-                self.angle(next, b'<', TokenKind::LessEqual, TokenKind::ShiftLeft, TokenKind::Less)
-            }
-            b'>' => self.angle(
-                next,
-                b'>',
-                TokenKind::GreaterEqual,
-                TokenKind::ShiftRight,
-                TokenKind::Greater,
-            ),
+            b'%' => self.either(next, b'=', TokenKind::PercentEqual, TokenKind::Percent),
+            b'^' => self.either(next, b'=', TokenKind::CaretEqual, TokenKind::Caret),
+            b'<' => self.either(next, b'=', TokenKind::LessEqual, TokenKind::Less),
+            b'>' => self.either(next, b'=', TokenKind::GreaterEqual, TokenKind::Greater),
             b'~' => {
-                if next == b'=' {
-                    self.cursor.bump();
-                    TokenKind::TildeEqual
-                } else if self.version.has_bitwise_ops() {
-                    TokenKind::Tilde
-                } else {
-                    self.reject(
-                        start,
-                        "standalone `~` is not supported in this Lua version (use `~=` for not-equal)",
-                    );
+                if next != b'=' {
+                    let span = self.cursor.span_since(start);
+                    let error = Diagnostic::e008(span, "unexpected character `~`")
+                        .with_help("use `~=` for not-equal");
+                    self.errors.push(error);
                     return None;
                 }
+                self.cursor.bump();
+                TokenKind::TildeEqual
             }
-            // Luau uses `&` and `|` for intersection and union types.
-            b'&' if self.version.has_bitwise_ops() || self.version.has_type_syntax() => {
-                TokenKind::Ampersand
-            }
-            b'|' if self.version.has_bitwise_ops() || self.version.has_type_syntax() => {
-                TokenKind::Pipe
-            }
-            // Luau
-            b'@' if self.version.has_function_attributes() => TokenKind::At,
-            // Luau
-            b'?' if self.version.has_type_syntax() => TokenKind::Question,
-            b'&' | b'|' | b'@' | b'?' => {
-                self.reject_unsupported_symbol(start, byte);
-                return None;
-            }
+            b'&' => TokenKind::Ampersand,
+            b'|' => TokenKind::Pipe,
+            b'@' => TokenKind::At,
+            b'?' => TokenKind::Question,
             _ => {
                 self.reject_unexpected_character(start, byte);
                 return None;
             }
         })
-    }
-
-    /// `compound` when `following`, the byte at the cursor, is a
-    /// compound-assignment `=`, consuming it, else `plain`.
-    #[inline]
-    fn compound_or(&mut self, following: u8, compound: TokenKind, plain: TokenKind) -> TokenKind {
-        if self.version.has_compound_assignment() && following == b'=' {
-            self.cursor.bump();
-            compound
-        } else {
-            plain
-        }
     }
 
     /// `pair` when `next`, the byte at the cursor, is `second`, consuming it,
@@ -498,35 +441,6 @@ impl<'source> Lexer<'source> {
         } else {
             single
         }
-    }
-
-    /// Finish `<` or `>`, with `next` at the cursor: `or_equal` before `=`,
-    /// `shift` before a second `angle` where the version has shifts, else
-    /// `plain`.
-    #[inline]
-    fn angle(
-        &mut self,
-        next: u8,
-        angle: u8,
-        or_equal: TokenKind,
-        shift: TokenKind,
-        plain: TokenKind,
-    ) -> TokenKind {
-        if next == b'=' {
-            self.cursor.bump();
-            or_equal
-        } else if self.version.has_bitwise_ops() && next == angle {
-            self.cursor.bump();
-            shift
-        } else {
-            plain
-        }
-    }
-
-    #[cold]
-    fn reject_unsupported_symbol(&mut self, start: usize, byte: u8) {
-        let symbol = char::from(byte);
-        self.reject(start, format!("`{symbol}` is not supported in this Lua version"));
     }
 
     #[cold]

@@ -1,13 +1,13 @@
 use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_ast::{Block, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
 use luck_codegen::LiteralSpelling;
 use luck_minifier::TransformConfig;
 use luck_testgen::{nested, with_the_smallest_stack};
-use luck_token::{LuaVersion, UnOp};
+use luck_token::UnOp;
 
-use crate::common::{minify_bytes, minify_lua54, reparses};
+use crate::common::{minify_bytes, minify_default, minify_typed, reparses};
 
 const MODULE_SOURCE: &str = r#"
 local M = {}
@@ -29,16 +29,16 @@ return M
 /// was.
 #[test]
 fn strings_keep_the_bytes_that_are_not_utf8_as_written() {
-    let source = b"#!/bin/lua \xE9\n-- caf\xE9\nprint('caf\xE9', 'd\xE9j' .. '\xE0')\n";
+    let source = b"#!/bin/luau \xE9\n-- caf\xE9\nprint('caf\xE9', 'd\xE9j' .. '\xE0')\n";
     assert_eq!(
-        minify_bytes(source, LuaVersion::Lua51, &TransformConfig::default()),
-        b"#!/bin/lua \xE9\nprint('caf\xE9',\"d\\233j\\224\")"
+        minify_bytes(source, &TransformConfig::default()),
+        b"#!/bin/luau \xE9\nprint('caf\xE9',\"d\\233j\\224\")"
     );
 }
 
 #[test]
 fn module_preserves_semantics() {
-    let result = minify_lua54(MODULE_SOURCE);
+    let result = minify_default(MODULE_SOURCE);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.len() < MODULE_SOURCE.len(), "Not shorter\nOutput: {result}");
     assert!(result.contains("greet"), "Field 'greet' missing: {result}");
@@ -74,7 +74,7 @@ return process
 
 #[test]
 fn control_flow_preserves_semantics() {
-    let result = minify_lua54(CONTROL_FLOW_SOURCE);
+    let result = minify_default(CONTROL_FLOW_SOURCE);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.len() < CONTROL_FLOW_SOURCE.len(), "Not shorter\nOutput: {result}");
     assert!(result.contains("nil"), "nil check missing: {result}");
@@ -102,7 +102,7 @@ return format_config(config)
 
 #[test]
 fn string_ops_preserves_semantics() {
-    let result = minify_lua54(STRING_OPS_SOURCE);
+    let result = minify_default(STRING_OPS_SOURCE);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.len() < STRING_OPS_SOURCE.len(), "Not shorter\nOutput: {result}");
     assert!(result.contains("pairs"), "Global 'pairs' missing: {result}");
@@ -117,8 +117,8 @@ fn string_ops_preserves_semantics() {
 }
 
 fn assert_reminifying_does_not_grow(source: &str, label: &str) {
-    let first = minify_lua54(source);
-    let second = minify_lua54(&first);
+    let first = minify_default(source);
+    let second = minify_default(&first);
     assert!(reparses(&second), "Re-minified {label} should parse: {second}");
     assert!(
         second.len() <= first.len(),
@@ -151,7 +151,7 @@ return x
 
 #[test]
 fn dead_code_eliminates_correctly() {
-    let result = minify_lua54(DEAD_CODE_SOURCE);
+    let result = minify_default(DEAD_CODE_SOURCE);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.len() < DEAD_CODE_SOURCE.len(), "Not shorter\nOutput: {result}");
     assert!(!result.contains("unused_func"), "unused_func not eliminated: {result}");
@@ -163,8 +163,8 @@ fn dead_code_eliminates_correctly() {
 
 #[test]
 fn dead_code_is_idempotent() {
-    let first = minify_lua54(DEAD_CODE_SOURCE);
-    let second = minify_lua54(&first);
+    let first = minify_default(DEAD_CODE_SOURCE);
+    let second = minify_default(&first);
     assert_eq!(first, second);
 }
 
@@ -177,8 +177,8 @@ end
 local x = add(1, 2)
 print(x)
 ";
-    let first = minify_lua54(source);
-    let second = minify_lua54(&first);
+    let first = minify_default(source);
+    let second = minify_default(&first);
     // Re-minification may rename locals differently (naming is
     // frequency-based), but the output length must not grow.
     assert!(
@@ -213,7 +213,7 @@ for _, v in ipairs(items) do
 end
 return items
 ";
-    let result = minify_lua54(source);
+    let result = minify_default(source);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.contains("tostring"), "Global 'tostring' missing: {result}");
     assert!(result.contains("ipairs"), "Global 'ipairs' missing: {result}");
@@ -225,20 +225,20 @@ return items
 #[test]
 fn long_if_return_run_minifies_within_the_depth_cap() {
     let source = format!("{}return 0\n", "if a then return 1 end\n".repeat(6000));
-    let output = minify_lua54(&source);
-    assert!(reparses(&output), "flat guards must minify to Lua that reparses: {output}");
+    let output = minify_default(&source);
+    assert!(reparses(&output), "flat guards must minify to Luau that reparses: {output}");
 }
 
 /// The output reparses, is no longer than the compact input, and is a
 /// fixpoint. Returns it.
 fn assert_minifies_within_the_depth_cap(source: &str) -> String {
-    let output = minify_lua54(source);
+    let output = minify_default(source);
     assert!(reparses(&output), "output must reparse");
     let allocator = Allocator::new();
-    let input = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54).chunk;
+    let input = luck_parser::parse(&allocator, source.as_bytes()).chunk;
     let compact_input = luck_codegen::compact(&input, LiteralSpelling::Shortest);
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
-    assert!(minify_lua54(&output) == output, "output must be a fixpoint");
+    assert!(minify_default(&output) == output, "output must be a fixpoint");
     output
 }
 
@@ -336,13 +336,13 @@ fn nested_negations<'ast>(
     allocator: &'ast Allocator,
     spans: &'ast SpanCounter,
     wraps: usize,
-) -> Chunk<'ast> {
+) -> Block<'ast> {
     let synth = Synth::new(allocator, spans);
     let mut expr = synth.name_expr("x");
     for _ in 0..wraps {
         expr = synth.unary_op(UnOp::Not, expr);
     }
-    Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([expr])]))
+    synth.block([synth.return_([expr])])
 }
 
 #[test]
@@ -351,11 +351,7 @@ fn a_tree_at_the_nesting_cap_minifies() {
         let wraps = MAX_NESTING_DEPTH - 1;
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
         let mut chunk = nested_negations(&allocator, &spans, wraps);
-        assert_eq!(
-            block_nesting_depth(&chunk.block),
-            MAX_NESTING_DEPTH,
-            "the tree sits at the cap"
-        );
+        assert_eq!(block_nesting_depth(&chunk), MAX_NESTING_DEPTH, "the tree sits at the cap");
         let config = TransformConfig::default();
         let output = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new());
         assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps)).into_bytes()));
@@ -384,13 +380,12 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
                 expr = synth.unary_op(UnOp::Not, expr);
             }
             let identity = synth.block([synth.return_([synth.name_expr("a")])]);
-            let block = synth.block([
-                synth.local(&["x"], [synth.number_i64(1)]),
+            synth.block([
+                synth.local(&["x"], [synth.number_f64(1.0)]),
                 synth.local_function("f", &["a"], identity),
                 synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
                 synth.return_([expr]),
-            ]);
-            Chunk::new(LuaVersion::Lua54, block)
+            ])
         };
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
         let mut chunk = past_the_cap(&allocator, &spans);
@@ -410,4 +405,122 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
             assert_eq!(chunk, expected, "the refused tree is as it was");
         }
     });
+}
+
+#[test]
+fn if_expr_survives_minification() {
+    let result = minify_default(
+        "\
+local x = if true then 1 else 2
+return x
+",
+    );
+    assert!(result.contains("if"), "Got: {result}");
+}
+
+#[test]
+fn string_interpolation_survives_minification() {
+    let result = minify_default(
+        "\
+local name = \"World\"
+local g = `Hello, {name}!`
+return g
+",
+    );
+    assert!(result.contains('`'), "Got: {result}");
+}
+
+#[test]
+fn continue_survives_minification() {
+    let result = minify_default(
+        "\
+for i = 1, 10 do
+  if i == 5 then continue end
+  print(i)
+end
+",
+    );
+    assert!(result.contains("continue"), "Got: {result}");
+}
+
+#[test]
+fn compound_assignment_survives_minification() {
+    let result = minify_default(
+        "\
+local x = 0
+x += 1
+return x
+",
+    );
+    assert!(result.contains("+="), "Got: {result}");
+}
+
+#[test]
+fn merged_rfc_syntax_and_exports_survive_minification() {
+    let source = "\
+export local public = 129312i
+export const mask = 0xffffffffffffffffi
+export function apply<T>(value: T)
+    return identity<<T>>(value), public, mask
+end
+";
+    let result = minify_typed(source);
+    assert!(result.contains("export local public=129312i"), "{result}");
+    assert!(result.contains("export const mask=0xffffffffffffffffi"), "{result}");
+    assert!(result.contains("export function apply"), "{result}");
+    assert!(result.contains("identity<<T>>"), "{result}");
+    assert!(result.contains(":T"), "{result}");
+    let allocator = Allocator::new();
+    let reparsed = luck_parser::parse(&allocator, result.as_bytes());
+    assert!(
+        reparsed.errors.is_empty(),
+        "minified merged-RFC syntax must reparse: {:?}\n{result}",
+        reparsed.errors
+    );
+}
+
+#[test]
+fn instantiated_literal_survives_minification() {
+    for (source, expected) in [
+        ("local a = `x{({})<<T>>}y`\n", "local e=`x{({})<<T>>}y`"),
+        ("return (\"s\")<<T>>()\n", "return(\"s\")<<T>>()"),
+        (
+            "\
+local s = \"x\"
+print(s<<T>>)
+",
+            "print((\"x\")<<T>>)",
+        ),
+    ] {
+        let result = minify_typed(source);
+        assert_eq!(result, expected, "source: {source}");
+        assert_eq!(minify_typed(&result), result, "must be idempotent");
+    }
+}
+
+#[test]
+fn inlined_cast_before_less_than_survives_minification() {
+    // Strings compare through the locale, so the comparison stays.
+    let source = "\
+local s = 'a' :: string
+return s < 'b'
+";
+    let result = minify_typed(source);
+    assert_eq!(result, "return('a'::string)<'b'");
+    assert_eq!(minify_typed(&result), result, "must be idempotent");
+}
+
+#[test]
+fn function_inside_a_type_survives_minification() {
+    for (source, expected) in [
+        ("type T = typeof(function(x) return x end)\n", "type T=typeof(function(e)return e end)"),
+        (
+            "return f<<typeof(function(x) return x end)>>()\n",
+            "return f<<typeof(function(e)return e end)>>()",
+        ),
+    ] {
+        let result = minify_typed(source);
+        assert_eq!(result, expected, "source: {source}");
+        assert_eq!(minify_typed(&result), result, "must be idempotent");
+    }
 }

@@ -29,10 +29,9 @@ pub struct ModuleInfo<'ast> {
     pub path: PathBuf,
     /// Project-relative path, built against the graph's project root.
     ///
-    /// It's the only path the bundle may carry, in `-- module` comments and
-    /// in the loader data 5.2+ chunks receive.
+    /// It's the only path the bundle may carry, in its `-- module` comments.
     pub relative_path: String,
-    /// Bytes, as Lua reads them, which the bundle copies as written.
+    /// Bytes, as Luau reads them, which the bundle copies as written.
     pub source: &'ast [u8],
     pub block: Block<'ast>,
     /// In source order.
@@ -40,27 +39,10 @@ pub struct ModuleInfo<'ast> {
     /// `block`'s depth as its parse counted it, never below what
     /// [`luck_ast::block_nesting_depth`] finds.
     pub(crate) nesting_depth: usize,
-    /// The callee, `require` or `_G.require`, of each of this module's calls
-    /// of the global `require` whose argument isn't a string literal, which
-    /// the emitter retargets at the loader's dynamic entry point, in source
-    /// order. Always empty on Luau targets.
-    pub(crate) dynamic_callees: Vec<Span>,
-    /// This module's leading `--!` hot comments. Empty except on Luau targets.
+    /// This module's leading `--!` hot comments.
     pub(crate) hot_comments: Vec<Span>,
-    /// The `#` first line, which Lua and Luau skip only at the start of a
-    /// chunk.
+    /// The `#!` first line, which Luau skips only at the start of a chunk.
     pub(crate) shebang: Option<Span>,
-    /// The module's own chunk reads `...`.
-    pub(crate) has_vararg_read: bool,
-    /// Lua 5.1: the module reads the global `arg`, which a vararg wrapper's
-    /// hidden local shadows.
-    pub(crate) has_global_arg_read: bool,
-    /// Lua 5.2+: the module can rebind `_ENV`, by assigning it or calling
-    /// `module`, so its wrapper keeps a private `_ENV`.
-    pub(crate) has_env_rebinding: bool,
-    /// Lua 5.1: the most locals any one of the module's functions captures,
-    /// which decides whether the loader fits as an upvalue. Zero elsewhere.
-    pub(crate) max_function_upvalues: usize,
     /// Whether the source holds `__luck`, the stem of every prefix the
     /// bundle's generated names can take.
     pub(crate) has_prefix_stem: bool,

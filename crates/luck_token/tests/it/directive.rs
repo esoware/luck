@@ -1,6 +1,6 @@
 use luck_token::{
     Comment, CommentContent, CommentKind, CommentPosition, DirectiveErrorKind, LintDirective,
-    LintExtent, LintVerb, LuaVersion, Span,
+    LintExtent, LintVerb, Span,
 };
 
 fn comment(text: &[u8], kind: CommentKind) -> Comment {
@@ -10,12 +10,12 @@ fn comment(text: &[u8], kind: CommentKind) -> Comment {
         kind,
         position: CommentPosition::Leading,
         is_followed_by_newline: true,
-        content: CommentContent::of(text, kind, LuaVersion::Luau),
+        content: CommentContent::of(text, kind),
     }
 }
 
 fn content(text: &str) -> CommentContent {
-    CommentContent::of(text.as_bytes(), CommentKind::Line, LuaVersion::Luau)
+    CommentContent::of(text.as_bytes(), CommentKind::Line)
 }
 
 fn extent(text: &str) -> Option<LintExtent> {
@@ -77,7 +77,7 @@ luck: allow (x) start
         ("-- luck: allow x", CommentKind::Line),
     ] {
         assert_eq!(
-            CommentContent::of(text.as_bytes(), kind, LuaVersion::Lua54),
+            CommentContent::of(text.as_bytes(), kind),
             CommentContent::LintDirective,
             "{text:?}"
         );
@@ -90,24 +90,20 @@ fn leaves_prose_plain() {
         assert_eq!(content(text), CommentContent::Plain, "{text:?}");
     }
     assert_eq!(
-        CommentContent::of(b"#!/usr/bin/env lua luck:", CommentKind::Shebang, LuaVersion::Lua54),
+        CommentContent::of(b"#!/usr/bin/env luau luck:", CommentKind::Shebang),
         CommentContent::Plain
     );
 }
 
 #[test]
-fn a_hot_comment_is_luau_and_a_word_after_the_bang() {
+fn a_hot_comment_is_a_line_comment_with_a_word_after_the_bang() {
     assert_eq!(content("--!strict"), CommentContent::HotComment);
     assert_eq!(content("--!optimize 2"), CommentContent::HotComment);
     for text in ["--!", "--! note", "--!\tnote", "---!strict"] {
         assert_eq!(content(text), CommentContent::Plain, "{text:?}");
     }
     assert_eq!(
-        CommentContent::of(b"--!strict", CommentKind::Line, LuaVersion::Lua54),
-        CommentContent::Plain
-    );
-    assert_eq!(
-        CommentContent::of(b"--[[!strict]]", CommentKind::SingleLineBlock, LuaVersion::Luau),
+        CommentContent::of(b"--[[!strict]]", CommentKind::SingleLineBlock),
         CommentContent::Plain
     );
 }
@@ -176,7 +172,7 @@ fn reads_a_directive_in_a_comment_that_is_not_utf8() {
         (b"-- luck: \xE9", CommentContent::InvalidDirective),
         (b"-- \xE9 luck: allow(x)", CommentContent::Plain),
     ] {
-        assert_eq!(CommentContent::of(text, CommentKind::Line, LuaVersion::Lua51), expected);
+        assert_eq!(CommentContent::of(text, CommentKind::Line), expected);
     }
     assert_eq!(
         error(b"-- luck: allow(x) \xE9t\xE9"),

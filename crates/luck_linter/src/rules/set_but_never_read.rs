@@ -33,7 +33,7 @@ impl Rule for SetButNeverRead {
             if name.starts_with('_') {
                 continue;
             }
-            // Luau: exported bindings are read through the module's
+            // Exported bindings are read through the module's
             // export table, so no write to one is dead.
             if symbol.is_exported {
                 continue;
@@ -65,49 +65,32 @@ impl Rule for SetButNeverRead {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local x
 x = 1
 return x",
-            LuaTarget::Lua54,
-        ),
         // No post-declaration write; that's `unused_variable`'s job.
-        ("local x = 1", LuaTarget::Lua54),
-        (
-            "\
+        "local x = 1",
+        "\
 local _x
 _x = 1",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 export local counter = 0
 counter = 1",
-            LuaTarget::Luau,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 local x
 x = 1",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local x
 x = 1
 x = 2",
-            LuaTarget::Lua54,
-        ),
     ];
 
     #[test]

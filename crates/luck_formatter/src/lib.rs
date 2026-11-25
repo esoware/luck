@@ -1,6 +1,6 @@
 //! # `luck_formatter`
 //!
-//! Prettier-style code formatter for Lua 5.1-5.5 and Luau.
+//! Prettier-style code formatter for Luau.
 //!
 //! [`format_chunk()`] formats a tree directly, including one built in code
 //! with no source text. It prints each literal as the tree spells it,
@@ -19,7 +19,7 @@
 //! tree or the source, never copied. An arena reused across files, as from an
 //! `AllocatorPool`, saves each one the heap's large allocations.
 //!
-//! A source is bytes, as Lua reads it, and so is the output, which keeps a
+//! A source is bytes, as Luau reads it, and so is the output, which keeps a
 //! comment or a string that isn't UTF-8 as written and is UTF-8 whenever the
 //! source is.
 //!
@@ -32,11 +32,9 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_formatter::FormatOptions;
-//! use luck_token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let result =
-//!     luck_formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+//! let result = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::default());
 //! assert!(result.errors.is_empty());
 //! assert_eq!(result.output, b"local x = 1\n");
 //! ```

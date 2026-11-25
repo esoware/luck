@@ -4,9 +4,8 @@
 use std::iter;
 
 use luck_ast::{BinaryOp, Expression, Field, IfExpression, Suffix, TableConstructor};
-use luck_token::{Associativity, BinOp, LuaNumber, LuaVersion, UnOp};
+use luck_token::{Associativity, BinOp, UnOp};
 
-use crate::arithmetic::negate;
 use crate::context::ValueContext;
 use crate::value::ConstantValue;
 
@@ -21,9 +20,9 @@ pub trait ToBoolean {
 
 /// The value an expression evaluates to.
 pub trait ConstantEvaluation<'ast> {
-    /// The value the expression evaluates to, in the target's exact
-    /// arithmetic, when that's known and evaluating it can't raise, run a
-    /// metamethod, or read a global.
+    /// The value the expression evaluates to, in Luau's exact arithmetic,
+    /// when that's known and evaluating it can't raise, run a metamethod, or
+    /// read a global.
     fn evaluate_value(&self, context: &dyn ValueContext) -> Option<ConstantValue<'ast>>;
 
     /// Whether the expression is truthy, when that's known and evaluating it
@@ -89,7 +88,7 @@ enum ValueType {
     String,
     Table,
     Function,
-    /// Luau: a 64-bit integer, which no arithmetic operator takes.
+    /// A 64-bit integer, which no arithmetic operator takes.
     Integer,
     /// Any type: a variable's value, or a metamethod's result.
     Undetermined,
@@ -215,23 +214,14 @@ impl<'ast> Outcome<'ast> {
         }
     }
 
-    /// The integer the value converts to for a bitwise operator, when it's a
-    /// number with an integer's value.
-    fn integer(self) -> Option<i64> {
-        self.value?.as_number()?.to_integer()
-    }
-
     /// Whether a table constructor takes the value as a key, which it does
     /// for any but `nil` and NaN.
     const fn is_valid_key(self) -> bool {
         match self.value {
             Some(ConstantValue::Nil) => false,
-            Some(ConstantValue::Number(LuaNumber::Float(float))) => !float.is_nan(),
+            Some(ConstantValue::Number(number)) => !number.is_nan(),
             Some(
-                ConstantValue::Boolean(_)
-                | ConstantValue::Number(LuaNumber::Int(_))
-                | ConstantValue::Integer(_)
-                | ConstantValue::String(_),
+                ConstantValue::Boolean(_) | ConstantValue::Integer(_) | ConstantValue::String(_),
             ) => true,
             None => matches!(
                 self.ty,
@@ -251,13 +241,12 @@ fn analyze<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Outcome
         Expression::False(_) => Outcome::constant(ConstantValue::Boolean(false)),
         Expression::True(_) => Outcome::constant(ConstantValue::Boolean(true)),
         Expression::Number(literal) => Outcome::constant(ConstantValue::Number(literal.value)),
-        // Luau
         Expression::Integer(literal) => Outcome::constant(ConstantValue::Integer(literal.value)),
         Expression::StringLiteral(literal) => {
             Outcome::constant(ConstantValue::String(literal.value.as_bytes()))
         }
-        // Luau: text alone is a string constant, and an expression in it
-        // calls the `format` method a string finds through its metatable.
+        // Text alone is a string constant, and an expression in it calls the
+        // `format` method a string finds through its metatable.
         Expression::InterpolatedString(string) => {
             if string.segments.is_empty() {
                 Outcome::constant(ConstantValue::String(string.tail.value.as_bytes()))
@@ -269,7 +258,7 @@ fn analyze<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Outcome
         Expression::Name(name) => Outcome::variable(context.is_global_reference(name)),
         Expression::FunctionDef(_) => Outcome::fresh(ValueType::Function, false),
         Expression::TableConstructor(table) => table_outcome(table, context),
-        // A chain of Luau instantiations alone runs nothing, since types
+        // A chain of type instantiations alone runs nothing, since types
         // don't.
         Expression::Suffixed(chain) => {
             if chain
@@ -284,13 +273,10 @@ fn analyze<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Outcome
         }
         // Taking the first value of one changes nothing the analysis tells.
         Expression::Parenthesized(parenthesized) => analyze(&parenthesized.expr, context),
-        Expression::UnaryOp(unary) => {
-            unary_outcome(unary.op, analyze(&unary.operand, context), context.version())
-        }
+        Expression::UnaryOp(unary) => unary_outcome(unary.op, analyze(&unary.operand, context)),
         Expression::BinaryOp(run) => run_outcome(run, context),
-        // Luau
         Expression::IfExpression(if_expr) => if_outcome(if_expr, context),
-        // Luau: a cast doesn't run.
+        // A cast runs nothing.
         Expression::TypeCast(cast) => analyze(&cast.expr, context),
         Expression::Error(_) => Outcome::OPAQUE,
     }
@@ -314,7 +300,7 @@ fn table_outcome<'ast>(
     Outcome::fresh(ValueType::Table, has_effects)
 }
 
-fn unary_outcome(op: UnOp, operand: Outcome<'_>, version: LuaVersion) -> Outcome<'_> {
+fn unary_outcome(op: UnOp, operand: Outcome<'_>) -> Outcome<'_> {
     let (number, is_safe) = match op {
         // `not` runs no metamethod.
         UnOp::Not => {
@@ -326,13 +312,15 @@ fn unary_outcome(op: UnOp, operand: Outcome<'_>, version: LuaVersion) -> Outcome
             };
         }
         UnOp::Neg => {
-            let negated = operand.value.and_then(ConstantValue::as_number).map(negate);
+            let negated = operand.value.and_then(ConstantValue::as_number).map(|number| -number);
             (negated, operand.ty == ValueType::Number)
         }
         // A string's length is its byte count, and a table's may run `__len`.
         UnOp::Len => {
             let length = match operand.value {
-                Some(ConstantValue::String(bytes)) => i64::try_from(bytes.len()).ok(),
+                Some(ConstantValue::String(bytes)) => {
+                    u32::try_from(bytes.len()).ok().map(f64::from)
+                }
                 Some(
                     ConstantValue::Nil
                     | ConstantValue::Boolean(_)
@@ -341,19 +329,7 @@ fn unary_outcome(op: UnOp, operand: Outcome<'_>, version: LuaVersion) -> Outcome
                 )
                 | None => None,
             };
-            let number = length.map(|integer| {
-                if version.has_integer_subtype() {
-                    LuaNumber::Int(integer)
-                } else {
-                    LuaNumber::Float(LuaNumber::Int(integer).to_f64())
-                }
-            });
-            (number, operand.ty == ValueType::String)
-        }
-        // Lua 5.3+: a float with a fraction raises, as a string may.
-        UnOp::BitNot => {
-            let integer = operand.integer().filter(|_| version.has_bitwise_ops());
-            (integer.map(|bits| LuaNumber::Int(!bits)), integer.is_some())
+            (length, operand.ty == ValueType::String)
         }
     };
     operand.operation(number_or_any(is_safe), number.map(ConstantValue::Number), is_safe)
@@ -365,10 +341,9 @@ const fn number_or_any(is_number: bool) -> ValueType {
 }
 
 fn run_outcome<'ast>(run: &BinaryOp<'ast>, context: &dyn ValueContext) -> Outcome<'ast> {
-    let version = context.version();
     match run.precedence().1 {
         Associativity::Left => run.links.iter().fold(analyze(&run.first, context), |lhs, link| {
-            binary_outcome(lhs, link.op, analyze(&link.operand, context), version)
+            binary_outcome(lhs, link.op, analyze(&link.operand, context))
         }),
         // `..` and `^` group from the right, so `a .. b .. c` is
         // `a .. (b .. c)`.
@@ -380,18 +355,13 @@ fn run_outcome<'ast>(run: &BinaryOp<'ast>, context: &dyn ValueContext) -> Outcom
                 .rev()
                 .zip(left_operands)
                 .fold(analyze(&run.links.last().operand, context), |rhs, (link, lhs)| {
-                    binary_outcome(analyze(lhs, context), link.op, rhs, version)
+                    binary_outcome(analyze(lhs, context), link.op, rhs)
                 })
         }
     }
 }
 
-fn binary_outcome<'ast>(
-    lhs: Outcome<'ast>,
-    op: BinOp,
-    rhs: Outcome<'ast>,
-    version: LuaVersion,
-) -> Outcome<'ast> {
+fn binary_outcome<'ast>(lhs: Outcome<'ast>, op: BinOp, rhs: Outcome<'ast>) -> Outcome<'ast> {
     let are_numbers = lhs.ty == ValueType::Number && rhs.ty == ValueType::Number;
     let (ty, is_safe) = match op {
         BinOp::And | BinOp::Or => return logical_outcome(lhs, rhs, op == BinOp::Or),
@@ -399,7 +369,7 @@ fn binary_outcome<'ast>(
             let is_safe = !(lhs.ty.may_have_eq_metamethod() && rhs.ty.may_have_eq_metamethod());
             (ValueType::Boolean, is_safe)
         }
-        // Lua makes a boolean of what an order metamethod returns.
+        // Luau makes a boolean of what an order metamethod returns.
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
             let are_strings = lhs.ty == ValueType::String && rhs.ty == ValueType::String;
             (ValueType::Boolean, are_numbers || are_strings)
@@ -409,37 +379,16 @@ fn binary_outcome<'ast>(
             let is_safe = is_joinable(lhs.ty) && is_joinable(rhs.ty);
             (if is_safe { ValueType::String } else { ValueType::Undetermined }, is_safe)
         }
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
-            (number_or_any(are_numbers), are_numbers)
-        }
-        // Lua 5.3+ raises on an integer divided by zero.
-        BinOp::FloorDiv | BinOp::Mod => {
-            let is_safe = are_numbers
-                && !(version.has_integer_subtype() && may_divide_integer_by_zero(lhs, rhs));
-            (number_or_any(is_safe), is_safe)
-        }
-        // Lua 5.3+: a float with a fraction raises, as a string may.
-        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
-            let is_safe =
-                version.has_bitwise_ops() && lhs.integer().is_some() && rhs.integer().is_some();
-            (number_or_any(is_safe), is_safe)
-        }
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::FloorDiv
+        | BinOp::Mod
+        | BinOp::Pow => (number_or_any(are_numbers), are_numbers),
     };
-    let value = lhs.value.zip(rhs.value).and_then(|(left, right)| left.binary(op, right, version));
+    let value = lhs.value.zip(rhs.value).and_then(|(left, right)| left.binary(op, right));
     lhs.alongside(rhs).operation(ty, value, is_safe)
-}
-
-/// Whether two numbers may both be integers with the second zero, which
-/// they can't be once either is known to be a float or the divisor nonzero.
-fn may_divide_integer_by_zero(lhs: Outcome<'_>, rhs: Outcome<'_>) -> bool {
-    match (
-        lhs.value.and_then(ConstantValue::as_number),
-        rhs.value.and_then(ConstantValue::as_number),
-    ) {
-        (Some(LuaNumber::Float(_)), _) | (_, Some(LuaNumber::Float(_))) => false,
-        (_, Some(LuaNumber::Int(divisor))) => divisor == 0,
-        (_, None) => true,
-    }
 }
 
 /// `lhs and rhs`, or with `is_or`, `lhs or rhs`, neither of which runs a
@@ -462,7 +411,7 @@ fn logical_outcome<'ast>(lhs: Outcome<'ast>, rhs: Outcome<'ast>, is_or: bool) ->
     }
 }
 
-/// Luau: `if c then a elseif d then b else e`, which runs its conditions in
+/// `if c then a elseif d then b else e`, which runs its conditions in
 /// order up to the first truthy one and yields that one's branch.
 fn if_outcome<'ast>(if_expr: &IfExpression<'ast>, context: &dyn ValueContext) -> Outcome<'ast> {
     let arms = iter::once((&if_expr.condition, &if_expr.then_expr))

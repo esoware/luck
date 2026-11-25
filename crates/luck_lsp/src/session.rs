@@ -9,13 +9,13 @@ use ls_types::notification::{Notification as _, PublishDiagnostics, ShowMessage}
 use ls_types::{MessageType, PublishDiagnosticsParams, ShowMessageParams, Uri};
 use lsp_server::Notification;
 use luck_allocator::AllocatorPool;
-use luck_config::Project;
+use luck_config::{Project, located_path};
 
 use crate::analyzed::SpareArena;
 use crate::line_index::PositionEncoding;
 use crate::providers::diagnostics;
 use crate::server::Task;
-use crate::settings::{ConfigError, DocumentSettings, LoadedProject, SettingsCache, settings_path};
+use crate::settings::{ConfigError, DocumentSettings, LoadedProject, SettingsCache};
 use crate::workspace::Workspace;
 
 /// What the main loop shares with every job.
@@ -88,7 +88,7 @@ impl Session {
     /// spells it, or of an untitled document, under the project
     /// [`Self::project_for`] finds.
     pub(crate) fn document_settings(&self, spelled: Option<&Path>) -> DocumentSettings {
-        let file = spelled.map(settings_path);
+        let file = spelled.map(located_path);
         let project = self.project_for(file.as_deref(), spelled);
         self.settings.document_settings(project, file.as_deref())
     }

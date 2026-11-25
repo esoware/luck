@@ -6,14 +6,10 @@ mod common;
 
 mod depth;
 mod errors;
+mod exprs;
 mod fixtures;
-mod lua51;
-mod lua52;
-mod lua53;
-mod lua54;
-mod lua55;
-mod luau;
-mod luau_types;
+mod functions;
 mod parse_result;
 mod stack;
-mod version;
+mod stmts;
+mod types;

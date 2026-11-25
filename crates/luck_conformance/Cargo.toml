@@ -5,7 +5,7 @@ publish                = false
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description            = "Internal tool: the official Lua and Luau test suites through every stage and the reference interpreter, with committed results"
+description            = "Internal tool: Luau's official conformance tests through every stage and the reference interpreter, with committed results"
 
 [lints]
 workspace = true
@@ -14,16 +14,6 @@ workspace = true
 name    = "luck_conformance"
 test    = false
 doctest = false
-
-# mlua links one interpreter per build, so exactly one of these is on.
-[features]
-default = ["lua54"]
-lua51   = ["mlua/lua51"]
-lua52   = ["mlua/lua52"]
-lua53   = ["mlua/lua53"]
-lua54   = ["mlua/lua54"]
-lua55   = ["mlua/lua55"]
-luau    = ["mlua/luau"]
 
 [dependencies]
 luck_allocator       = { workspace = true }

@@ -3,15 +3,15 @@ use std::sync::Arc;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
-use luck_token::LuaTarget;
 use self_cell::{MutBorrow, self_cell};
 
 use crate::layering::layer;
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_definition::StdlibDefinition;
 use crate::stdlib_model::StdlibLibrary;
+use crate::variant::Variant;
 
-/// A target's standard library, with the std definitions a project names
+/// A variant's standard library, with the std definitions a project names
 /// layered over it, which semantic analysis reads as it reads a built-in
 /// one. A clone shares it.
 #[derive(Clone)]
@@ -41,9 +41,9 @@ self_cell!(
 );
 
 impl Stdlib {
-    /// `target`'s built-in library.
-    pub const fn new(target: LuaTarget) -> Self {
-        Self(Layers::BuiltIn(library_for(target)))
+    /// `variant`'s built-in library.
+    pub const fn new(variant: Variant) -> Self {
+        Self(Layers::BuiltIn(library_for(variant)))
     }
 
     pub fn library(&self) -> &StdlibLibrary<'_> {
@@ -53,8 +53,8 @@ impl Stdlib {
         }
     }
 
-    pub fn target(&self) -> LuaTarget {
-        self.library().target
+    pub fn variant(&self) -> Variant {
+        self.library().variant
     }
 
     /// This library with `definition` layered over it.
@@ -65,9 +65,9 @@ impl Stdlib {
     /// `shape`, `extends`, or deprecation it doesn't set.
     ///
     /// A shape or a constant set the definition names comes from it or from
-    /// this library. One that only another target's library declares is
-    /// left unresolved, so one definition can serve every target: the shape
-    /// has no members, and a param that takes the set takes any string.
+    /// this library. One that only Roblox's library declares is left
+    /// unresolved, so one definition can serve both variants: the shape has
+    /// no members, and a param that takes the set takes any string.
     ///
     /// # Errors
     ///
@@ -91,7 +91,7 @@ impl fmt::Debug for Stdlib {
             current = &layered.borrow_owner().base;
         }
         f.debug_struct("Stdlib")
-            .field("target", &self.target())
+            .field("variant", &self.variant())
             .field("layer_count", &layer_count)
             .finish()
     }

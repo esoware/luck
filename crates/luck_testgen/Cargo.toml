@@ -5,7 +5,7 @@ publish                = false
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description            = "Internal test harness: deterministic Lua program generators and property tests"
+description            = "Internal test harness: deterministic Luau program generators and property tests"
 
 [lints]
 workspace = true

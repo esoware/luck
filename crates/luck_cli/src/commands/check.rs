@@ -66,21 +66,20 @@ impl CheckArgs {
 fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     let file_path = file.path.as_path();
     let label = file_path.to_string_lossy();
-    let version = file.project.target_for(Some(file_path)).version();
     let source = match FileSystemOs.read(file_path) {
         Ok(bytes) => bytes,
         Err(error) => {
             let mut rendered = Vec::new();
-            let source_file = SourceFile { label: &label, text: None, version };
+            let source_file = SourceFile { label: &label, text: None };
             DefaultReporter.render(source_file, &[Diagnostic::e010(&label, &error)], &mut rendered);
             return Some(rendered);
         }
     };
 
-    let result = luck_parser::parse(allocator, &source, version);
+    let result = luck_parser::parse(allocator, &source);
     let errors = if result.errors.is_empty() {
-        // The compile-time errors real Lua reports beyond the grammar, such as
-        // const writes and unresolved gotos.
+        // The compile-time errors Luau reports beyond the grammar, such as an
+        // assignment to a `const`.
         SemanticBuilder::new()
             .with_counts(result.counts)
             .with_check(true)
@@ -94,7 +93,7 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     }
 
     let mut rendered = Vec::new();
-    let source_file = SourceFile { label: &label, text: Some(&source), version };
+    let source_file = SourceFile { label: &label, text: Some(&source) };
     DefaultReporter.render(source_file, &errors, &mut rendered);
     Some(rendered)
 }
@@ -115,14 +114,14 @@ mod tests {
 
     #[test]
     fn check_is_top_level_command_with_paths_and_config() {
-        let cli = Cli::try_parse_from(["luck", "check", "src", "main.lua", "-c", "luck.json"])
+        let cli = Cli::try_parse_from(["luck", "check", "src", "main.luau", "-c", "luck.json"])
             .expect("check parses");
         let Command::Check(CheckArgs { paths, config, no_error_on_unmatched_pattern }) =
             cli.command
         else {
             panic!("expected Command::Check");
         };
-        assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
+        assert_eq!(paths, vec!["src".to_owned(), "main.luau".to_owned()]);
         assert_eq!(config, Some(PathBuf::from("luck.json")));
         assert!(!no_error_on_unmatched_pattern);
     }
@@ -131,7 +130,7 @@ mod tests {
     fn an_unreadable_file_reports_e010() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
-        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
+        let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let rendered = check_file(&Allocator::new(), &file).expect("an unread file fails");
 

@@ -3,9 +3,8 @@ mod literal;
 mod stmt;
 mod types;
 
-use luck_ast::Chunk;
+use luck_ast::Block;
 use luck_data_structures::CodeBuffer;
-use luck_token::LuaVersion;
 
 use crate::separator::{Classes, NUMBER, OTHER, WORD, class_of, merges_after};
 
@@ -16,15 +15,15 @@ pub enum LiteralSpelling {
     /// wrote them, and one built in code the shortest way its value reads
     /// back.
     AsWritten,
-    /// The shortest way its value reads back in the chunk's version, or as
-    /// the tree spells it when that's no longer, as a minifier wants.
+    /// The shortest way its value reads back, or as the tree spells it when
+    /// that's no longer, as a minifier wants.
     Shortest,
 }
 
 /// The output is bytes, as a source is, and starts with no reserved
 /// capacity. Use [`compact_into`] to write after a header, or into a buffer
 /// with a useful size reserved.
-pub fn compact(chunk: &Chunk<'_>, spelling: LiteralSpelling) -> Vec<u8> {
+pub fn compact(chunk: &Block<'_>, spelling: LiteralSpelling) -> Vec<u8> {
     compact_into(chunk, spelling, Vec::new())
 }
 
@@ -34,14 +33,13 @@ pub fn compact(chunk: &Chunk<'_>, spelling: LiteralSpelling) -> Vec<u8> {
 /// code, and the capacity it reserves is the capacity the printer starts
 /// with. A parsed tree's source length, its comments aside, makes a good
 /// hint, since compact output is rarely longer.
-pub fn compact_into(chunk: &Chunk<'_>, spelling: LiteralSpelling, output: Vec<u8>) -> Vec<u8> {
+pub fn compact_into(chunk: &Block<'_>, spelling: LiteralSpelling, output: Vec<u8>) -> Vec<u8> {
     let mut printer = Printer {
         output: CodeBuffer::from(output),
         last: OTHER,
-        version: chunk.version,
         is_shortest: spelling == LiteralSpelling::Shortest,
     };
-    printer.print_block(&chunk.block);
+    printer.print_block(chunk);
     printer.output.into_bytes()
 }
 
@@ -55,7 +53,6 @@ struct Printer {
     output: CodeBuffer,
     /// The class of the last piece written.
     last: Classes,
-    version: LuaVersion,
     /// Whether literals take [`LiteralSpelling::Shortest`].
     is_shortest: bool,
 }

@@ -4,7 +4,7 @@
 #[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default, deny_unknown_fields))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TransformConfig {
-    /// Luau: drop every type annotation, cast, instantiation, and `type`
+    /// Drop every type annotation, cast, instantiation, and `type`
     /// declaration before the other passes run. Types never run, so this
     /// changes no behavior, but a typed library's users lose its types.
     pub strip_types: bool,

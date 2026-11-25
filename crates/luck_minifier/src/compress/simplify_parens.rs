@@ -1,7 +1,7 @@
 //! Dropping parentheses that change nothing.
 //!
 //! The tree keeps only those that truncate a call or `...` to one value or
-//! stop a `-` before a Luau integer literal from reading as a negative one,
+//! stop a `-` before an integer literal from reading as a negative one,
 //! and the printer writes whatever grouping needs. So what's left to drop
 //! is a truncation wherever only the first value counts anyway, the
 //! parentheses around a lone string or table argument, and the ones a run
@@ -21,7 +21,7 @@ pub(super) enum Place {
     /// Where only its first value counts: an operand, a condition, a key, a
     /// field, an index, or any but the last of a list.
     OneValue,
-    /// The operand of a `-`, under which a Luau integer literal reads as a
+    /// The operand of a `-`, under which an integer literal reads as a
     /// negative one.
     Negated,
 }
@@ -47,7 +47,7 @@ pub(super) fn strip(expr: &mut Expression<'_>, place: Place) -> bool {
 /// Strips a chain's parenthesized prefix where what it holds stands bare
 /// there, which a chain does, and says whether it did.
 ///
-/// In front of a Luau instantiation the parentheses stay around a call,
+/// In front of an instantiation the parentheses stay around a call,
 /// whose values they truncate.
 pub(super) fn strip_prefix<'ast>(
     allocator: &'ast Allocator,
@@ -93,7 +93,6 @@ pub(super) fn strip_call_args(args: &mut FunctionArgs<'_>) -> bool {
 mod tests {
     use luck_allocator::Allocator;
     use luck_ast::{Statement, expr_nesting_depth};
-    use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with};
     use crate::transform_config::TransformConfig;
@@ -101,11 +100,7 @@ mod tests {
     const PARENS: TransformConfig = TransformConfig { simplify_parens: true, ..NO_PASSES };
 
     fn apply(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &PARENS)
-    }
-
-    fn apply_luau(source: &str) -> String {
-        minify_with(source, LuaVersion::Luau, &PARENS)
+        minify_with(source, &PARENS)
     }
 
     #[test]
@@ -150,7 +145,7 @@ mod tests {
             ],
         );
         assert_outputs(
-            apply_luau,
+            apply,
             &[
                 ("x += (f()) return `{(f())}`", "x+=f()return`{f()}`"),
                 ("return if (f()) then (g()) else (...)", "return if f()then g()else..."),
@@ -178,7 +173,7 @@ mod tests {
             ],
         );
         assert_outputs(
-            apply_luau,
+            apply,
             &[
                 ("local x = (a :: T)", "local x=a::T"),
                 ("return if (a) then (b) else (c or d)", "return if a then b else c or d"),
@@ -222,7 +217,7 @@ mod tests {
         );
         // `-(1i)` negates an integer, which raises, and `-1i` is a literal.
         assert_outputs(
-            apply_luau,
+            apply,
             &[("return -(1i), not (1i), (1i) + x, (1i) :: T", "return-(1i),not 1i,1i+x,1i::T")],
         );
     }
@@ -232,7 +227,7 @@ mod tests {
         let allocator = Allocator::new();
         let source = "return (a + b) - c, x .. (y .. z), (a * b) + c";
         let chunk = compressed(&allocator, source, PARENS);
-        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
+        let [Statement::Return(return_stmt)] = &*chunk.stmts else {
             panic!("expected a return");
         };
         let depths: Vec<usize> = return_stmt.exprs.iter().map(expr_nesting_depth).collect();
@@ -243,7 +238,7 @@ mod tests {
     #[test]
     fn keeps_parens_on_an_instantiated_literal_in_every_position() {
         assert_outputs(
-            apply_luau,
+            apply,
             &[
                 ("return ({})<<T>>\n", "return({})<<T>>"),
                 ("return (\"s\")<<T>>\n", "return(\"s\")<<T>>"),
@@ -278,7 +273,7 @@ mod tests {
     #[test]
     fn strips_parens_on_an_instantiated_var() {
         assert_outputs(
-            apply_luau,
+            apply,
             &[
                 ("return (x)<<T>>\n", "return x<<T>>"),
                 ("return (x.y)<<T>>\n", "return x.y<<T>>"),

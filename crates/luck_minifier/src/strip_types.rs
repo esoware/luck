@@ -1,4 +1,4 @@
-//! Luau: stripping every type before anything else reads the tree, as
+//! Stripping every type before anything else reads the tree, as
 //! `oxc_transformer` strips TypeScript's before `oxc_minifier` runs.
 //!
 //! Annotations, generic lists, return types, instantiations, and `type`
@@ -7,8 +7,8 @@
 
 use luck_allocator::Allocator;
 use luck_ast::{
-    AttributedName, Block, Expression, FunctionBody, MethodCall, NumericFor, Parameter, Statement,
-    Suffix, SuffixedExpression, Type, VarArgParam, VisitMut,
+    Block, Expression, FunctionBody, MethodCall, Statement, Suffix, SuffixedExpression, Type,
+    TypedName, VarArgParam, VisitMut,
 };
 
 use crate::expr::truncate_multi_value;
@@ -101,21 +101,12 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
         self.walk_function_body(function_body);
     }
 
-    fn visit_param(&mut self, param: &mut Parameter<'ast>) {
-        param.type_annotation = None;
+    fn visit_typed_name(&mut self, typed_name: &mut TypedName<'ast>) {
+        typed_name.type_annotation = None;
     }
 
     fn visit_var_arg_param(&mut self, var_arg_param: &mut VarArgParam<'ast>) {
         var_arg_param.type_annotation = None;
-    }
-
-    fn visit_attributed_name(&mut self, attributed_name: &mut AttributedName<'ast>) {
-        attributed_name.type_annotation = None;
-    }
-
-    fn visit_numeric_for(&mut self, numeric_for: &mut NumericFor<'ast>) {
-        numeric_for.type_annotation = None;
-        self.walk_numeric_for(numeric_for);
     }
 
     fn visit_type(&mut self, _ty: &mut Type<'ast>) {}
@@ -123,15 +114,13 @@ impl<'ast> VisitMut<'ast> for TypeStripper<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use crate::fixtures::{NO_PASSES, minify_with};
     use crate::transform_config::TransformConfig;
 
     const STRIPPING: TransformConfig = TransformConfig { strip_types: true, ..NO_PASSES };
 
     fn strip(source: &str) -> String {
-        minify_with(source, LuaVersion::Luau, &STRIPPING)
+        minify_with(source, &STRIPPING)
     }
 
     #[test]
@@ -170,6 +159,6 @@ mod tests {
     #[test]
     fn leaves_types_on_when_asked() {
         let source = "local x:number=1::number";
-        assert_eq!(minify_with(source, LuaVersion::Luau, &NO_PASSES), source);
+        assert_eq!(minify_with(source, &NO_PASSES), source);
     }
 }

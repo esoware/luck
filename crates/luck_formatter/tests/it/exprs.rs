@@ -1,5 +1,4 @@
 use luck_formatter::FormatOptions;
-use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_with};
 
@@ -55,7 +54,6 @@ local x = aaaa
 \t+ bbbb
 \t+ cccc
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -69,7 +67,6 @@ fn binary_chain_breaks_at_one_precedence_level() {
 local total = first_value * second_value
 \t+ third_value * fourth_value
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -82,7 +79,7 @@ local v = f(aaaa)[ [[x
 y]] ]
 ";
     let width = |line_width| FormatOptions { line_width, ..FormatOptions::default() };
-    assert_format_with(source, source, LuaVersion::Lua54, &width(22));
+    assert_format_with(source, source, &width(22));
     assert_format_with(
         source,
         "\
@@ -91,7 +88,6 @@ local v = f(
 )[ [[x
 y]] ]
 ",
-        LuaVersion::Lua54,
         &width(21),
     );
 }
@@ -115,4 +111,57 @@ if x then
 end
 ",
     );
+}
+
+#[test]
+fn long_if_expression_starts_a_line_at_then_and_else() {
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "local scale = if someLongFlagName() then firstValue else secondValue\n",
+        "\
+local scale = if someLongFlagName()
+\tthen firstValue
+\telse secondValue
+",
+        &options,
+    );
+}
+
+#[test]
+fn long_if_expression_keeps_an_elseif_and_its_then_together() {
+    let options = FormatOptions { line_width: 40, ..FormatOptions::default() };
+    assert_format_with(
+        "local scale = if firstFlag() then 1 elseif secondFlag() then 0.5 else 2\n",
+        "\
+local scale = if firstFlag()
+\tthen 1
+\telseif secondFlag() then 0.5
+\telse 2
+",
+        &options,
+    );
+}
+
+#[test]
+fn if_expression_branches_hug_their_tables() {
+    let source = "\
+local thing = makeSomething(\"Foo\", {
+\tOneChild = if someFlag()
+\t\tthen makeSomething(\"Bar\", {
+\t\t\tscale = 1,
+\t\t})
+\t\telse makeSomething(\"Bar\", {
+\t\t\tscale = 2,
+\t\t}),
+\tTwoChild = makeSomething(\"Baz\"),
+})
+";
+    assert_format(source, source);
+}
+
+#[test]
+fn interpolated_expr_starting_with_table_gets_space() {
+    // `{{` is a parse error, so the formatter separates the interpolation
+    // opener from a leading table constructor.
+    assert_format("return `list { {1, 2} } tail`\n", "return `list { { 1, 2 } } tail`\n");
 }

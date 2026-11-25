@@ -2,10 +2,10 @@
 //! next piece's first byte names the classes it would merge with, so a space
 //! goes in only where the two meet.
 //!
-//! The classes cover the merges a tree can print. Only a Luau type prints a
-//! `<` or `>` before another, and Luau has no shift, so those stay glued.
-//! Every other merge, such as `/` into `//` or `=` into `==`, takes a pair no
-//! tree prints.
+//! The classes cover the merges a tree can print. Only a type prints a `<`
+//! or `>` before another, and Luau lexes `<<` and `>>` as two tokens each,
+//! so those stay glued. Every other merge, such as `/` into `//` or `=` into
+//! `==`, takes a pair no tree prints.
 
 use std::ops::BitOr;
 
@@ -32,7 +32,8 @@ impl BitOr for Classes {
 pub(crate) const OTHER: Classes = Classes(0);
 /// A keyword or a name.
 pub(crate) const WORD: Classes = Classes(1);
-/// A number reads on through letters, digits, `_`, and `.`.
+/// A numeral with no letter in it, which reads on through letters, digits,
+/// `_`, and `.`. One with a letter leaves [`WORD`].
 pub(crate) const NUMBER: Classes = Classes(1 << 1);
 /// `..`, which a `.` extends to `...`, and the field `.`, which nothing that
 /// starts with one follows.
@@ -43,7 +44,7 @@ pub(crate) const MINUS: Classes = Classes(1 << 3);
 pub(crate) const LEFT_BRACKET: Classes = Classes(1 << 4);
 /// `>`, which a `=` makes `>=`.
 pub(crate) const GREATER: Classes = Classes(1 << 5);
-/// Luau: the `{` that opens an interpolation, which a table's `{` makes `{{`.
+/// The `{` that opens an interpolation, which a table's `{` makes `{{`.
 pub(crate) const INTERPOLATION_BRACE: Classes = Classes(1 << 6);
 
 /// The classes a piece starting with `first` merges with.

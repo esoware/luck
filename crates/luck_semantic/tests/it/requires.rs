@@ -1,7 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::GetSpan as _;
 use luck_semantic::SemanticBuilder;
-use luck_token::LuaVersion;
 
 use crate::common::{parse, semantic_for};
 
@@ -19,11 +18,10 @@ do
     require(\"e\")
 end
 _G.require(\"g\")
-_ENV[\"require\"] \"h\"
 _G:require(\"i\")
 _G.require.j(\"k\")
 return require(require(\"f\").g)";
-    let semantic = semantic_for(&allocator, source, LuaVersion::Lua54);
+    let semantic = semantic_for(&allocator, source);
     let sites: Vec<(&str, Option<&[u8]>)> = semantic
         .requires()
         .iter()
@@ -40,21 +38,31 @@ return require(require(\"f\").g)";
             ("require(x)", None),
             ("require(\"c\", 2)", None),
             ("_G.require(\"g\")", Some(&b"g"[..])),
-            ("_ENV[\"require\"] \"h\"", Some(&b"h"[..])),
             ("require(require(\"f\").g)", None),
             ("require(\"f\")", Some(&b"f"[..])),
         ]
     );
-    for shadowing in ["require = nil", "local _ENV = {}", "_ENV = {}"] {
-        for call in ["require(\"a\")", "_G.require(\"a\")"] {
-            let shadowed = format!("{shadowing}\n{call}");
-            let found = semantic_for(&allocator, &shadowed, LuaVersion::Lua54);
-            assert!(found.requires().is_empty(), "{shadowed}");
-        }
+    for call in ["require(\"a\")", "_G.require(\"a\")"] {
+        let shadowed = format!("require = nil\n{call}");
+        let found = semantic_for(&allocator, &shadowed);
+        assert!(found.requires().is_empty(), "{shadowed}");
     }
-    let in_lua51 = semantic_for(&allocator, "_ENV.require(\"a\")", LuaVersion::Lua51);
-    assert!(in_lua51.requires().is_empty(), "Lua 5.1's `_ENV` is a plain global");
-    let unasked =
-        SemanticBuilder::new().build(parse(&allocator, "require(\"a\")", LuaVersion::Lua54));
+    let unasked = SemanticBuilder::new().build(parse(&allocator, "require(\"a\")"));
     assert!(unasked.semantic.requires().is_empty());
+}
+
+#[test]
+fn a_require_site_knows_whether_it_is_in_a_type() {
+    let allocator = Allocator::new();
+    let source = "\
+type T = typeof(require(\"a\"))
+local b: typeof(require(\"b\")) = require(\"c\")
+return require(\"d\")";
+    let semantic = semantic_for(&allocator, source);
+    let sites: Vec<(&[u8], bool)> = semantic
+        .requires()
+        .iter()
+        .map(|site| (site.path.expect("a literal path").value.as_bytes(), site.is_in_type))
+        .collect();
+    assert_eq!(sites, [(&b"a"[..], true), (b"b", true), (b"c", false), (b"d", false)]);
 }

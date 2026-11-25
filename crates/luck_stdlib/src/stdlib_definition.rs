@@ -558,13 +558,13 @@ params = [{ kind = "string" }, { kind = "vararg" }]
     #[test]
     fn a_problem_deep_in_a_namespace_is_placed_on_it() {
         let text = r#"
-[globals.love]
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
-[globals.love.members.graphics.members.print]
+[globals.app.members.net.members.listen]
 kind = "function"
 params = [{ kind = "string" }, { kind = "numbr" }]
 "#;

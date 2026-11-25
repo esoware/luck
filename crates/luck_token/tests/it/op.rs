@@ -11,11 +11,6 @@ fn bin_op_from_token_kind_maps_every_binary_operator_token() {
         (TokenKind::GreaterEqual, BinOp::Ge),
         (TokenKind::TildeEqual, BinOp::Ne),
         (TokenKind::EqualEqual, BinOp::Eq),
-        (TokenKind::Pipe, BinOp::BitOr),
-        (TokenKind::Tilde, BinOp::BitXor),
-        (TokenKind::Ampersand, BinOp::BitAnd),
-        (TokenKind::ShiftLeft, BinOp::Shl),
-        (TokenKind::ShiftRight, BinOp::Shr),
         (TokenKind::DotDot, BinOp::Concat),
         (TokenKind::Plus, BinOp::Add),
         (TokenKind::Minus, BinOp::Sub),
@@ -28,41 +23,35 @@ fn bin_op_from_token_kind_maps_every_binary_operator_token() {
         assert_eq!(BinOp::from_token_kind(kind), Some(op), "{kind:?}");
         assert_eq!(Some(op.static_text()), kind.static_text(), "{kind:?}");
     }
-    assert_eq!(BinOp::from_token_kind(TokenKind::Not), None);
-    assert_eq!(BinOp::from_token_kind(TokenKind::Equal), None);
+    for kind in [TokenKind::Not, TokenKind::Equal, TokenKind::Ampersand, TokenKind::Pipe] {
+        assert_eq!(BinOp::from_token_kind(kind), None, "{kind:?}");
+    }
 }
 
 #[test]
-fn bin_op_and_un_op_precedence_follow_the_lua_manual() {
+fn bin_op_and_un_op_precedence_follow_luau() {
     use Associativity::{Left, Right};
     for (ops, expected) in [
         (&[BinOp::Or][..], (1, Left)),
         (&[BinOp::And], (2, Left)),
         (&[BinOp::Lt, BinOp::Gt, BinOp::Le, BinOp::Ge, BinOp::Ne, BinOp::Eq], (3, Left)),
-        (&[BinOp::BitOr], (4, Left)),
-        (&[BinOp::BitXor], (5, Left)),
-        (&[BinOp::BitAnd], (6, Left)),
-        (&[BinOp::Shl, BinOp::Shr], (7, Left)),
-        (&[BinOp::Concat], (8, Right)),
-        (&[BinOp::Add, BinOp::Sub], (9, Left)),
-        (&[BinOp::Mul, BinOp::Div, BinOp::Mod, BinOp::FloorDiv], (10, Left)),
-        (&[BinOp::Pow], (12, Right)),
+        (&[BinOp::Concat], (4, Right)),
+        (&[BinOp::Add, BinOp::Sub], (5, Left)),
+        (&[BinOp::Mul, BinOp::Div, BinOp::Mod, BinOp::FloorDiv], (6, Left)),
+        (&[BinOp::Pow], (8, Right)),
     ] {
         for op in ops {
             assert_eq!(op.precedence(), expected, "{op:?}");
         }
     }
-    assert_eq!(UnOp::PRECEDENCE, 11);
+    assert_eq!(UnOp::PRECEDENCE, 7);
 }
 
 #[test]
 fn un_op_and_compound_op_spell_their_tokens() {
-    for (kind, expected) in [
-        (TokenKind::Not, "not"),
-        (TokenKind::Minus, "-"),
-        (TokenKind::Hash, "#"),
-        (TokenKind::Tilde, "~"),
-    ] {
+    for (kind, expected) in
+        [(TokenKind::Not, "not"), (TokenKind::Minus, "-"), (TokenKind::Hash, "#")]
+    {
         let op = UnOp::from_token_kind(kind).expect("unary operator kind");
         assert_eq!(op.static_text(), expected);
         assert_eq!(kind.static_text(), Some(expected));

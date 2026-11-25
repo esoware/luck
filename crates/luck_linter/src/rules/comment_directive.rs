@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use luck_token::{CommentContent, Span, is_lua_whitespace};
+use luck_token::{CommentContent, Span, is_luau_whitespace};
 
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
@@ -22,13 +22,13 @@ declare_lint_rule!(
 
 impl Rule for CommentDirective {
     fn run_once(&self, context: &LintContext<'_, '_>) {
-        let first_token_start = context.chunk.block.span.start;
+        let first_token_start = context.chunk.span.start;
         let mut first_mode: Option<Span> = None;
         for comment in context.comments {
             if comment.content != CommentContent::HotComment {
                 continue;
             }
-            // Luau ignores hot comments after the first token.
+            // Hot comments after the first token have no effect.
             if comment.span.start > first_token_start {
                 context.diagnostic(Finding::new(
                     "comment directive after the first statement has no effect",
@@ -66,14 +66,14 @@ struct HotComment<'body> {
 
 impl<'body> HotComment<'body> {
     fn split(body: &'body [u8], word_start: u32) -> Self {
-        let word_length = body.iter().position(|&b| is_lua_whitespace(b)).unwrap_or(body.len());
+        let word_length = body.iter().position(|&b| is_luau_whitespace(b)).unwrap_or(body.len());
         let (word, rest) = body.split_at(word_length);
         Self { word, rest, word_span: Span::from_indices(0, word_length).shifted(word_start) }
     }
 
     fn trailing_symbols_span(&self) -> Option<Span> {
-        let first = self.rest.iter().position(|&b| !is_lua_whitespace(b))?;
-        let last = self.rest.iter().rposition(|&b| !is_lua_whitespace(b))?;
+        let first = self.rest.iter().position(|&b| !is_luau_whitespace(b))?;
+        let last = self.rest.iter().rposition(|&b| !is_luau_whitespace(b))?;
         Some(Span::from_indices(first, last + 1).shifted(self.word_span.end))
     }
 
@@ -135,109 +135,59 @@ impl<'body> HotComment<'body> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 --!strict
 --!native
 --!optimize 2
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!nolint UnknownGlobal
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 -- not a directive
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
---!foobar
-local _x = 1",
-            LuaTarget::Lua54,
-        ),
         // Luau reserves `--! ` for plain comments.
-        (
-            "\
+        "\
 --! note
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 local _x = 1
 --! note",
-            LuaTarget::Luau,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 --!foobar
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!strcit
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 local _x = 1
 --!strict",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 return 1
 --!strict",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!strict yes
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!strict
 --!nocheck
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!optimize
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!optimize 3
 local _x = 1",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native on
 local _x = 1",
-            LuaTarget::Luau,
-        ),
     ];
 
     #[test]

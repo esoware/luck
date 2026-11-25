@@ -27,10 +27,7 @@ impl Rule for RedundantReturn {
         let AstKind::Block(block) = node.kind() else {
             return;
         };
-        if !matches!(
-            context.nodes.parent_kind(node.id()),
-            Some(AstKind::FunctionBody(_) | AstKind::Chunk(_))
-        ) {
+        if !matches!(context.nodes.parent_kind(node.id()), None | Some(AstKind::FunctionBody(_))) {
             return;
         }
         let Some(Statement::Return(return_stmt)) = block.stmts.last() else {

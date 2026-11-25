@@ -90,7 +90,7 @@ struct WideChar {
 }
 
 /// The run of bytes the wide-character scan skips at once when it's all
-/// ASCII, which most of a Lua source is.
+/// ASCII, which most of a Luau source is.
 const ASCII_RUN: usize = 64;
 
 impl LineIndex {
@@ -99,7 +99,7 @@ impl LineIndex {
         let mut line_starts = Vec::with_capacity(source.len().div_ceil(40));
         line_starts.push(0);
         for i in memchr::memchr2_iter(b'\n', b'\r', bytes) {
-            // LSP's EOLs, the client's for every dialect, are LF, CRLF, and CR.
+            // LSP's EOLs are LF, CRLF, and CR, whatever the language's are.
             let next = i + 1;
             if bytes[i] == b'\n' || bytes.get(next) != Some(&b'\n') {
                 line_starts.push(index_to_offset(next));
@@ -471,8 +471,8 @@ zz";
 
     #[test]
     fn a_bare_cr_ends_a_line() {
-        // LSP defines `\r` as an EOL alongside `\n` and `\r\n`, and Lua's
-        // lexer counts it as a line break too.
+        // LSP defines `\r` as an EOL alongside `\n` and `\r\n`, though Luau
+        // reads a lone one as whitespace.
         let source = "local a = 1\rlocal b = 2";
         let index = LineIndex::new(source, PositionEncoding::Utf16);
         let b_offset = index_to_offset(source.rfind('b').expect("b"));

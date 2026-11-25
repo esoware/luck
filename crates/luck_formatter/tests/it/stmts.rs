@@ -1,5 +1,4 @@
 use luck_formatter::{FormatOptions, IndentStyle};
-use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_with};
 
@@ -124,22 +123,6 @@ end
 }
 
 #[test]
-fn goto_and_label() {
-    assert_format_with(
-        "\
-goto done
-::done::
-",
-        "\
-goto done
-::done::
-",
-        LuaVersion::Lua52,
-        &FormatOptions::default(),
-    );
-}
-
-#[test]
 fn semicolons_stripped() {
     assert_format("local x = 1;\n", "local x = 1\n");
 }
@@ -155,11 +138,6 @@ local a = 1
 local b = 2
 ",
     );
-}
-
-#[test]
-fn semicolon_runs_dropped() {
-    assert_format("local a = 1;;;", "local a = 1\n");
 }
 
 #[test]
@@ -185,26 +163,8 @@ g()
 }
 
 #[test]
-fn empty_stmt_stripped() {
-    assert_format_with(
-        "\
-local x = 1
-;
-",
-        "local x = 1\n",
-        LuaVersion::Lua52,
-        &FormatOptions::default(),
-    );
-}
-
-#[test]
 fn multi_return() {
     assert_format("return a,b,c\n", "return a, b, c\n");
-}
-
-#[test]
-fn lua54_attributes() {
-    assert_format("local x <const> =5\n", "local x <const> = 5\n");
 }
 
 #[test]
@@ -225,32 +185,25 @@ if x then
   y = 1
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
 
 #[test]
-fn luau_compound_assignment() {
-    assert_format_with("x+=1\n", "x += 1\n", LuaVersion::Luau, &FormatOptions::default());
+fn compound_assignment() {
+    assert_format_with("x+=1\n", "x += 1\n", &FormatOptions::default());
 }
 
 #[test]
-fn luau_type_declaration() {
-    assert_format_with(
-        "type Foo = number\n",
-        "type Foo = number\n",
-        LuaVersion::Luau,
-        &FormatOptions::default(),
-    );
+fn type_declaration() {
+    assert_format_with("type Foo = number\n", "type Foo = number\n", &FormatOptions::default());
 }
 
 #[test]
-fn luau_export_type() {
+fn export_type() {
     assert_format_with(
         "export type Foo = number\n",
         "export type Foo = number\n",
-        LuaVersion::Luau,
         &FormatOptions::default(),
     );
 }
@@ -264,7 +217,6 @@ fn long_assignment_values_break() {
 local a, b = very_long_value_1,
 \tvery_long_value_2
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -285,7 +237,6 @@ then
 \tx = 1
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -315,7 +266,6 @@ then
 \tx = 2
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
     assert_format_with(
@@ -332,7 +282,6 @@ do
 \tstep()
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -355,7 +304,6 @@ then
 \tx = 1
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -379,7 +327,6 @@ then
 \tx = 1
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -399,43 +346,8 @@ repeat
 until first_condition
 \tand second_condition
 ",
-        LuaVersion::Lua54,
         &options,
     );
-}
-
-#[test]
-fn global_declaration_with_initializer() {
-    // Lua 5.5: `global attnamelist ['=' explist]`.
-    assert_format_with(
-        "global x=1\n",
-        "global x = 1\n",
-        LuaVersion::Lua55,
-        &FormatOptions::default(),
-    );
-    assert_format_with(
-        "global a,b=1,f(2)\n",
-        "global a, b = 1, f(2)\n",
-        LuaVersion::Lua55,
-        &FormatOptions::default(),
-    );
-}
-
-#[test]
-fn leading_attribute_stays_before_the_names() {
-    // 5.5 manual section 3.3.7: a leading attribute applies to every name
-    // without one of its own.
-    for (source, expected) in [
-        ("local<const>x,y<close> =1,2\n", "local <const> x, y <close> = 1, 2\n"),
-        ("global<const>x,y=1,2\n", "global <const> x, y = 1, 2\n"),
-    ] {
-        assert_format_with(source, expected, LuaVersion::Lua55, &FormatOptions::default());
-    }
-}
-
-#[test]
-fn function_body_of_only_semicolons_formats_like_an_empty_body() {
-    assert_format("function f() ; end\n", "function f() end\n");
 }
 
 #[test]
@@ -465,7 +377,6 @@ for _, v in ipairs(
 \tprint(v)
 end
 ",
-        LuaVersion::Lua54,
         &FormatOptions { line_width: 34, ..FormatOptions::default() },
     );
 }
@@ -482,21 +393,19 @@ t[{ k }] = \"a string that is long\"
 \t\talpha, beta, gamma,
 \t})
 ",
-        LuaVersion::Lua54,
         &narrow(),
     );
 }
 
 #[test]
 fn assigned_values_move_to_the_next_line_when_only_it_fits_them() {
-    for (source, expected, version) in [
+    for (source, expected) in [
         (
             "local alpha, beta = gamma + delta, 1\n",
             "\
 local alpha, beta =
 \tgamma + delta, 1
 ",
-            LuaVersion::Lua54,
         ),
         (
             "alpha.beta.gamma = (x - 1) / 99\n",
@@ -504,15 +413,6 @@ local alpha, beta =
 alpha.beta.gamma =
 \t(x - 1) / 99
 ",
-            LuaVersion::Lua54,
-        ),
-        (
-            "global alpha_value = (x - 1) / 99\n",
-            "\
-global alpha_value =
-\t(x - 1) / 99
-",
-            LuaVersion::Lua55,
         ),
         (
             "counter_value_x += (x - 1) / 99\n",
@@ -520,10 +420,9 @@ global alpha_value =
 counter_value_x +=
 \t(x - 1) / 99
 ",
-            LuaVersion::Luau,
         ),
     ] {
-        assert_format_with(source, expected, version, &narrow());
+        assert_format_with(source, expected, &narrow());
     }
 }
 
@@ -535,7 +434,6 @@ fn assigned_values_that_fit_neither_line_hang_from_the_equals() {
 local alpha = first_operand_name
 \t+ second_operand_name
 ",
-        LuaVersion::Lua54,
         &narrow(),
     );
 }
@@ -570,6 +468,6 @@ local value = call_something(
 ",
         ),
     ] {
-        assert_format_with(source, expected, LuaVersion::Lua54, &narrow());
+        assert_format_with(source, expected, &narrow());
     }
 }

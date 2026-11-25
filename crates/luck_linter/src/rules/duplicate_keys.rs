@@ -47,19 +47,15 @@ impl Rule for DuplicateKeys {
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum Key<'ast> {
     String(&'ast [u8]),
-    /// A key with an integer's value, which a float with one is too, as
-    /// Lua 5.3+ converts it.
-    Integer(i64),
-    /// Any other float's bits.
-    Float(u64),
+    /// A number's bits.
+    Number(u64),
 }
 
 impl fmt::Display for Key<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::String(value) => write!(f, "{}", value.escape_ascii()),
-            Self::Integer(value) => write!(f, "{value}"),
-            Self::Float(bits) => write!(f, "{}", f64::from_bits(*bits)),
+            Self::Number(bits) => write!(f, "{}", f64::from_bits(*bits)),
         }
     }
 }
@@ -70,12 +66,10 @@ impl fmt::Display for Key<'_> {
 fn table_key<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Option<Key<'ast>> {
     match expr.evaluate_value(context)? {
         ConstantValue::String(bytes) => Some(Key::String(bytes)),
+        ConstantValue::Number(number) if number.is_nan() => None,
         ConstantValue::Number(number) => {
-            let float = number.to_f64();
-            if float.is_nan() {
-                return None;
-            }
-            Some(number.to_integer().map_or_else(|| Key::Float(float.to_bits()), Key::Integer))
+            let key = if number == 0.0 { 0.0 } else { number };
+            Some(Key::Number(key.to_bits()))
         }
         ConstantValue::Nil | ConstantValue::Boolean(_) | ConstantValue::Integer(_) => None,
     }
@@ -83,34 +77,27 @@ fn table_key<'ast>(expr: &Expression<'ast>, context: &dyn ValueContext) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local t = { 1, 1, a = 1, b = 1, [1] = 2, [x] = 3, [x] = 4 }", LuaTarget::Lua54),
-        ("local t = { [9007199254740993] = 1, [9007199254740992] = 2 }", LuaTarget::Lua54),
-    ];
+    const PASS: &[&str] = &["local t = { 1, 1, a = 1, b = 1, [1] = 2, [x] = 3, [x] = 4 }"];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local t = { a = 1, b = 2, a = 3 }", LuaTarget::Lua54),
-        (r#"local t = { a = 1, ["a"] = 2 }"#, LuaTarget::Lua54),
-        (r#"local t = { a = 1, ["\97"] = 2 }"#, LuaTarget::Lua54),
-        ("local t = { a = 1, a = 2, a = 3 }", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "local t = { a = 1, b = 2, a = 3 }",
+        r#"local t = { a = 1, ["a"] = 2 }"#,
+        r#"local t = { a = 1, ["\97"] = 2 }"#,
+        "local t = { a = 1, a = 2, a = 3 }",
         // A `f{}` table is a table constructor.
-        ("foo{ a = 1, a = 2 }", LuaTarget::Lua54),
+        "foo{ a = 1, a = 2 }",
         // Both fields set key 1.
-        (r#"local t = { [1] = "a", [1] = "b" }"#, LuaTarget::Lua54),
-        (r#"local t = { [1] = "a", [1.0] = "b", [-2] = "c", [-2.0] = "d" }"#, LuaTarget::Lua54),
+        r#"local t = { [1] = "a", [1] = "b" }"#,
+        r#"local t = { [1] = "a", [1.0] = "b", [-2] = "c", [-2.0] = "d" }"#,
         // NaN is no key.
-        (
-            "local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }",
-            LuaTarget::Lua54,
-        ),
-        ("local t = { [9007199254740993] = 1, [9007199254740992] = 2 }", LuaTarget::Lua51),
-        ("local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }", LuaTarget::Lua54),
-        ("local t = { a = 1, a = 2 }", LuaTarget::Lua54),
+        "local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }",
+        // A double reads both as 2^53.
+        "local t = { [9007199254740993] = 1, [9007199254740992] = 2 }",
+        "local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }",
+        "local t = { a = 1, a = 2 }",
     ];
 
     #[test]

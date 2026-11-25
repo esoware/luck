@@ -3,7 +3,7 @@ use std::fs;
 use luck_lexer::{LexResult, Lexer, lex};
 use luck_simd::DynCpu;
 use luck_testgen::{fixture_files, generate_full_grammar};
-use luck_token::{LuaVersion, TokenKind};
+use luck_token::TokenKind;
 
 #[test]
 fn a_lexer_is_send_and_sync() {
@@ -23,10 +23,11 @@ fn next_token_streams_exactly_what_lex_materializes() {
 local x = 1 -- trailing
 -- leading
 return x",
-        "#!/usr/bin/env lua\r\n--[==[ block\r\n ]==] print'a' --[[ tail ]]",
+        "#!/usr/bin/env luau\r\n--[==[ block\r\n ]==] print'a' --[[ tail ]]",
         "\
-\u{FEFF}x = [[long
+x = [[long
 string]] .. \"esc\\n\" -- end",
+        "\u{FEFF}x = 1",
         "\
 x = \"unterminated
 y = 0x --[[ open",
@@ -39,28 +40,26 @@ y = 0x --[[ open",
         sources.push(fs::read_to_string(path).expect("fixture is readable"));
     }
 
-    for version in LuaVersion::ALL {
-        for source in &sources {
-            let materialized = lex(source.as_bytes(), version);
-            let mut lexer = Lexer::new(source.as_bytes(), version).expect("source fits u32 spans");
-            let mut streamed = Vec::new();
-            loop {
-                let token = lexer.next_token();
-                let is_eof = token.kind == TokenKind::Eof;
-                streamed.push(token);
-                if is_eof {
-                    break;
-                }
+    for source in &sources {
+        let materialized = lex(source.as_bytes());
+        let mut lexer = Lexer::new(source.as_bytes()).expect("source fits u32 spans");
+        let mut streamed = Vec::new();
+        loop {
+            let token = lexer.next_token();
+            let is_eof = token.kind == TokenKind::Eof;
+            streamed.push(token);
+            if is_eof {
+                break;
             }
-            let eof = *streamed.last().expect("an EOF token");
-            assert_eq!(lexer.next_token(), eof, "EOF repeats: {source:?}");
-            assert_eq!(lexer.finish(streamed), materialized, "{version:?} {source:?}");
         }
+        let eof = *streamed.last().expect("an EOF token");
+        assert_eq!(lexer.next_token(), eof, "EOF repeats: {source:?}");
+        assert_eq!(lexer.finish(streamed), materialized, "{source:?}");
     }
 }
 
-fn stream(source: &[u8], version: LuaVersion, cpu: DynCpu) -> LexResult {
-    let mut lexer = Lexer::with_cpu(source, version, cpu).expect("source fits u32 spans");
+fn stream(source: &[u8], cpu: DynCpu) -> LexResult {
+    let mut lexer = Lexer::with_cpu(source, cpu).expect("source fits u32 spans");
     let mut tokens = Vec::new();
     loop {
         let token = lexer.next_token();
@@ -100,10 +99,8 @@ fn token_soup(seed: u64) -> Vec<u8> {
         b"end",
         b"local",
         b"function",
-        b"goto",
         b"type",
         b"continue",
-        b"global",
         b"averyveryverylongnamethatrunspastasixtyfourbytewindowendforsure_0123456789",
         b"1",
         b"123",
@@ -205,19 +202,15 @@ fn every_feature_set_lexes_exactly_as_the_best_one_does() {
     for seed in 0..2000 {
         sources.push(token_soup(seed));
     }
-    for version in LuaVersion::ALL {
-        for seed in 0..4 {
-            sources.push(generate_full_grammar(seed, version, 200).into_bytes());
-        }
+    for seed in 0..24 {
+        sources.push(generate_full_grammar(seed, 200).into_bytes());
     }
     let cpus = DynCpu::available();
-    for version in LuaVersion::ALL {
-        for source in &sources {
-            let best = stream(source, version, cpus[0]);
-            for &cpu in &cpus[1..] {
-                let lexed = stream(source, version, cpu);
-                assert_eq!(lexed, best, "{cpu:?} {version:?} {:?}", source.escape_ascii());
-            }
+    for source in &sources {
+        let best = stream(source, cpus[0]);
+        for &cpu in &cpus[1..] {
+            let lexed = stream(source, cpu);
+            assert_eq!(lexed, best, "{cpu:?} {:?}", source.escape_ascii());
         }
     }
 }

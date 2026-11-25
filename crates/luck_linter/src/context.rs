@@ -3,13 +3,13 @@ use std::ops::Deref;
 use std::{iter, ptr};
 
 use luck_ast::{
-    AstKind, Block, Call, Chunk, Expression, GetSpan as _, LocalAssignment, Name, Suffix,
+    AstKind, Block, Call, Expression, GetSpan as _, LocalAssignment, Name, Suffix,
     SuffixedExpression, Var,
 };
 use luck_parser::Groupings;
 use luck_semantic::{AstNode, AstNodes, NodeId, Reference, ScopeId, Scoping, Symbol};
 use luck_stdlib::{ResolvedCallee, SemanticAnalysis};
-use luck_token::{Comment, LineIndex, LuaVersion, Span};
+use luck_token::{Comment, LineIndex, Span};
 use luck_value::ValueContext;
 
 use crate::cfg::FlowGraph;
@@ -24,15 +24,15 @@ use crate::local_flow::LocalFlow;
 /// rule that asks.
 #[derive(Debug)]
 pub(crate) struct ContextHost<'ast> {
-    pub chunk: &'ast Chunk<'ast>,
+    pub chunk: &'ast Block<'ast>,
     pub semantic: &'ast SemanticAnalysis<'ast>,
     pub nodes: &'ast AstNodes<'ast>,
     pub directives: &'ast Directives,
     pub source: &'ast [u8],
     pub comments: &'ast [Comment],
     pub groupings: &'ast Groupings,
-    /// Where each escape Lua 5.1 and Luau read as the character it escapes
-    /// is, as the lexer found them.
+    /// Where each unknown escape is, such as `\q`, which reads as the
+    /// character it escapes, as the lexer found them.
     pub lenient_escapes: &'ast [Span],
     /// The kinds of fix the host applies, which are the only ones rules
     /// build.
@@ -101,10 +101,7 @@ impl<'ast> ContextHost<'ast> {
     /// The block of the function or chunk that opens `function`.
     fn function_block(&self, function: ScopeId) -> Option<&'ast Block<'ast>> {
         let opener = self.nodes.kind(self.scoping().scope(function).node);
-        if let AstKind::FunctionBody(body) = opener {
-            return Some(&body.block);
-        }
-        opener.as_chunk().map(|chunk| &chunk.block)
+        if let AstKind::FunctionBody(body) = opener { Some(&body.block) } else { opener.as_block() }
     }
 
     pub(crate) fn local_flow(&self) -> &LocalFlow {
@@ -112,7 +109,7 @@ impl<'ast> ContextHost<'ast> {
     }
 
     pub(crate) fn line_index(&self) -> &LineIndex {
-        self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version()))
+        self.line_index.get_or_init(|| LineIndex::new(self.source))
     }
 
     /// What `expr` spans with the parentheses it's written in, which the
@@ -192,12 +189,12 @@ impl<'ast> ContextHost<'ast> {
         &self,
         symbol: &Symbol,
     ) -> Option<(&'ast LocalAssignment<'ast>, usize)> {
-        let (AstKind::AttributedName(attributed), Some(AstKind::LocalAssignment(local))) =
+        let (AstKind::TypedName(local_name), Some(AstKind::LocalAssignment(local))) =
             (self.nodes.kind(symbol.declaration), self.nodes.parent_kind(symbol.declaration))
         else {
             return None;
         };
-        let position = local.names.iter().position(|name| ptr::eq(name, attributed))?;
+        let position = local.names.iter().position(|name| ptr::eq(name, local_name))?;
         Some((local, position))
     }
 
@@ -212,7 +209,6 @@ impl<'ast> ContextHost<'ast> {
         if let Some(AstKind::Assignment(assignment)) = parent {
             return assignment.targets.iter().any(is_chain);
         }
-        // Luau
         matches!(parent, Some(AstKind::CompoundAssignment(compound)) if is_chain(&compound.var))
     }
 
@@ -232,13 +228,8 @@ impl<'ast> ContextHost<'ast> {
     }
 }
 
-/// A free name reads a global, or a field of a local `_ENV`, so either may
-/// run `__index`.
+/// A free name reads a global, which may run `__index`.
 impl ValueContext for ContextHost<'_> {
-    fn version(&self) -> LuaVersion {
-        self.semantic.version()
-    }
-
     fn is_global_reference(&self, name: &Name<'_>) -> bool {
         !self.scoping().resolves_to_local(name)
     }
@@ -275,10 +266,6 @@ impl<'ast> Deref for LintContext<'_, 'ast> {
 }
 
 impl ValueContext for LintContext<'_, '_> {
-    fn version(&self) -> LuaVersion {
-        self.host.version()
-    }
-
     fn is_global_reference(&self, name: &Name<'_>) -> bool {
         self.host.is_global_reference(name)
     }
@@ -286,8 +273,6 @@ impl ValueContext for LintContext<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use super::*;
     use crate::fixtures::with_host;
 
@@ -299,7 +284,7 @@ local function f(a)
   while a do a = a - 1 end
   for i = 1, 2 do print(i) end
 end";
-        with_host(source, LuaTarget::Lua54, |host| {
+        with_host(source, |host| {
             let graphs: Vec<(ScopeId, *const FlowGraph)> = host
                 .nodes
                 .iter()
@@ -322,7 +307,7 @@ end";
     fn a_callee_resolves_on_the_chain_asked_about() {
         let source = "string.format('%d', 1)
 os.time()";
-        with_host(source, LuaTarget::Lua54, |host| {
+        with_host(source, |host| {
             let chains: Vec<&AstNode<'_>> = host
                 .nodes
                 .iter()
@@ -344,7 +329,7 @@ os.time()";
         let source = "\
 f(1).g(2)
 local x = h(3)";
-        with_host(source, LuaTarget::Lua54, |host| {
+        with_host(source, |host| {
             let calls: Vec<Option<usize>> = host
                 .nodes
                 .iter()
@@ -360,7 +345,7 @@ local x = h(3)";
         let source = "\
 f(1).g(2)
 local x = h(3)(4)";
-        with_host(source, LuaTarget::Lua54, |host| {
+        with_host(source, |host| {
             let used: Vec<&[u8]> = host
                 .nodes
                 .iter()
@@ -376,7 +361,7 @@ local x = h(3)(4)";
         let source = "\
 a.b.c = x.y.z
 t.n += 1";
-        with_host(source, LuaTarget::Luau, |host| {
+        with_host(source, |host| {
             let reads: Vec<usize> = host
                 .nodes
                 .iter()
@@ -392,7 +377,7 @@ t.n += 1";
         let source = "\
 local a, b = 1
 local function f() end";
-        with_host(source, LuaTarget::Lua54, |host| {
+        with_host(source, |host| {
             let tree = host.scoping();
             let positions: Vec<(&str, Option<usize>)> = tree
                 .symbols()
@@ -411,7 +396,7 @@ local function f() end";
         let source = "\
 local x = 1
 print(x, y)";
-        with_host(source, LuaTarget::Lua54, |host| {
+        with_host(source, |host| {
             let reads: Vec<(&str, bool)> = host
                 .nodes
                 .iter()

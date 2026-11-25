@@ -1,12 +1,11 @@
-use luck_stdlib::{Stdlib, StdlibArgKind, StdlibDefinition, StdlibEntry};
-use luck_token::LuaTarget;
+use luck_stdlib::{Stdlib, StdlibArgKind, StdlibDefinition, StdlibEntry, Variant};
 
 fn definition(text: &str) -> StdlibDefinition {
     StdlibDefinition::parse(text).expect("the definition parses")
 }
 
-fn layered(target: LuaTarget, text: &str) -> Stdlib {
-    Stdlib::new(target).layer(&definition(text)).expect("the definition layers")
+fn layered(variant: Variant, text: &str) -> Stdlib {
+    Stdlib::new(variant).layer(&definition(text)).expect("the definition layers")
 }
 
 fn first_param_kind<'library>(
@@ -22,41 +21,40 @@ fn first_param_kind<'library>(
 #[test]
 fn a_definition_declares_new_globals_with_their_members() {
     let stdlib = layered(
-        LuaTarget::Lua51,
+        Variant::Standalone,
         r#"
-[globals.love]
+[globals.app]
 kind = "namespace"
 
-[globals.love.members.graphics]
+[globals.app.members.net]
 kind = "namespace"
 
-[globals.love.members.graphics.members.newImage]
+[globals.app.members.net.members.connect]
 kind = "function"
 is_must_use = true
 params = [{ kind = "string" }]
-returns = "Image"
+returns = "Socket"
 
-[shapes.Image.members.getWidth]
+[shapes.Socket.members.isOpen]
 kind = "function"
 is_method = true
 "#,
     );
     let library = stdlib.library();
-    assert_eq!(library.target, LuaTarget::Lua51);
-    let Some(StdlibEntry::Function(new_image)) = library.lookup(["love", "graphics", "newImage"])
-    else {
-        panic!("love.graphics.newImage should be a function");
+    assert_eq!(library.variant, Variant::Standalone);
+    let Some(StdlibEntry::Function(connect)) = library.lookup(["app", "net", "connect"]) else {
+        panic!("app.net.connect should be a function");
     };
-    assert_eq!((new_image.min_args(), new_image.max_args()), (1, Some(1)));
-    assert_eq!(new_image.returns_shape, Some("Image"));
-    assert!(library.shape_member("Image", "getWidth").is_some());
+    assert_eq!((connect.min_args(), connect.max_args()), (1, Some(1)));
+    assert_eq!(connect.returns_shape, Some("Socket"));
+    assert!(library.shape_member("Socket", "isOpen").is_some());
     assert!(library.lookup(["print"]).is_some(), "the built-in library stays under it");
 }
 
 #[test]
 fn a_namespace_over_a_namespace_keeps_the_members_it_leaves_alone() {
     let stdlib = layered(
-        LuaTarget::Lua54,
+        Variant::Standalone,
         r#"
 [globals.string]
 kind = "namespace"
@@ -80,8 +78,31 @@ returns = "string"
 }
 
 #[test]
+fn a_derived_string_method_keeps_a_deprecation_but_not_its_fix() {
+    let stdlib = layered(
+        Variant::Standalone,
+        r#"
+[globals.string]
+kind = "namespace"
+
+[globals.string.members.gfind]
+kind = "function"
+params = [{ kind = "string" }, { kind = "string" }]
+deprecated = { message = "use string.gmatch", replacement = { template = "string.gmatch(%1)", is_exact = true } }
+"#,
+    );
+    let Some(StdlibEntry::Function(method)) = stdlib.library().shape_member("string", "gfind")
+    else {
+        panic!("a string-first function of `string` is a method of strings");
+    };
+    let deprecation = method.deprecated.as_ref().expect("the method keeps the deprecation");
+    assert_eq!(deprecation.message, "use string.gmatch");
+    assert!(deprecation.replacement.is_none(), "a template numbers the receiver `%1`");
+}
+
+#[test]
 fn a_later_definition_replaces_what_it_redeclares() {
-    let stdlib = Stdlib::new(LuaTarget::Lua54);
+    let stdlib = Stdlib::new(Variant::Standalone);
     let first = stdlib
         .layer(&definition(
             r#"
@@ -114,7 +135,7 @@ params = [{ kind = "string" }, { kind = "function", is_required = false }]
 #[test]
 fn a_member_added_to_a_base_shape_reaches_the_shapes_that_extend_it() {
     let stdlib = layered(
-        LuaTarget::LuauRoblox,
+        Variant::Roblox,
         r#"
 [shapes.Instance.members.GetTags]
 kind = "function"
@@ -141,7 +162,7 @@ is_read_only = false
 #[test]
 fn enums_join_the_enum_global_of_the_library_below() {
     let stdlib = layered(
-        LuaTarget::LuauRoblox,
+        Variant::Roblox,
         r#"
 [enums.Flavor]
 items = ["Sweet", "Sour"]
@@ -168,7 +189,7 @@ params = [{ kind = "constant", set = "roblox_services" }]
 
 #[test]
 fn a_definition_names_a_constant_set_of_the_library_below() {
-    let stdlib = layered(LuaTarget::LuauRoblox, SERVICE_WRAPPER);
+    let stdlib = layered(Variant::Roblox, SERVICE_WRAPPER);
     let StdlibArgKind::Constant(services) = first_param_kind(&stdlib, &["Knit", "GetService"])
     else {
         panic!("the param should take the service names");
@@ -177,8 +198,8 @@ fn a_definition_names_a_constant_set_of_the_library_below() {
 }
 
 #[test]
-fn a_set_only_another_target_declares_leaves_its_param_any_string() {
-    let stdlib = layered(LuaTarget::Luau, SERVICE_WRAPPER);
+fn a_set_only_roblox_declares_leaves_its_param_any_string() {
+    let stdlib = layered(Variant::Standalone, SERVICE_WRAPPER);
     assert!(matches!(first_param_kind(&stdlib, &["Knit", "GetService"]), StdlibArgKind::String));
 }
 
@@ -215,7 +236,7 @@ params = [{ kind = "constant", set = "colors" }]
     for ((text, expected), name) in
         cases.into_iter().zip([r#""Fiel""#, r#""Instanse""#, r#""colors""#])
     {
-        let diag = Stdlib::new(LuaTarget::Lua54).layer(&definition(text)).expect_err(expected);
+        let diag = Stdlib::new(Variant::Standalone).layer(&definition(text)).expect_err(expected);
         assert_eq!(diag.code, "E014");
         assert_eq!(diag.message, format!("invalid config: {expected}"));
         assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(name.as_bytes()));
@@ -225,20 +246,20 @@ params = [{ kind = "constant", set = "colors" }]
 #[test]
 fn a_definition_names_its_own_constant_set() {
     let stdlib = layered(
-        LuaTarget::Lua54,
+        Variant::Standalone,
         r#"
-[constant_sets.modes]
-values = ["fill", { value = "line", is_common = true }]
+[constant_sets.protocols]
+values = ["udp", { value = "tcp", is_common = true }]
 
-[globals.draw]
+[globals.listen]
 kind = "function"
-params = [{ kind = "constant", set = "modes" }]
+params = [{ kind = "constant", set = "protocols" }]
 "#,
     );
-    let StdlibArgKind::Constant(modes) = first_param_kind(&stdlib, &["draw"]) else {
+    let StdlibArgKind::Constant(protocols) = first_param_kind(&stdlib, &["listen"]) else {
         panic!("the param should take the set");
     };
-    let values: Vec<&str> = modes.iter().map(|mode| mode.value).collect();
-    assert_eq!(values, ["fill", "line"]);
-    assert!(stdlib.library().constant_sets.contains_key("modes"));
+    let values: Vec<&str> = protocols.iter().map(|protocol| protocol.value).collect();
+    assert_eq!(values, ["udp", "tcp"]);
+    assert!(stdlib.library().constant_sets.contains_key("protocols"));
 }

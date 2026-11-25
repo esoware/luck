@@ -6,7 +6,6 @@ use luck_allocator::ThreadAllocators;
 use luck_bundler::{DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
 use luck_resolver::to_slash_lossy;
-use luck_token::LuaTarget;
 use serde_json::{Value, json};
 
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
@@ -21,10 +20,6 @@ pub(crate) struct BundleArgs {
     /// Entry file.
     entry: String,
 
-    /// Lua target [default: from the entry's extension and luck.json].
-    #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<LuaTarget>,
-
     /// Output file [default: stdout].
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
@@ -32,10 +27,6 @@ pub(crate) struct BundleArgs {
     /// Project config [default: discovered from entry directory].
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
-
-    /// Search path template (repeatable) [default: luck.json's `search_paths`].
-    #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
-    search_paths: Vec<String>,
 
     /// Minify the output.
     #[arg(long)]
@@ -58,30 +49,28 @@ impl BundleArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let entry_path = existing_file(&self.entry)?;
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
-        let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
-        let version = target.version();
         let transforms = self.minify_flags.apply_to(project.transforms());
-        let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
+        let options = bundle_options(&project, self.dynamic_require);
 
         let arenas = ThreadAllocators::new();
         if self.minify {
             let minified = bundle_minified(&arenas, entry_path, &options, &transforms)
-                .map_err(|errors| fail_with_diags(&errors, version))?;
+                .map_err(|errors| fail_with_diags(&errors))?;
             check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
-                print_files(&minified.warnings, version);
+                print_files(&minified.warnings);
             }
             return write_output(self.output.as_deref(), &minified.output);
         }
 
-        let result = bundle(&arenas, entry_path, &options)
-            .map_err(|errors| fail_with_diags(&errors, version))?;
+        let result =
+            bundle(&arenas, entry_path, &options).map_err(|errors| fail_with_diags(&errors))?;
 
         check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))
             .map_err(usage_error)?;
 
         if verbosity != Verbosity::Quiet {
-            print_files(&result.warnings, version);
+            print_files(&result.warnings);
         }
 
         if let Some(map_path) = self.line_map.as_deref() {
@@ -111,20 +100,19 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
-    use luck_token::LuaTarget;
 
     use super::BundleArgs;
     use crate::cli::Cli;
     use crate::commands::Command;
 
     #[test]
-    fn bundle_is_top_level_command_with_target_flag() {
-        let cli = Cli::try_parse_from(["luck", "bundle", "entry.lua", "-t", "54"])
+    fn bundle_is_top_level_command_with_an_entry() {
+        let cli = Cli::try_parse_from(["luck", "bundle", "entry.luau", "--minify"])
             .expect("bundle parses");
-        let Command::Bundle(BundleArgs { entry, target, .. }) = cli.command else {
+        let Command::Bundle(BundleArgs { entry, minify, .. }) = cli.command else {
             panic!("expected Command::Bundle");
         };
-        assert_eq!(entry, "entry.lua");
-        assert_eq!(target, Some(LuaTarget::Lua54));
+        assert_eq!(entry, "entry.luau");
+        assert!(minify);
     }
 }

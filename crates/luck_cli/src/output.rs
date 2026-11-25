@@ -15,7 +15,7 @@ pub(crate) fn format_size(bytes: usize) -> String {
     }
 }
 
-/// `content` is bytes, as a Lua source is, which reach stdout or the file
+/// `content` is bytes, as a Luau source is, which reach stdout or the file
 /// as they are.
 pub(crate) fn write_output(output_path: Option<&Path>, content: &[u8]) -> Result<(), Exit> {
     if let Some(path) = output_path {
@@ -37,7 +37,7 @@ pub(crate) fn write_output_file(path: &Path, content: &[u8]) -> Result<(), Exit>
     fs::write(path, content).map_err(|e| operation_error(format!("failed to write output: {e}")))
 }
 
-/// Bytes, as Lua reads a source.
+/// Bytes, as Luau reads a source.
 pub(crate) fn read_stdin_source() -> Result<Vec<u8>, Exit> {
     let mut source = Vec::new();
     io::stdin()

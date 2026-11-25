@@ -1,7 +1,7 @@
 # GENERATED FILE - do not hand-edit.
 # Regenerate: just roblox-api
 # Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).
-# The constant sets luau_roblox.toml's params name, which `just stdlib`
+# The constant sets roblox.toml's params name, which `just stdlib`
 # layers it over.
 # Settings-provider classes (settings() / UserSettings() children) are
 # excluded from roblox_services: they are not reachable via game:GetService.

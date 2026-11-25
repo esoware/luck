@@ -2,19 +2,18 @@ use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_codegen::LiteralSpelling;
-use luck_testgen::{lua_fixtures, tree_shape};
+use luck_testgen::{source_fixtures, tree_shape};
 
 #[test]
 fn every_fixture_compacts_to_output_that_compacts_to_itself() {
     let mut report = String::new();
     let mut round_trip_count = 0;
-    for fixture in lua_fixtures() {
+    for fixture in source_fixtures() {
         if fixture.is_error {
             continue;
         }
-        let version = fixture.version;
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, fixture.source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, fixture.source.as_bytes());
         if !parsed.errors.is_empty() {
             continue;
         }
@@ -23,7 +22,7 @@ fn every_fixture_compacts_to_output_that_compacts_to_itself() {
             [("as written", LiteralSpelling::AsWritten), ("shortest", LiteralSpelling::Shortest)]
         {
             let output = luck_codegen::compact(&parsed.chunk, spelling);
-            let reparsed = luck_parser::parse(&allocator, &output, version);
+            let reparsed = luck_parser::parse(&allocator, &output);
             let text = String::from_utf8_lossy(&output);
             let name = fixture.relative_path.display();
             if let Some(error) = reparsed.errors.first() {

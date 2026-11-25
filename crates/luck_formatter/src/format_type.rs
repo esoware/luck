@@ -130,12 +130,12 @@ impl<'ast> Formatter<'ast> {
             Type::True(_) => self.token("true"),
             Type::False(_) => self.token("false"),
             Type::StringLiteral(literal) => self.write_string(literal),
-            // Luau: `...T`.
+            // `...T`.
             Type::Variadic(variadic) => {
                 self.token("...");
                 self.write_type(&variadic.ty);
             }
-            // Luau: `T...`.
+            // `T...`.
             Type::GenericPack(generic_pack) => {
                 self.name(generic_pack.name);
                 self.token("...");
@@ -146,7 +146,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// When the group breaks, each field gets its own line and a trailing
-    /// comma, except the array shorthand `{ T }`, since Luau's grammar has no
+    /// comma, except the array shorthand `{ T }`, since the grammar has no
     /// `{ T, }`. `closer` is where the `}` is.
     fn write_table_type(&mut self, fields: &[TypeField<'ast>], closer: u32) {
         if fields.is_empty() {
@@ -183,7 +183,7 @@ impl<'ast> Formatter<'ast> {
             || field.span(),
             |f| match field {
                 TypeField::Named { access, name, value, .. } => {
-                    // Luau `read`/`write` access modifier sits before the name.
+                    // A `read`/`write` access modifier sits before the name.
                     if let Some(modifier) = access {
                         f.token(modifier.as_str());
                         f.space();
@@ -314,7 +314,7 @@ impl<'ast> Formatter<'ast> {
             || param.span,
             |f| {
                 f.name(param.name);
-                // Luau: `T...` marks a generic pack parameter.
+                // `T...` marks a generic pack parameter.
                 if param.is_pack {
                     f.token("...");
                 }
@@ -345,7 +345,7 @@ impl<'ast> Formatter<'ast> {
         );
     }
 
-    /// Type arguments, `<T, U>`, or a Luau instantiation's doubled
+    /// Type arguments, `<T, U>`, or an instantiation's doubled
     /// `<<T, U>>`, whose last `>` is at `closer`.
     ///
     /// An instantiation's arguments are `<T, U>` between an outer `<` and

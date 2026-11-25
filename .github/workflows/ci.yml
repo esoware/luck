@@ -65,13 +65,13 @@ jobs:
         with:
           tool: just@1.59.0
 
-      # The pins and directory names live in suite.rs and the extraction in download.rs, so keying on both refetches only when one changes.
+      # The pin and directory name live in suite.rs and the extraction in download.rs, so keying on both refetches only when one changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/luck_conformance/cache
-          key: conformance-suites-${{ hashFiles('crates/luck_conformance/src/suite.rs', 'crates/luck_benchmark_files/src/download.rs') }}
+          key: conformance-suite-${{ hashFiles('crates/luck_conformance/src/suite.rs', 'crates/luck_benchmark_files/src/download.rs') }}
 
-      - name: Run the suites
+      - name: Run the suite
         run: just conformance
 
       - name: Fail if a snapshot changed

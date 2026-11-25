@@ -1,9 +1,5 @@
 use luck_lexer::{LexResult, lex};
-use luck_token::{LuaVersion, TokenKind};
-
-pub(crate) fn lex_lua51(source: &str) -> LexResult {
-    lex(source.as_bytes(), LuaVersion::Lua51)
-}
+use luck_token::TokenKind;
 
 /// Every token's kind and text in `source`, which `result` lexed, but the
 /// closing `Eof`'s, errors or not.
@@ -19,32 +15,20 @@ pub(crate) fn token_texts<'source>(
         .collect()
 }
 
-/// Every token's kind and text but the closing `Eof`'s, after asserting
-/// `source` lexes clean under `version`.
-pub(crate) fn tokens_in(source: &str, version: LuaVersion) -> Vec<(TokenKind, &str)> {
-    let result = lex(source.as_bytes(), version);
+/// Every token's kind and text but the closing `Eof`, after asserting
+/// `source` lexes clean.
+pub(crate) fn tokens(source: &str) -> Vec<(TokenKind, &str)> {
+    let result = lex(source.as_bytes());
     assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
     token_texts(&result, source)
 }
 
-pub(crate) fn tokens(source: &str) -> Vec<(TokenKind, &str)> {
-    tokens_in(source, LuaVersion::Lua51)
-}
-
 /// Every token kind but the closing `Eof`, after asserting `source` lexes
-/// clean under `version`.
-pub(crate) fn kinds_in(source: &str, version: LuaVersion) -> Vec<TokenKind> {
-    tokens_in(source, version).into_iter().map(|(kind, _)| kind).collect()
-}
-
-pub(crate) fn first_kind_in(source: &str, version: LuaVersion) -> TokenKind {
-    kinds_in(source, version)[0]
-}
-
+/// clean.
 pub(crate) fn kinds(source: &str) -> Vec<TokenKind> {
-    kinds_in(source, LuaVersion::Lua51)
+    tokens(source).into_iter().map(|(kind, _)| kind).collect()
 }
 
 pub(crate) fn first_kind(source: &str) -> TokenKind {
-    first_kind_in(source, LuaVersion::Lua51)
+    kinds(source)[0]
 }

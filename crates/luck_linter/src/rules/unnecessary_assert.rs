@@ -50,46 +50,38 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) -> Option<Finding> 
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
+    const PASS: &[&str] = &[
         // Its `format` comes through the string metatable, which a program can
         // change.
-        ("assert(`a{x}`)", LuaTarget::Luau),
-        (
-            "\
+        "assert(`a{x}`)",
+        "\
 local x = 1
 assert(x)",
-            LuaTarget::Lua54,
-        ),
-        ("assert(next({}))", LuaTarget::Lua54),
-        (
-            "\
+        "assert(next({}))",
+        "\
 local assert = function() end
 assert(true)",
-            LuaTarget::Lua54,
-        ),
-        ("assert()", LuaTarget::Lua54),
+        "assert()",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("assert(true)", LuaTarget::Lua54),
-        // 0 is truthy in Lua.
-        ("assert(0)", LuaTarget::Lua54),
-        (r#"assert("always")"#, LuaTarget::Lua54),
-        ("assert({})", LuaTarget::Lua54),
-        (r#"assert(false, "unreachable")"#, LuaTarget::Lua54),
-        ("assert(nil)", LuaTarget::Lua54),
-        ("assert(1 + 1 == 2)", LuaTarget::Lua54),
-        ("assert(x or true)", LuaTarget::Lua54),
-        ("assert(not 1)", LuaTarget::Lua54),
-        (r#"assert"""#, LuaTarget::Lua54),
-        ("assert{}", LuaTarget::Lua54),
-        ("assert{ false }", LuaTarget::Lua54),
-        ("local ok = assert(true)", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "assert(true)",
+        // 0 is truthy in Luau.
+        "assert(0)",
+        r#"assert("always")"#,
+        "assert({})",
+        r#"assert(false, "unreachable")"#,
+        "assert(nil)",
+        "assert(1 + 1 == 2)",
+        "assert(x or true)",
+        "assert(not 1)",
+        r#"assert"""#,
+        "assert{}",
+        "assert{ false }",
+        "local ok = assert(true)",
     ];
 
     #[test]

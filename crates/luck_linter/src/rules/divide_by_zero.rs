@@ -8,9 +8,8 @@ use crate::diagnostic::Finding;
 use crate::number::has_number_value;
 use crate::rule::{Rule, declare_lint_rule};
 
-/// Float division by zero gives `inf` or `nan`, and from Lua 5.3 integer
-/// `%` and `//` by zero raise an error. Either way a divisor that's always
-/// zero is a mistake.
+/// Division by zero gives `inf` or `nan`, so a divisor that's always zero is
+/// a mistake.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DivideByZero;
 
@@ -22,7 +21,6 @@ impl Rule for DivideByZero {
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let kind = node.kind();
-        // Luau
         if let AstKind::CompoundAssignment(compound) = kind {
             if let Some(op_name) = divisive_op_name(compound.op.binary_op())
                 && has_number_value(&compound.expr, context, 0.0)
@@ -57,7 +55,6 @@ const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
     match op {
         BinOp::Div => Some("division"),
         BinOp::Mod => Some("modulo"),
-        // Lua 5.3+, Luau
         BinOp::FloorDiv => Some("floor division"),
         BinOp::Add
         | BinOp::Sub
@@ -71,61 +68,43 @@ const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
         | BinOp::Gt
         | BinOp::Ge
         | BinOp::And
-        | BinOp::Or
-        | BinOp::BitAnd
-        | BinOp::BitOr
-        | BinOp::BitXor
-        | BinOp::Shl
-        | BinOp::Shr => None,
+        | BinOp::Or => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local r = x / y", LuaTarget::Lua54),
-        ("local r = x / 2", LuaTarget::Lua54),
-        ("local r = x / 0x1p4", LuaTarget::Lua54),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "local r = x / y",
+        "local r = x / 2",
+        "local r = x / 0x10",
+        "\
 local x = 1
 x *= 0",
-            LuaTarget::Luau,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local r = x / 0", LuaTarget::Lua54),
-        ("local r = x % 0", LuaTarget::Lua54),
-        ("local r = x // 0", LuaTarget::Lua54),
-        // Dividing by 0.0 gives `inf` or `nan`, which is still a bug.
-        ("local r = x / 0.0", LuaTarget::Lua54),
-        ("local r = x / -0", LuaTarget::Lua54),
-        ("local r = x / -0.0", LuaTarget::Lua54),
-        ("local r = x / (1 - 1)", LuaTarget::Lua54),
-        ("local r = x / (0 * 5)", LuaTarget::Lua54),
-        ("local r = x / 0x0", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "local r = x / 0",
+        "local r = x % 0",
+        "local r = x // 0",
+        "local r = x / 0.0",
+        "local r = x / -0",
+        "local r = x / -0.0",
+        "local r = x / (1 - 1)",
+        "local r = x / (0 * 5)",
+        "local r = x / 0x0",
         // `x /= 0` divides by zero.
-        (
-            "\
+        "\
 local x = 1
 x /= 0",
-            LuaTarget::Luau,
-        ),
         // `0b0` is a literal zero.
-        ("local r = x / 0b0", LuaTarget::Luau),
-        ("local r = x / 0x0p0", LuaTarget::Lua54),
-        (
-            "\
+        "local r = x / 0b0",
+        "\
 local x = 1
 x %= 0_0",
-            LuaTarget::Luau,
-        ),
     ];
 
     #[test]

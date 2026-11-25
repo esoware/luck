@@ -47,10 +47,9 @@ impl NodeId {
 define_index_id!(ScopeId);
 define_index_id!(SymbolId);
 define_index_id!(ReferenceId);
-define_index_id!(LabelId);
 define_index_id!(
-    /// One of a chunk's distinct names, which every symbol, reference, and
-    /// label of that text shares.
+    /// One of a chunk's distinct names, which every symbol and reference of
+    /// that text shares.
     NameId
 );
 
@@ -64,7 +63,6 @@ mod tests {
         assert_eq!(size_of::<Option<ScopeId>>(), 4);
         assert_eq!(size_of::<Option<SymbolId>>(), 4);
         assert_eq!(size_of::<Option<ReferenceId>>(), 4);
-        assert_eq!(size_of::<Option<LabelId>>(), 4);
         assert_eq!(size_of::<Option<NameId>>(), 4);
     }
 

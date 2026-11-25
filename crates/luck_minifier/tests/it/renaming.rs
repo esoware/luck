@@ -1,11 +1,10 @@
 use luck_minifier::TransformConfig;
-use luck_token::LuaVersion;
 
-use crate::common::{minify_lua54, minify_renaming_globals, minify_with, reparses};
+use crate::common::{minify_default, minify_renaming_globals, minify_with, reparses};
 
 #[test]
 fn renames_locals() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local longname = 1
 return longname
@@ -16,13 +15,13 @@ return longname
 
 #[test]
 fn preserves_globals() {
-    let result = minify_lua54("print(42)\n");
+    let result = minify_default("print(42)\n");
     assert!(result.contains("print"));
 }
 
 #[test]
 fn preserves_method_names() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local t = {}
 t:insert(1)
@@ -33,7 +32,7 @@ t:insert(1)
 
 #[test]
 fn preserves_field_names() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local t = { foo = 1 }
 return t.foo
@@ -44,7 +43,7 @@ return t.foo
 
 #[test]
 fn shadowing_local_keeps_outer_global() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 print(1)
 do
@@ -66,7 +65,6 @@ local longname = 1
 print(longname)
 return longname
 ",
-        LuaVersion::Lua54,
         &config,
     );
     assert!(result.contains("longname"), "Rename should be disabled: {result}");
@@ -81,7 +79,7 @@ local function foo(a, b)
 end
 return foo(1, 2)
 ";
-    let result = minify_lua54(source);
+    let result = minify_default(source);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.len() < source.len(), "Should be shorter: {result}");
     assert!(!result.contains("foo"), "Local function name 'foo' should be renamed: {result}");
@@ -100,14 +98,14 @@ for i = 1, 20 do
 end
 return results
 ";
-    let result = minify_lua54(source);
+    let result = minify_default(source);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.contains("table"), "Global 'table' missing: {result}");
     assert!(result.contains("insert"), "Field 'insert' missing: {result}");
 }
 
 #[test]
-fn captured_upvalue_renames_to_valid_lua() {
+fn captured_upvalue_renames_to_valid_luau() {
     let source = "\
 local x = 1
 local function inner()
@@ -115,7 +113,7 @@ local function inner()
 end
 return inner()
 ";
-    let result = minify_lua54(source);
+    let result = minify_default(source);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
 }
 
@@ -129,7 +127,7 @@ do
 end
 return x
 ";
-    let result = minify_lua54(source);
+    let result = minify_default(source);
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(result.contains("print"), "Global 'print' must be preserved: {result}");
 }
@@ -169,82 +167,9 @@ print(g)
             "function g.x()end g=1 print(g)",
         ),
     ] {
-        let result = minify_renaming_globals(source, LuaVersion::Lua54);
+        let result = minify_renaming_globals(source);
         assert_eq!(result, expected, "source: {source}");
-        assert_eq!(
-            minify_renaming_globals(&result, LuaVersion::Lua54),
-            result,
-            "must be idempotent"
-        );
-    }
-}
-
-#[test]
-fn rename_globals_keeps_env() {
-    for (source, expected) in [
-        (
-            "\
-_ENV = {print = print}
-print(1)
-",
-            "_ENV={print=print}print(1)",
-        ),
-        (
-            "\
-local _ENV = {print = print}
-print(1)
-",
-            "local _ENV={print=print}print(1)",
-        ),
-        (
-            "for _, _ENV in ipairs({{print = print}}) do print(1) end\n",
-            "for e,_ENV in ipairs{{print=print}}do print(1)end",
-        ),
-    ] {
-        let result = minify_renaming_globals(source, LuaVersion::Lua54);
-        assert_eq!(result, expected, "source: {source}");
-        let second = minify_renaming_globals(&result, LuaVersion::Lua54);
-        assert_eq!(second, result, "must be idempotent");
-    }
-}
-
-#[test]
-fn rename_globals_keeps_names_a_global_declaration_declares() {
-    for (source, expected) in [
-        (
-            "\
-global g
-g = 1
-",
-            "global g g=1",
-        ),
-        (
-            "\
-g = 1
-global g
-",
-            "g=1 global g",
-        ),
-        (
-            "\
-g = 1
-global function g() end
-",
-            "g=1 global function g()end",
-        ),
-        (
-            "\
-function g() end
-global g
-g()
-",
-            "function g()end global g g()",
-        ),
-    ] {
-        let result = minify_renaming_globals(source, LuaVersion::Lua55);
-        assert_eq!(result, expected, "source: {source}");
-        let second = minify_renaming_globals(&result, LuaVersion::Lua55);
-        assert_eq!(second, result, "must be idempotent");
+        assert_eq!(minify_renaming_globals(&result), result, "must be idempotent");
     }
 }
 
@@ -278,9 +203,9 @@ print(y)
             "do local e=f()print(e)end function e()end print(e)",
         ),
     ] {
-        let result = minify_renaming_globals(source, LuaVersion::Lua54);
+        let result = minify_renaming_globals(source);
         assert_eq!(result, expected, "source: {source}");
-        let second = minify_renaming_globals(&result, LuaVersion::Lua54);
+        let second = minify_renaming_globals(&result);
         assert_eq!(second, result, "must be idempotent");
     }
 }

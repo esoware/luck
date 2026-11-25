@@ -7,7 +7,7 @@ use luck_ast::MAX_NESTING_DEPTH;
 use luck_testgen::sources_at_the_nesting_cap;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, run, stderr_text, stdout_text, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 /// 0 when the command found nothing, 1 when it found problems, and anything
 /// else, such as a stack overflow's exit code, a failure.
@@ -19,11 +19,10 @@ fn assert_ran(output: &Assert) {
 #[test]
 fn every_command_gets_through_input_nested_to_the_cap() {
     let directory = TempDir::new().expect("directory");
-    write_file(directory.path(), "luck.json", r#"{"lua": "lua54", "luau": "luau"}"#);
+    write_file(directory.path(), "luck.json", "{}");
     let mut files = Vec::new();
-    for (i, (version, source)) in sources_at_the_nesting_cap().into_iter().enumerate() {
-        let extension = if version.is_luau() { "luau" } else { "lua" };
-        let name = format!("src/deep{i}.{extension}");
+    for (i, source) in sources_at_the_nesting_cap().into_iter().enumerate() {
+        let name = format!("src/deep{i}.luau");
         write_file(directory.path(), &name, &source);
         files.push(name);
     }
@@ -61,7 +60,7 @@ return sum, text, either, field
         ":m()".repeat(LINKS),
     );
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", &source);
+    write_file(directory.path(), "main.luau", &source);
     directory
 }
 
@@ -69,7 +68,7 @@ return sum, text, either, field
 fn lint_survives_long_runs() {
     let directory = long_runs_project();
 
-    let output = run(directory.path(), &["lint", "main.lua"]);
+    let output = run(directory.path(), &["lint", "main.luau"]);
 
     assert_eq!(
         output.status.code(),
@@ -83,7 +82,7 @@ fn lint_survives_long_runs() {
 fn minify_survives_long_runs() {
     let directory = long_runs_project();
 
-    let output = run(directory.path(), &["minify", "main.lua", "-o", "minified.lua"]);
+    let output = run(directory.path(), &["minify", "main.luau", "-o", "minified.luau"]);
 
     assert_eq!(
         output.status.code(),
@@ -97,7 +96,7 @@ fn minify_survives_long_runs() {
 fn bundle_survives_long_runs() {
     let directory = long_runs_project();
 
-    let output = run(directory.path(), &["bundle", "main.lua", "-o", "bundle.lua"]);
+    let output = run(directory.path(), &["bundle", "main.luau", "-o", "bundle.luau"]);
 
     assert_eq!(
         output.status.code(),
@@ -111,7 +110,7 @@ fn bundle_survives_long_runs() {
 fn fmt_survives_long_runs() {
     let directory = long_runs_project();
 
-    let output = run(directory.path(), &["fmt", "main.lua"]);
+    let output = run(directory.path(), &["fmt", "main.luau"]);
 
     assert_eq!(
         output.status.code(),
@@ -124,9 +123,6 @@ fn fmt_survives_long_runs() {
 /// One sibling list of each kind. A list is one level of nesting however long
 /// it is, and 20,000 `elseif`s overflowed `minify`'s stack when it recursed
 /// per clause.
-///
-/// A function holds at most 200 locals, so the one with 20,000 parameters is
-/// in `params.lua`, apart from the valid lists in `main.lua`.
 fn long_lists_project() -> TempDir {
     const ITEMS: usize = 20_000;
     let numbered = |template: &str| -> String {
@@ -147,17 +143,12 @@ local t = {{{}}}
         numbered("\nelseif a == # then a()"),
         "\nelseif false then a()".repeat(ITEMS),
         numbered("k# = a, "),
-        numbered(
-            "\
-goto l#
-::l#::
-"
-        ),
+        numbered("a(#)\n"),
     );
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", &source);
+    write_file(directory.path(), "main.luau", &source);
     let params = format!("local function f(_{}) return _ end\nreturn f\n", numbered(", _#"));
-    write_file(directory.path(), "params.lua", &params);
+    write_file(directory.path(), "params.luau", &params);
     directory
 }
 
@@ -167,12 +158,13 @@ fn every_command_survives_long_lists() {
 
     // `fmt` rewrites the file, so it goes last.
     for args in [
-        &["lint", "main.lua"][..],
-        &["minify", "main.lua", "-o", "minified.lua"],
-        &["bundle", "main.lua", "-o", "bundle.lua"],
-        &["fmt", "main.lua"],
-        &["minify", "params.lua", "-o", "minified_params.lua"],
-        &["fmt", "params.lua"],
+        &["lint", "main.luau"][..],
+        &["minify", "main.luau", "-o", "minified.luau"],
+        &["bundle", "main.luau", "-o", "bundle.luau"],
+        &["fmt", "main.luau"],
+        &["lint", "params.luau"],
+        &["minify", "params.luau", "-o", "minified_params.luau"],
+        &["fmt", "params.luau"],
     ] {
         let output = run(directory.path(), args);
         assert_eq!(
@@ -183,23 +175,15 @@ fn every_command_survives_long_lists() {
             stderr_text(&output)
         );
     }
-    let output = run(directory.path(), &["lint", "params.lua"]);
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_text(&output));
-    let report = format!("{}{}", stdout_text(&output), stderr_text(&output));
-    assert!(
-        report.contains("too many local variables (limit is 200) in function")
-            && report.contains("1 error(s), 0 warning(s)"),
-        "the compiler's limit is the one problem:\n{report}"
-    );
 }
 
-/// A project whose `deep.lua` holds `1` inside `tables` table constructors.
+/// A project whose `deep.luau` holds `1` inside `tables` table constructors.
 /// Its own block is a level, and its wrapper in a bundle adds two more.
 fn deep_module_project(tables: usize) -> TempDir {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "return require(\"deep\")\n");
+    write_file(directory.path(), "main.luau", "return require(\"./deep\")\n");
     let deep = format!("return {}1{}\n", "{".repeat(tables), "}".repeat(tables));
-    write_file(directory.path(), "deep.lua", &deep);
+    write_file(directory.path(), "deep.luau", &deep);
     directory
 }
 
@@ -209,11 +193,11 @@ fn bundle_at_the_nesting_cap_reads_back() {
     let directory = deep_module_project(MAX_NESTING_DEPTH - 3);
 
     for args in [
-        &["bundle", "main.lua", "-o", "bundle.lua"][..],
-        &["bundle", "main.lua", "--minify", "-o", "minified.lua"],
-        &["lint", "bundle.lua", "minified.lua"],
-        &["check", "bundle.lua", "minified.lua"],
-        &["fmt", "bundle.lua", "minified.lua"],
+        &["bundle", "main.luau", "-o", "bundle.luau"][..],
+        &["bundle", "main.luau", "--minify", "-o", "minified.luau"],
+        &["lint", "bundle.luau", "minified.luau"],
+        &["check", "bundle.luau", "minified.luau"],
+        &["fmt", "bundle.luau", "minified.luau"],
     ] {
         let output = run(directory.path(), args);
         assert_eq!(
@@ -231,14 +215,14 @@ fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
     let directory = deep_module_project(MAX_NESTING_DEPTH - 1);
     // The first table the wrapper pushes past the cap follows `return ` and
     // the tables before it.
-    let first_too_deep = format!("deep.lua:1:{} ", "return ".len() + MAX_NESTING_DEPTH - 2);
+    let first_too_deep = format!("deep.luau:1:{} ", "return ".len() + MAX_NESTING_DEPTH - 2);
 
-    for args in [&["bundle", "main.lua"][..], &["bundle", "main.lua", "--minify"]] {
+    for args in [&["bundle", "main.luau"][..], &["bundle", "main.luau", "--minify"]] {
         let output = run(directory.path(), args);
         let stderr = stderr_text(&output);
         assert_eq!(output.status.code(), Some(1), "`{}`:\n{stderr}", args.join(" "));
         assert!(stderr.contains("E013"), "{stderr}");
         assert!(stderr.contains(&first_too_deep), "{stderr}");
-        assert!(!stderr.contains("main.lua:"), "{stderr}");
+        assert!(!stderr.contains("main.luau:"), "{stderr}");
     }
 }

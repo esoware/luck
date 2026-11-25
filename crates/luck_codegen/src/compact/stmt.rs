@@ -1,9 +1,8 @@
 use luck_ast::{
-    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, Expression,
-    FunctionAttribute, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction,
-    GlobalStar, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
-    LocalFunctionKind, NumericFor, Parameter, RepeatLoop, Slot, Statement, TypeDeclaration,
-    TypeDeclarationValue, WhileLoop,
+    Assignment, Block, CompoundAssignment, DoBlock, Expression, FunctionAttribute, FunctionBody,
+    FunctionDecl, GenericFor, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
+    LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement, TypeDeclaration,
+    TypeDeclarationValue, TypedName, WhileLoop,
 };
 
 use super::Printer;
@@ -40,23 +39,8 @@ impl Printer {
             Statement::LocalAssignment(local) => self.print_local_assignment(local),
             Statement::Return(return_stmt) => self.print_return(&return_stmt.exprs),
             Statement::Break(_) => self.piece("break"),
-            // Luau
             Statement::Continue(_) => self.piece("continue"),
-            // Lua 5.2+
-            Statement::Goto(goto) => self.print_goto(goto.name.text.as_str()),
-            // Lua 5.2+
-            Statement::Label(label) => self.print_label(label.name.text.as_str()),
-            // Lua 5.5
-            Statement::GlobalDeclaration(declaration) => {
-                self.print_global_declaration(declaration);
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(function) => self.print_global_function(function),
-            // Lua 5.5
-            Statement::GlobalStar(global_star) => self.print_global_star(global_star),
-            // Luau
             Statement::CompoundAssignment(compound) => self.print_compound_assignment(compound),
-            // Luau
             Statement::TypeDeclaration(declaration) => self.print_type_declaration(declaration),
             Statement::Error(_) => {}
         }
@@ -109,11 +93,7 @@ impl Printer {
 
     fn print_numeric_for(&mut self, numeric_for: &NumericFor<'_>) {
         self.piece("for");
-        self.name(numeric_for.name.text.as_str());
-        if let Some(ty) = &numeric_for.type_annotation {
-            self.piece(":");
-            self.print_type(ty);
-        }
+        self.print_typed_name(&numeric_for.variable);
         self.piece("=");
         self.print_free_expr(&numeric_for.start);
         self.piece(",");
@@ -129,7 +109,7 @@ impl Printer {
 
     fn print_generic_for(&mut self, generic_for: &GenericFor<'_>) {
         self.piece("for");
-        self.list(&generic_for.names, ",", Self::print_param);
+        self.list(&generic_for.names, ",", Self::print_typed_name);
         self.piece("in");
         self.list(&generic_for.exprs, ",", Self::print_free_expr);
         self.piece("do");
@@ -154,9 +134,7 @@ impl Printer {
         self.print_function_attributes(&local_function.attributes);
         match local_function.kind {
             LocalFunctionKind::Local => self.piece("local function"),
-            // Luau
             LocalFunctionKind::Const => self.piece("const function"),
-            // Luau
             LocalFunctionKind::Export => self.piece("export function"),
         }
         self.name(local_function.name.text.as_str());
@@ -166,57 +144,20 @@ impl Printer {
     fn print_local_assignment(&mut self, local: &LocalAssignment<'_>) {
         match local.kind {
             LocalAssignmentKind::Local => self.piece("local"),
-            // Luau
             LocalAssignmentKind::Const => self.piece("const"),
-            // Luau
             LocalAssignmentKind::ExportLocal => self.piece("export local"),
-            // Luau
             LocalAssignmentKind::ExportConst => self.piece("export const"),
         }
-        if let Some(attribute) = &local.attribute {
-            self.print_attribute(attribute);
+        self.list(&local.names, ",", Self::print_typed_name);
+        if !local.exprs.is_empty() {
+            self.piece("=");
+            self.list(&local.exprs, ",", Self::print_free_expr);
         }
-        self.list(&local.names, ",", Self::print_attributed_name);
-        self.print_values(&local.exprs);
     }
 
     fn print_return(&mut self, exprs: &[Expression<'_>]) {
         self.piece("return");
         self.list(exprs, ",", Self::print_free_expr);
-    }
-
-    fn print_goto(&mut self, label: &str) {
-        self.piece("goto");
-        self.name(label);
-    }
-
-    fn print_label(&mut self, label: &str) {
-        self.piece("::");
-        self.name(label);
-        self.piece("::");
-    }
-
-    fn print_global_declaration(&mut self, declaration: &GlobalDeclaration<'_>) {
-        self.piece("global");
-        if let Some(attribute) = &declaration.attribute {
-            self.print_attribute(attribute);
-        }
-        self.list(&declaration.names, ",", Self::print_attributed_name);
-        self.print_values(&declaration.exprs);
-    }
-
-    fn print_global_function(&mut self, function: &GlobalFunction<'_>) {
-        self.piece("global function");
-        self.name(function.name.text.as_str());
-        self.print_function_body(&function.body);
-    }
-
-    fn print_global_star(&mut self, global_star: &GlobalStar<'_>) {
-        self.piece("global");
-        if let Some(attribute) = &global_star.attribute {
-            self.print_attribute(attribute);
-        }
-        self.piece("*");
     }
 
     fn print_compound_assignment(&mut self, compound: &CompoundAssignment<'_>) {
@@ -246,32 +187,16 @@ impl Printer {
         }
     }
 
-    fn print_values(&mut self, exprs: &[Expression<'_>]) {
-        if !exprs.is_empty() {
-            self.piece("=");
-            self.list(exprs, ",", Self::print_free_expr);
-        }
-    }
-
-    fn print_attributed_name(&mut self, attributed: &AttributedName<'_>) {
-        self.name(attributed.name.text.as_str());
-        if let Some(ty) = &attributed.type_annotation {
+    fn print_typed_name(&mut self, typed_name: &TypedName<'_>) {
+        self.name(typed_name.name.text.as_str());
+        if let Some(ty) = &typed_name.type_annotation {
             self.piece(":");
             self.print_type(ty);
         }
-        if let Some(attribute) = &attributed.attribute {
-            self.print_attribute(attribute);
-        }
     }
 
-    fn print_attribute(&mut self, attribute: &Attribute<'_>) {
-        self.piece("<");
-        self.name(attribute.name.text.as_str());
-        self.piece(">");
-    }
-
-    /// Luau: only the bracketed form takes arguments, and a lone table or
-    /// string needs no parentheses there, as a call's doesn't.
+    /// Only the bracketed form takes arguments, and a lone table or string
+    /// needs no parentheses there, as a call's doesn't.
     pub(super) fn print_function_attributes(&mut self, attributes: &[FunctionAttribute<'_>]) {
         for attribute in attributes {
             if let Some(args) = &attribute.args {
@@ -299,15 +224,12 @@ impl Printer {
             self.print_generic_type_list(generics);
         }
         self.piece("(");
-        self.list(&body.params, ",", Self::print_param);
+        self.list(&body.params, ",", Self::print_typed_name);
         if let Some(vararg) = &body.vararg {
             if !body.params.is_empty() {
                 self.piece(",");
             }
             self.piece("...");
-            if let Some(name) = &vararg.name {
-                self.name(name.text.as_str());
-            }
             if let Some(ty) = &vararg.type_annotation {
                 self.piece(":");
                 self.print_type(ty);
@@ -320,14 +242,6 @@ impl Printer {
         }
         self.print_block(&body.block);
         self.piece("end");
-    }
-
-    fn print_param(&mut self, param: &Parameter<'_>) {
-        self.name(param.name.text.as_str());
-        if let Some(ty) = &param.type_annotation {
-            self.piece(":");
-            self.print_type(ty);
-        }
     }
 }
 
@@ -346,11 +260,9 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::RepeatLoop(_)
         | Statement::LocalAssignment(_)
         | Statement::Return(_)
-        | Statement::GlobalDeclaration(_)
         | Statement::CompoundAssignment(_)
         // Prints nothing, so whatever it follows ends the output.
         | Statement::Error(_) => true,
-        // Luau
         Statement::TypeDeclaration(declaration) => {
             matches!(declaration.value, TypeDeclarationValue::Alias(_))
         }
@@ -362,10 +274,6 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
         | Statement::Break(_)
-        | Statement::Continue(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_) => false,
+        | Statement::Continue(_) => false,
     }
 }

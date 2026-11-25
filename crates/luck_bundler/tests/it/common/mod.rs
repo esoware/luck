@@ -7,15 +7,10 @@ use luck_bundler::{Bundle, BundleOptions, DynamicRequire, bundle, bundle_minifie
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_minifier::TransformConfig;
 use luck_resolver::to_slash_lossy;
-use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
 use tempfile::TempDir;
 
-pub(crate) const LUA_REQUIRE_UTIL: &str = "\
-local util = require(\"util\")
-print(util)
-";
-pub(crate) const LUAU_REQUIRE_UTIL: &str = "\
+pub(crate) const REQUIRE_UTIL: &str = "\
 local util = require(\"./util\")
 print(util)
 ";
@@ -73,7 +68,7 @@ pub(crate) fn bundle_both(
             let bytes = &text_bundle.output;
             let output = String::from_utf8_lossy(bytes);
             let allocator = Allocator::new();
-            let expected = luck_minifier::minify(&allocator, bytes, options.version, &transforms)
+            let expected = luck_minifier::minify(&allocator, bytes, &transforms)
                 .unwrap_or_else(|errors| panic!("the bundle must parse: {errors:?}\n{output}"));
             assert_eq!(
                 minified.output, expected,
@@ -103,31 +98,23 @@ pub(crate) fn write_project(files: &[(&str, &[u8])]) -> TempDir {
 pub(crate) fn bundle_project(
     directory: &Path,
     entry: &str,
-    version: LuaVersion,
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
-    let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
     bundle_both(
         &directory.join(entry),
-        &BundleOptions {
-            version,
-            search_paths: &search_paths,
-            project_root: directory,
-            dynamic_require: DynamicRequire::default(),
-        },
+        &BundleOptions { project_root: directory, dynamic_require: DynamicRequire::default() },
     )
 }
 
 pub(crate) fn bundle_files(
     files: &[(&str, &[u8])],
     entry: &str,
-    version: LuaVersion,
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
-    bundle_project(write_project(files).path(), entry, version)
+    bundle_project(write_project(files).path(), entry)
 }
 
-pub(crate) fn assert_reparses(output: &[u8], version: LuaVersion) {
+pub(crate) fn assert_reparses(output: &[u8]) {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, output, version);
+    let parsed = luck_parser::parse(&allocator, output);
     assert!(
         parsed.errors.is_empty(),
         "bundle must reparse: {:?}\n{}",

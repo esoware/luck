@@ -1,4 +1,4 @@
-//! Each stage's results over a suite, summarized and listed the way oxc's
+//! Each stage's results over the suite, summarized and listed the way oxc's
 //! `tasks/coverage` snapshots them.
 
 use std::collections::BTreeMap;
@@ -63,19 +63,19 @@ impl TestResult {
     }
 }
 
-/// A stage's result on the file at `path`.
+/// A stage's result on the file `name`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CoverageResult<'a> {
-    pub path: &'a str,
+    pub name: &'a str,
     pub result: &'a TestResult,
 }
 
-/// A stage's snapshot of a suite: the summary the console shows, then the
+/// A stage's snapshot of the suite: the summary the console shows, then the
 /// details.
 #[derive(Debug)]
 pub(crate) struct Snapshot {
-    /// The stage and the suite, such as `parser_lua54`, which name the file.
-    name: String,
+    /// The stage, such as `parser`, which names the file.
+    name: &'static str,
     pub summary: String,
     details: String,
 }
@@ -98,7 +98,7 @@ impl fmt::Display for Snapshot {
 /// A stage's snapshot: how many of the files the reference interpreter
 /// compiles luck parsed and passed, and how many of the ones it rejects luck
 /// rejected, then the [`failures`].
-pub(crate) fn coverage(name: String, results: &[CoverageResult<'_>]) -> Snapshot {
+pub(crate) fn coverage(name: &'static str, results: &[CoverageResult<'_>]) -> Snapshot {
     let (negatives, positives): (Vec<&TestResult>, Vec<&TestResult>) =
         results.iter().map(|coverage| coverage.result).partition(|result| result.is_negative());
     let mut summary = format!("{name} Summary:\n");
@@ -121,10 +121,10 @@ fn percent(count: usize, all: usize) -> f64 {
 }
 
 /// Every result that didn't pass, then every file luck rejected as it should
-/// have, with its first error, each in the order given, which is path order.
+/// have, with its first error, each in the order given, which is name order.
 fn failures(results: &[CoverageResult<'_>]) -> String {
     let mut listed = String::new();
-    for &CoverageResult { path, result } in results {
+    for &CoverageResult { name, result } in results {
         let (label, detail) = match result {
             TestResult::Passed | TestResult::CorrectError(_) => continue,
             TestResult::IncorrectlyPassed => ("Expect Syntax Error: ", None),
@@ -139,7 +139,7 @@ fn failures(results: &[CoverageResult<'_>]) -> String {
             }
         };
         listed.push_str(label);
-        listed.push_str(path);
+        listed.push_str(name);
         listed.push('\n');
         if let Some(text) = detail {
             listed.push_str(text);
@@ -147,10 +147,10 @@ fn failures(results: &[CoverageResult<'_>]) -> String {
         }
         listed.push('\n');
     }
-    for &CoverageResult { path, result } in results {
+    for &CoverageResult { name, result } in results {
         if let TestResult::CorrectError(error) = result {
             listed.push_str("Correct Error: ");
-            listed.push_str(path);
+            listed.push_str(name);
             listed.push('\n');
             listed.push_str(error);
             listed.push_str("\n\n");
@@ -170,16 +170,19 @@ pub(crate) struct LintLine {
 /// The linter's snapshot: how many files it ran on and each rule's count, then
 /// the files it couldn't run on, and every diagnostic of the others, by file in
 /// the order given.
-pub(crate) fn lint(name: String, files: &[(&str, &Result<Vec<LintLine>, TestResult>)]) -> Snapshot {
+pub(crate) fn lint(
+    name: &'static str,
+    files: &[(&str, &Result<Vec<LintLine>, TestResult>)],
+) -> Snapshot {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut not_linted = Vec::new();
     let mut listed = String::new();
-    for &(path, linted) in files {
+    for &(file, linted) in files {
         match linted {
-            Err(result) => not_linted.push(CoverageResult { path, result }),
+            Err(result) => not_linted.push(CoverageResult { name: file, result }),
             Ok(diagnostics) if diagnostics.is_empty() => {}
             Ok(diagnostics) => {
-                let _ = writeln!(listed, "{path}");
+                let _ = writeln!(listed, "{file}");
                 for LintLine { rule, text } in diagnostics {
                     *counts.entry(rule).or_default() += 1;
                     let _ = writeln!(listed, "{text}");

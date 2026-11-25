@@ -3,7 +3,7 @@
 # Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).
 # Each [enums.<Type>] is an Enum-shaped namespace of the Enum global, and
 # each item an EnumItem-shaped read-only constant, which `just stdlib`
-# layers over luau_roblox.toml.
+# layers over roblox.toml.
 
 [enums.AccessModifierType]
 items = [

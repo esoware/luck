@@ -8,14 +8,14 @@ use std::thread;
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_diagnostics::Diagnostic;
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
-use luck_token::{CommentKind, LuaVersion, leading_hot_comments};
+use luck_token::{CommentKind, leading_hot_comments};
 use memchr::memmem;
 use rayon::Yield;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{Analysis, StaticRequire, analyze};
 use crate::dynamic_require::DynamicRequire;
-use crate::graph::{BundleOptions, MAX_MODULE_COUNT};
+use crate::graph::MAX_MODULE_COUNT;
 use crate::module::ModuleInfo;
 use crate::plan::PREFIX_STEM;
 use crate::relative_path::make_relative;
@@ -58,25 +58,16 @@ pub(crate) fn parse_module<'ast>(
     path: PathBuf,
     relative_path: String,
     source: &'ast [u8],
-    version: LuaVersion,
     dynamic_require: DynamicRequire,
 ) -> ParsedModule<'ast> {
-    let parsed = luck_parser::parse(allocator, source, version);
+    let parsed = luck_parser::parse(allocator, source);
     let mut errors = parsed.errors;
-    let Analysis {
-        requires,
-        dynamic_callees,
-        diags,
-        has_vararg_read,
-        has_global_arg_read,
-        has_env_rebinding,
-        max_function_upvalues,
-        exports,
-    } = analyze(allocator, &parsed.chunk, parsed.counts, source, dynamic_require);
+    let Analysis { requires, diags, exports } =
+        analyze(allocator, &parsed.chunk, parsed.counts, source, dynamic_require);
     let (analysis_errors, warnings): (Vec<Diagnostic>, Vec<Diagnostic>) =
         diags.into_iter().partition(Diagnostic::is_error);
     errors.extend(analysis_errors);
-    let hot_comments = leading_hot_comments(&parsed.comments, parsed.chunk.block.span.start)
+    let hot_comments = leading_hot_comments(&parsed.comments, parsed.chunk.span.start)
         .map(|comment| comment.span)
         .collect();
     let shebang = parsed
@@ -88,16 +79,11 @@ pub(crate) fn parse_module<'ast>(
         path,
         relative_path,
         source,
-        block: parsed.chunk.block,
+        block: parsed.chunk,
         nesting_depth: parsed.nesting_depth,
         dependencies: Vec::new(),
-        dynamic_callees,
         hot_comments,
         shebang,
-        has_vararg_read,
-        has_global_arg_read,
-        has_env_rebinding,
-        max_function_upvalues,
         has_prefix_stem: memmem::find(source, PREFIX_STEM.as_bytes()).is_some(),
         exports,
     };
@@ -107,7 +93,6 @@ pub(crate) fn parse_module<'ast>(
 /// What reading and resolving modules takes, which every task shares.
 #[derive(Clone, Copy)]
 pub(crate) struct Reader<'input> {
-    version: LuaVersion,
     dynamic_require: DynamicRequire,
     /// From [`absolute_project_root`](crate::relative_path::absolute_project_root).
     project_root: &'input Path,
@@ -116,16 +101,11 @@ pub(crate) struct Reader<'input> {
 
 impl<'input> Reader<'input> {
     pub(crate) const fn new(
-        options: &BundleOptions<'_>,
+        dynamic_require: DynamicRequire,
         project_root: &'input Path,
         resolver: &'input Resolver,
     ) -> Self {
-        Self {
-            version: options.version,
-            dynamic_require: options.dynamic_require,
-            project_root,
-            resolver,
-        }
+        Self { dynamic_require, project_root, resolver }
     }
 
     /// Reads and parses the module at `path` into `allocator`.
@@ -147,7 +127,6 @@ impl<'input> Reader<'input> {
             path.to_path_buf(),
             make_relative(path, self.project_root),
             source,
-            self.version,
             self.dynamic_require,
         ))
     }

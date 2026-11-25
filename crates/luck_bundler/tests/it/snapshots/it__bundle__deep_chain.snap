@@ -3,31 +3,37 @@ source: crates/luck_bundler/tests/it/bundle.rs
 expression: output
 ---
 local __luck_modules={}
-local __luck_loaded=type(package)=="table" and type(package.loaded)=="table" and package.loaded or {}
-local __luck_preload=type(package)=="table" and type(package.preload)=="table" and package.preload or {}
-local __luck_paths={}
-local function __luck_require(name)
-local value=__luck_loaded[name]
-if value then return value end
-local loaderdata
-local loader=__luck_preload[name]
-if loader then
-loaderdata=":preload:"
-else
-loader=__luck_modules[name]
-loaderdata=__luck_paths[name]
+local __luck_loaded={}
+local __luck_loading={}
+local function __luck_result(...)
+if select("#",...)~=1 then
+error("luck bundle: module must return a single value",0)
 end
-value=loader(name,loaderdata)
-if value~=nil then __luck_loaded[name]=value end
-value=__luck_loaded[name]
-if value==nil then
-value=true
-__luck_loaded[name]=value
+return ...
 end
-return value,loaderdata
+local function __luck_require(id)
+local value=__luck_loaded[id]
+if value~=nil then return value end
+local chunk=__luck_modules[id]
+if __luck_loading[id] then
+local level=2
+local caller=debug.info(level,"f")
+while caller do
+if caller==chunk then
+error("luck bundle: module #"..id.." was required recursively while it loads",2)
 end
--- module "e": e.lua
-__luck_modules["e"]=function(...)
+level+=1
+caller=debug.info(level,"f")
+end
+end
+__luck_loading[id]=true
+value=__luck_result(chunk())
+__luck_loading[id]=nil
+__luck_loaded[id]=value
+return value
+end
+-- module #1: e.luau
+__luck_modules[1]=function(...)
 local e = {}
 
 function e.compute()
@@ -36,10 +42,9 @@ end
 
 return e
 end
-__luck_paths["e"]="e.lua"
--- module "d": d.lua
-__luck_modules["d"]=function(...)
-local e = __luck_require("e")
+-- module #2: d.luau
+__luck_modules[2]=function(...)
+local e = __luck_require(1)
 
 local d = {}
 
@@ -49,10 +54,9 @@ end
 
 return d
 end
-__luck_paths["d"]="d.lua"
--- module "c": c.lua
-__luck_modules["c"]=function(...)
-local d = __luck_require("d")
+-- module #3: c.luau
+__luck_modules[3]=function(...)
+local d = __luck_require(2)
 
 local c = {}
 
@@ -62,10 +66,9 @@ end
 
 return c
 end
-__luck_paths["c"]="c.lua"
--- module "b": b.lua
-__luck_modules["b"]=function(...)
-local c = __luck_require("c")
+-- module #4: b.luau
+__luck_modules[4]=function(...)
+local c = __luck_require(3)
 
 local b = {}
 
@@ -75,9 +78,8 @@ end
 
 return b
 end
-__luck_paths["b"]="b.lua"
 local __luck_entry=function(...)
-local b = __luck_require("b")
+local b = __luck_require(4)
 
 local result = b.compute()
 print(result)

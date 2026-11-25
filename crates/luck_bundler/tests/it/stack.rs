@@ -10,21 +10,14 @@ use crate::common::{bundle_files, codes};
 
 #[test]
 fn bundling_fits_the_smallest_stack() {
-    on_the_smallest_stack(deep_and_long_sources(), |source, version| {
-        let (entry_name, module_name, require) = if version.is_luau() {
-            ("main.luau", "m.luau", "require(\"./m\")")
-        } else {
-            ("main.lua", "m.lua", "require(\"m\")")
-        };
-        let entry_source = format!(
-            "\
-local m = {require}
+    on_the_smallest_stack(deep_and_long_sources(), |source| {
+        let entry_source = "\
+local m = require(\"./m\")
 print(m)
-"
-        );
-        let files = [(module_name, source.as_bytes()), (entry_name, entry_source.as_bytes())];
+";
+        let files = [("m.luau", source.as_bytes()), ("main.luau", entry_source.as_bytes())];
         // A module nested to the cap passes it inside its wrapper.
-        if let Err(errors) = bundle_files(&files, entry_name, version) {
+        if let Err(errors) = bundle_files(&files, "main.luau") {
             assert!(codes(&errors).iter().all(|&code| code == "E013"), "{errors:?}");
         }
     });

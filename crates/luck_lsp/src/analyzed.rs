@@ -41,17 +41,13 @@ self_cell!(
 );
 
 impl Analyzed {
-    /// Parses `text` in `arena` as `stdlib`'s target, keeping its tokens, and
-    /// has `linter` analyze it against `stdlib`.
+    /// Parses `text` in `arena`, keeping its tokens, and has `linter` analyze
+    /// it against `stdlib`.
     pub(crate) fn new(text: Arc<str>, stdlib: Stdlib, linter: &Linter, arena: Arena) -> Self {
         let owner = Source { text, arena: MutBorrow::new(arena), stdlib };
         let parsed = ParsedCell::new(owner, |source| {
             let lent: &Arena = source.arena.borrow_mut();
-            luck_parser::parse_with_tokens(
-                &lent.allocator,
-                source.text.as_bytes(),
-                source.stdlib.target().version(),
-            )
+            luck_parser::parse_with_tokens(&lent.allocator, source.text.as_bytes())
         });
         let analyzed = AnalyzedCell::new(parsed, |cell| {
             linter.analyze(cell.borrow_dependent(), cell.borrow_owner().stdlib.library())
@@ -131,13 +127,13 @@ mod tests {
     use std::thread;
 
     use luck_linter::LintConfig;
-    use luck_token::LuaTarget;
+    use luck_stdlib::Variant;
 
     use super::*;
 
     fn analyzed(text: &str, spare: &Arc<SpareArena>) -> Analyzed {
         let linter = Linter::new(LintConfig::default());
-        let stdlib = Stdlib::new(LuaTarget::Lua54);
+        let stdlib = Stdlib::new(Variant::Standalone);
         Analyzed::new(Arc::from(text), stdlib, &linter, Arena::from_spare(spare))
     }
 

@@ -1,10 +1,10 @@
 use luck_lexer::lex;
-use luck_token::{LuaVersion, Span, TokenKind};
+use luck_token::{Span, TokenKind};
 
-use crate::common::{first_kind, first_kind_in, kinds, kinds_in, lex_lua51, tokens, tokens_in};
+use crate::common::{first_kind, kinds, tokens};
 
 #[test]
-fn lua51_keywords_lex_as_keyword_tokens() {
+fn keywords_lex_as_keyword_tokens() {
     let cases = [
         ("and", TokenKind::And),
         ("break", TokenKind::Break),
@@ -72,9 +72,7 @@ fn single_char_symbols_lex_to_their_kinds() {
         ("/", TokenKind::Slash),
         ("%", TokenKind::Percent),
         ("^", TokenKind::Caret),
-        // '#' at the very start of a chunk is a first-line comment (like
-        // luaL_loadfilex); lex it after a newline to get the length op.
-        ("\n#", TokenKind::Hash),
+        ("#", TokenKind::Hash),
         ("(", TokenKind::LeftParen),
         (")", TokenKind::RightParen),
         ("{", TokenKind::LeftBrace),
@@ -88,6 +86,10 @@ fn single_char_symbols_lex_to_their_kinds() {
         ("=", TokenKind::Equal),
         ("<", TokenKind::Less),
         (">", TokenKind::Greater),
+        ("&", TokenKind::Ampersand),
+        ("|", TokenKind::Pipe),
+        ("?", TokenKind::Question),
+        ("@", TokenKind::At),
     ];
     for (source, expected) in cases {
         assert_eq!(first_kind(source), expected, "failed for: {source:?}");
@@ -104,6 +106,8 @@ fn multi_char_symbols_lex_to_their_kinds() {
         ("..x", TokenKind::DotDot),
         ("...", TokenKind::DotDotDot),
         ("::", TokenKind::DoubleColon),
+        ("//", TokenKind::FloorDiv),
+        ("->", TokenKind::Arrow),
     ];
     for (source, expected) in cases {
         assert_eq!(first_kind(source), expected, "failed for: {source:?}");
@@ -125,7 +129,7 @@ a b
 c --[[
 ]] d -- e
 f --[[ g ]] h";
-    let result = lex_lua51(source);
+    let result = lex(source.as_bytes());
     let breaks: Vec<(&str, bool)> = result
         .tokens
         .iter()
@@ -148,22 +152,21 @@ f --[[ g ]] h";
 }
 
 #[test]
-fn only_luau_reads_a_lone_cr_as_no_line_break() {
-    for version in LuaVersion::ALL {
-        let result = lex(b"a\rb", version);
-        assert_eq!(result.tokens[1].has_line_break_before, !version.is_luau(), "{version:?}");
-    }
+fn only_an_lf_breaks_a_line() {
+    assert!(!lex(b"a\rb").tokens[1].has_line_break_before);
+    assert!(lex(b"a\r\nb").tokens[1].has_line_break_before);
+    assert!(lex(b"a\nb").tokens[1].has_line_break_before);
 }
 
 #[test]
 fn token_stream_ends_with_eof() {
-    let result = lex_lua51("x");
+    let result = lex(b"x");
     assert_eq!(result.tokens.last().expect("tokens should not be empty").kind, TokenKind::Eof);
 }
 
 #[test]
 fn empty_source_lexes_to_only_eof() {
-    let result = lex_lua51("");
+    let result = lex(b"");
     assert_eq!(result.tokens.len(), 1);
     assert_eq!(result.tokens[0].kind, TokenKind::Eof);
 }
@@ -172,40 +175,38 @@ fn empty_source_lexes_to_only_eof() {
 /// different byte.
 #[test]
 fn every_prefix_of_a_source_lexes_to_an_eof_at_its_end() {
-    let source = "\u{FEFF}#!lua
+    let source = "\u{FEFF}#!luau
 local name_longer_than_a_word, x = 0x1F.8p-3 + 1e+10 .. 0b1_01i, 1_000i
 s = \"esc \\n \\z \t \\x41 \\u{1F600} \\065 \\q \u{e9}\" .. 'q\\\r
 ' t = [==[ long ]] ]=] ]==] --[[ block
 comment ]] -- line \u{1F600}\r
 `a {b .. `c {d}`} \\{ {{ e` f(...) ..= //= :: -> \x0B\x0C caf\u{e9}
 ";
-    for version in LuaVersion::ALL {
-        // `get` refuses a cut inside a char.
-        for prefix in (0..=source.len()).filter_map(|length| source.get(..length)) {
-            let result = lex(prefix.as_bytes(), version);
-            let end = u32::try_from(prefix.len()).expect("the source is short");
-            let (eof, tokens) = result.tokens.split_last().expect("an EOF token");
-            assert_eq!(eof.kind, TokenKind::Eof, "{version:?} {prefix:?}");
-            assert_eq!(eof.span, Span::new(end, end), "{version:?} {prefix:?}");
-            let mut previous_end = 0;
-            for token in tokens {
-                let span = token.span;
-                assert!(
-                    previous_end <= span.start && span.start < span.end && span.end <= end,
-                    "{version:?} {prefix:?} {token:?}"
-                );
-                previous_end = span.end;
-            }
-            for comment in &result.comments {
-                assert!(comment.span.end <= end, "{version:?} {prefix:?} {comment:?}");
-            }
+    // `get` refuses a cut inside a char.
+    for prefix in (0..=source.len()).filter_map(|length| source.get(..length)) {
+        let result = lex(prefix.as_bytes());
+        let end = u32::try_from(prefix.len()).expect("the source is short");
+        let (eof, tokens) = result.tokens.split_last().expect("an EOF token");
+        assert_eq!(eof.kind, TokenKind::Eof, "{prefix:?}");
+        assert_eq!(eof.span, Span::new(end, end), "{prefix:?}");
+        let mut previous_end = 0;
+        for token in tokens {
+            let span = token.span;
+            assert!(
+                previous_end <= span.start && span.start < span.end && span.end <= end,
+                "{prefix:?} {token:?}"
+            );
+            previous_end = span.end;
+        }
+        for comment in &result.comments {
+            assert!(comment.span.end <= end, "{prefix:?} {comment:?}");
         }
     }
 }
 
 #[test]
 fn token_spans_cover_their_source_bytes() {
-    let result = lex_lua51("local x = 42");
+    let result = lex(b"local x = 42");
     assert_eq!(result.tokens[0].span, Span::new(0, 5));
     assert_eq!(result.tokens[0].kind, TokenKind::Local);
     assert_eq!(result.tokens[1].span, Span::new(6, 7));
@@ -279,24 +280,15 @@ fn dot_runs_lex_as_varargs_concat_and_dot() {
 }
 
 #[test]
-fn bom_is_skipped_in_lua52_plus() {
-    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
-        let result = lex("\u{FEFF}local x = 1".as_bytes(), version);
-        assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
-        assert_eq!(result.tokens[0].kind, TokenKind::Local, "{version:?}");
-    }
-}
-
-#[test]
 fn non_ascii_unexpected_char_is_one_error() {
-    let result = lex("local caf\u{e9} = 1".as_bytes(), LuaVersion::Lua54);
+    let result = lex("local caf\u{e9} = 1".as_bytes());
     assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
     assert!(result.errors[0].message.contains('\u{e9}'));
 }
 
 #[test]
 fn each_unexpected_byte_that_is_not_utf8_is_one_error() {
-    let result = lex(b"local caf\xE9\x80 = 1", LuaVersion::Lua51);
+    let result = lex(b"local caf\xE9\x80 = 1");
     let errors: Vec<(&str, Option<Span>)> =
         result.errors.iter().map(|e| (&*e.message, e.span)).collect();
     assert_eq!(
@@ -320,215 +312,72 @@ fn each_unexpected_byte_that_is_not_utf8_is_one_error() {
 }
 
 #[test]
-fn goto_is_a_keyword_only_in_lua52_plus() {
-    for version in [LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
-        assert_eq!(
-            first_kind_in("goto", version),
-            TokenKind::Goto,
-            "goto should be keyword in {version:?}"
-        );
-    }
-    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        assert_eq!(
-            first_kind_in("goto", version),
-            TokenKind::Identifier,
-            "goto should be identifier in {version:?}"
-        );
-    }
-}
-
-#[test]
-fn a_contextual_keyword_lexes_as_its_own_kind_only_where_its_version_has_it() {
-    for version in LuaVersion::ALL {
-        for (text, kind, has_it) in [
-            ("continue", TokenKind::Continue, version.has_continue()),
-            ("type", TokenKind::Type, version.has_type_syntax()),
-            ("global", TokenKind::Global, version.has_global()),
-        ] {
-            let expected = if has_it { kind } else { TokenKind::Identifier };
-            assert_eq!(first_kind_in(text, version), expected, "{text} in {version:?}");
-        }
-    }
-}
-
-#[test]
-fn lua52_goto_and_label_lex_token_by_token() {
-    assert_eq!(
-        kinds_in("goto done :: done ::", LuaVersion::Lua52),
-        vec![
-            TokenKind::Goto,
-            TokenKind::Identifier,
-            TokenKind::DoubleColon,
-            TokenKind::Identifier,
-            TokenKind::DoubleColon,
-        ]
-    );
-}
-
-#[test]
-fn lua55_global_stmt_lexes_token_by_token() {
-    assert_eq!(
-        kinds_in("global x = 5", LuaVersion::Lua55),
-        vec![TokenKind::Global, TokenKind::Identifier, TokenKind::Equal, TokenKind::Number,]
-    );
-}
-
-#[test]
-fn floor_div_lexes_only_in_lua53_plus_and_luau() {
-    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
-        assert_eq!(
-            first_kind_in("//", version),
-            TokenKind::FloorDiv,
-            "// should be FloorDiv in {version:?}"
-        );
-    }
-    for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
-        assert_eq!(
-            kinds_in("//", version),
-            vec![TokenKind::Slash, TokenKind::Slash],
-            "// should be two slashes in {version:?}"
-        );
+fn a_contextual_keyword_lexes_as_its_own_kind() {
+    for (text, kind) in [
+        ("continue", TokenKind::Continue),
+        ("export", TokenKind::Export),
+        ("const", TokenKind::Const),
+        ("type", TokenKind::Type),
+        ("typeof", TokenKind::Typeof),
+        ("read", TokenKind::Read),
+        ("write", TokenKind::Write),
+    ] {
+        assert_eq!(first_kind(text), kind, "{text}");
     }
 }
 
 #[test]
 fn floor_div_not_confused_with_comment() {
     assert_eq!(
-        kinds_in(
+        kinds(
             "\
 -- comment
-//",
-            LuaVersion::Lua53
+//"
         ),
         vec![TokenKind::FloorDiv]
     );
 }
 
 #[test]
-fn standalone_tilde_lexes_only_in_lua53_plus() {
-    // Lua 5.3+ supports bitwise NOT; Luau doesn't.
-    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
-        let result = lex(b"~", version);
-        assert!(result.errors.is_empty(), "~ should work in {version:?}");
-        assert_eq!(result.tokens[0].kind, TokenKind::Tilde);
-    }
-    for version in [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Luau] {
-        let result = lex(b"~", version);
-        assert!(!result.errors.is_empty(), "standalone ~ should error in {version:?}");
-    }
-}
-
-#[test]
-fn tilde_equal_lexes_in_every_version() {
-    for version in LuaVersion::ALL {
-        let result = lex(b"~=", version);
-        assert!(result.errors.is_empty(), "~= failed in {version:?}");
-        assert_eq!(result.tokens[0].kind, TokenKind::TildeEqual);
-    }
-}
-
-#[test]
-fn ampersand_and_pipe_lex_only_in_lua53_plus_and_luau() {
-    // Luau uses `&` and `|` for intersection and union types.
-    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55, LuaVersion::Luau] {
-        assert_eq!(
-            first_kind_in("&", version),
-            TokenKind::Ampersand,
-            "& should work in {version:?}"
-        );
-        assert_eq!(first_kind_in("|", version), TokenKind::Pipe, "| should work in {version:?}");
-    }
-    for version in [LuaVersion::Lua51, LuaVersion::Lua52] {
-        assert!(!lex(b"&", version).errors.is_empty(), "& should error in {version:?}");
-        assert!(!lex(b"|", version).errors.is_empty(), "| should error in {version:?}");
-    }
-}
-
-#[test]
-fn shift_operators_lex_only_in_lua53_plus() {
-    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
-        assert_eq!(first_kind_in("<<", version), TokenKind::ShiftLeft, "<< in {version:?}");
-        assert_eq!(first_kind_in(">>", version), TokenKind::ShiftRight, ">> in {version:?}");
-    }
-    // Without bitwise ops, `<<` and `>>` are two separate tokens.
-    assert_eq!(kinds_in("<<", LuaVersion::Lua51), vec![TokenKind::Less, TokenKind::Less]);
-    assert_eq!(kinds_in(">>", LuaVersion::Lua51), vec![TokenKind::Greater, TokenKind::Greater]);
-}
-
-#[test]
-fn lua53_bitwise_expr_lexes_token_by_token() {
+fn a_lone_tilde_is_an_error() {
+    let result = lex(b"a ~ b");
+    let [error] = result.errors.as_slice() else {
+        panic!("{:?}", result.errors);
+    };
+    assert_eq!(error.span, Some(Span::new(2, 3)));
+    assert_eq!(error.message, "unexpected character `~`");
+    assert_eq!(error.help.as_deref(), Some("use `~=` for not-equal"));
     assert_eq!(
-        kinds_in("a & b | c", LuaVersion::Lua53),
+        kinds("a ~= b"),
+        [TokenKind::Identifier, TokenKind::TildeEqual, TokenKind::Identifier]
+    );
+}
+
+#[test]
+fn doubled_angle_brackets_lex_as_two_tokens() {
+    assert_eq!(kinds("<<"), [TokenKind::Less, TokenKind::Less]);
+    assert_eq!(kinds(">>"), [TokenKind::Greater, TokenKind::Greater]);
+    assert_eq!(kinds("<=>="), [TokenKind::LessEqual, TokenKind::GreaterEqual]);
+}
+
+#[test]
+fn type_operators_lex_token_by_token() {
+    assert_eq!(
+        kinds("a & b | c?"),
         vec![
             TokenKind::Identifier,
             TokenKind::Ampersand,
             TokenKind::Identifier,
             TokenKind::Pipe,
             TokenKind::Identifier,
+            TokenKind::Question,
         ]
     );
 }
 
 #[test]
-fn lua53_shift_expr_lexes_token_by_token() {
-    assert_eq!(
-        kinds_in("x << 2 >> 1", LuaVersion::Lua53),
-        vec![
-            TokenKind::Identifier,
-            TokenKind::ShiftLeft,
-            TokenKind::Number,
-            TokenKind::ShiftRight,
-            TokenKind::Number,
-        ]
-    );
-}
-
-#[test]
-fn lua53_mixed_bitwise_expr_lexes_token_by_token() {
-    assert_eq!(
-        kinds_in("(a & b) | (~c >> 2)", LuaVersion::Lua53),
-        vec![
-            TokenKind::LeftParen,
-            TokenKind::Identifier,
-            TokenKind::Ampersand,
-            TokenKind::Identifier,
-            TokenKind::RightParen,
-            TokenKind::Pipe,
-            TokenKind::LeftParen,
-            TokenKind::Tilde,
-            TokenKind::Identifier,
-            TokenKind::ShiftRight,
-            TokenKind::Number,
-            TokenKind::RightParen,
-        ]
-    );
-}
-
-/// The parser reads an attribute, and the lexer sees plain angle brackets
-/// around a name.
-#[test]
-fn lua54_attributes_lex_as_a_name_in_angle_brackets() {
-    for attribute in ["const", "close"] {
-        let source = format!("local x <{attribute}> = 5");
-        assert_eq!(
-            tokens_in(&source, LuaVersion::Lua54),
-            [
-                (TokenKind::Local, "local"),
-                (TokenKind::Identifier, "x"),
-                (TokenKind::Less, "<"),
-                (TokenKind::Identifier, attribute),
-                (TokenKind::Greater, ">"),
-                (TokenKind::Equal, "="),
-                (TokenKind::Number, "5"),
-            ],
-            "{source:?}"
-        );
-    }
-}
-
-#[test]
-fn compound_assignment_operators_lex_only_in_luau() {
-    let operators = [
+fn compound_assignment_operators_lex_as_one_token() {
+    for (source, expected) in [
         ("+=", TokenKind::PlusEqual),
         ("-=", TokenKind::MinusEqual),
         ("*=", TokenKind::StarEqual),
@@ -537,53 +386,19 @@ fn compound_assignment_operators_lex_only_in_luau() {
         ("%=", TokenKind::PercentEqual),
         ("^=", TokenKind::CaretEqual),
         ("..=", TokenKind::DotDotEqual),
-    ];
-    for (source, expected) in &operators {
-        assert_eq!(
-            first_kind_in(source, LuaVersion::Luau),
-            *expected,
-            "{source} should be compound op in Luau"
-        );
-    }
-
-    // Outside Luau, these split into two tokens.
-    let split_cases: &[(&str, LuaVersion, &[TokenKind])] = &[
-        ("+=", LuaVersion::Lua54, &[TokenKind::Plus, TokenKind::Equal]),
-        ("-=", LuaVersion::Lua54, &[TokenKind::Minus, TokenKind::Equal]),
-        ("*=", LuaVersion::Lua53, &[TokenKind::Star, TokenKind::Equal]),
-        ("/=", LuaVersion::Lua51, &[TokenKind::Slash, TokenKind::Equal]),
-        ("%=", LuaVersion::Lua52, &[TokenKind::Percent, TokenKind::Equal]),
-        ("^=", LuaVersion::Lua51, &[TokenKind::Caret, TokenKind::Equal]),
-        ("..=", LuaVersion::Lua54, &[TokenKind::DotDot, TokenKind::Equal]),
-        ("//=", LuaVersion::Lua53, &[TokenKind::FloorDiv, TokenKind::Equal]),
-    ];
-    for (source, version, expected) in split_cases {
-        assert_eq!(kinds_in(source, *version), *expected, "{source} should split in {version:?}");
-    }
-}
-
-#[test]
-fn at_lexes_only_in_luau() {
-    assert_eq!(first_kind_in("@", LuaVersion::Luau), TokenKind::At);
-    for version in [
-        LuaVersion::Lua51,
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
     ] {
-        assert!(!lex(b"@", version).errors.is_empty(), "@ should error in {version:?}");
+        assert_eq!(tokens(source), [(expected, source)], "{source}");
     }
 }
 
 #[test]
-fn luau_attribute_lexes_as_at_and_a_name() {
-    assert_eq!(kinds_in("@native", LuaVersion::Luau), vec![TokenKind::At, TokenKind::Identifier]);
+fn an_attribute_lexes_as_at_and_a_name() {
+    assert_eq!(kinds("@native"), vec![TokenKind::At, TokenKind::Identifier]);
 }
 
 #[test]
-fn luau_nul_byte_ends_the_source() {
-    let result = lex(b"return 1\0$", LuaVersion::Luau);
+fn a_nul_byte_ends_the_source() {
+    let result = lex(b"return 1\0$");
     assert!(
         result.errors.is_empty(),
         "Luau reads a raw NUL as end of input, so the bytes after it should not be lexed: {:?}",
@@ -593,13 +408,11 @@ fn luau_nul_byte_ends_the_source() {
 }
 
 #[test]
-fn bom_is_error_in_lua51_and_luau() {
-    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        let result = lex("\u{FEFF}return 1".as_bytes(), version);
-        assert!(
-            !result.errors.is_empty(),
-            "a leading BOM fails to compile under {version:?}, so it should be reported: {:?}",
-            result.tokens
-        );
-    }
+fn a_bom_is_an_error() {
+    let result = lex("\u{FEFF}return 1".as_bytes());
+    assert!(
+        !result.errors.is_empty(),
+        "a leading BOM fails to compile under Luau, so it should be reported: {:?}",
+        result.tokens
+    );
 }

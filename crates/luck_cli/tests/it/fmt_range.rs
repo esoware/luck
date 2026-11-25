@@ -11,14 +11,14 @@ fn fmt_range_formats_only_covered_stmt() {
     // Two unformatted statements; the range covers only the second line.
     let path = write_file(
         directory.path(),
-        "partial.lua",
+        "partial.luau",
         "\
 local    a=1
 local    b=2
 ",
     );
 
-    luck_in(directory.path()).args(["fmt", "--range-start", "13", "partial.lua"]).assert().code(0);
+    luck_in(directory.path()).args(["fmt", "--range-start", "13", "partial.luau"]).assert().code(0);
     let contents = fs::read_to_string(&path).unwrap();
     assert!(contents.contains("local    a=1"), "{contents}");
     assert!(contents.contains("local b = 2"), "{contents}");
@@ -27,9 +27,9 @@ local    b=2
 #[test]
 fn fmt_range_leaves_crlf_outside_the_range_verbatim() {
     let directory = TempDir::new().unwrap();
-    let path = write_file(directory.path(), "main.lua", "local    a=1\r\nlocal    b=2\r\n");
+    let path = write_file(directory.path(), "main.luau", "local    a=1\r\nlocal    b=2\r\n");
 
-    run(directory.path(), &["fmt", "--range-start", "14", "main.lua"]);
+    run(directory.path(), &["fmt", "--range-start", "14", "main.luau"]);
     let formatted = fs::read_to_string(path).unwrap();
 
     assert!(
@@ -41,11 +41,11 @@ fn fmt_range_leaves_crlf_outside_the_range_verbatim() {
 #[test]
 fn fmt_range_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "a.lua", "local a = 1\n");
-    write_file(directory.path(), "b.lua", "local b = 2\n");
+    write_file(directory.path(), "a.luau", "local a = 1\n");
+    write_file(directory.path(), "b.luau", "local b = 2\n");
 
     luck_in(directory.path())
-        .args(["fmt", "--range-start", "0", "a.lua", "b.lua"])
+        .args(["fmt", "--range-start", "0", "a.luau", "b.luau"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("exactly one input file"));
@@ -54,10 +54,10 @@ fn fmt_range_with_multiple_files_exits_usage() {
 #[test]
 fn fmt_range_reversed_bounds_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "a.lua", "local a = 1\n");
+    write_file(directory.path(), "a.luau", "local a = 1\n");
 
     luck_in(directory.path())
-        .args(["fmt", "--range-start", "9", "--range-end", "2", "a.lua"])
+        .args(["fmt", "--range-start", "9", "--range-end", "2", "a.luau"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("invalid format range"));

@@ -1,17 +1,8 @@
 ---
 source: crates/luck_linter/src/fixtures.rs
 ---
-warning: unused argument `args`
- --> Lua55:1:21
-1 | local function f(...args) end
-  |                     ^^^^
-tag: unnecessary
-help: prefix with `_` to suppress this warning
-suggestion: prefix `args` with `_`
-  | local function f(..._args) end
-
 warning: unused argument `x`
- --> Lua54:1:18
+ --> Standalone:1:18
 1 | local function f(x) end
   |                  ^
 tag: unnecessary
@@ -20,7 +11,7 @@ suggestion: prefix `x` with `_`
   | local function f(_x) end
 
 warning: unused argument `x`
- --> Lua54:2:21
+ --> Standalone:2:21
 1 | local obj = {}
 2 | function obj:method(x) end
   |                     ^
@@ -31,7 +22,7 @@ suggestion: prefix `x` with `_`
   | function obj:method(_x) end
 
 warning: unused argument `b`
- --> Lua54:1:21
+ --> Standalone:1:21
 1 | local function f(a, b, c) return a + c end
   |                     ^
 tag: unnecessary
@@ -40,7 +31,7 @@ suggestion: prefix `b` with `_`
   | local function f(a, _b, c) return a + c end
 
 warning: unused argument `a`
- --> Lua54:1:22
+ --> Standalone:1:22
 1 | local function f(_a, a) return _a end
   |                      ^
 tag: unnecessary

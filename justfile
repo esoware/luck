@@ -29,7 +29,7 @@ ready:
   just deny
   git status
 
-# Run all tests, or narrow them with nextest args like -p luck_parser goto_stmt
+# Run all tests, or narrow them with nextest args like -p luck_parser if_expression
 test *args:
   cargo nextest run {{args}}
 
@@ -46,11 +46,9 @@ fmt:
   cargo fmt --all
   npm run --prefix editors/vscode fmt
 
-# Run clippy and fail on any warning, with luck_conformance on its own under Lua 5.4 and Luau, since its dialect features exclude each other
+# Run clippy and fail on any warning
 lint *args:
-  cargo clippy --workspace --exclude luck_conformance --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}}
-  cargo clippy -p luck_conformance --all-targets --keep-going --config "build.warnings='deny'" {{args}}
-  cargo clippy -p luck_conformance --all-targets --no-default-features --features luau --keep-going --config "build.warnings='deny'" {{args}}
+  cargo clippy --workspace --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}}
 
 # Accept pending insta snapshots, since cargo insta review is interactive
 accept:
@@ -97,11 +95,6 @@ minsize:
 allocs *args:
   cargo run -p luck_allocs --profile allocs -- {{args}}
 
-# Run each dialect's official test suite through every stage and its reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose path holds it
+# Run Luau's official conformance tests through every stage and the reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose name holds it
 conformance *args:
-  cargo run -p luck_conformance --profile conformance --no-default-features --features lua51 -- {{args}}
-  cargo run -p luck_conformance --profile conformance --no-default-features --features lua52 -- {{args}}
-  cargo run -p luck_conformance --profile conformance --no-default-features --features lua53 -- {{args}}
-  cargo run -p luck_conformance --profile conformance --no-default-features --features lua54 -- {{args}}
-  cargo run -p luck_conformance --profile conformance --no-default-features --features lua55 -- {{args}}
-  cargo run -p luck_conformance --profile conformance --no-default-features --features luau -- {{args}}
+  cargo run -p luck_conformance --profile conformance -- {{args}}

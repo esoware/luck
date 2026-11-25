@@ -11,7 +11,7 @@ pub(crate) struct JsonReporter;
 impl Reporter for JsonReporter {
     fn render(&self, file: SourceFile<'_>, diags: &[Diagnostic], output: &mut Vec<u8>) {
         let text = file.text.unwrap_or_default();
-        let lines = LineIndex::new(text, file.version);
+        let lines = LineIndex::new(text);
         let place = |span: Option<Span>| Place::of(span, &lines, text);
         for diag in diags {
             let labels: Vec<Value> = diag
@@ -87,17 +87,12 @@ impl Place {
 #[cfg(test)]
 mod tests {
     use luck_diagnostics::Severity;
-    use luck_token::LuaVersion;
 
     use super::*;
 
     fn rendered(text: &str, diags: &[Diagnostic]) -> Vec<Value> {
         let mut output = Vec::new();
-        let file = SourceFile {
-            label: "src/a.lua",
-            text: Some(text.as_bytes()),
-            version: LuaVersion::Lua54,
-        };
+        let file = SourceFile { label: "src/a.luau", text: Some(text.as_bytes()) };
         JsonReporter.render(file, diags, &mut output);
         let lines = String::from_utf8(output).expect("JSON is UTF-8");
         lines.lines().map(|line| serde_json::from_str(line).expect("a JSON object")).collect()
@@ -113,7 +108,7 @@ local unused = 2";
                 .with_label(Span::new(6, 7), "here")
                 .with_tag(Tag::Unnecessary);
         let [entry] = <[Value; 1]>::try_from(rendered(text, &[diag])).expect("one line");
-        assert_eq!(entry["file"], "src/a.lua");
+        assert_eq!(entry["file"], "src/a.luau");
         assert_eq!(entry["code"], "unused_variable");
         assert_eq!(entry["tag"], "unnecessary");
         let number = |value: &Value, key: &str| value[key].as_u64().expect("a number");

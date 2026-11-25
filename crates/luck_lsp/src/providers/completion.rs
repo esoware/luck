@@ -37,8 +37,8 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
     let mut items: Vec<CompletionItem> =
         semantic.stdlib().globals.iter().map(|(name, entry)| item_for_entry(name, entry)).collect();
     // Every local declared before the cursor in a scope open there, each name
-    // once. The implicit `self` and `arg` aren't spelled anywhere, and a name
-    // recovery made up is empty.
+    // once. The implicit `self` isn't spelled anywhere, and a name recovery
+    // made up is empty.
     let tree = semantic.scoping();
     let tokens = document.tokens();
     // Code typed at the cursor is in a block from the token that opens it to
@@ -63,18 +63,21 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
     let is_open: Vec<bool> = tree
         .scopes()
         .iter()
-        .map(|scope| match nodes.kind(scope.node) {
-            AstKind::Chunk(_) => true,
-            AstKind::Block(block) => is_in_block(block),
-            AstKind::FunctionBody(body) => is_in_block(&body.block),
-            AstKind::NumericFor(numeric_for) => is_in_block(&numeric_for.block),
-            AstKind::GenericFor(generic_for) => is_in_block(&generic_for.block),
-            // The `until` condition is in the body's scope.
-            AstKind::RepeatLoop(repeat_loop) => {
-                is_in_block(&repeat_loop.block)
-                    || (repeat_loop.block.span.end <= offset && offset <= repeat_loop.span.end)
-            }
-            _ => false,
+        .map(|scope| {
+            scope.parent.is_none()
+                || match nodes.kind(scope.node) {
+                    AstKind::Block(block) => is_in_block(block),
+                    AstKind::FunctionBody(body) => is_in_block(&body.block),
+                    AstKind::NumericFor(numeric_for) => is_in_block(&numeric_for.block),
+                    AstKind::GenericFor(generic_for) => is_in_block(&generic_for.block),
+                    // The `until` condition is in the body's scope.
+                    AstKind::RepeatLoop(repeat_loop) => {
+                        is_in_block(&repeat_loop.block)
+                            || (repeat_loop.block.span.end <= offset
+                                && offset <= repeat_loop.span.end)
+                    }
+                    _ => false,
+                }
         })
         .collect();
     let mut offered: FxHashSet<&str> = FxHashSet::default();
@@ -93,15 +96,11 @@ fn bare_name_completions(document: &DocumentState, offset: u32) -> Vec<Completio
             });
         }
     }
-    for keyword in KEYWORD_COMPLETIONS {
-        if TokenKind::keyword(keyword, document.version()).is_some() {
-            items.push(CompletionItem {
-                label: (*keyword).to_owned(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                ..Default::default()
-            });
-        }
-    }
+    items.extend(KEYWORD_COMPLETIONS.iter().map(|keyword| CompletionItem {
+        label: (*keyword).to_owned(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        ..Default::default()
+    }));
     items
 }
 
@@ -149,8 +148,8 @@ fn member_completions(
             push(name, member);
         }
     }
-    // A shaped local: `local f = io.open(...); f:` offers the file methods,
-    // `local g = game; g:` the DataModel ones, its Instance ones among them.
+    // A shaped local: `local g = game; g:` offers the DataModel methods, its
+    // Instance ones among them.
     let shape = match (stdlib_entry, root_local, segments.as_slice()) {
         (Some(entry), _, _) => entry.shape(),
         (None, Some(symbol_id), [_]) => semantic.symbol_shape(symbol_id),
@@ -379,39 +378,27 @@ fn function_documentation(name: &str, function: &StdlibFunction<'_>) -> String {
     let must_use_note = if function.is_must_use { "\n\n_must_use_" } else { "" };
     let pure_note = if function.is_pure { " \u{b7} _pure_" } else { "" };
     format!(
-        "```lua\nfunction {name}({params})\n```{overload_note}{deprecation_note}{must_use_note}{pure_note}"
+        "```luau\nfunction {name}({params})\n```{overload_note}{deprecation_note}{must_use_note}{pure_note}"
     )
 }
 
-/// Every target's keywords. A target offers only those its lexer reads as
-/// keywords.
 const KEYWORD_COMPLETIONS: &[&str] = &[
-    "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function",
-    "global", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true",
-    "until", "while",
+    "and", "break", "continue", "do", "else", "elseif", "end", "false", "for", "function", "if",
+    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
 ];
 
 #[cfg(test)]
 mod tests {
     use ls_types::Range as LspRange;
-    use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::document as document_for;
+    use crate::fixtures::{document, roblox_document};
 
     fn items_at(document: &DocumentState, line: u32, utf16_column: u32) -> Vec<CompletionItem> {
         match completion(document, Position::new(line, utf16_column)) {
             CompletionResponse::Array(items) => items,
             CompletionResponse::List(list) => list.items,
         }
-    }
-
-    fn roblox_document(text: &str) -> DocumentState {
-        document_for(text, LuaTarget::LuauRoblox)
-    }
-
-    fn lua54_document(text: &str) -> DocumentState {
-        document_for(text, LuaTarget::Lua54)
     }
 
     fn keywords_of(items: &[CompletionItem]) -> Vec<&str> {
@@ -431,24 +418,11 @@ mod tests {
     }
 
     #[test]
-    fn keywords_follow_the_target() {
-        for (target, expect_goto, expect_global, expect_continue) in [
-            (LuaTarget::Lua51, false, false, false),
-            (LuaTarget::Lua52, true, false, false),
-            (LuaTarget::Lua53, true, false, false),
-            (LuaTarget::Lua54, true, false, false),
-            (LuaTarget::Lua55, true, true, false),
-            (LuaTarget::Luau, false, false, true),
-            (LuaTarget::LuauRoblox, false, false, true),
-        ] {
-            let document = document_for("", target);
-            let items = items_at(&document, 0, 0);
-            let keywords = keywords_of(&items);
-            assert!(keywords.contains(&"while"), "{target:?}: {keywords:?}");
-            assert_eq!(keywords.contains(&"goto"), expect_goto, "{target:?}: {keywords:?}");
-            assert_eq!(keywords.contains(&"global"), expect_global, "{target:?}: {keywords:?}");
-            assert_eq!(keywords.contains(&"continue"), expect_continue, "{target:?}: {keywords:?}");
-        }
+    fn keywords_and_contextual_keywords_are_offered() {
+        let items = items_at(&document(""), 0, 0);
+        let keywords = keywords_of(&items);
+        assert!(keywords.contains(&"while"), "{keywords:?}");
+        assert!(keywords.contains(&"continue"), "{keywords:?}");
     }
 
     #[test]
@@ -466,7 +440,7 @@ function t:m(q)
 end
 local later
 ";
-        let document = lua54_document(text);
+        let document = document(text);
         // The blank line inside `t:m`.
         let items = items_at(&document, 8, 0);
         assert_eq!(variables_of(&items), ["a", "f", "t", "q"], "once each, without `self`");
@@ -474,7 +448,7 @@ local later
 
     #[test]
     fn a_block_s_locals_are_offered_up_to_what_ends_it() {
-        let block = lua54_document(
+        let block = document(
             "\
 do
   local before = 1
@@ -484,26 +458,14 @@ end
         );
         assert!(variables_of(&items_at(&block, 2, 0)).contains(&"before"), "before its `end`");
         assert!(!variables_of(&items_at(&block, 4, 0)).contains(&"before"), "after its `end`");
-        let repeat = lua54_document("repeat local body = 1 until b");
+        let repeat = document("repeat local body = 1 until b");
         assert!(variables_of(&items_at(&repeat, 0, 29)).contains(&"body"), "in its condition");
-        let unclosed = lua54_document(
+        let unclosed = document(
             "\
 function g(x)
   ",
         );
         assert!(variables_of(&items_at(&unclosed, 1, 2)).contains(&"x"), "with no `end` yet");
-    }
-
-    #[test]
-    fn named_vararg_is_offered_on_lua55() {
-        let text = "\
-local function f(...args)
-
-end
-";
-        let document = document_for(text, LuaTarget::Lua55);
-        let items = items_at(&document, 1, 0);
-        assert!(variables_of(&items).contains(&"args"), "{items:?}");
     }
 
     /// A string the line cut off is still being typed at its end, so its
@@ -620,21 +582,6 @@ end
     }
 
     #[test]
-    fn completion_after_shaped_local_colon_offers_file_methods() {
-        let text = "\
-local f = io.open('x')
-f:";
-        let document = lua54_document(text);
-        let items = items_at(&document, 1, 2);
-        assert!(
-            items.iter().any(|item| item.label == "read"),
-            "file methods expected: {:?}",
-            items.iter().map(|item| &item.label).collect::<Vec<_>>()
-        );
-        assert!(items.iter().any(|item| item.label == "seek"));
-    }
-
-    #[test]
     fn completion_after_shaped_local_colon_offers_datamodel_methods() {
         let text = "\
 local g = game
@@ -665,20 +612,20 @@ g:";
 
     #[test]
     fn completion_ranks_deprecated_members_last() {
-        let text = "local x = math.";
-        let document = lua54_document(text);
+        let text = "local x = table.";
+        let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
-        let floor = items.iter().find(|item| item.label == "floor").expect("live member");
-        let pow = items.iter().find(|item| item.label == "pow").expect("deprecated compat member");
-        assert_eq!(floor.sort_text.as_deref(), Some("1floor"));
-        assert_eq!(pow.sort_text.as_deref(), Some("2pow"));
-        assert_eq!(pow.deprecated, Some(true));
+        let insert = items.iter().find(|item| item.label == "insert").expect("live member");
+        let getn = items.iter().find(|item| item.label == "getn").expect("deprecated member");
+        assert_eq!(insert.sort_text.as_deref(), Some("1insert"));
+        assert_eq!(getn.sort_text.as_deref(), Some("2getn"));
+        assert_eq!(getn.deprecated, Some(true));
     }
 
     #[test]
     fn completion_offers_nothing_inside_a_comment() {
         let text = "-- string.";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
         assert!(
             items.is_empty(),
@@ -690,7 +637,7 @@ g:";
     #[test]
     fn completion_offers_nothing_inside_a_plain_string() {
         let text = "local s = \"string.\"";
-        let document = lua54_document(text);
+        let document = document(text);
         // Just before the closing quote.
         let items = items_at(&document, 0, index_to_offset(text.len() - 1));
         assert!(
@@ -705,7 +652,7 @@ g:";
         let text = "\
 local math = {}
 math.";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 1, 5);
         assert!(
             !items.iter().any(|item| item.label == "floor"),
@@ -716,7 +663,7 @@ math.";
     #[test]
     fn constant_completion_in_a_long_string_replaces_only_its_interior() {
         let text = "collectgarbage([[c]])";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 0, 18);
         let collect = items
             .iter()
@@ -735,7 +682,7 @@ math.";
     #[test]
     fn completion_after_a_concat_offers_namespace_members() {
         let text = "local s = \"a\"..string.";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
         assert!(
             items.iter().any(|item| item.label == "format"),
@@ -747,7 +694,7 @@ math.";
     #[test]
     fn completion_after_a_member_dot_on_an_unknown_receiver_offers_no_keywords() {
         let text = "local result = make().";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
         assert!(
             keywords_of(&items).is_empty(),
@@ -759,7 +706,7 @@ math.";
     #[test]
     fn completion_offers_nothing_inside_an_unterminated_string() {
         let text = "local s = \"string.";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
         assert_eq!(items.len(), 0, "the string is still being typed: {items:?}");
     }
@@ -767,7 +714,7 @@ math.";
     #[test]
     fn completion_after_a_keyword_shaped_partial_offers_namespace_members() {
         let text = "local s = string.for";
-        let document = lua54_document(text);
+        let document = document(text);
         let items = items_at(&document, 0, index_to_offset(text.len()));
         assert!(items.iter().any(|item| item.label == "format"), "{items:?}");
     }

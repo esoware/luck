@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
-use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver, to_slash_lossy};
-use luck_token::LuaVersion;
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
@@ -21,10 +20,6 @@ pub(crate) const MAX_MODULE_COUNT: usize = 10_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BundleOptions<'input> {
-    pub version: LuaVersion,
-    /// Lua search path templates, resolved against `project_root`. Empty
-    /// means the default templates.
-    pub search_paths: &'input [String],
     /// Every module's `relative_path`, and so every path in the output, is
     /// relative to this.
     pub project_root: &'input Path,
@@ -64,12 +59,8 @@ impl<'ast> DependencyGraph<'ast> {
         // Emitted paths are made relative to this, so it must be canonical like
         // the modules' paths.
         let root = absolute_project_root(options.project_root);
-        let resolver = Resolver::new(ResolveOptions {
-            version: options.version,
-            search_paths: options.search_paths.to_vec(),
-            root: root.clone(),
-        });
-        let reader = Reader::new(options, &root, &resolver);
+        let resolver = Resolver::new();
+        let reader = Reader::new(options.dynamic_require, &root, &resolver);
         let entry =
             FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
         let found = discover_reachable(arenas, reader, &entry);
@@ -163,7 +154,7 @@ fn number_modules<'ast>(
     Ok(DependencyGraph { modules, topological_order, entry_id, warnings })
 }
 
-/// Luau hot comments only take effect at the top of a chunk. The emitter
+/// Hot comments only take effect at the top of a chunk. The emitter
 /// hoists the entry module's leading run above the loader; any other module's
 /// hot comments become inert in the bundle.
 fn warn_inert_hot_comments(
@@ -185,8 +176,8 @@ fn warn_inert_hot_comments(
 /// The loader doesn't depend on registration order, so a cycle only warns
 /// (W003) and falls back to discovery order.
 ///
-/// A deferred cycle works as in real Lua, and a load-time cycle fails at
-/// runtime the way the target version fails.
+/// A deferred cycle works as in real Luau, and the loader raises on a
+/// load-time one.
 fn topological_order(
     modules: &[ModuleInfo<'_>],
     warnings: &mut [Vec<Diagnostic>],

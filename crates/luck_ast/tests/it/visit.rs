@@ -68,7 +68,7 @@ fn reaches_binary_operands() {
     // local x = 1 + 1: the sum and both operands.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(1));
+    let sum = synth.binary_op(synth.number_f64(1.0), BinOp::Add, synth.number_f64(1.0));
     assert_eq!(expr_count(synth, [synth.local(&["x"], [sum])]), 3);
 }
 
@@ -77,7 +77,7 @@ fn reaches_table_fields() {
     // local t = {1, 1, 1}: the constructor and its three values.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let table = synth.array([synth.number_i64(1), synth.number_i64(1), synth.number_i64(1)]);
+    let table = synth.array([synth.number_f64(1.0), synth.number_f64(1.0), synth.number_f64(1.0)]);
     assert_eq!(expr_count(synth, [synth.local(&["t"], [table])]), 4);
 }
 
@@ -86,8 +86,8 @@ fn visit_stmt_reaches_the_return_that_ends_a_block() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let block = synth.block([
-        synth.local(&["x"], [synth.number_i64(1)]),
-        synth.local(&["y"], [synth.number_i64(1)]),
+        synth.local(&["x"], [synth.number_f64(1.0)]),
+        synth.local(&["y"], [synth.number_f64(1.0)]),
         synth.return_([synth.name_expr("x")]),
     ]);
     assert_eq!(hook_counts(&block).statements, 3);
@@ -98,7 +98,7 @@ fn reaches_function_bodies() {
     // local function f(a) return a + 1 end: the sum and both operands.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_i64(1));
+    let sum = synth.binary_op(synth.name_expr("a"), BinOp::Add, synth.number_f64(1.0));
     let body = synth.block([synth.return_([sum])]);
     assert_eq!(expr_count(synth, [synth.local_function("f", &["a"], body)]), 3);
 }
@@ -108,7 +108,7 @@ fn reaches_if_conditions_and_branches() {
     // if x then y = 1 else y = nil end: x, 1, and nil.
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let then_block = synth.block([synth.assign([synth.name_var("y")], [synth.number_i64(1)])]);
+    let then_block = synth.block([synth.assign([synth.name_var("y")], [synth.number_f64(1.0)])]);
     let else_block = synth.block([synth.assign([synth.name_var("y")], [synth.nil()])]);
     let if_stmt = synth.if_(synth.name_expr("x"), then_block, [], Some(else_block));
     assert_eq!(expr_count(synth, [if_stmt]), 3);
@@ -120,10 +120,10 @@ fn reaches_numeric_for_bounds_and_step() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let numeric_for = synth.numeric_for(
-        synth.param("i"),
-        synth.number_i64(1),
-        synth.number_i64(10),
-        Some(synth.number_i64(2)),
+        synth.typed_name("i", None),
+        synth.number_f64(1.0),
+        synth.number_f64(10.0),
+        Some(synth.number_f64(2.0)),
         synth.block([]),
     );
     assert_eq!(expr_count(synth, [numeric_for]), 3);
@@ -191,16 +191,17 @@ impl<'ast> Visit<'ast> for NameTexts<'ast> {
 
 #[test]
 fn reaches_every_name_in_source_order() {
-    // local x <const> = t.a:m(y); goto done; ::done::
+    // local x = t.a:m(y); done(...)
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let call =
         synth.method_call(synth.field(synth.name_expr("t"), "a"), "m", [synth.name_expr("y")]);
-    let local = synth.local_full([synth.attributed_name("x", None, Some("const"))], [call]);
-    let block = synth.block([local, synth.goto_("done"), synth.label("done")]);
+    let local = synth.local_full([synth.typed_name("x", None)], [call]);
+    let done = synth.call_stmt(synth.call(synth.name_expr("done"), [synth.vararg()]));
+    let block = synth.block([local, done]);
     let mut names = NameTexts::default();
     names.visit_block(&block);
-    assert_eq!(names.0, ["x", "const", "t", "a", "m", "y", "done", "done"]);
+    assert_eq!(names.0, ["x", "t", "a", "m", "y", "done"]);
 }
 
 #[test]
@@ -209,7 +210,7 @@ fn reaches_the_names_in_types() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let ty = synth.ty_optional(synth.ty_generic("Map", [synth.ty_named("K"), synth.ty_named("V")]));
-    let local = synth.local_full([synth.attributed_name("v", Some(ty), None)], [synth.nil()]);
+    let local = synth.local_full([synth.typed_name("v", Some(ty))], [synth.nil()]);
     let mut names = NameTexts::default();
     let block = synth.block([local]);
     names.visit_block(&block);

@@ -301,8 +301,6 @@ fn leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::fixtures::Fixture;
 
@@ -396,10 +394,10 @@ mod tests {
 
     #[test]
     fn ty_table_keeps_no_array_element_beside_other_fields() {
-        // Luau: `TableType ::= '{' Type '}' | '{' [PropList] '}'`, so
-        // `{ T, a: U }` is a parse error.
+        // Luau's grammar has `TableType ::= '{' Type '}' | '{' [PropList] '}'`,
+        // so `{ T, a: U }` is a parse error.
         let fixture = Fixture::default();
-        let synth = fixture.synth().with_version(LuaVersion::Luau);
+        let synth = fixture.synth();
         let Type::Table(table) = synth.ty_table([
             TypeFieldSpec::Array(synth.ty_named("T")),
             TypeFieldSpec::Named { access: None, name: "a", value: synth.ty_named("U") },

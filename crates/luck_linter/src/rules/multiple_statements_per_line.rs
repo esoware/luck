@@ -56,8 +56,7 @@ mod tests {
         "\
 local a = 1
 local b = 2",
-        // Lua reads a lone CR as a line break.
-        "local a = 1\rlocal b = 2",
+        "local a = 1\r\nlocal b = 2",
     ];
 
     const FAIL: &[&str] = &[
@@ -69,6 +68,8 @@ do
 end",
         "local a = 1 local b = 2 local c = 3",
         "local function f() local x = 1 return x end",
+        // A lone CR breaks no line.
+        "local a = 1\rlocal b = 2",
     ];
 
     #[test]

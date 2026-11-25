@@ -22,7 +22,7 @@ luck_linter      = { workspace = true, features = ["serde"] }
 luck_minifier    = { workspace = true, features = ["serde"] }
 luck_resolver    = { workspace = true }
 luck_stdlib      = { workspace = true }
-luck_token       = { workspace = true, features = ["serde"] }
+luck_token       = { workspace = true }
 
 globset     = { workspace = true }
 ignore      = { workspace = true }
@@ -37,7 +37,7 @@ luck_bundler   = { workspace = true, features = ["schemars"] }
 luck_formatter = { workspace = true, features = ["schemars"] }
 luck_linter    = { workspace = true, features = ["schemars"] }
 luck_minifier  = { workspace = true, features = ["schemars"] }
-luck_token     = { workspace = true, features = ["schemars"] }
+luck_stdlib    = { workspace = true, features = ["schemars"] }
 
 schemars   = { workspace = true }
 serde_json = { workspace = true }

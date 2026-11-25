@@ -2,8 +2,7 @@
 //! output that reparses and minifies to itself.
 
 use luck_minifier::TransformConfig;
-use luck_testgen::{generate_full_grammar, generate_runtime_safe, lua_fixtures};
-use luck_token::LuaVersion;
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, source_fixtures};
 
 use crate::common::minify_with;
 
@@ -14,11 +13,9 @@ const STATEMENT_BUDGET: usize = 25;
 #[test]
 fn generated_programs_minify_to_a_fixpoint() {
     let config = TransformConfig::default();
-    for version in LuaVersion::ALL {
-        for seed in 0..SEED_COUNT {
-            minify_with(&generate_runtime_safe(seed, version, STATEMENT_BUDGET), version, &config);
-            minify_with(&generate_full_grammar(seed, version, STATEMENT_BUDGET), version, &config);
-        }
+    for seed in 0..SEED_COUNT {
+        minify_with(&generate_runtime_safe(seed, STATEMENT_BUDGET), &config);
+        minify_with(&generate_full_grammar(seed, STATEMENT_BUDGET), &config);
     }
 }
 
@@ -51,14 +48,8 @@ fn generated_programs_minify_to_a_fixpoint_with_each_pass_alone() {
         TransformConfig { rename_globals: true, ..TransformConfig::default() },
     ];
     for config in configs {
-        for version in LuaVersion::ALL {
-            for seed in 0..PER_PASS_SEED_COUNT {
-                minify_with(
-                    &generate_full_grammar(seed, version, STATEMENT_BUDGET),
-                    version,
-                    &config,
-                );
-            }
+        for seed in 0..PER_PASS_SEED_COUNT {
+            minify_with(&generate_full_grammar(seed, STATEMENT_BUDGET), &config);
         }
     }
 }
@@ -66,10 +57,10 @@ fn generated_programs_minify_to_a_fixpoint_with_each_pass_alone() {
 #[test]
 fn fixtures_minify_to_a_fixpoint() {
     let config = TransformConfig::default();
-    for fixture in lua_fixtures() {
+    for fixture in source_fixtures() {
         if fixture.is_error {
             continue;
         }
-        minify_with(&fixture.source.replace("\r\n", "\n"), fixture.version, &config);
+        minify_with(&fixture.source.replace("\r\n", "\n"), &config);
     }
 }

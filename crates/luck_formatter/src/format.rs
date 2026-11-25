@@ -1,10 +1,10 @@
 use std::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
 use luck_diagnostics::Diagnostic;
 use luck_parser::{Groupings, ParseResult};
-use luck_token::{LuaVersion, Span, is_lua_whitespace};
+use luck_token::{Span, is_luau_whitespace};
 
 use crate::comments::Comments;
 use crate::format_block::{first_item_start, format_selection};
@@ -21,22 +21,22 @@ pub struct FormatResult {
 
 fn print_chunk<'ast>(
     allocator: &'ast Allocator,
-    chunk: &'ast Chunk<'ast>,
+    chunk: &'ast Block<'ast>,
     comments: Comments<'ast>,
     groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
 ) -> Vec<u8> {
-    let mut f = Formatter::new(allocator, chunk.version, *options, comments, groupings);
+    let mut f = Formatter::new(allocator, *options, comments, groupings);
     f.write_shebang();
-    f.write_block(&chunk.block);
-    // Empty and error statements print nothing, so a block holding only
-    // those must not open a line before the trailing comment flush.
-    let has_stmts = first_item_start(&chunk.block).is_some();
+    f.write_block(chunk);
+    // Error statements print nothing, so a block holding only those must not
+    // open a line before the trailing comment flush.
+    let has_stmts = first_item_start(chunk).is_some();
     f.write_remaining_comments(has_stmts);
     let mut output = f.print(b"");
 
     let trimmed_length =
-        output.iter().rposition(|&b| !is_lua_whitespace(b)).map_or(0, |last| last + 1);
+        output.iter().rposition(|&b| !is_luau_whitespace(b)).map_or(0, |last| last + 1);
     output.truncate(trimmed_length);
     output.extend_from_slice(match options.line_endings {
         LineEndings::Unix => b"\n",
@@ -46,7 +46,7 @@ fn print_chunk<'ast>(
 }
 
 /// Formats a tree, including one built in code with no source text, such as
-/// with `luck_ast::Synth`, whose literals it spells for the chunk's version.
+/// with `luck_ast::Synth`, whose literals it spells from their values.
 ///
 /// Pass [`Comments::synthetic`] to attach generated comments (chain
 /// [`Comments::with_blank_before`] for blank lines between statements), or
@@ -59,13 +59,13 @@ fn print_chunk<'ast>(
 /// which `luck_parser` never builds and would refuse to read back.
 pub fn format_chunk<'ast>(
     allocator: &'ast Allocator,
-    chunk: &'ast Chunk<'ast>,
+    chunk: &'ast Block<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
 ) -> Result<Vec<u8>, Diagnostic> {
-    if block_nesting_depth(&chunk.block) > MAX_NESTING_DEPTH {
+    if block_nesting_depth(chunk) > MAX_NESTING_DEPTH {
         return Err(Diagnostic::e008(
-            chunk.block.span,
+            chunk.span,
             format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
         ));
     }
@@ -75,15 +75,10 @@ pub fn format_chunk<'ast>(
 /// Parses `source` into `allocator` and formats it. Input that fails to parse
 /// returns empty output with its parse errors in `FormatResult::errors`.
 ///
-/// `source` is bytes, as Lua reads it, and the formatter copies a comment or
+/// `source` is bytes, as Luau reads it, and the formatter copies a comment or
 /// a string that isn't UTF-8 as written.
-pub fn format(
-    allocator: &Allocator,
-    source: &[u8],
-    version: LuaVersion,
-    options: &FormatOptions,
-) -> FormatResult {
-    let parse = luck_parser::parse_with_tokens(allocator, source, version);
+pub fn format(allocator: &Allocator, source: &[u8], options: &FormatOptions) -> FormatResult {
+    let parse = luck_parser::parse_with_tokens(allocator, source);
     format_parsed(allocator, &parse, options)
 }
 

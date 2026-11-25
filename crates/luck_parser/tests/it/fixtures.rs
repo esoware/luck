@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_parser::{parse, parse_with_tokens};
-use luck_testgen::lua_fixtures;
+use luck_testgen::source_fixtures;
 
 #[test]
 fn fixtures_outside_errors_parse_cleanly() {
@@ -10,8 +10,8 @@ fn fixtures_outside_errors_parse_cleanly() {
     let mut failures = Vec::new();
     let mut success_count = 0;
 
-    for fixture in lua_fixtures() {
-        let result = parse(&allocator, fixture.source.as_bytes(), fixture.version);
+    for fixture in source_fixtures() {
+        let result = parse(&allocator, fixture.source.as_bytes());
 
         if fixture.is_error {
             // Fixtures under `errors/` may or may not parse.
@@ -41,15 +41,10 @@ fn fixtures_outside_errors_parse_cleanly() {
 
 #[test]
 fn every_fixture_parses_with_the_tokens_it_lexes_to() {
-    for fixture in lua_fixtures() {
-        let (source, version) = (fixture.source.as_bytes(), fixture.version);
+    for fixture in source_fixtures() {
+        let source = fixture.source.as_bytes();
         let allocator = Allocator::new();
-        let tokens = parse_with_tokens(&allocator, source, version).tokens;
-        assert_eq!(
-            tokens,
-            luck_lexer::lex(source, version).tokens,
-            "{}",
-            fixture.relative_path.display()
-        );
+        let tokens = parse_with_tokens(&allocator, source).tokens;
+        assert_eq!(tokens, luck_lexer::lex(source).tokens, "{}", fixture.relative_path.display());
     }
 }

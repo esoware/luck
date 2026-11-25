@@ -36,17 +36,15 @@ mod tests {
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
-    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::fixtures::{document_at, session, uri};
     use crate::workspace::WorkspaceView;
 
-    fn serve_every_request(source: &str, version: LuaVersion) {
-        let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
+    fn serve_every_request(source: &str) {
         let uri = uri();
         let project = Project::defaults(PathBuf::from("."));
-        let document = document_at(source, target, project, Path::new("main.lua"));
+        let document = document_at(source, project, Path::new("main.luau"));
         let session = session();
         let workspace = WorkspaceView::new(&session, &[], &|| false);
         let lints = document.lint(&|| false).expect("nothing cancels it");

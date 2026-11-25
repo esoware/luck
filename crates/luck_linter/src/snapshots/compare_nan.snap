@@ -2,67 +2,67 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 0/0
   |              ^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:17
+ --> Standalone:1:17
 1 | local differs = 0/0 ~= x
   |                 ^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 0.0/0
   |              ^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 0/0.0
   |              ^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 0x0/0
   |              ^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 0e0/0
   |              ^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == -(0/0)
   |              ^^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 1e999 - 1e999
   |              ^^^^^^^^^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == 0/0 + 1
   |              ^^^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:1:14
+ --> Standalone:1:14
 1 | local same = x == (0/0)
   |              ^^^^^^^^^^
 help: use `x ~= x` to check for NaN
 
 error: NaN (`0/0`) equals nothing, so this comparison always has the same result
- --> Lua54:2:4
+ --> Standalone:2:4
 1 | local x = 1
 2 | if x == 0/0 then end
   |    ^^^^^^^^

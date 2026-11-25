@@ -7,7 +7,7 @@ use luck_semantic::{AstNode, AstTypesBitset};
 use luck_stdlib::{
     ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
 };
-use luck_token::{index_to_offset, is_lua_whitespace};
+use luck_token::{index_to_offset, is_luau_whitespace};
 
 use crate::call::CallArgs;
 use crate::context::{ContextHost, LintContext};
@@ -117,8 +117,7 @@ fn deprecated_params(
 }
 
 /// Flags each literal string argument that's a deprecated constant, like a
-/// dead service name in `game:GetService(...)` or `collectgarbage("setpause")`
-/// in 5.4.
+/// dead service name in `game:GetService(...)`.
 ///
 /// Only positions that every signature matching the call's arity limits to
 /// constants are checked.
@@ -204,20 +203,19 @@ fn fit_to_position(
     is_statement: bool,
     context: &ContextHost<'_>,
 ) -> Option<Vec<u8>> {
-    let version = context.semantic.version();
     let allocator = Allocator::new();
     if is_statement {
         let statement = [&b"do "[..], &expanded, b" end"].concat();
-        let parse = luck_parser::parse(&allocator, &statement, version);
+        let parse = luck_parser::parse(&allocator, &statement);
         return parse.errors.is_empty().then_some(expanded);
     }
     let return_stmt = [&b"return "[..], &expanded].concat();
-    let parse = luck_parser::parse(&allocator, &return_stmt, version);
+    let parse = luck_parser::parse(&allocator, &return_stmt);
     if !parse.errors.is_empty() {
         return None;
     }
     let is_unary = matches!(
-        &*parse.chunk.block.stmts,
+        &*parse.chunk.stmts,
         [Statement::Return(returned)]
             if matches!(returned.exprs.first(), Some(Expression::UnaryOp(_)))
     );
@@ -233,7 +231,7 @@ fn is_followed_by_tighter_binding(offset: u32, context: &ContextHost<'_>) -> boo
     let bytes = context.source;
     let mut index = offset as usize;
     loop {
-        index += bytes[index..].iter().take_while(|&&b| is_lua_whitespace(b)).count();
+        index += bytes[index..].iter().take_while(|&&b| is_luau_whitespace(b)).count();
         let found = context
             .comments
             .binary_search_by_key(&index_to_offset(index), |comment| comment.span.start)
@@ -302,85 +300,69 @@ fn check_field_accesses(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
+    const PASS: &[&str] = &[
         // The type of `obj` is unknown, so `getn` doesn't resolve to a stdlib
         // entry.
-        ("obj:getn()", LuaTarget::Lua54),
-        ("local p = game:GetService('Players')", LuaTarget::LuauRoblox),
-        ("local p = Instance.new('Part')", LuaTarget::LuauRoblox),
-        (
-            "\
-local Enum = {}
-local a = Enum.AlignType.Parallel",
-            LuaTarget::LuauRoblox,
-        ),
-        (
-            "\
-Enum = {}
-local a = Enum.AlignType.Parallel",
-            LuaTarget::LuauRoblox,
-        ),
+        "obj:getn()",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("unpack(t)", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
         // Only a suggestion, since `#` calls `__len`.
-        ("local n = table.getn(t)", LuaTarget::Lua54),
-        ("wait(1)", LuaTarget::LuauRoblox),
-        ("unpack(f(--[[why]] t))", LuaTarget::Lua54),
-        ("loadstring('x')", LuaTarget::Lua54),
-        ("string.gfind(s, p)", LuaTarget::Lua54),
-        ("local r = math.pow(a, b)", LuaTarget::Lua54),
-        // `(a ^ b)` can't stand alone as a statement, so there's no fix.
-        ("math.pow(a, b)", LuaTarget::Lua54),
-        ("math.log10(x)", LuaTarget::Lua54),
-        // A string literal has the `string` shape, so `:gfind` warns like
-        // `string.gfind`.
-        ("local it = ('x'):gfind('a')", LuaTarget::Lua51),
-        ("local p = game:GetService('PointsService')", LuaTarget::LuauRoblox),
-        ("local p = game:GetService'PointsService'", LuaTarget::LuauRoblox),
-        ("local p = Instance.new('Part', workspace)", LuaTarget::LuauRoblox),
-        ("local a = Enum.AlignType.Parallel", LuaTarget::LuauRoblox),
-        // Per-constant deprecation from the 5.4 GC rework.
-        ("collectgarbage('setpause', 100)", LuaTarget::Lua54),
-        ("collectgarbage'setpause'", LuaTarget::Lua54),
-        // The fix shouldn't regroup the base as `1 ^ b`.
-        ("local r = math.pow(a + 1, b)", LuaTarget::Lua54),
+        "local n = table.getn(t)",
+        "table.foreach(t, print)",
+        "table.foreachi(t, print)",
+        "local n = table.getn(f(--[[why]] t))",
         // The fix should take the length of the whole argument.
-        ("local r = table.getn(a or b)", LuaTarget::Lua54),
+        "local r = table.getn(a or b)",
         // `#t ^ 2` takes the length of `t ^ 2`, not the square of the length.
-        ("local r = table.getn(t) ^ 2", LuaTarget::Lua54),
-        // The fix shouldn't drop the range arguments.
-        ("local a, b = unpack(t, 2, 3)", LuaTarget::Lua54),
-        // `(f() ^ )` doesn't parse, so no fix applies.
-        ("local r = math.pow(f())", LuaTarget::Lua54),
-        // `bit32.bnot(0)` is 4294967295 and `~0` is -1.
-        ("local x = bit32.bnot(0)", LuaTarget::Lua53),
+        "local r = table.getn(t) ^ 2",
         // `#t` can't stand as a statement.
-        (
-            "\
+        "\
 local a = 1
 table.getn(t)",
-            LuaTarget::Lua54,
-        ),
-        ("local r = table.getn(t).x", LuaTarget::Lua54),
-        ("local r = table.getn(t) .. 'x'", LuaTarget::Lua54),
-        ("local r = math.pow(a --[[why]], b)", LuaTarget::Lua54),
-        (
-            "\
-local table = {}
-local a = unpack(t)",
-            LuaTarget::Lua54,
-        ),
+        "local r = table.getn(t).x",
+        "local r = table.getn(t) .. 'x'",
+        // The fix would drop the comment.
+        "local r = table.getn(t --[[why]])",
+    ];
+
+    const ROBLOX_PASS: &[&str] = &[
+        "local p = game:GetService('Players')",
+        "local p = Instance.new('Part')",
+        "\
+local Enum = {}
+local a = Enum.AlignType.Parallel",
+        "\
+Enum = {}
+local a = Enum.AlignType.Parallel",
+    ];
+
+    const ROBLOX_FAIL: &[&str] = &[
+        "wait(1)",
+        "ypcall(f)",
+        // The fix shouldn't drop the arguments the template doesn't name.
+        "local ok = ypcall(f, 1, 2)",
+        "delay(1, f, 'x')",
+        "local ok = ypcall(g(--[[why]] f))",
+        "local s = stats()",
+        "local n = collectgarbage('count')",
+        "local p = game:GetService('PointsService')",
+        "local p = game:GetService'PointsService'",
+        "local p = Instance.new('Part', workspace)",
+        "local a = Enum.AlignType.Parallel",
+        // `task.wait` would read the local `task`, so there's no fix.
+        "\
+local task = {}
+wait(1)",
     ];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::Deprecated, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::Deprecated, PASS, FAIL)
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }

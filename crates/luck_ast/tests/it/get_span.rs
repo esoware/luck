@@ -1,5 +1,5 @@
 use luck_allocator::{Allocator, Box};
-use luck_ast::{Expression, Field, GetSpan as _, Name, Parameter, Type};
+use luck_ast::{Expression, Field, GetSpan as _, Name, Type, TypedName};
 use luck_token::Span;
 
 fn name(text: &'static str, start: u32) -> Name<'static> {
@@ -12,9 +12,9 @@ fn a_node_without_a_span_spans_its_fields() {
     let allocator = Allocator::new();
     // x: T, then x alone
     let annotation = Type::new_name("T".into(), None, Span::new(3, 4), &allocator);
-    let typed = Parameter::new(name("x", 0), Some(Box::new_in(annotation, &allocator)));
+    let typed = TypedName::new(name("x", 0), Some(Box::new_in(annotation, &allocator)));
     assert_eq!(typed.span(), Span::new(0, 4));
-    assert_eq!(Parameter::new(name("x", 0), None).span(), Span::new(0, 1));
+    assert_eq!(TypedName::new(name("x", 0), None).span(), Span::new(0, 1));
     // k = nil
     let field = Field::Named { name: name("k", 1), value: Expression::Nil(Span::new(5, 8)) };
     assert_eq!(field.span(), Span::new(1, 8));

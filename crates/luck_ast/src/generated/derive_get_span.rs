@@ -4,17 +4,16 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
-    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
-    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan,
-    GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor,
-    OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
-    ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
-    TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField,
-    TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
+    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
+    GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, IfExpression, IfStatement,
+    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
+    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
+    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
+    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType,
+    UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 impl GetSpan for Expression<'_> {
@@ -184,17 +183,6 @@ impl GetSpan for FunctionBody<'_> {
     }
 }
 
-impl GetSpan for Parameter<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        let mut span = self.name.span();
-        if let Some(ty) = &self.type_annotation {
-            span = span.merge(ty.span());
-        }
-        span
-    }
-}
-
 impl GetSpan for VarArgParam<'_> {
     #[inline]
     fn span(&self) -> Span {
@@ -237,13 +225,6 @@ impl GetSpan for StringLiteral<'_> {
     }
 }
 
-impl GetSpan for Chunk<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.block.span()
-    }
-}
-
 impl GetSpan for Block<'_> {
     #[inline]
     fn span(&self) -> Span {
@@ -267,11 +248,6 @@ impl GetSpan for Statement<'_> {
             Self::LocalAssignment(local_assignment) => local_assignment.span(),
             Self::Return(return_stmt) => return_stmt.span(),
             Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
-            Self::Goto(goto_stmt) => goto_stmt.span(),
-            Self::Label(label_stmt) => label_stmt.span(),
-            Self::GlobalDeclaration(global_declaration) => global_declaration.span(),
-            Self::GlobalFunction(global_function) => global_function.span(),
-            Self::GlobalStar(global_star) => global_star.span(),
             Self::CompoundAssignment(compound_assignment) => compound_assignment.span(),
             Self::TypeDeclaration(type_declaration) => type_declaration.span(),
         }
@@ -362,42 +338,18 @@ impl GetSpan for LocalFunction<'_> {
     }
 }
 
-impl GetSpan for Attribute<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
-    }
-}
-
-impl GetSpan for AttributedName<'_> {
+impl GetSpan for TypedName<'_> {
     #[inline]
     fn span(&self) -> Span {
         let mut span = self.name.span();
         if let Some(ty) = &self.type_annotation {
             span = span.merge(ty.span());
         }
-        if let Some(attribute) = &self.attribute {
-            span = span.merge(attribute.span());
-        }
         span
     }
 }
 
 impl GetSpan for LocalAssignment<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
-    }
-}
-
-impl GetSpan for GotoStatement<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
-    }
-}
-
-impl GetSpan for LabelStatement<'_> {
     #[inline]
     fn span(&self) -> Span {
         self.span
@@ -431,27 +383,6 @@ impl GetSpan for TypeDeclarationValue<'_> {
             Self::Alias(ty) => ty.span(),
             Self::TypeFunction(function_body) => function_body.span(),
         }
-    }
-}
-
-impl GetSpan for GlobalDeclaration<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
-    }
-}
-
-impl GetSpan for GlobalFunction<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
-    }
-}
-
-impl GetSpan for GlobalStar<'_> {
-    #[inline]
-    fn span(&self) -> Span {
-        self.span
     }
 }
 

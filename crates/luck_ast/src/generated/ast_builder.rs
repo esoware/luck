@@ -2,27 +2,26 @@
 // `just ast` after changing one.
 
 use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
-use luck_token::{BinOp, CompoundOp, LuaNumber, LuaVersion, Span, UnOp};
+use luck_token::{BinOp, CompoundOp, Span, UnOp};
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
-    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
-    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
-    GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name,
-    NameIndex, NamedType, NumberLiteral, NumericFor, OneOrMore, OptionalType, Parameter,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
-    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp,
-    UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute, FunctionBody,
+    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
+    GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement, IntegerLiteral,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NameIndex, NamedType,
+    NumberLiteral, NumericFor, OneOrMore, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
+    TypeField, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType,
+    WhileLoop,
 };
 
 impl<'ast> Expression<'ast> {
     #[inline]
     pub fn new_number(
-        value: LuaNumber,
+        value: f64,
         raw: Option<ThinStr<'ast>>,
         span: Span,
         is_exact: bool,
@@ -449,7 +448,7 @@ impl<'ast> FunctionBody<'ast> {
     pub const fn new(
         span: Span,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, Parameter<'ast>>,
+        params: List<'ast, TypedName<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
         return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
@@ -461,7 +460,7 @@ impl<'ast> FunctionBody<'ast> {
     pub fn boxed(
         span: Span,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, Parameter<'ast>>,
+        params: List<'ast, TypedName<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
         return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
@@ -471,31 +470,19 @@ impl<'ast> FunctionBody<'ast> {
     }
 }
 
-impl<'ast> Parameter<'ast> {
-    #[inline]
-    pub const fn new(name: Name<'ast>, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
-        Self { name, type_annotation }
-    }
-}
-
 impl<'ast> VarArgParam<'ast> {
     #[inline]
-    pub const fn new(
-        span: Span,
-        name: Option<Name<'ast>>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
-    ) -> Self {
-        Self { span, name, type_annotation }
+    pub const fn new(span: Span, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
+        Self { span, type_annotation }
     }
 
     #[inline]
     pub fn boxed(
         span: Span,
-        name: Option<Name<'ast>>,
         type_annotation: Option<Box<'ast, Type<'ast>>>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name, type_annotation), allocator)
+        Box::new_in(Self::new(span, type_annotation), allocator)
     }
 }
 
@@ -529,18 +516,13 @@ impl<'ast> Name<'ast> {
 
 impl<'ast> NumberLiteral<'ast> {
     #[inline]
-    pub const fn new(
-        value: LuaNumber,
-        raw: Option<ThinStr<'ast>>,
-        span: Span,
-        is_exact: bool,
-    ) -> Self {
+    pub const fn new(value: f64, raw: Option<ThinStr<'ast>>, span: Span, is_exact: bool) -> Self {
         Self { value, raw, span, is_exact }
     }
 
     #[inline]
     pub fn boxed(
-        value: LuaNumber,
+        value: f64,
         raw: Option<ThinStr<'ast>>,
         span: Span,
         is_exact: bool,
@@ -581,13 +563,6 @@ impl<'ast> StringLiteral<'ast> {
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
         Box::new_in(Self::new(value, raw, span), allocator)
-    }
-}
-
-impl<'ast> Chunk<'ast> {
-    #[inline]
-    pub const fn new(version: LuaVersion, block: Block<'ast>) -> Self {
-        Self { version, block }
     }
 }
 
@@ -664,33 +639,22 @@ impl<'ast> Statement<'ast> {
     }
 
     #[inline]
-    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
     pub fn new_numeric_for(
         span: Span,
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::NumericFor(NumericFor::boxed(
-            span,
-            name,
-            type_annotation,
-            start,
-            limit,
-            step,
-            block,
-            allocator,
-        ))
+        Self::NumericFor(NumericFor::boxed(span, variable, start, limit, step, block, allocator))
     }
 
     #[inline]
     pub fn new_generic_for(
         span: Span,
-        names: List<'ast, Parameter<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
@@ -733,15 +697,12 @@ impl<'ast> Statement<'ast> {
     #[inline]
     pub fn new_local_assignment(
         span: Span,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-        names: List<'ast, AttributedName<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::LocalAssignment(LocalAssignment::boxed(
-            span, attribute, names, exprs, kind, allocator,
-        ))
+        Self::LocalAssignment(LocalAssignment::boxed(span, names, exprs, kind, allocator))
     }
 
     #[inline]
@@ -751,46 +712,6 @@ impl<'ast> Statement<'ast> {
         allocator: &'ast Allocator,
     ) -> Self {
         Self::Return(ReturnStatement::boxed(span, exprs, allocator))
-    }
-
-    #[inline]
-    pub fn new_goto(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Self {
-        Self::Goto(GotoStatement::boxed(span, name, allocator))
-    }
-
-    #[inline]
-    pub fn new_label(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Self {
-        Self::Label(LabelStatement::boxed(span, name, allocator))
-    }
-
-    #[inline]
-    pub fn new_global_declaration(
-        span: Span,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-        names: List<'ast, AttributedName<'ast>>,
-        exprs: List<'ast, Expression<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::GlobalDeclaration(GlobalDeclaration::boxed(span, attribute, names, exprs, allocator))
-    }
-
-    #[inline]
-    pub fn new_global_function(
-        span: Span,
-        name: Name<'ast>,
-        body: FunctionBody<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::GlobalFunction(GlobalFunction::boxed(span, name, body, allocator))
-    }
-
-    #[inline]
-    pub fn new_global_star(
-        span: Span,
-        attribute: Option<Attribute<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::GlobalStar(GlobalStar::boxed(span, attribute, allocator))
     }
 
     #[inline]
@@ -939,29 +860,26 @@ impl<'ast> NumericFor<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
     ) -> Self {
-        Self { span, name, type_annotation, start, limit, step, block }
+        Self { span, variable, start, limit, step, block }
     }
 
     #[inline]
-    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
     pub fn boxed(
         span: Span,
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
+        variable: TypedName<'ast>,
         start: Expression<'ast>,
         limit: Expression<'ast>,
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name, type_annotation, start, limit, step, block), allocator)
+        Box::new_in(Self::new(span, variable, start, limit, step, block), allocator)
     }
 }
 
@@ -969,7 +887,7 @@ impl<'ast> GenericFor<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
-        names: List<'ast, Parameter<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         block: Block<'ast>,
     ) -> Self {
@@ -979,7 +897,7 @@ impl<'ast> GenericFor<'ast> {
     #[inline]
     pub fn boxed(
         span: Span,
-        names: List<'ast, Parameter<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         block: Block<'ast>,
         allocator: &'ast Allocator,
@@ -1049,26 +967,10 @@ impl<'ast> LocalFunction<'ast> {
     }
 }
 
-impl<'ast> Attribute<'ast> {
+impl<'ast> TypedName<'ast> {
     #[inline]
-    pub const fn new(span: Span, name: Name<'ast>) -> Self {
-        Self { span, name }
-    }
-
-    #[inline]
-    pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name), allocator)
-    }
-}
-
-impl<'ast> AttributedName<'ast> {
-    #[inline]
-    pub const fn new(
-        name: Name<'ast>,
-        type_annotation: Option<Box<'ast, Type<'ast>>>,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-    ) -> Self {
-        Self { name, type_annotation, attribute }
+    pub const fn new(name: Name<'ast>, type_annotation: Option<Box<'ast, Type<'ast>>>) -> Self {
+        Self { name, type_annotation }
     }
 }
 
@@ -1076,48 +978,22 @@ impl<'ast> LocalAssignment<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-        names: List<'ast, AttributedName<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
     ) -> Self {
-        Self { span, attribute, names, exprs, kind }
+        Self { span, names, exprs, kind }
     }
 
     #[inline]
     pub fn boxed(
         span: Span,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-        names: List<'ast, AttributedName<'ast>>,
+        names: List<'ast, TypedName<'ast>>,
         exprs: List<'ast, Expression<'ast>>,
         kind: LocalAssignmentKind,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, attribute, names, exprs, kind), allocator)
-    }
-}
-
-impl<'ast> GotoStatement<'ast> {
-    #[inline]
-    pub const fn new(span: Span, name: Name<'ast>) -> Self {
-        Self { span, name }
-    }
-
-    #[inline]
-    pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name), allocator)
-    }
-}
-
-impl<'ast> LabelStatement<'ast> {
-    #[inline]
-    pub const fn new(span: Span, name: Name<'ast>) -> Self {
-        Self { span, name }
-    }
-
-    #[inline]
-    pub fn boxed(span: Span, name: Name<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name), allocator)
+        Box::new_in(Self::new(span, names, exprs, kind), allocator)
     }
 }
 
@@ -1185,7 +1061,7 @@ impl<'ast> TypeDeclarationValue<'ast> {
     pub fn new_type_function(
         span: Span,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, Parameter<'ast>>,
+        params: List<'ast, TypedName<'ast>>,
         vararg: Option<Box<'ast, VarArgParam<'ast>>>,
         return_type: Option<Box<'ast, Type<'ast>>>,
         block: Block<'ast>,
@@ -1200,62 +1076,6 @@ impl<'ast> TypeDeclarationValue<'ast> {
             block,
             allocator,
         ))
-    }
-}
-
-impl<'ast> GlobalDeclaration<'ast> {
-    #[inline]
-    pub const fn new(
-        span: Span,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-        names: List<'ast, AttributedName<'ast>>,
-        exprs: List<'ast, Expression<'ast>>,
-    ) -> Self {
-        Self { span, attribute, names, exprs }
-    }
-
-    #[inline]
-    pub fn boxed(
-        span: Span,
-        attribute: Option<Box<'ast, Attribute<'ast>>>,
-        names: List<'ast, AttributedName<'ast>>,
-        exprs: List<'ast, Expression<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, attribute, names, exprs), allocator)
-    }
-}
-
-impl<'ast> GlobalFunction<'ast> {
-    #[inline]
-    pub const fn new(span: Span, name: Name<'ast>, body: FunctionBody<'ast>) -> Self {
-        Self { span, name, body }
-    }
-
-    #[inline]
-    pub fn boxed(
-        span: Span,
-        name: Name<'ast>,
-        body: FunctionBody<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name, body), allocator)
-    }
-}
-
-impl<'ast> GlobalStar<'ast> {
-    #[inline]
-    pub const fn new(span: Span, attribute: Option<Attribute<'ast>>) -> Self {
-        Self { span, attribute }
-    }
-
-    #[inline]
-    pub fn boxed(
-        span: Span,
-        attribute: Option<Attribute<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, attribute), allocator)
     }
 }
 

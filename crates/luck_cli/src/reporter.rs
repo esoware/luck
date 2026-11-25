@@ -9,7 +9,7 @@ use std::io::{self, Write as _};
 
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-use luck_token::{LineIndex, LuaVersion};
+use luck_token::LineIndex;
 
 pub(crate) use default::DefaultReporter;
 pub(crate) use github::GithubReporter;
@@ -20,10 +20,9 @@ pub(crate) use json::JsonReporter;
 pub(crate) struct SourceFile<'text> {
     /// What the output calls it.
     pub label: &'text str,
-    /// Bytes, as Lua reads a source, or `None` for a file that can't be
+    /// Bytes, as Luau reads a source, or `None` for a file that can't be
     /// read, which no snippet shows.
     pub text: Option<&'text [u8]>,
-    pub version: LuaVersion,
 }
 
 /// One output format.
@@ -35,12 +34,12 @@ pub(crate) trait Reporter {
 
 /// Writes `files`' diagnostics to stderr in the default format, each file's
 /// text read from disk.
-pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
+pub(crate) fn print_files(files: &[FileDiagnostics]) {
     let mut output = Vec::new();
     for file in files {
         let text = FileSystemOs.read(&file.path).ok();
         let label = to_slash_lossy(&file.path);
-        let source = SourceFile { label: &label, text: text.as_deref(), version };
+        let source = SourceFile { label: &label, text: text.as_deref() };
         DefaultReporter.render(source, &file.diags, &mut output);
     }
     // A failed write has nowhere to be reported.
@@ -49,9 +48,9 @@ pub(crate) fn print_files(files: &[FileDiagnostics], version: LuaVersion) {
 
 /// Writes the diagnostics in `text`, a document already read, such as stdin,
 /// which `label` names, to stderr in the default format.
-pub(crate) fn print_document(label: &str, text: &[u8], diags: &[Diagnostic], version: LuaVersion) {
+pub(crate) fn print_document(label: &str, text: &[u8], diags: &[Diagnostic]) {
     let mut output = Vec::new();
-    DefaultReporter.render(SourceFile { label, text: Some(text), version }, diags, &mut output);
+    DefaultReporter.render(SourceFile { label, text: Some(text) }, diags, &mut output);
     let _ = io::stderr().write_all(&output);
 }
 
@@ -82,7 +81,7 @@ local a
 local \u{e9}b = 1
 "
         .as_bytes();
-        let lines = LineIndex::new(text, LuaVersion::Lua54);
+        let lines = LineIndex::new(text);
         assert_eq!(line_and_column(&lines, text, 0), (1, 1));
         assert_eq!(line_and_column(&lines, text, 6), (1, 7));
         assert_eq!(line_and_column(&lines, text, 8), (2, 1));
@@ -91,17 +90,9 @@ local \u{e9}b = 1
     }
 
     #[test]
-    fn line_and_column_starts_the_first_line_after_a_skipped_bom() {
-        let text = "\u{feff}local a".as_bytes();
-        let lines = LineIndex::new(text, LuaVersion::Lua54);
-        assert_eq!(line_and_column(&lines, text, 3), (1, 1));
-        assert_eq!(line_and_column(&lines, text, 9), (1, 7));
-    }
-
-    #[test]
     fn line_and_column_counts_a_byte_that_is_not_utf8_as_one_character() {
         let text = b"local s = 'caf\xE9' local";
-        let lines = LineIndex::new(text, LuaVersion::Lua51);
+        let lines = LineIndex::new(text);
         assert_eq!(line_and_column(&lines, text, 17), (1, 18));
     }
 }

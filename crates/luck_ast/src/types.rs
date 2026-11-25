@@ -1,7 +1,5 @@
 //! Types appear in the annotation positions (parameters, varargs, return
 //! types, local/loop bindings, casts) and in `type` declarations.
-//!
-//! Outside Luau these nodes never occur; the parser gates on `LuaVersion::has_type_syntax`.
 
 use std::mem;
 
@@ -123,8 +121,8 @@ pub struct FunctionTypeParam<'ast> {
     pub ty: Type<'ast>,
 }
 
-/// Luau also accepts `T??`. The parser and `Synth` build one node for a run
-/// of `?`, so `ty` is never itself an optional.
+/// `T??` is valid too. The parser and `Synth` build one node for a run of
+/// `?`, so `ty` is never itself an optional.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[visit(level)]
 pub struct OptionalType<'ast> {

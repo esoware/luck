@@ -48,44 +48,30 @@ fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local s = tostring(1)
 print(s)",
-            LuaTarget::Lua54,
-        ),
         // `table.insert` mutates, so discarding its result is fine.
-        ("table.insert(t, 1)", LuaTarget::Lua54),
-        ("obj:tostring()", LuaTarget::Lua54),
-        (
-            "\
-local f = io.open('x')
-f:seek('set')",
-            LuaTarget::Lua54,
-        ),
+        "table.insert(t, 1)",
+        "obj:tostring()",
         // The call runs a full collection.
-        ("collectgarbage()", LuaTarget::Luau),
+        "collectgarbage()",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("tostring(1)", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "tostring(1)",
         // Discarding a pcall loses the success bool, which is the whole point of
         // calling it.
-        ("pcall(f)", LuaTarget::Lua54),
-        ("coroutine.create(f)", LuaTarget::Lua54),
-        ("table.clone(t)", LuaTarget::Luau),
-        (
-            "\
+        "pcall(f)",
+        "coroutine.create(f)",
+        "table.clone(t)",
+        "\
 local s = 'x'
 s:upper()",
-            LuaTarget::Lua54,
-        ),
     ];
 
     #[test]

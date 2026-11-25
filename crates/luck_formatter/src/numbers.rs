@@ -1,8 +1,8 @@
-//! The base prefix (`0x`/`0b`) and exponent marker (`e`/`p`) are always
+//! The base prefix (`0x`/`0b`) and exponent marker (`e`) are always
 //! lowercased, and a bare leading dot gains a zero (`.5` -> `0.5`).
 //!
-//! Neither is a style option. Hex digit case follows [`HexCase`]. Digit separators (`_`, Luau)
-//! stay, and the value never changes.
+//! Neither is a style option. Hex digit case follows [`HexCase`]. Digit separators (`_`) stay,
+//! and the value never changes.
 
 use crate::HexCase;
 
@@ -15,9 +15,6 @@ pub(crate) fn normalize_number(text: &[u8], hex_case: HexCase, normalized: &mut 
         _ => return normalize_decimal(text, normalized),
     };
     let normal_digit = |b: u8| match b {
-        // Hex-float exponent. Its sign and decimal digits fall through
-        // unchanged.
-        b'p' | b'P' if is_hex => b'p',
         b'a'..=b'f' | b'A'..=b'F' if is_hex => apply_hex_case(b, hex_case),
         _ => b,
     };
@@ -84,13 +81,6 @@ mod tests {
     }
 
     #[test]
-    fn hex_float_exponent_lowered_digits_cased() {
-        // `p` marker lowered; `A` digit follows config; `-2` exponent intact.
-        assert_eq!(normal("0xAP-2", HexCase::Lower), "0xap-2");
-        assert_eq!(normal("0x1.8P3", HexCase::Preserve), "0x1.8p3");
-    }
-
-    #[test]
     fn separators_preserved() {
         assert_eq!(normal("0xFF_FF", HexCase::Lower), "0xff_ff");
         assert_eq!(normal("1_000_000", HexCase::Upper), "1_000_000");
@@ -101,15 +91,14 @@ mod tests {
         assert_eq!(normal(".5", HexCase::Preserve), "0.5");
         assert_eq!(normal(".5E2", HexCase::Preserve), "0.5e2");
         assert_eq!(normal(".5e2", HexCase::Preserve), "0.5e2");
-        // Already-zeroed forms and hex floats are untouched.
+        // An already-zeroed form is untouched.
         assert_eq!(normal("0.5", HexCase::Preserve), "0.5");
-        assert_eq!(normal("0x.8p1", HexCase::Preserve), "0x.8p1");
     }
 
     #[test]
     fn a_normal_number_is_left_as_written() {
         let mut normalized = Vec::new();
-        for text in ["0xff", "0xFF", "0b101", "1e5", "0x1p4", "12"] {
+        for text in ["0xff", "0xFF", "0b101", "1e5", "12"] {
             assert!(
                 !normalize_number(text.as_bytes(), HexCase::Preserve, &mut normalized),
                 "{text}"
@@ -120,7 +109,7 @@ mod tests {
 
     #[test]
     fn normalization_is_idempotent() {
-        for input in ["0XB0", "0xDEad", "1E10", "0xAP-2", "0B10", ".5", ".5E2"] {
+        for input in ["0XB0", "0xDEad", "1E10", "0B10", ".5", ".5E2"] {
             for case in [HexCase::Preserve, HexCase::Lower, HexCase::Upper] {
                 let once = normal(input, case);
                 assert_eq!(normal(&once, case), once, "{input} @ {case:?}");

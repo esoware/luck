@@ -10,7 +10,7 @@ use luck_bundler::{bundle, bundle_minified};
 use luck_config::{BuildConfig, Project, check_output_paths, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-use luck_token::{LuaVersion, chunk_start, has_shebang};
+use luck_token::has_shebang;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
@@ -213,10 +213,9 @@ impl BuildArgs {
         let start = Instant::now();
         // The arenas outlive each build, so a rebuild reuses their memory.
         arenas.reset();
-        let version = config.target.version();
-        let options = project.bundle_options(version);
+        let options = project.bundle_options();
         let bundle_failure = |errors: Vec<FileDiagnostics>| {
-            print_files(&errors, version);
+            print_files(&errors);
             let source_files =
                 errors.into_iter().map(|file| file.path).chain([config.entry.clone()]).collect();
             BuildFailure::Failed { source_files }
@@ -233,19 +232,19 @@ impl BuildArgs {
                 .map_err(bundle_failure)?;
             check_output(&minified.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_files(&minified.warnings, version);
+                print_files(&minified.warnings);
             }
             (minified.output, minified.source_files, Some(minified.source_byte_count))
         } else {
             let result = bundle(arenas, &config.entry, &options).map_err(bundle_failure)?;
             check_output(&result.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_files(&result.warnings, version);
+                print_files(&result.warnings);
             }
             (result.output, result.source_files, None)
         };
 
-        let output = with_preamble(config, bundled, version);
+        let output = with_preamble(config, bundled);
 
         if self.dry_run {
             eprintln!("[dry-run] Would write: {}", config.output.display());
@@ -282,13 +281,13 @@ fn watched_directories(files: &[PathBuf]) -> Vec<PathBuf> {
     directories
 }
 
-/// `output` with `config`'s preamble on top, after the BOM and shebang line a
-/// loader only skips at the very start of a chunk.
-fn with_preamble(config: &BuildConfig, output: Vec<u8>, version: LuaVersion) -> Vec<u8> {
+/// `output` with `config`'s preamble on top, after the shebang line a loader
+/// only skips at the very start of a chunk.
+fn with_preamble(config: &BuildConfig, output: Vec<u8>) -> Vec<u8> {
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
-        // A short comment ends at a CR as well as at an LF, on every target.
+        // A short comment ends at a CR as well as at an LF.
         for line in text.lines().flat_map(|line| line.split('\r')) {
             lines.push(format!("-- {line}"));
         }
@@ -307,14 +306,13 @@ fn with_preamble(config: &BuildConfig, output: Vec<u8>, version: LuaVersion) -> 
     }
     let preamble = lines.join("\n");
 
-    let (bom, chunk) = output.split_at(chunk_start(&output, version));
-    if !has_shebang(chunk, version) {
-        return [bom, preamble.as_bytes(), b"\n", chunk].concat();
+    if !has_shebang(&output) {
+        return [preamble.as_bytes(), b"\n", output.as_slice()].concat();
     }
-    let shebang_length = chunk.iter().position(|&b| b == b'\n').unwrap_or(chunk.len());
-    let (shebang, from_line_break) = chunk.split_at(shebang_length);
+    let shebang_length = output.iter().position(|&b| b == b'\n').unwrap_or(output.len());
+    let (shebang, from_line_break) = output.split_at(shebang_length);
     let body = from_line_break.get(1..).unwrap_or_default();
-    [bom, shebang, b"\n", preamble.as_bytes(), b"\n", body].concat()
+    [shebang, b"\n", preamble.as_bytes(), b"\n", body].concat()
 }
 
 /// Blocks until a relevant file changes, then drains what's queued behind it.
@@ -358,11 +356,11 @@ fn has_changed(states: &[(PathBuf, FileState)]) -> bool {
     states.iter().any(|(file, state)| file_state(file) != *state)
 }
 
-/// Only `.lua`, `.luau`, `.json`, and `.luaurc` changes trigger a rebuild, so
+/// Only `.luau`, `.lua`, `.json`, and `.luaurc` changes trigger a rebuild, so
 /// editor temp files and `.git` churn don't.
 fn is_relevant_change(path: &Path) -> bool {
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("lua" | "luau" | "json") => true,
+        Some("luau" | "lua" | "json") => true,
         _ => path.file_name().is_some_and(|name| name == ".luaurc"),
     }
 }
@@ -388,7 +386,6 @@ fn relative_display(path: &Path) -> Cow<'_, str> {
 fn print_build_header(config: &BuildConfig) {
     let version = env!("CARGO_PKG_VERSION");
     eprintln!("\x1b[1;36mluck\x1b[0m \x1b[2mv{version}\x1b[0m\n");
-    eprintln!("  \x1b[2mTarget:\x1b[0m  {}", config.target);
     eprintln!("  \x1b[2mEntry:\x1b[0m   {}", relative_display(&config.entry));
     if config.minify {
         eprintln!("  \x1b[2mMinify:\x1b[0m  \x1b[32menabled\x1b[0m");
@@ -477,20 +474,22 @@ mod tests {
     fn a_save_during_a_rebuild_starts_another() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = directory.path();
-        fs::write(project.join("main.lua"), "return require('small')\n").expect("write main.lua");
-        fs::write(project.join("small.lua"), "return 'v1'\n").expect("write small.lua");
+        fs::write(project.join("main.luau"), "return require('./small')\n")
+            .expect("write main.luau");
+        fs::write(project.join("small.luau"), "return 'v1'\n").expect("write small.luau");
         let config = project.join("luck.json");
-        fs::write(&config, r#"{"entry":"main.lua","output":"out.lua"}"#).expect("write luck.json");
+        fs::write(&config, r#"{"entry":"main.luau","output":"out.luau"}"#)
+            .expect("write luck.json");
         let states = states_before(&config);
-        assert!(states.iter().any(|(file, _)| file.ends_with("small.lua")), "{states:?}");
+        assert!(states.iter().any(|(file, _)| file.ends_with("small.luau")), "{states:?}");
 
         let mut arenas = ThreadAllocators::new();
         let rebuilt = watching(config).build_for_watch(&mut arenas, Verbosity::Quiet);
         assert!(rebuilt.is_ok_and(|files| files.written.len() == 1));
         assert!(!has_changed(&states), "the rebuild itself must not start another");
 
-        fs::write(project.join("small.lua"), "return 'v2, saved during the rebuild'\n")
-            .expect("save small.lua");
+        fs::write(project.join("small.luau"), "return 'v2, saved during the rebuild'\n")
+            .expect("save small.luau");
         assert!(has_changed(&states), "the save during the rebuild was lost");
     }
 
@@ -500,16 +499,16 @@ mod tests {
     fn an_output_another_build_reads_starts_no_rebuild() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = directory.path();
-        fs::write(project.join("a.lua"), "return 1\n").expect("write a.lua");
-        fs::write(project.join("b.lua"), "return require('dist.a')\n").expect("write b.lua");
+        fs::write(project.join("a.luau"), "return 1\n").expect("write a.luau");
+        fs::write(project.join("b.luau"), "return require('./dist/a')\n").expect("write b.luau");
         let config = project.join("luck.json");
         let entries = r#"{"entries":[
-            {"entry":"a.lua","output":"dist/a.lua"},
-            {"entry":"b.lua","output":"dist/b.lua"}
+            {"entry":"a.luau","output":"dist/a.luau"},
+            {"entry":"b.luau","output":"dist/b.luau"}
         ]}"#;
         fs::write(&config, entries).expect("write luck.json");
         let states = states_before(&config);
-        assert!(project.join("dist/b.lua").is_file(), "both builds must succeed");
+        assert!(project.join("dist/b.luau").is_file(), "both builds must succeed");
 
         let mut arenas = ThreadAllocators::new();
         watching(config).build_for_watch(&mut arenas, Verbosity::Quiet).expect("watch goes on");
@@ -521,7 +520,7 @@ mod tests {
         for relevant in ["luck.json", "base.json", "main.lua", "main.luau", ".luaurc"] {
             assert!(is_relevant_change(Path::new(relevant)), "{relevant}");
         }
-        for irrelevant in ["main.lua~", ".main.lua.swp", "luck.toml"] {
+        for irrelevant in ["main.luau~", ".main.luau.swp", "luck.toml"] {
             assert!(!is_relevant_change(Path::new(irrelevant)), "{irrelevant}");
         }
     }
@@ -530,10 +529,13 @@ mod tests {
     /// of a file name.
     #[test]
     fn build_paths_print_with_forward_slashes() {
-        let expected = if cfg!(windows) { "src/out.lua" } else { r"src\out.lua" };
-        assert_eq!(relative_display(Path::new(r"src\out.lua")), expected);
+        let expected = if cfg!(windows) { "src/out.luau" } else { r"src\out.luau" };
+        assert_eq!(relative_display(Path::new(r"src\out.luau")), expected);
         let working_directory = env::current_dir().expect("working directory");
-        assert_eq!(relative_display(&working_directory.join("src").join("out.lua")), "src/out.lua");
+        assert_eq!(
+            relative_display(&working_directory.join("src").join("out.luau")),
+            "src/out.luau"
+        );
     }
 
     #[test]
@@ -543,9 +545,9 @@ mod tests {
         let sources = directory.path().join("sources");
         fs::create_dir_all(&project).expect("mkdir project");
         fs::create_dir_all(&sources).expect("mkdir sources");
-        fs::write(sources.join("main.lua"), "local =\n").expect("write entry");
+        fs::write(sources.join("main.luau"), "local =\n").expect("write entry");
         let config = project.join("luck.json");
-        fs::write(&config, r#"{"entry":"../sources/main.lua","output":"bundle.lua"}"#)
+        fs::write(&config, r#"{"entry":"../sources/main.luau","output":"bundle.luau"}"#)
             .expect("write luck.json");
 
         let directories = watched_for(&watching(config));
@@ -566,10 +568,10 @@ mod tests {
         fs::create_dir_all(&shared).expect("mkdir shared");
         fs::create_dir_all(&project).expect("mkdir project");
         fs::write(shared.join("base.json"), "{}").expect("write base.json");
-        fs::write(project.join("main.lua"), "return 1\n").expect("write entry");
+        fs::write(project.join("main.luau"), "return 1\n").expect("write entry");
         let config = project.join("luck.json");
         let extending =
-            r#"{"extends":["../shared/base.json"],"entry":"main.lua","output":"out.lua"}"#;
+            r#"{"extends":["../shared/base.json"],"entry":"main.luau","output":"out.luau"}"#;
         fs::write(&config, extending).expect("write luck.json");
         let canonical_shared = FileSystemOs.canonicalize_existing(&shared);
 

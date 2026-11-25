@@ -1,4 +1,4 @@
-use luck_token::{Keywords, LuaVersion, Span, Token, TokenKind};
+use luck_token::{Span, Token, TokenKind};
 
 const fn token(kind: TokenKind, start: u32, end: u32) -> Token {
     Token {
@@ -63,7 +63,7 @@ fn token_display_shows_name_and_numeral_text_but_not_string_text() {
 
 #[test]
 fn static_text_is_none_only_for_kinds_whose_text_varies_and_eof() {
-    assert_eq!(TokenKind::Goto.static_text(), Some("goto"));
+    assert_eq!(TokenKind::Continue.static_text(), Some("continue"));
     assert_eq!(TokenKind::DoubleColon.static_text(), Some("::"));
     for kind in [
         TokenKind::Identifier,
@@ -131,8 +131,14 @@ fn text_of_an_unterminated_piece_keeps_its_last_byte() {
     }
 }
 
+const KEYWORDS: [&str; 28] = [
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local",
+    "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "continue", "export",
+    "const", "type", "typeof", "read", "write",
+];
+
 #[test]
-fn keyword_reads_back_each_keyword_spelling_under_its_versions() {
+fn keyword_reads_back_each_keyword_spelling() {
     let base_keywords = [
         TokenKind::And,
         TokenKind::Break,
@@ -156,36 +162,30 @@ fn keyword_reads_back_each_keyword_spelling_under_its_versions() {
         TokenKind::Until,
         TokenKind::While,
     ];
-    for version in LuaVersion::ALL {
-        for kind in base_keywords {
-            let text = kind.static_text().unwrap();
-            assert_eq!(TokenKind::keyword(text, version), Some(kind));
-        }
-        let goto = version.has_goto().then_some(TokenKind::Goto);
-        assert_eq!(TokenKind::keyword("goto", version), goto, "{version:?}");
-        for name in ["", "x", "End", "functions", "types", "Global"] {
-            assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
-        }
+    for kind in base_keywords {
+        let text = kind.static_text().unwrap();
+        assert_eq!(TokenKind::keyword(text), Some(kind));
+        assert!(!kind.is_name(), "{kind:?}");
+    }
+    for name in ["", "x", "End", "functions", "types"] {
+        assert_eq!(TokenKind::keyword(name), None, "{name:?}");
     }
 }
 
 #[test]
-fn keyword_reads_each_contextual_keyword_only_where_its_version_has_it() {
-    for version in LuaVersion::ALL {
-        for (text, kind, has_it) in [
-            ("continue", TokenKind::Continue, version.has_continue()),
-            ("export", TokenKind::Export, version.has_type_syntax()),
-            ("const", TokenKind::Const, version.has_const_stmt()),
-            ("type", TokenKind::Type, version.has_type_syntax()),
-            ("typeof", TokenKind::Typeof, version.has_type_syntax()),
-            ("read", TokenKind::Read, version.has_type_syntax()),
-            ("write", TokenKind::Write, version.has_type_syntax()),
-            ("global", TokenKind::Global, version.has_global()),
-        ] {
-            assert_eq!(kind.static_text(), Some(text));
-            assert!(kind.is_name(), "{kind:?}");
-            assert_eq!(TokenKind::keyword(text, version), has_it.then_some(kind), "{version:?}");
-        }
+fn keyword_reads_each_contextual_keyword_as_a_name_kind() {
+    for (text, kind) in [
+        ("continue", TokenKind::Continue),
+        ("export", TokenKind::Export),
+        ("const", TokenKind::Const),
+        ("type", TokenKind::Type),
+        ("typeof", TokenKind::Typeof),
+        ("read", TokenKind::Read),
+        ("write", TokenKind::Write),
+    ] {
+        assert_eq!(kind.static_text(), Some(text));
+        assert!(kind.is_name(), "{kind:?}");
+        assert_eq!(TokenKind::keyword(text), Some(kind));
     }
 }
 
@@ -193,12 +193,7 @@ fn keyword_reads_each_contextual_keyword_only_where_its_version_has_it() {
 /// compare the whole spelling.
 #[test]
 fn keyword_rejects_every_near_spelling_of_a_keyword() {
-    let keywords = [
-        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
-        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
-        "continue", "export", "const", "type", "typeof", "read", "write", "global",
-    ];
-    for keyword in keywords {
+    for keyword in KEYWORDS {
         let (_, tail) = keyword.split_at(1);
         let (head, _) = keyword.split_at(keyword.len() - 1);
         let mut near = vec![
@@ -213,10 +208,8 @@ fn keyword_rejects_every_near_spelling_of_a_keyword() {
             bytes[i] ^= 1;
             near.push(String::from_utf8(bytes).expect("ASCII stays UTF-8"));
         }
-        for name in near.iter().filter(|name| !keywords.contains(&name.as_str())) {
-            for version in LuaVersion::ALL {
-                assert_eq!(TokenKind::keyword(name, version), None, "{name:?}");
-            }
+        for name in near.iter().filter(|name| !KEYWORDS.contains(&name.as_str())) {
+            assert_eq!(TokenKind::keyword(name), None, "{name:?}");
         }
     }
 }
@@ -224,15 +217,10 @@ fn keyword_rejects_every_near_spelling_of_a_keyword() {
 /// Every keyword, and every name one edit or one byte of length from one,
 /// beside bytes that would change the answer if a lookup read past the name.
 #[test]
-fn keywords_reads_each_name_as_keyword_does() {
-    let keywords = [
-        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
-        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
-        "continue", "export", "const", "type", "typeof", "read", "write", "global",
-    ];
+fn of_name_reads_each_name_as_keyword_does() {
     let mut names: Vec<String> =
         ["x", "_", "e", "functions", "elseiff", "typeofx", "x1234567"].map(String::from).to_vec();
-    for keyword in keywords {
+    for keyword in KEYWORDS {
         names.push(keyword.to_owned());
         names.push(format!("{keyword}s"));
         names.push(keyword[1..].to_owned());
@@ -243,47 +231,33 @@ fn keywords_reads_each_name_as_keyword_does() {
             names.push(String::from_utf8(bytes).expect("ASCII stays UTF-8"));
         }
     }
-    for version in LuaVersion::ALL {
-        let table = Keywords::of(version);
-        for name in names.iter().filter(|name| !name.is_empty()) {
-            let expected = TokenKind::keyword(name, version).unwrap_or(TokenKind::Identifier);
-            for after in [b'\0', b' ', b'e', b'(', 0xFF] {
-                let mut first_eight = [after; 8];
-                let shown = name.len().min(8);
-                first_eight[..shown].copy_from_slice(&name.as_bytes()[..shown]);
-                let kind = table.kind(u64::from_le_bytes(first_eight), name.len());
-                assert_eq!(kind, expected, "{version:?} {name:?} then {after:#04x}");
-            }
+    for name in names.iter().filter(|name| !name.is_empty()) {
+        let expected = TokenKind::keyword(name).unwrap_or(TokenKind::Identifier);
+        for after in [b'\0', b' ', b'e', b'(', 0xFF] {
+            let mut first_eight = [after; 8];
+            let shown = name.len().min(8);
+            first_eight[..shown].copy_from_slice(&name.as_bytes()[..shown]);
+            let kind = TokenKind::of_name(u64::from_le_bytes(first_eight), name.len());
+            assert_eq!(kind, expected, "{name:?} then {after:#04x}");
         }
     }
 }
 
 #[test]
-fn is_reserved_holds_for_keywords_and_lua55_global_only() {
-    for version in LuaVersion::ALL {
-        assert!(TokenKind::is_reserved("while", version), "{version:?}");
-        assert_eq!(TokenKind::is_reserved("goto", version), version.has_goto(), "{version:?}");
-        assert_eq!(TokenKind::is_reserved("global", version), version.has_global(), "{version:?}");
-        for name in ["", "x", "continue", "type", "export", "const", "typeof", "While"] {
-            assert!(!TokenKind::is_reserved(name, version), "{name:?} {version:?}");
-        }
+fn is_reserved_holds_for_keywords_only() {
+    assert!(TokenKind::is_reserved("while"));
+    let names = ["", "x", "continue", "type", "export", "const", "typeof", "While"];
+    for name in names {
+        assert!(!TokenKind::is_reserved(name), "{name:?}");
     }
 }
 
 #[test]
 fn is_identifier_shaped_holds_for_ascii_names_keywords_included() {
-    for text in ["x", "_", "_private", "snake_case2", "camelCase", "end", "goto"] {
+    for text in ["x", "_", "_private", "snake_case2", "camelCase", "end", "continue"] {
         assert!(TokenKind::is_identifier_shaped(text), "{text:?}");
     }
     for text in ["", "1st", "a-b", "has space", "a.b", "a\\nb", "\u{dc}nicode", "x\u{e9}"] {
         assert!(!TokenKind::is_identifier_shaped(text), "{text:?}");
     }
-}
-
-#[test]
-fn global_is_a_name_on_default_lua55_builds() {
-    assert!(
-        TokenKind::keyword("global", LuaVersion::Lua55).is_some_and(TokenKind::is_name),
-        "stock Lua 5.5 defines LUA_COMPAT_GLOBAL, so `global` is a regular name and `local global = 1` compiles"
-    );
 }

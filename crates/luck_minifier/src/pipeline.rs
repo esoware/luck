@@ -1,8 +1,8 @@
 use luck_allocator::Allocator;
-use luck_ast::{Chunk, MAX_NESTING_DEPTH, Name, NameIndex, TreeCounts, VisitMut};
+use luck_ast::{Block, MAX_NESTING_DEPTH, Name, NameIndex, TreeCounts, VisitMut};
 use luck_codegen::LiteralSpelling;
 use luck_diagnostics::Diagnostic;
-use luck_token::{CommentKind, LuaVersion, chunk_header, leading_hot_comments};
+use luck_token::{CommentKind, chunk_header, leading_hot_comments};
 
 use crate::binding::NameIndexes;
 use crate::compress::compress;
@@ -13,7 +13,7 @@ use crate::transform_config::TransformConfig;
 /// Parses `source` into `allocator` and minifies it, returning the compact
 /// output or the parse errors.
 ///
-/// The source and the output are bytes, as Lua reads them. A string spelled
+/// The source and the output are bytes, as Luau reads them. A string spelled
 /// as written keeps its bytes, and the output is UTF-8 whenever the source
 /// is.
 ///
@@ -23,10 +23,9 @@ use crate::transform_config::TransformConfig;
 pub fn minify<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
-    version: LuaVersion,
     config: &TransformConfig,
 ) -> Result<Vec<u8>, Vec<Diagnostic>> {
-    let mut result = luck_parser::parse(allocator, source, version);
+    let mut result = luck_parser::parse(allocator, source);
     if !result.errors.is_empty() {
         return Err(result.errors);
     }
@@ -38,8 +37,7 @@ pub fn minify<'ast>(
     let mut output = chunk_header(
         source,
         shebang,
-        leading_hot_comments(&result.comments, result.chunk.block.span.start)
-            .map(|comment| comment.span),
+        leading_hot_comments(&result.comments, result.chunk.span.start).map(|comment| comment.span),
     );
     let comment_bytes: usize =
         result.comments.iter().map(|comment| comment.span.text(source).len()).sum();
@@ -52,7 +50,7 @@ pub fn minify<'ast>(
 /// writes its compact output after the bytes `output` holds.
 ///
 /// New nodes go in `allocator`. A tree holds no comments, so a shebang or
-/// Luau hot comments the output needs on top are the caller's to write into
+/// hot comments the output needs on top are the caller's to write into
 /// `output` first.
 ///
 /// # Errors
@@ -62,15 +60,15 @@ pub fn minify<'ast>(
 /// its names' indexes.
 pub fn minify_chunk<'ast>(
     allocator: &'ast Allocator,
-    chunk: &mut Chunk<'ast>,
+    chunk: &mut Block<'ast>,
     config: &TransformConfig,
     output: Vec<u8>,
 ) -> Result<Vec<u8>, Diagnostic> {
     let mut numbering = NameNumbering { names: 0, depth: 0, deepest: 0 };
-    numbering.visit_block(&mut chunk.block);
+    numbering.visit_block(chunk);
     if numbering.deepest > MAX_NESTING_DEPTH {
         return Err(Diagnostic::e008(
-            chunk.block.span,
+            chunk.span,
             format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
         ));
     }
@@ -79,17 +77,17 @@ pub fn minify_chunk<'ast>(
     Ok(luck_codegen::compact_into(chunk, LiteralSpelling::Shortest, output))
 }
 
-/// Strips a Luau tree's types, compresses it, and names its locals, as each
-/// phase is on. Every name of the tree holds an index of its own, below
+/// Strips a tree's types, compresses it, and names its locals, as each phase
+/// is on. Every name of the tree holds an index of its own, below
 /// `counts.names`.
 fn minify_tree<'ast>(
     allocator: &'ast Allocator,
-    chunk: &mut Chunk<'ast>,
+    chunk: &mut Block<'ast>,
     counts: TreeCounts,
     config: &TransformConfig,
 ) {
-    if config.strip_types && chunk.version.has_type_syntax() {
-        strip_types(allocator, &mut chunk.block);
+    if config.strip_types {
+        strip_types(allocator, chunk);
     }
     let mut name_indexes = NameIndexes::new(counts.names);
     let compressed =

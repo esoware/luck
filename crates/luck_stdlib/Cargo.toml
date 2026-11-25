@@ -3,13 +3,17 @@ name                   = "luck_stdlib"
 version.workspace      = true
 authors.workspace      = true
 categories.workspace   = true
-description            = "The standard libraries of Lua 5.1-5.5, Luau, and Roblox, std definitions that layer a host's library over one, and what a chunk's names and calls reach in it"
+description            = "The standard libraries of Luau and Roblox, std definitions that layer a host's library over one, and what a chunk's names and calls reach in it"
 edition.workspace      = true
 homepage.workspace     = true
 keywords.workspace     = true
 license.workspace      = true
 repository.workspace   = true
 rust-version.workspace = true
+
+[features]
+# Derive `JsonSchema` for `Variant`, for the schema `luck_config` generates.
+schemars = ["dep:schemars"]
 
 [lints]
 workspace = true
@@ -26,6 +30,7 @@ luck_diagnostics = { workspace = true }
 luck_semantic    = { workspace = true }
 luck_token       = { workspace = true }
 
+schemars  = { workspace = true, optional = true }
 self_cell = { workspace = true }
 serde     = { workspace = true }
 toml      = { workspace = true }

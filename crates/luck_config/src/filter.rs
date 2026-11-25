@@ -1,9 +1,22 @@
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 
 use globset::{Candidate, GlobSet};
 use luck_resolver::{FileSystem as _, FileSystemOs};
 
 use crate::glob::{Glob, compiled, glob_set};
+
+/// `path` under its directory's canonical path, with its own name, so a
+/// symlink stays where it is and doesn't move to where it leads.
+///
+/// A file takes the project of its directory, and its `include`, `exclude`,
+/// and `overrides` globs match this, so all of them go by the same path.
+pub fn located_path(path: &Path) -> PathBuf {
+    let absolute = path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(directory), Some(name)) => FileSystemOs.canonicalize_existing(directory).join(name),
+        _ => FileSystemOs.canonicalize_existing(&absolute),
+    }
+}
 
 /// Decides whether a file belongs to the project from `include` and `exclude`
 /// globs, matched relative to the config directory. Exclude wins.
@@ -11,7 +24,7 @@ use crate::glob::{Glob, compiled, glob_set};
 pub struct ProjectFilter {
     /// Canonical, as the paths matched against it are.
     root: PathBuf,
-    /// `None` takes every `.lua` and `.luau` file.
+    /// `None` takes every `.luau` and `.lua` file.
     include: Option<GlobSet>,
     exclude: GlobSet,
     /// The directory part of each exclude ending in `/**` or `/**/*`, every
@@ -20,7 +33,7 @@ pub struct ProjectFilter {
 }
 
 impl ProjectFilter {
-    /// Every `.lua` and `.luau` file.
+    /// Every `.luau` and `.lua` file.
     pub(crate) fn everything(root: &Path) -> Self {
         Self {
             root: FileSystemOs.canonicalize_existing(root),
@@ -70,39 +83,38 @@ impl ProjectFilter {
     }
 
     pub fn is_included(&self, path: &Path) -> bool {
-        self.includes_canonical(&FileSystemOs.canonicalize_existing(path))
+        self.includes_located(&located_path(path))
     }
 
-    /// [`is_included`](Self::is_included) for a canonical path, such as a
-    /// walk from a canonical directory builds, which touches no disk.
-    pub fn includes_canonical(&self, path: &Path) -> bool {
+    /// [`is_included`](Self::is_included) for a path [`located_path`] gives,
+    /// or a walk from a canonical directory builds, which touches no disk.
+    pub fn includes_located(&self, path: &Path) -> bool {
         let candidate = Candidate::new(self.relative(path));
         let is_taken = self
             .include
             .as_ref()
-            .map_or_else(|| is_lua_file(path), |include| include.is_match_candidate(&candidate));
+            .map_or_else(|| is_source_file(path), |include| include.is_match_candidate(&candidate));
         is_taken && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
     }
 
     /// Whether an `exclude` glob matches `path`, whatever `include` says. A
     /// file named on the command line is held to this alone.
     pub fn is_excluded(&self, path: &Path) -> bool {
-        !self.exclude.is_empty()
-            && self.exclude.is_match(self.relative(&FileSystemOs.canonicalize_existing(path)))
+        !self.exclude.is_empty() && self.exclude.is_match(self.relative(&located_path(path)))
     }
 
-    /// `canonical` as the globs see it, relative to the root when it's under
-    /// it.
-    pub(crate) fn relative<'path>(&self, canonical: &'path Path) -> &'path Path {
-        canonical.strip_prefix(&self.root).unwrap_or(canonical)
+    /// `located`, a path under canonical directories, as the globs see it,
+    /// relative to the root when it's under it.
+    pub(crate) fn relative<'path>(&self, located: &'path Path) -> &'path Path {
+        located.strip_prefix(&self.root).unwrap_or(located)
     }
 }
 
-/// What `**/*.lua` and `**/*.luau` match, without a glob.
-fn is_lua_file(path: &Path) -> bool {
+/// What `**/*.luau` and `**/*.lua` match, without a glob.
+fn is_source_file(path: &Path) -> bool {
     path.file_name().is_some_and(|file_name| {
         let name = file_name.as_encoded_bytes();
-        name.ends_with(b".lua") || name.ends_with(b".luau")
+        name.ends_with(b".luau") || name.ends_with(b".lua")
     })
 }
 
@@ -124,16 +136,16 @@ mod tests {
     #[test]
     fn takes_included_files_unless_excluded() {
         let filter = filter(Some(&["src/**/*.lua", "src/**/*.luau"]), &["**/gen/**"]);
-        assert!(filter.is_included(Path::new("/proj/src/a.lua")));
-        assert!(!filter.is_included(Path::new("/proj/src/gen/b.lua")));
-        assert!(!filter.is_included(Path::new("/proj/other/c.lua")));
+        assert!(filter.is_included(Path::new("/proj/src/a.luau")));
+        assert!(!filter.is_included(Path::new("/proj/src/gen/b.luau")));
+        assert!(!filter.is_included(Path::new("/proj/other/c.luau")));
     }
 
     #[test]
     fn is_excluded_ignores_include() {
-        let filter = filter(Some(&["src/**/*.lua"]), &["**/gen/**"]);
-        assert!(filter.is_excluded(Path::new("/proj/src/gen/b.lua")));
-        assert!(!filter.is_excluded(Path::new("/proj/other/c.lua")));
+        let filter = filter(Some(&["src/**/*.luau"]), &["**/gen/**"]);
+        assert!(filter.is_excluded(Path::new("/proj/src/gen/b.luau")));
+        assert!(!filter.is_excluded(Path::new("/proj/other/c.luau")));
         assert!(!filter.is_excluded(Path::new("/proj/tool")));
     }
 
@@ -153,17 +165,17 @@ mod tests {
         assert!(filter.is_included(Path::new("/proj/x.lua")));
         assert!(filter.is_included(Path::new("/proj/sub/y.luau")));
         assert!(filter.is_included(Path::new("/proj/.lua")));
-        assert!(filter.is_included(Path::new("/elsewhere/z.lua")));
+        assert!(filter.is_included(Path::new("/elsewhere/z.luau")));
         assert!(!filter.is_included(Path::new("/proj/x.txt")));
-        assert!(!filter.is_included(Path::new("/proj/x.lua.bak")));
+        assert!(!filter.is_included(Path::new("/proj/x.luau.bak")));
         assert!(!filter.is_included(Path::new("/proj/x.luaux")));
     }
 
     #[test]
     fn no_include_takes_what_everything_takes_less_the_excludes() {
         let filter = filter(None, &["gen/**"]);
-        assert!(filter.is_included(Path::new("/proj/a.lua")));
-        assert!(!filter.is_included(Path::new("/proj/gen/b.lua")));
+        assert!(filter.is_included(Path::new("/proj/a.luau")));
+        assert!(!filter.is_included(Path::new("/proj/gen/b.luau")));
         assert!(!filter.is_included(Path::new("/proj/a.txt")));
     }
 }

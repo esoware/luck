@@ -9,13 +9,13 @@ fn constructors_set_code_severity_and_help() {
     assert_eq!((e2.code, e2.span), ("E002", Some(Span::new(0, 10))));
     assert!(e2.is_error());
 
-    let e4 = Diagnostic::e004(Span::new(0, 10), "mymod", &["src/mymod.lua".to_owned()]);
+    let e4 = Diagnostic::e004(Span::new(0, 10), "mymod", &["src/mymod.luau".to_owned()]);
     assert_eq!(
         e4.help.as_deref(),
         Some(
             "\
 searched paths:
-  - `src/mymod.lua`"
+  - `src/mymod.luau`"
         )
     );
 
@@ -29,9 +29,9 @@ searched paths:
 #[test]
 fn a_problem_with_no_place_has_no_span() {
     let io_error = io::Error::from(io::ErrorKind::NotFound);
-    assert_eq!(Diagnostic::e010("gone.lua", &io_error).span, None);
+    assert_eq!(Diagnostic::e010("gone.luau", &io_error).span, None);
     assert_eq!(Diagnostic::e014(None, "bad").span, None);
-    let cycle = Diagnostic::w003(None, &["a.lua".to_owned(), "b.lua".to_owned()]);
+    let cycle = Diagnostic::w003(None, &["a.luau".to_owned(), "b.luau".to_owned()]);
     assert_eq!((cycle.severity, cycle.span), (Severity::Warning, None));
 }
 
@@ -39,13 +39,13 @@ fn a_problem_with_no_place_has_no_span() {
 /// on purpose.
 #[test]
 fn a_wrapped_help_joins_its_lines_with_single_spaces() {
-    let cycle = Diagnostic::w003(None, &["a.lua".to_owned(), "b.lua".to_owned()]);
+    let cycle = Diagnostic::w003(None, &["a.luau".to_owned(), "b.luau".to_owned()]);
     assert_eq!(
         cycle.help.as_deref(),
         Some(
             "\
-cycle: `a.lua` -> `b.lua`
-modules load lazily, so a cycle through a function body works, but one hit while a module is still loading fails at runtime, as it would without bundling"
+cycle: `a.luau` -> `b.luau`
+modules load lazily, so a cycle through a function body works, but requiring a module while it's still loading raises an error at runtime"
         )
     );
     let hot_comment = Diagnostic::w006(Span::new(0, 9), "--!strict");

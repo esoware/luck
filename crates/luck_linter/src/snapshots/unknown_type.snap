@@ -2,51 +2,51 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `strng` is not a value that `type` can return
- --> Lua54:1:23
+ --> Standalone:1:23
 1 | local ok = type(x) == "strng"
   |                       ^^^^^^^
 help: did you mean `string`?
 
 warning: `nuffer` is not a value that `type` can return
- --> Luau:1:23
+ --> Standalone:1:23
 1 | local ok = type(x) == "nuffer"
   |                       ^^^^^^^^
 help: did you mean `buffer`?
 
 warning: `nll` is not a value that `type` can return
- --> Lua54:1:12
+ --> Standalone:1:12
 1 | local ok = "nll" == type(x)
   |            ^^^^^
 help: did you mean `nil`?
 
 warning: `Number` is not a value that `type` can return
- --> Lua54:1:23
+ --> Standalone:1:23
 1 | local ok = type(x) ~= "Number"
   |                       ^^^^^^^^
 help: did you mean `number`?
 
-warning: `buffer` is not a value that `type` can return
- --> Lua54:1:23
-1 | local ok = type(x) == "buffer"
-  |                       ^^^^^^^^
-
 warning: `strng` is not a value that `type` can return
- --> Lua54:1:23
+ --> Standalone:1:23
 1 | local ok = type"x" == "strng"
   |                       ^^^^^^^
 help: did you mean `string`?
 
 warning: `strng` is not a value that `type` can return
- --> Lua54:1:22
+ --> Standalone:1:22
 1 | local ok = type{} == "strng"
   |                      ^^^^^^^
 help: did you mean `string`?
 
 warning: `tabel` is not a value that `typeof` can return
- --> Luau:1:25
+ --> Standalone:1:25
 1 | local ok = typeof(x) == "tabel"
   |                         ^^^^^^^
 help: did you mean `table`?
+
+warning: `Instance` is not a value that `typeof` can return
+ --> Standalone:1:25
+1 | local ok = typeof(x) == "Instance"
+  |                         ^^^^^^^^^^
 
 warning: `Number` is not a value that `typeof` can return
  --> Roblox:1:25

@@ -25,7 +25,7 @@ impl Diagnostic {
 
     pub fn e002(span: Span) -> Self {
         Self::error("E002", Some(span), "`require` argument must be a string literal")
-            .with_help("use a string literal: `require(\"module_name\")`")
+            .with_help("use a string literal: `require(\"./module\")`")
     }
 
     /// `tried_paths` holds the candidate files in probe order, unquoted.
@@ -169,8 +169,7 @@ impl Diagnostic {
         let cycle = quoted_paths.join(" -> ");
         Self::warning("W003", span, "circular dependency between modules").with_help(format!(
             "cycle: {cycle}\nmodules load lazily, so a cycle through a function body works, \
-             but one hit while a module is still loading fails at runtime, as it would \
-             without bundling"
+             but requiring a module while it's still loading raises an error at runtime"
         ))
     }
 
@@ -182,8 +181,8 @@ impl Diagnostic {
         )
     }
 
-    /// A read of a name `require` that isn't the global one: a local, a field
-    /// of a local `_ENV`, or a global the file replaces.
+    /// A read of a name `require` that isn't the global one: a local or a
+    /// global the file replaces.
     pub fn w005_shadowed(span: Span) -> Self {
         Self::warning(
             "W005",
@@ -222,25 +221,9 @@ impl Diagnostic {
         .with_tag(Tag::Unnecessary)
     }
 
-    /// Lua targets only: the cache is keyed by module name, so a name computed at
-    /// runtime can still find a bundled module.
-    pub fn w007_loader_fallback(span: Span) -> Self {
-        Self::warning(
-            "W007",
-            Some(span),
-            "`require` argument is not a string literal, so the module is resolved at runtime",
-        )
-        .with_help(
-            "the call goes through the bundle's loader, which serves bundled modules by name \
-             and passes any other name to the runtime's own `require`, so use a string literal \
-             to bundle the module itself",
-        )
-    }
-
-    /// Luau targets only: the bundle's cache is keyed by resolved file, and Roblox
-    /// requires take an Instance, so a runtime argument can't name a bundled
-    /// module.
-    pub fn w007_runtime(span: Span) -> Self {
+    /// The bundle's cache is keyed by resolved file, and a Roblox require takes an
+    /// Instance, so a runtime argument can't name a bundled module.
+    pub fn w007(span: Span) -> Self {
         Self::warning(
             "W007",
             Some(span),

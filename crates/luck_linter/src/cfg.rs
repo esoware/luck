@@ -5,11 +5,9 @@
 use std::cell::OnceCell;
 use std::mem;
 
-use luck_ast::{Block, GetSpan as _, IfStatement, Name, RepeatLoop, Statement, WhileLoop};
-use luck_semantic::LabelId;
+use luck_ast::{Block, GetSpan as _, IfStatement, RepeatLoop, Statement, WhileLoop};
 use luck_token::Span;
 use luck_value::ToBoolean as _;
-use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
 use crate::context::ContextHost;
@@ -19,7 +17,7 @@ pub(crate) enum Exit {
     /// Off the block's end, which in a loop body starts the next iteration,
     /// as `continue` does.
     End,
-    /// `break`, or a `goto` to a label outside the block.
+    /// A `break` of the loop whose body the block is.
     Break,
     ReturnValue,
     ReturnEmpty,
@@ -94,7 +92,7 @@ pub(crate) struct LocalDeclaration {
     pub name_span: Span,
     pub node: usize,
     /// Where the name's scope ends. Code past this can't reference it, and
-    /// Lua can only re-enter a scope through the `local` statement itself.
+    /// only the `local` statement itself re-enters the scope.
     pub scope_end: u32,
 }
 
@@ -118,7 +116,6 @@ impl FlowGraph {
             scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
-            label_nodes: FxHashMap::default(),
         };
         let entry = builder.new_node();
         builder.cursor = Some(entry);
@@ -153,8 +150,7 @@ impl FlowGraph {
     }
 
     /// The exits the body of the loop that starts at `loop_start` reaches,
-    /// as the graph of that body alone has them, where a jump out of the
-    /// body is a `Break`.
+    /// as the graph of that body alone has them.
     pub(crate) fn loop_exits(&self, loop_start: u32) -> Option<Exits> {
         let index = self.loops.binary_search_by_key(&loop_start, |body| body.start).ok()?;
         Some(self.loop_exits.get_or_init(|| self.every_loop_s_exits())[index])
@@ -194,7 +190,7 @@ impl FlowGraph {
                     let exit = if node == body.continue_target {
                         Exit::End
                     } else {
-                        // Else the loop's `break`, or a jump out of its body.
+                        // Else the loop's `break`.
                         [Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error]
                             .into_iter()
                             .find(|exit| exit.node() == node)
@@ -247,9 +243,6 @@ struct GraphBuilder<'host, 'ast> {
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
-    /// The node of each label of a block the builder has entered, which
-    /// the `goto`s semantic analysis resolved to it jump to.
-    label_nodes: FxHashMap<LabelId, usize>,
 }
 
 impl<'ast> GraphBuilder<'_, 'ast> {
@@ -314,27 +307,11 @@ impl<'ast> GraphBuilder<'_, 'ast> {
     fn scoped_block(&mut self, block: &'ast Block<'ast>, scope_end: u32) {
         self.run = None;
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
-        // A label is visible in its whole block, `goto`s before it included,
-        // so its node comes before the code of every block inside it.
-        for stmt in &block.stmts {
-            if let Statement::Label(label) = stmt
-                && let Some(id) = self.host.scoping().label_of(&label.name)
-            {
-                let node = self.new_node();
-                self.label_nodes.insert(id, node);
-            }
-        }
         for stmt in &block.stmts {
             self.stmt(stmt);
         }
         self.scope_end = outer_scope_end;
         self.run = None;
-    }
-
-    /// The node of the label `name` names, or reaches as a `goto`'s.
-    fn label_node(&self, name: &Name<'_>) -> Option<usize> {
-        let id = self.host.scoping().label_of(name)?;
-        self.label_nodes.get(&id).copied()
     }
 
     fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
@@ -352,8 +329,8 @@ impl<'ast> GraphBuilder<'_, 'ast> {
             Statement::LocalAssignment(local) => {
                 let node = self.simple(local.span);
                 let scope_end = self.scope_end;
-                self.graph.locals.extend(local.names.iter().map(|attributed| LocalDeclaration {
-                    name_span: attributed.name.span,
+                self.graph.locals.extend(local.names.iter().map(|local_name| LocalDeclaration {
+                    name_span: local_name.name.span,
                     node,
                     scope_end,
                 }));
@@ -368,32 +345,16 @@ impl<'ast> GraphBuilder<'_, 'ast> {
             Statement::GenericFor(node) => {
                 self.for_loop(Span::new(node.span.start, node.block.span.start), &node.block);
             }
-            // Lua 5.2+
-            Statement::Goto(node) => {
-                let target = self.label_node(&node.name);
-                self.jump(node.span, target.unwrap_or_else(|| Exit::Break.node()));
-            }
-            // Lua 5.2+
-            Statement::Label(node) => {
-                if let Some(target) = self.label_node(&node.name) {
-                    self.graph.code.push((node.span, target));
-                    self.advance_to(target);
-                }
-            }
             Statement::Return(node) => {
                 let exit =
                     if node.exprs.is_empty() { Exit::ReturnEmpty } else { Exit::ReturnValue };
                 self.jump(node.span, exit.node());
             }
             Statement::Break(span) => self.jump(*span, self.break_target),
-            // Luau
             Statement::Continue(span) => self.jump(*span, self.continue_target),
             Statement::Assignment(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {
@@ -492,17 +453,12 @@ mod tests {
     use std::fmt::Write as _;
 
     use luck_ast::{FunctionBody, GenericFor, NumericFor, Visit};
-    use luck_token::LuaVersion;
 
     use super::*;
     use crate::fixtures::with_host;
 
-    fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
-        with_host(source, version.into(), |host| FlowGraph::of_block(&host.chunk.block, host))
-    }
-
     fn flow(source: &str) -> FlowGraph {
-        flow_of(source, LuaVersion::Lua54)
+        with_host(source, |host| FlowGraph::of_block(host.chunk, host))
     }
 
     #[test]
@@ -678,11 +634,10 @@ while c do if c then break end end",
 
     #[test]
     fn continue_runs_the_until_condition() {
-        let graph = flow_of(
+        let graph = flow(
             "\
 repeat continue until true
 return 2",
-            LuaVersion::Luau,
         );
         assert!(graph.reaches(Exit::ReturnValue));
         assert!(!graph.reaches(Exit::End));
@@ -690,99 +645,25 @@ return 2",
 
     #[test]
     fn continue_of_the_analyzed_block_ends_it() {
-        let reaches_end =
-            with_host("for _ = 1, 3 do continue end", LuaVersion::Luau.into(), |host| {
-                let Some(Statement::NumericFor(numeric_for)) = host.chunk.block.stmts.first()
-                else {
-                    panic!("the statement must be a numeric for");
-                };
-                FlowGraph::of_block(&numeric_for.block, host).reaches(Exit::End)
-            });
+        let reaches_end = with_host("for _ = 1, 3 do continue end", |host| {
+            let Some(Statement::NumericFor(numeric_for)) = host.chunk.stmts.first() else {
+                panic!("the statement must be a numeric for");
+            };
+            FlowGraph::of_block(&numeric_for.block, host).reaches(Exit::End)
+        });
         assert!(reaches_end);
     }
 
     #[test]
-    fn goto_jumps_over_the_code_before_its_label() {
-        let graph = flow(
-            "\
-goto skip
-do return end
-::skip::
-print(1)",
-        );
-        assert!(!graph.reaches(Exit::ReturnEmpty));
-        assert!(graph.reaches(Exit::End));
-    }
-
-    #[test]
-    fn backward_goto_loops() {
-        let graph = flow(
-            "\
-::top::
-print(1)
-goto top",
-        );
-        assert!(!graph.reaches(Exit::End));
-    }
-
-    #[test]
-    fn goto_to_a_label_outside_the_block_leaves_it() {
-        let source = "\
-while true do goto done end
-::done::";
-        let graph = with_host(source, LuaVersion::Lua54.into(), |host| {
-            let Some(Statement::WhileLoop(while_loop)) = host.chunk.block.stmts.first() else {
+    fn break_of_the_analyzed_block_leaves_it() {
+        let graph = with_host("while true do if x then break end end", |host| {
+            let Some(Statement::WhileLoop(while_loop)) = host.chunk.stmts.first() else {
                 panic!("the statement must be a while loop");
             };
             FlowGraph::of_block(&while_loop.block, host)
         });
         assert!(graph.reaches(Exit::Break));
-        assert!(!graph.reaches(Exit::End));
-    }
-
-    #[test]
-    fn goto_takes_the_innermost_label_of_its_name() {
-        // The outer `::a::` would loop forever.
-        let graph = flow(
-            "\
-::a::
-do
-  goto a
-  do return end
-  ::a::
-end",
-        );
         assert!(graph.reaches(Exit::End));
-        assert!(!graph.reaches(Exit::ReturnEmpty));
-    }
-
-    #[test]
-    fn label_goes_out_of_sight_with_its_block() {
-        let graph = flow(
-            "\
-do ::a:: end
-goto a",
-        );
-        assert!(graph.reaches(Exit::Break));
-        assert!(!graph.reaches(Exit::End));
-    }
-
-    #[test]
-    fn gotos_find_their_labels_among_many() {
-        let mut source = String::new();
-        for i in 0..2_000 {
-            writeln!(
-                source,
-                "\
-goto l{i}
-do return end
-::l{i}::"
-            )
-            .unwrap();
-        }
-        let graph = flow(&source);
-        assert!(graph.reaches(Exit::End));
-        assert!(!graph.reaches(Exit::ReturnEmpty));
     }
 
     /// The loop bodies a block holds outside its functions, by where each
@@ -817,33 +698,21 @@ do return end
     #[test]
     fn each_loop_s_exits_are_those_of_a_graph_of_its_body_alone() {
         let sources = [
-            ("for i = 1, 2 do while true do goto out end ::out:: end", LuaVersion::Lua54),
-            ("::a:: for i = 1, 2 do for j = 1, 2 do goto a end end", LuaVersion::Lua54),
-            (
-                "for i = 1, 2 do ::top:: while i do if i then goto top end return end end",
-                LuaVersion::Lua54,
-            ),
-            (
-                "while x do repeat if y then break end goto done until true end ::done::",
-                LuaVersion::Lua54,
-            ),
-            ("while false do for i = 1, 2 do break end return end", LuaVersion::Lua54),
-            ("for i = 1, 2 do while true do end repeat until false end", LuaVersion::Lua54),
-            (
-                "for i = 1, 2 do local f = function() while x do error() end end end",
-                LuaVersion::Lua54,
-            ),
-            ("for i = 1, 2 do repeat if x then continue end return until x end", LuaVersion::Luau),
-            (
-                "while x do for _ in t do if x then break end return end continue end",
-                LuaVersion::Luau,
-            ),
+            "for i = 1, 2 do while true do break end end",
+            "for i = 1, 2 do for j = 1, 2 do if j then break end continue end end",
+            "for i = 1, 2 do while i do if i then continue end return end end",
+            "while x do repeat if y then break end until true end",
+            "while false do for i = 1, 2 do break end return end",
+            "for i = 1, 2 do while true do end repeat until false end",
+            "for i = 1, 2 do local f = function() while x do error() end end end",
+            "for i = 1, 2 do repeat if x then continue end return until x end",
+            "while x do for _ in t do if x then break end return end continue end",
         ];
-        for (source, version) in sources {
-            with_host(source, version.into(), |host| {
-                let graph = FlowGraph::of_block(&host.chunk.block, host);
+        for source in sources {
+            with_host(source, |host| {
+                let graph = FlowGraph::of_block(host.chunk, host);
                 let mut bodies = LoopBodies::default();
-                bodies.visit_block(&host.chunk.block);
+                bodies.visit_block(host.chunk);
                 assert!(!bodies.0.is_empty(), "{source}");
                 for (start, body) in bodies.0 {
                     let alone = FlowGraph::of_block(body, host).exits();
@@ -858,15 +727,17 @@ do return end
     }
 
     #[test]
-    fn can_run_is_false_after_a_jump_until_a_reached_label() {
+    fn can_run_is_false_after_every_path_leaves() {
         let source = "\
-goto a
-print(1)
-::a::
+do
+  if x then return end
+  print(1)
+end
+do return end
 print(2)";
         let graph = flow(source);
         let offset_of = |text: &str| u32::try_from(source.find(text).expect("in source")).unwrap();
-        assert!(!graph.can_run(offset_of("print(1)")));
-        assert!(graph.can_run(offset_of("print(2)")));
+        assert!(graph.can_run(offset_of("print(1)")));
+        assert!(!graph.can_run(offset_of("print(2)")));
     }
 }

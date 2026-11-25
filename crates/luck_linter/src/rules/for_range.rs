@@ -66,8 +66,7 @@ fn range_problem(
         number_value(step, context).map_or(Step::Unknown, Step::Constant)
     });
 
-    // A zero step loops forever before Lua 5.4 and raises an error from 5.4
-    // on.
+    // A zero step either skips the body or runs it forever.
     if step.value() == Some(0.0) {
         return Some((
             "numeric `for` loop with step 0 never advances".to_owned(),
@@ -100,7 +99,7 @@ fn range_problem(
     // limit fires, since `0, n` may be intentional.
     if start == Some(0.0) && is_length_of_identifier(&numeric_for.limit) {
         return Some((
-            "numeric `for` starts at 0, but Lua sequences are 1-indexed".to_owned(),
+            "numeric `for` starts at 0, but Luau sequences are 1-indexed".to_owned(),
             "use `for i = 1, #t do` to iterate the whole sequence",
         ));
     }
@@ -120,7 +119,7 @@ fn range_problem(
 fn length_start_problem(limit_value: f64, step: Step) -> Option<(String, &'static str)> {
     match limit_value {
         0.0 if step.value().is_some_and(|step_value| step_value > 0.0) => Some((
-            "numeric `for` from a length to 0 needs a `-1` step, and Lua sequences are 1-indexed"
+            "numeric `for` from a length to 0 needs a `-1` step, and Luau sequences are 1-indexed"
                 .to_owned(),
             "use `for i = #t, 1, -1 do` to iterate the sequence backwards",
         )),
@@ -173,50 +172,39 @@ fn is_length_of_identifier(expr: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("for i = 1, 10 do end", LuaTarget::Lua54),
-        ("for i = 10, 1, -1 do end", LuaTarget::Lua54),
+    const PASS: &[&str] = &[
+        "for i = 1, 10 do end",
+        "for i = 10, 1, -1 do end",
         // `0, 5` may be deliberate. Only `0, #t` fires.
-        ("for i = 0, 5 do end", LuaTarget::Lua54),
-        (
-            "\
+        "for i = 0, 5 do end",
+        "\
 local t = {}
 for i = #t, 1, -1 do print(i) end",
-            LuaTarget::Lua54,
-        ),
         // `for i = 1, 10, 2` stops at 9; integer strides are idiomatic.
-        ("for i = 1, 10, 2 do print(i) end", LuaTarget::Lua54),
-        ("for i = 1, 2.5, 0.5 do print(i) end", LuaTarget::Lua54),
+        "for i = 1, 10, 2 do print(i) end",
+        "for i = 1, 2.5, 0.5 do print(i) end",
         // With no step, this is `reversed_for_loop`'s case.
-        ("for i = 10, 1 do end", LuaTarget::Lua54),
+        "for i = 10, 1 do end",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("for i = 1, 10, 0 do end", LuaTarget::Lua54),
-        ("for i = 1, 10, -1 do end", LuaTarget::Lua54),
-        ("for i = 0, #t do end", LuaTarget::Lua54),
-        ("for i = 10, 1, 1 do end", LuaTarget::Lua54),
-        ("for i = 0x10, 1, 1 do end", LuaTarget::Lua54),
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "for i = 1, 10, 0 do end",
+        "for i = 1, 10, -1 do end",
+        "for i = 0, #t do end",
+        "for i = 10, 1, 1 do end",
+        "for i = 0x10, 1, 1 do end",
+        "\
 local t = {}
 for i = #t, 0 do print(i) end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local t = {}
 for i = #t, 1 do print(i) end",
-            LuaTarget::Lua54,
-        ),
-        ("for i = 1, 8.75 do print(i) end", LuaTarget::Lua54),
+        "for i = 1, 8.75 do print(i) end",
         // `1_000` is a number literal above the limit.
-        ("for i = 1_000, 1, 1 do print(i) end", LuaTarget::Luau),
+        "for i = 1_000, 1, 1 do print(i) end",
     ];
 
     #[test]

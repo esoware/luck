@@ -1,6 +1,6 @@
 # luck_data_structures
 
-Data structures that luck's crates share and that know nothing of Lua, as `oxc_data_structures` holds oxc's.
+Data structures that luck's crates share and that know nothing of Luau, as `oxc_data_structures` holds oxc's.
 
 ## Usage
 

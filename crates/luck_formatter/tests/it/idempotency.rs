@@ -2,7 +2,6 @@ use luck_allocator::Allocator;
 use luck_ast::MAX_NESTING_DEPTH;
 use luck_formatter::FormatOptions;
 use luck_testgen::with_the_smallest_stack;
-use luck_token::LuaVersion;
 
 use crate::common::assert_format;
 
@@ -130,19 +129,18 @@ return M -- done
 
 #[test]
 fn comment_inside_stmt_then_blank_line() {
-    // A comment between a callee and its argument list goes inside the
-    // parentheses, and the blank line after the call has to survive the
-    // second pass.
+    // A comment between a callee and its argument goes inside the
+    // parentheses the argument gains, and the blank line after the call has
+    // to survive the second pass.
     assert_format(
         "\
-goto l x
+x
 --
-(\"\")
+\"\"
 
 c = x
 ",
         "\
-goto l
 x(
 \t--
 \t\"\"
@@ -209,8 +207,7 @@ fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
             let source = nested_table_calls(levels);
             let allocator = Allocator::new();
             let options = FormatOptions::default();
-            let result =
-                luck_formatter::format(&allocator, source.as_bytes(), LuaVersion::Lua54, &options);
+            let result = luck_formatter::format(&allocator, source.as_bytes(), &options);
             let [error] = result.errors.as_slice() else {
                 panic!("{levels} levels: {:?}", result.errors);
             };

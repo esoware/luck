@@ -53,7 +53,6 @@ impl Printer {
         match expr {
             Expression::Name(name) => self.name(name.text.as_str()),
             Expression::Number(literal) => self.print_number(literal),
-            // Luau
             Expression::Integer(literal) => self.print_integer(literal),
             Expression::StringLiteral(literal) => self.print_string(literal),
             Expression::Nil(_) => self.piece("nil"),
@@ -69,11 +68,8 @@ impl Printer {
             Expression::TableConstructor(table) => self.print_table(table),
             Expression::BinaryOp(binary_op) => self.print_run(binary_op, slot),
             Expression::UnaryOp(unary_op) => self.print_unary_op(unary_op, slot),
-            // Luau
             Expression::IfExpression(if_expr) => self.print_if_expr(if_expr),
-            // Luau
             Expression::InterpolatedString(interpolated) => self.print_interpolated(interpolated),
-            // Luau
             Expression::TypeCast(cast) => self.print_type_cast(cast),
             Expression::Error(_) => {}
         }
@@ -107,8 +103,8 @@ impl Printer {
         self.print_expr(&unary_op.operand, slot.unary_operand());
     }
 
-    /// Luau: a slot with anything after it takes parentheses, so nothing
-    /// follows the `else` branch.
+    /// A slot with anything after it takes parentheses, so nothing follows
+    /// the `else` branch.
     fn print_if_expr(&mut self, if_expr: &IfExpression<'_>) {
         self.piece("if");
         self.print_free_expr(&if_expr.condition);
@@ -190,7 +186,6 @@ impl Printer {
                 Suffix::Index { index, .. } => self.print_index(index),
                 Suffix::Call(args) => self.print_args(args),
                 Suffix::MethodCall(call) => self.print_method_call(call),
-                // Luau
                 Suffix::TypeInstantiation { type_args, .. } => {
                     self.print_type_instantiation(type_args);
                 }

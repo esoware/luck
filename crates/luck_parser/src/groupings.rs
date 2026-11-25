@@ -97,7 +97,7 @@ const fn key(expr: Span) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::{LuaVersion, index_to_offset};
+    use luck_token::index_to_offset;
 
     use super::*;
 
@@ -105,7 +105,7 @@ mod tests {
     fn finds_the_outermost_pair_around_each_grouped_expression() {
         let allocator = Allocator::new();
         let source = "return ((a)) + (b * (c))";
-        let parse = crate::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = crate::parse(&allocator, source.as_bytes());
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let at = |text: &str| {
             let start = source.find(text).expect("text is in the source");
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn keeps_no_record_of_parentheses_the_tree_keeps() {
         let allocator = Allocator::new();
-        let parse = crate::parse(&allocator, b"return (f()), (...)", LuaVersion::Lua54);
+        let parse = crate::parse(&allocator, b"return (f()), (...)");
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         assert_eq!(parse.groupings.len(), 0);
     }
@@ -129,7 +129,7 @@ mod tests {
     fn finds_each_pair_from_any_cursor() {
         let allocator = Allocator::new();
         let source = "return (a), ((b)), (c) + (d), (e .. (f)), g, (h)";
-        let parse = crate::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = crate::parse(&allocator, source.as_bytes());
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
         let groupings = &parse.groupings;
         let queries: Vec<Span> = (0..index_to_offset(source.len()))

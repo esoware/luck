@@ -41,28 +41,23 @@ impl Rule for ReversedForLoop {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("for i = 10, 1, -1 do print(i) end", LuaTarget::Lua54),
-        ("for i = 1, 10 do print(i) end", LuaTarget::Lua54),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "for i = 10, 1, -1 do print(i) end",
+        "for i = 1, 10 do print(i) end",
+        "\
 local n = 0
 for i = 10, n do print(i) end",
-            LuaTarget::Lua54,
-        ),
-        // Luau reads this limit as 1.8e19, not -1.
-        ("for i = 1, 0xFFFFFFFFFFFFFFFF do print(i) end", LuaTarget::Luau),
+        // The limit reads as 1.8e19.
+        "for i = 1, 0xFFFFFFFFFFFFFFFF do print(i) end",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("for i = 10, 1 do print(i) end", LuaTarget::Lua54),
-        ("for i = 0x10, 1 do print(i) end", LuaTarget::Lua54),
-        ("for i = -1, -5 do print(i) end", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "for i = 10, 1 do print(i) end",
+        "for i = 0x10, 1 do print(i) end",
+        "for i = -1, -5 do print(i) end",
     ];
 
     #[test]

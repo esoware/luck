@@ -1,6 +1,5 @@
 use luck_ast::{
-    AstKind, AstType, Attribute, ContentEq as _, GetSpan as _, LocalAssignment,
-    LocalAssignmentKind, Name, Statement,
+    AstKind, AstType, GetSpan as _, LocalAssignment, LocalAssignmentKind, Name, Statement,
 };
 use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
@@ -70,13 +69,6 @@ fn mergeable<'ast>(
     if !context.comments_within(pair_span).is_empty() {
         return None;
     }
-    if !first.attribute.content_eq(&second.attribute) {
-        return None;
-    }
-    // Lua allows only one `<close>` variable per local list.
-    if first.attribute.is_some_and(|attribute| attribute.name.text == "close") {
-        return None;
-    }
     // Both values in `local a, b = x, y` are evaluated before either name is
     // bound, so merging `local a = 1 local b = a` would make `b` read an outer
     // or global `a`.
@@ -91,7 +83,6 @@ fn mergeable<'ast>(
 struct SimpleBinding<'ast> {
     name: &'ast Name<'ast>,
     declaration: Span,
-    attribute: Option<&'ast Attribute<'ast>>,
     initializer: Span,
 }
 
@@ -103,20 +94,19 @@ fn simple_binding<'ast>(
     if local.kind != LocalAssignmentKind::Local {
         return None;
     }
-    let [attributed] = &*local.names else {
+    let [local_name] = &*local.names else {
         return None;
     };
     let [initializer] = &*local.exprs else {
         return None;
     };
-    let declaration_end = attributed
+    let declaration_end = local_name
         .type_annotation
         .as_ref()
-        .map_or(attributed.name.span.end, |annotation| annotation.span().end);
+        .map_or(local_name.name.span.end, |annotation| annotation.span().end);
     Some(SimpleBinding {
-        name: &attributed.name,
-        declaration: Span::new(attributed.name.span.start, declaration_end),
-        attribute: attributed.attribute_or(local.attribute.as_deref()),
+        name: &local_name.name,
+        declaration: Span::new(local_name.name.span.start, declaration_end),
         initializer: context.extent(initializer),
     })
 }
@@ -124,19 +114,11 @@ fn simple_binding<'ast>(
 /// Builds the merged statement from source slices, which keeps the
 /// author's formatting.
 fn build_merged(source: &[u8], first: &SimpleBinding<'_>, second: &SimpleBinding<'_>) -> Vec<u8> {
-    // Attributes are per name: `local a <const>, b <const> = ...`.
-    let (space, attribute) = first
-        .attribute
-        .map_or((&b""[..], &b""[..]), |attribute| (b" ", attribute.span.text(source)));
     [
         &b"local "[..],
         first.declaration.text(source),
-        space,
-        attribute,
         b", ",
         second.declaration.text(source),
-        space,
-        attribute,
         b" = ",
         first.initializer.text(source),
         b", ",
@@ -147,143 +129,71 @@ fn build_merged(source: &[u8], first: &SimpleBinding<'_>, second: &SimpleBinding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
-local a <close> = nil
-local b <close> = nil",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local a = 1
 local b = a + 1",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = 1
 local b = function() return a end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = 1
 -- keep apart
 local b = 2",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a, b = 1, 2
 local c = 3",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a
 local b = 2",
-            LuaTarget::Lua54,
-        ),
-        // Lua 5.4 attribute on only one of the two.
-        (
-            "\
-local a <const> = 1
-local b = 2",
-            LuaTarget::Lua54,
-        ),
         // The merge would drop `export`.
-        (
-            "\
+        "\
 export local a = 1
 export local b = 2",
-            LuaTarget::Luau,
-        ),
         // The merge would make the bindings mutable.
-        (
-            "\
+        "\
 const a = 1
 const b = 2",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
+local a = 1
+const b = 2",
+        "\
 local a --[[why]] = 1
 local b = 2",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = 1 -- the count
 local b = 2",
-            LuaTarget::Lua54,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 local a = 1
 local b = 2",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = (x)
 local b = (y)",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-local a <const> = 1
-local b <const> = 2",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-local a <const> = 1
-local b < const > = 2",
-            LuaTarget::Lua54,
-        ),
         // A merged pair's second local can't start another pair, so no two fixes
         // overlap.
-        (
-            "\
+        "\
 local a = 1
 local b = 2
 local c = 3",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = 1
 local b = t.a",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = 1
 local b = \"a\"",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local a = 1
 local b = function(a) return a end",
-            LuaTarget::Lua54,
-        ),
-        ("local a = 1; local b = 2", LuaTarget::Lua54),
-        (
-            "\
+        "local a = 1; local b = 2",
+        "\
 local a: number = 1
 local b: string = \"x\"",
-            LuaTarget::Luau,
-        ),
     ];
 
     #[test]

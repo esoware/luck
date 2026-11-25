@@ -1,8 +1,8 @@
 use luck_allocator::List;
 
 use crate::expr::Expression;
-use crate::function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
-use crate::stmt::Block;
+use crate::function::{FunctionAttribute, FunctionBody, VarArgParam};
+use crate::stmt::{Block, TypedName};
 use crate::synth::Synth;
 use crate::types::{GenericTypeList, Type};
 
@@ -10,14 +10,14 @@ use crate::types::{GenericTypeList, Type};
 #[derive(Debug, Default)]
 pub struct FunctionSignature<'ast> {
     pub generics: Option<GenericTypeList<'ast>>,
-    pub params: Vec<Parameter<'ast>>,
+    pub params: Vec<TypedName<'ast>>,
     /// Trailing `...`, optionally typed. See [`Synth::vararg_param`].
     pub vararg: Option<VarArgParam<'ast>>,
     pub return_type: Option<Type<'ast>>,
 }
 
 impl<'ast> Synth<'ast> {
-    /// A Luau function attribute in the plain `@name` form.
+    /// A function attribute in the plain `@name` form.
     ///
     /// # Panics
     ///
@@ -26,7 +26,7 @@ impl<'ast> Synth<'ast> {
         FunctionAttribute::new(self.next_span(), self.name(name), None)
     }
 
-    /// A Luau function attribute in the bracketed `@[name(args)]` form.
+    /// A function attribute in the bracketed `@[name(args)]` form.
     ///
     /// # Panics
     ///
@@ -58,27 +58,22 @@ impl<'ast> Synth<'ast> {
         )
     }
 
+    /// A parameter, a `local` name, or a `for` variable, with an optional
+    /// type annotation.
+    ///
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn param(&self, name: &str) -> Parameter<'ast> {
-        Parameter::new(self.name(name), None)
+    pub fn typed_name(&self, name: &str, ty: Option<Type<'ast>>) -> TypedName<'ast> {
+        TypedName::new(self.name(name), ty.map(|annotation| self.boxed(annotation)))
     }
 
-    /// # Panics
-    ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn param_typed(&self, name: &str, ty: Type<'ast>) -> Parameter<'ast> {
-        Parameter::new(self.name(name), Some(self.boxed(ty)))
-    }
-
-    /// Lua 5.5's named `...name` form isn't supported, so `name` is `None`.
     pub fn vararg_param(&self, type_annotation: Option<Type<'ast>>) -> VarArgParam<'ast> {
-        VarArgParam::new(self.next_span(), None, type_annotation.map(|ty| self.boxed(ty)))
+        VarArgParam::new(self.next_span(), type_annotation.map(|ty| self.boxed(ty)))
     }
 
-    pub(super) fn params(&self, names: &[&str]) -> Vec<Parameter<'ast>> {
-        names.iter().map(|name| self.param(name)).collect()
+    pub(super) fn params(&self, names: &[&str]) -> Vec<TypedName<'ast>> {
+        names.iter().map(|name| self.typed_name(name, None)).collect()
     }
 }
 
@@ -93,7 +88,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let signature = FunctionSignature {
-            params: vec![synth.param_typed("n", synth.ty_named("number"))],
+            params: vec![synth.typed_name("n", Some(synth.ty_named("number")))],
             return_type: Some(synth.ty_named("number")),
             ..FunctionSignature::default()
         };
@@ -116,7 +111,7 @@ mod tests {
         let synth = fixture.synth();
         let signature = FunctionSignature {
             generics: Some(synth.generic_type_list([("T", false)])),
-            params: vec![synth.param_typed("value", synth.ty_named("T"))],
+            params: vec![synth.typed_name("value", Some(synth.ty_named("T")))],
             return_type: Some(synth.ty_named("T")),
             ..FunctionSignature::default()
         };
@@ -139,7 +134,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let signature = FunctionSignature {
-            params: vec![synth.param("first")],
+            params: vec![synth.typed_name("first", None)],
             vararg: Some(synth.vararg_param(None)),
             ..FunctionSignature::default()
         };
@@ -150,7 +145,6 @@ mod tests {
         };
         assert_eq!(function_def.body.params.len(), 1);
         let vararg = function_def.body.vararg.as_ref().expect("vararg present");
-        assert!(vararg.name.is_none());
         assert!(vararg.type_annotation.is_none());
     }
 
@@ -159,7 +153,6 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let vararg = synth.vararg_param(Some(synth.ty_named("number")));
-        assert!(vararg.name.is_none());
         assert!(vararg.type_annotation.is_some());
     }
 

@@ -45,7 +45,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
         ("insert", [table, index, _]) => {
             if is_zero(index) {
                 context.diagnostic(
-                    finding("`table.insert` with index 0, but Lua arrays are 1-based")
+                    finding("`table.insert` with index 0, but Luau arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
             } else if length_operand(index).is_some_and(|target| same_target(target, table)) {
@@ -67,7 +67,7 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
         ("remove", [table, index]) => {
             if is_zero(index) {
                 context.diagnostic(
-                    finding("`table.remove` with index 0, but Lua arrays are 1-based")
+                    finding("`table.remove` with index 0, but Luau arrays are 1-based")
                         .with_help("did you mean index 1?"),
                 );
             } else if length_offset_operand(index, BinOp::Sub, context)
@@ -82,12 +82,12 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
         ("move", move_args) => {
             if move_args.get(1).is_some_and(is_zero) {
                 context.diagnostic(finding(
-                    "`table.move` with start index 0, but Lua arrays are 1-based",
+                    "`table.move` with start index 0, but Luau arrays are 1-based",
                 ));
             }
             if move_args.get(3).is_some_and(is_zero) {
                 context.diagnostic(finding(
-                    "`table.move` with destination index 0, but Lua arrays are 1-based",
+                    "`table.move` with destination index 0, but Luau arrays are 1-based",
                 ));
             }
         }
@@ -101,18 +101,13 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
     }
 }
 
-/// The `field` of a `table.field(...)` call, if `table` is the stdlib global
-/// and this version's stdlib has that function.
+/// The `field` of a `table.field(...)` call, if `table` is the stdlib global.
 fn table_stdlib_function<'call>(
     call: Call<'call>,
     context: &LintContext<'_, '_>,
 ) -> Option<&'call str> {
     let (root, field) = dotted_callee(call)?;
-    if root.text != "table" || !context.scoping().reaches_host_global(root) {
-        return None;
-    }
-    context.semantic.stdlib().lookup(&["table", field])?;
-    Some(field)
+    (root.text == "table" && context.scoping().reaches_host_global(root)).then_some(field)
 }
 
 fn length_operand<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Expression<'ast>> {
@@ -158,55 +153,41 @@ fn same_target(left: &Expression<'_>, right: &Expression<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("table.insert(t, v)", LuaTarget::Lua54),
-        ("table.insert(t, 1, v)", LuaTarget::Lua54),
-        ("table.insert(t, #u, v)", LuaTarget::Lua54),
-        ("table.insert(a.b, #a.c, v)", LuaTarget::Lua54),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "table.insert(t, v)",
+        "table.insert(t, 1, v)",
+        "table.insert(t, #u, v)",
+        "table.insert(a.b, #a.c, v)",
+        "\
 local table = {}
 table.insert(t, 0, v)",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 table = {}
 table.insert(t, 0, v)",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-local _ENV = { table = {} }
-table.insert(t, 0, v)",
-            LuaTarget::Lua54,
-        ),
-        ("table.move(t, 1, #t, 1, u)", LuaTarget::Lua54),
-        ("local x = table.create(3, 0)", LuaTarget::Luau),
+        "table.move(t, 1, #t, 1, u)",
+        "local x = table.create(3, 0)",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("table.insert(t, 0, v)", LuaTarget::Lua54),
-        ("table.insert(t, 0x0, v)", LuaTarget::Lua54),
-        ("table.remove(t, 0x0)", LuaTarget::Lua54),
-        ("table.move(t, 0x0, #t, 1)", LuaTarget::Lua54),
-        ("table.move(t, 1, #t, 0x0, u)", LuaTarget::Lua54),
-        ("table.insert(t, #t + 0x1, v)", LuaTarget::Lua54),
-        ("table.remove(t, #t - 0x1)", LuaTarget::Lua54),
-        ("table.insert(t, #t, v)", LuaTarget::Lua54),
-        ("table.insert(t, #t + 1, v)", LuaTarget::Lua54),
-        ("table.insert(a.b, #a.b, v)", LuaTarget::Lua54),
-        ("table.remove(t, 0)", LuaTarget::Lua54),
-        ("table.remove(t, #t - 1)", LuaTarget::Lua54),
-        ("table.move(t, 0, #t, 1)", LuaTarget::Lua54),
-        ("table.move(t, 1, #t, 0, u)", LuaTarget::Lua54),
-        ("local x = table.create(3, {})", LuaTarget::Luau),
-        ("local last = table.remove(t, 0)", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "table.insert(t, 0, v)",
+        "table.insert(t, 0x0, v)",
+        "table.remove(t, 0x0)",
+        "table.move(t, 0x0, #t, 1)",
+        "table.move(t, 1, #t, 0x0, u)",
+        "table.insert(t, #t + 0x1, v)",
+        "table.remove(t, #t - 0x1)",
+        "table.insert(t, #t, v)",
+        "table.insert(t, #t + 1, v)",
+        "table.insert(a.b, #a.b, v)",
+        "table.remove(t, 0)",
+        "table.remove(t, #t - 1)",
+        "table.move(t, 0, #t, 1)",
+        "table.move(t, 1, #t, 0, u)",
+        "local x = table.create(3, {})",
+        "local last = table.remove(t, 0)",
     ];
 
     #[test]

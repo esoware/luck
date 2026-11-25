@@ -62,7 +62,6 @@ impl BlockItem<'_, '_> {
                 stmt,
                 Statement::FunctionDecl(_)
                     | Statement::LocalFunction(_)
-                    | Statement::GlobalFunction(_)
                     | Statement::TypeDeclaration(_)
             ),
             Self::Verbatim { .. } => false,
@@ -123,11 +122,10 @@ impl<'ast> Formatter<'ast> {
         if should_preserve_edge_blanks {
             let printed_end =
                 self.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
-            let version = self.version();
             let has_blank = self
                 .comments()
                 .source_text()
-                .is_some_and(|source| has_trailing_edge_blank(source, printed_end, version));
+                .is_some_and(|source| has_trailing_edge_blank(source, printed_end));
             if has_blank {
                 self.empty_line();
             }
@@ -240,7 +238,7 @@ impl<'ast> Formatter<'ast> {
                 if absorbed.is_none() {
                     has_leading_paren = source[span.start as usize] == b'(';
                 }
-                let line_start = own_line_start(source, span.start, self.version());
+                let line_start = own_line_start(source, span.start);
                 run.start = run.start.min(line_start.unwrap_or(span.start));
                 run.end = run.end.max(span.end);
                 absorbed = Some(absorbed.map_or(span.start, |range| range.start)..span.end);
@@ -285,9 +283,7 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn has_blank_line_before(&self, start: u32) -> bool {
         let comments = self.comments();
         let anchor = comments.peek_next_start().filter(|comment| *comment < start).unwrap_or(start);
-        comments
-            .source_text()
-            .is_some_and(|source| has_leading_edge_blank(source, anchor, self.version()))
+        comments.source_text().is_some_and(|source| has_leading_edge_blank(source, anchor))
     }
 
     /// Write the line break between two adjacent items, and return whether
@@ -303,7 +299,6 @@ impl<'ast> Formatter<'ast> {
         should_surround_next_with_blank: bool,
     ) -> bool {
         let comments = self.comments();
-        let version = self.version();
         let is_blank = match comments.source_text() {
             Some(source) => {
                 // Stop at an intervening comment, so a blank line after it isn't
@@ -313,7 +308,7 @@ impl<'ast> Formatter<'ast> {
                 let gap_start = comments
                     .last_printed_end()
                     .map_or(previous.end, |printed_end| printed_end.max(previous.end));
-                has_blank_line(source, gap_start, gap_end, version)
+                has_blank_line(source, gap_start, gap_end)
             }
             None => {
                 previous.should_surround_with_blank
@@ -356,7 +351,7 @@ impl<'ast> Formatter<'ast> {
             let line_start = self
                 .comments()
                 .source_text()
-                .and_then(|source| own_line_start(source, start, self.version()))
+                .and_then(|source| own_line_start(source, start))
                 .unwrap_or(start);
             self.write_exact(Span::new(line_start, end));
         }
@@ -381,7 +376,7 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return false;
         };
-        let base_indent = own_line_start(source, start, self.version())
+        let base_indent = own_line_start(source, start)
             .map_or(&b""[..], |line_start| Span::new(line_start, start).text(source));
         let line_breaks = self.comments().line_breaks_between_tokens(start, end);
         let mut line_start = start;
@@ -439,7 +434,7 @@ pub(crate) fn format_selection<'ast>(
     range: Span,
 ) -> Option<(Span, Vec<u8>)> {
     let groupings = |expr| parse.groupings.around(expr);
-    let block = &parse.chunk.block;
+    let block = &parse.chunk;
     let mut finder = InnermostBlock { range, groupings: &parse.groupings, found: block };
     finder.visit_block(block);
 
@@ -454,14 +449,12 @@ pub(crate) fn format_selection<'ast>(
     let last_end = items.clone().last()?.span(groupings).end;
 
     let source = parse.source;
-    let line_start =
-        own_line_start(source, first_start, parse.chunk.version).unwrap_or(first_start);
+    let line_start = own_line_start(source, first_start).unwrap_or(first_start);
     let base_indent = Span::new(line_start, first_start).text(source);
     let mut comments = Comments::from_parse(parse);
     comments.restrict_to(Span::new(line_start, last_end));
 
-    let mut f =
-        Formatter::new(allocator, parse.chunk.version, *options, comments, Some(&parse.groupings));
+    let mut f = Formatter::new(allocator, *options, comments, Some(&parse.groupings));
     f.write_items(items);
     let end = f.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
     Some((Span::new(line_start, end), f.print(base_indent)))

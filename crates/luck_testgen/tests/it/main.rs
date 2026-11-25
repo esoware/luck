@@ -2,6 +2,5 @@
 // otherwise reaches only the `#[test]` functions of an integration test binary.
 #![cfg(test)]
 
-mod full_grammar;
 mod roundtrip;
 mod runtime_safe;

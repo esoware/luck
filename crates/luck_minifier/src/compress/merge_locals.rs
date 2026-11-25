@@ -5,33 +5,28 @@ use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    Assignment, AttributedName, Expression, LocalAssignmentKind, Name, Statement, Var, Visit,
+    Assignment, Expression, LocalAssignmentKind, Name, Statement, TypedName, Var, Visit,
 };
 use luck_semantic::{Scoping, SymbolId};
-use luck_token::LuaVersion;
 use luck_value::{MayHaveSideEffects as _, ValueContext};
 
 use super::Compressor;
 use crate::binding::has_fixed_binding;
 use crate::limits::assignment_target_limit;
 
-/// A dialect in which no name's read counts as an effect, since a group
+/// A context in which no name's read counts as an effect, since a group
 /// evaluates its values in the order its statements did, so a global's
 /// `__index` sees the same reads in the same order.
-struct ReadsInOrder(LuaVersion);
+struct ReadsInOrder;
 
 impl ValueContext for ReadsInOrder {
-    fn version(&self) -> LuaVersion {
-        self.0
-    }
-
     fn is_global_reference(&self, _name: &Name<'_>) -> bool {
         false
     }
 }
 
-pub(super) fn is_bare_local(stmt: &Statement<'_>, scoping: &Scoping) -> bool {
-    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local, scoping))
+pub(super) fn is_bare_local(stmt: &Statement<'_>) -> bool {
+    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local))
 }
 
 /// Whether `expr` evaluates into exactly one register with no temporaries.
@@ -58,7 +53,7 @@ const fn is_single_register_value(expr: &Expression<'_>) -> bool {
     }
 }
 
-/// Finds a reference to any of a group's bindings, closure bodies and Luau
+/// Finds a reference to any of a group's bindings, closure bodies and
 /// annotations included.
 struct ReferenceFinder<'group> {
     group: &'group [SymbolId],
@@ -137,13 +132,13 @@ impl<'ast> Compressor<'_, 'ast> {
         };
         // Fixed bindings stay unmerged. Merging a `const` with plain locals,
         // for one, would extend or drop its const-ness.
-        if has_fixed_binding(local, self.scoping) {
+        if has_fixed_binding(local) {
             return None;
         }
-        if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
-            && !expr.may_have_side_effects(&ReadsInOrder(self.version))
+        if let ([local_name], [expr]) = (&*local.names, &*local.exprs)
+            && !expr.may_have_side_effects(&ReadsInOrder)
         {
-            return self.scoping.symbol_of(&attributed.name);
+            return self.scoping.symbol_of(&local_name.name);
         }
         None
     }
@@ -164,8 +159,8 @@ impl<'ast> Compressor<'_, 'ast> {
                 .iter()
                 .take_while(|stmt| {
                     self.single_local(stmt).is_some_and(|follower| {
-                        // A Luau annotation binds before the name, as the
-                        // value does.
+                        // An annotation binds before the name, as the value
+                        // does.
                         let mut finder = self.reference_finder(group);
                         finder.visit_stmt(stmt);
                         let can_join = !finder.has_reference;
@@ -176,8 +171,8 @@ impl<'ast> Compressor<'_, 'ast> {
                     })
                 })
                 .count()
-        } else if is_bare_local(first, self.scoping) {
-            followers.iter().take_while(|stmt| is_bare_local(stmt, self.scoping)).count()
+        } else if is_bare_local(first) {
+            followers.iter().take_while(|stmt| is_bare_local(stmt)).count()
         } else if let Statement::Assignment(assignment) = first
             && let Some((symbol, _)) = self.single_assignment(assignment)
         {
@@ -191,8 +186,9 @@ impl<'ast> Compressor<'_, 'ast> {
                         return false;
                     };
                     self.single_assignment(follower).is_some_and(|(target, value)| {
-                        // PUC Lua stores a multiple assignment right to left,
-                        // so a repeated target would keep its first value.
+                        // The language leaves open the order a multiple
+                        // assignment stores in, so a repeated target could
+                        // keep either value.
                         let can_join =
                             !group.contains(&target) && !self.references_any(value, group);
                         if can_join {
@@ -252,20 +248,16 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::Return(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
         }
     }
 
-    /// A group stores right to left, so only a local may join, since any
-    /// other store can run `__newindex`. A group also holds one register per
-    /// value until the stores run, and only a leaf value needs exactly one.
+    /// Only a local may join a group, since any other store can run
+    /// `__newindex`, and the language leaves open the order a group stores
+    /// in. A group also holds one register per value until the stores run,
+    /// and only a leaf value needs exactly one.
     fn single_assignment<'tree>(
         &self,
         assignment: &'tree Assignment<'ast>,
@@ -274,7 +266,7 @@ impl<'ast> Compressor<'_, 'ast> {
             && is_single_register_value(expr)
         {
             let symbol = self.scoping.resolved_symbol_of(name)?;
-            return (!self.scoping.is_env_binding(symbol)).then_some((symbol, expr));
+            return Some((symbol, expr));
         }
         None
     }
@@ -298,8 +290,7 @@ impl<'ast> Compressor<'_, 'ast> {
             let can_fuse = if let Statement::LocalAssignment(local) = stmt
                 && let Some(Statement::Assignment(assignment)) = stmts.get(index + 1)
             {
-                is_bare_local(stmt, self.scoping)
-                    && self.can_fuse(&local.names, assignment, &mut declared)
+                is_bare_local(stmt) && self.can_fuse(&local.names, assignment, &mut declared)
             } else {
                 false
             };
@@ -334,7 +325,7 @@ impl<'ast> Compressor<'_, 'ast> {
     /// locals go in `declared`.
     fn can_fuse(
         &self,
-        names: &[AttributedName<'_>],
+        names: &[TypedName<'_>],
         assignment: &Assignment<'_>,
         declared: &mut Vec<SymbolId>,
     ) -> bool {
@@ -345,9 +336,9 @@ impl<'ast> Compressor<'_, 'ast> {
             return false;
         }
         declared.clear();
-        for (attributed, target) in names.iter().zip(assignment.targets.iter()) {
+        for (local_name, target) in names.iter().zip(assignment.targets.iter()) {
             let (Some(symbol), Var::Name(name)) =
-                (self.scoping.symbol_of(&attributed.name), target)
+                (self.scoping.symbol_of(&local_name.name), target)
             else {
                 return false;
             };
@@ -383,11 +374,6 @@ pub(super) fn declared_count(stmt: &Statement<'_>) -> usize {
         | Statement::Return(_)
         | Statement::Break(_)
         | Statement::Continue(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => 0,
@@ -397,7 +383,6 @@ pub(super) fn declared_count(stmt: &Statement<'_>) -> usize {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, assert_outputs, minify_with, parse};
     use crate::transform_config::TransformConfig;
@@ -405,7 +390,7 @@ mod tests {
     const MERGING: TransformConfig = TransformConfig { merge_locals: true, ..NO_PASSES };
 
     fn merge(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &MERGING)
+        minify_with(source, &MERGING)
     }
 
     #[test]
@@ -443,21 +428,12 @@ mod tests {
             "local a=f()a=1 b=2",
             "do local a=f()end a=1 b=2",
             "a.b=1 c.d=2",
-            "local _ENV=f()x=1 y=2",
-            "local _ENV,y=f()_ENV=1 y=2",
             "x=1 x=2",
             "local a,a a,a=1,2",
+            "local a=1 local b=a::number print(b)",
+            "local a=...local b:typeof(a)=g print(b)",
         ] {
             assert_eq!(merge(source), source);
-        }
-        assert_eq!(
-            minify_with("local x,y=f()global x x=1 y=2", LuaVersion::Lua55, &MERGING),
-            "local x,y=f()global x x=1 y=2"
-        );
-        for source in
-            ["local a=1 local b=a::number print(b)", "local a=...local b:typeof(a)=g print(b)"]
-        {
-            assert_eq!(minify_with(source, LuaVersion::Luau, &MERGING), source);
         }
     }
 
@@ -466,8 +442,7 @@ mod tests {
     /// same minify for the output to minify to itself.
     #[test]
     fn a_fused_local_takes_what_it_allows_in_one_minify() {
-        let every_pass =
-            |source: &str| minify_with(source, LuaVersion::Lua54, &TransformConfig::default());
+        let every_pass = |source: &str| minify_with(source, &TransformConfig::default());
         assert_outputs(
             every_pass,
             &[
@@ -500,8 +475,7 @@ mod tests {
 
     fn largest_assignment_target_count(output: &str) -> usize {
         let allocator = Allocator::new();
-        parse(&allocator, output, LuaVersion::Lua54)
-            .block
+        parse(&allocator, output)
             .stmts
             .iter()
             .filter_map(|stmt| {

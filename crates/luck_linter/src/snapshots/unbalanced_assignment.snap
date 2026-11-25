@@ -2,12 +2,12 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: 3 name(s) but 2 value(s) in assignment
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | local a, b, c = 1, 2
   | ^^^^^^^^^^^^^^^^^^^^
 
 warning: 2 target(s) but 3 value(s) in assignment
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | local a, b
 2 | a, b = 1, 2, 3
   | ^^^^^^^^^^^^^^

@@ -1,33 +1,30 @@
 use std::mem;
 
 use luck_ast::{Name, NameIndex, TreeCounts};
-use luck_token::{LuaVersion, Span};
+use luck_token::Span;
 
-use crate::id::{LabelId, NameId, NodeId, ReferenceId, ScopeId, SymbolId};
+use crate::id::{NameId, NodeId, ReferenceId, ScopeId, SymbolId};
 use crate::names::Names;
 
-/// A chunk's scopes, symbols, references, and labels, in flat tables indexed
-/// by their ids, and the distinct names they use.
+/// A chunk's scopes, symbols, and references, in flat tables indexed by
+/// their ids, and the distinct names they use.
 ///
 /// It owns all of it, so it outlives the tree it was built from: a pass that
 /// rewrites the tree can keep it.
 ///
-/// Every name in the tree that declares a symbol, makes a reference, or
-/// names a label finds it by its [`NameIndex`], which
-/// the parser gives each name of its own, so a tree whose names share an
-/// index, as a rewrite that copies a name may leave, finds the role of only
-/// the last of them.
+/// Every name in the tree that declares a symbol or makes a reference finds
+/// it by its [`NameIndex`], which the parser gives each name of its own, so
+/// a tree whose names share an index, as a rewrite that copies a name may
+/// leave, finds the role of only the last of them.
 ///
 /// Symbols are in the order the walk declares them, and references in the
 /// order the chunk evaluates them, which is source order except that an
 /// assignment writes a name only after its values are read.
 #[derive(Debug)]
 pub struct Scoping {
-    version: LuaVersion,
     scopes: Vec<Scope>,
     symbols: Vec<Symbol>,
     references: Vec<Reference>,
-    labels: Vec<Label>,
     /// Every symbol's references, a run per symbol in symbol order.
     resolved: Vec<ReferenceId>,
     /// Where each symbol's run of `resolved` starts, and then where the last
@@ -40,10 +37,6 @@ pub struct Scoping {
     /// What each name of the tree is, by its index.
     roles: Vec<NameRole>,
     names: Names,
-    /// Lua 5.5: each name a `global` statement declares, and the scope of
-    /// the block the statement is in, in source order.
-    declared_globals: Vec<(NameId, ScopeId)>,
-    is_env_assigned: bool,
 }
 
 /// A slot of the references by position that holds no reference yet. No
@@ -55,14 +48,12 @@ fn unfilled_position() -> ReferenceId {
 /// What a name in the tree is to the tables.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) enum NameRole {
-    /// A field, a type, an attribute, a global's declaration, or a name the
-    /// walk never reached.
+    /// A field, a type, a function attribute, or a name the walk never
+    /// reached.
     #[default]
     None,
     Symbol(SymbolId),
     Reference(ReferenceId),
-    /// A label's own name, or a `goto`'s that reaches it.
-    Label(LabelId),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,13 +63,9 @@ pub struct Scope {
     /// The function scope this one runs in: itself for a function or the
     /// chunk.
     pub function: ScopeId,
-    /// What opens it: the chunk, a function body, the block of a `do`, a
-    /// `while`, or an `if` clause, or a `repeat` or `for` loop.
+    /// What opens it: the chunk's block, a function body, the block of a
+    /// `do`, a `while`, or an `if` clause, or a `repeat` or `for` loop.
     pub node: NodeId,
-    /// For the chunk's scope or a function's, whether its own code, not a
-    /// nested function's, reads `...`. Lua 5.1 builds a vararg function's
-    /// `arg` table only when it doesn't.
-    pub has_vararg_read: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,30 +85,23 @@ pub struct Symbol {
     pub name: NameId,
     pub scope: ScopeId,
     pub kind: SymbolKind,
-    /// The node that declares it: a local's [`AttributedName`], a parameter
-    /// or generic `for` variable's [`Parameter`], a numeric `for`, a
-    /// `local function`, the [`VarArgParam`] of a Lua 5.5 named vararg or a
-    /// Lua 5.1 `arg`, or the [`FunctionBody`] of a method's `self`.
+    /// The node that declares it: the [`TypedName`] of a local, a
+    /// parameter, or a `for` variable, a `local function`, or the
+    /// [`FunctionBody`] of a method's `self`.
     ///
-    /// [`AttributedName`]: luck_ast::AttributedName
-    /// [`Parameter`]: luck_ast::Parameter
-    /// [`VarArgParam`]: luck_ast::VarArgParam
+    /// [`TypedName`]: luck_ast::TypedName
     /// [`FunctionBody`]: luck_ast::FunctionBody
     pub declaration: NodeId,
     pub definition_span: Span,
     pub shadows: Option<SymbolId>,
     pub is_upvalue: bool,
     pub is_modified: bool,
-    /// Luau: true for `export local`, `export const`, and `export function`
+    /// True for `export local`, `export const`, and `export function`
     /// bindings. The module's export table reads them, so they're used even
     /// with no references in the module, and their name is the module's API.
     pub is_exported: bool,
-    /// Lua 5.4+: true for a `<close>` local, which its scope's exit uses even
-    /// with no references.
-    pub is_close: bool,
-    /// Writing to it is a compile error: a `<const>` or `<close>` local, a
-    /// Luau `const` or `export function`, a Lua 5.5 `for` loop's control
-    /// variable, or a Lua 5.5 named vararg.
+    /// Writing to it is an error: a `const` local or function, or an
+    /// `export const` or `export function`.
     pub is_read_only: bool,
 }
 
@@ -135,9 +115,6 @@ pub enum SymbolKind {
     /// The `self` of a `function t:m()` header. No token spells it, so its
     /// definition span is empty, at the start of the signature.
     ImplicitSelf,
-    /// Lua 5.1: the `arg` table of a vararg function's extra arguments. No
-    /// token spells it, so its definition span is empty, at the `...`.
-    ImplicitArg,
 }
 
 impl SymbolKind {
@@ -145,7 +122,7 @@ impl SymbolKind {
     /// remove.
     pub const fn is_implicit(self) -> bool {
         match self {
-            Self::ImplicitSelf | Self::ImplicitArg => true,
+            Self::ImplicitSelf => true,
             Self::Local
             | Self::Parameter
             | Self::IteratorVariable
@@ -162,19 +139,20 @@ pub struct Reference {
     pub scope: ScopeId,
     /// The [`Name`] that makes it.
     pub node: NodeId,
-    /// The symbol this name resolves to, or `None` for a free name.
+    /// The symbol this name resolves to, or `None` for a global.
     pub resolved: Option<SymbolId>,
-    /// Lua 5.2+: the local `_ENV` a free name is a field of, in which case
-    /// it's no global.
-    pub env: Option<SymbolId>,
     pub kind: ReferenceKind,
-    /// Lua 5.5: a free name in the scope of a `global` statement that covers
-    /// it, by name or with `*`.
-    pub is_declared_global: bool,
-    /// Luau: made in a type, as a `typeof` makes one, which never runs.
+    /// Made in a type, as a `typeof` makes one, which never runs.
     pub is_in_type: bool,
     /// Made in the body of the `local function` it resolves to.
     pub is_recursive: bool,
+}
+
+impl Reference {
+    /// Whether it names a global.
+    pub const fn is_global(&self) -> bool {
+        self.resolved.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,33 +178,17 @@ impl ReferenceKind {
     }
 }
 
-/// Lua 5.2+: a `::name::` statement, which the `goto`s of its function that
-/// can see it jump to.
-#[derive(Debug, Clone, Copy)]
-pub struct Label {
-    pub name: NameId,
-    /// The whole statement's.
-    pub span: Span,
-    /// The scope of the block it's in.
-    pub scope: ScopeId,
-    pub node: NodeId,
-    /// A `goto` jumps to it.
-    pub is_used: bool,
-}
-
 impl Scoping {
     /// Tables sized from `counts`, the parse's or the default.
-    pub(crate) fn with_capacity(version: LuaVersion, counts: TreeCounts) -> Self {
+    pub(crate) fn with_capacity(counts: TreeCounts) -> Self {
         let declarations = counts.declarations as usize;
         let name_uses = counts.name_uses as usize;
         let mut resolved_offsets = Vec::with_capacity(declarations + 1);
         resolved_offsets.push(0);
         Self {
-            version,
             scopes: Vec::with_capacity(counts.blocks as usize),
             symbols: Vec::with_capacity(declarations),
             references: Vec::with_capacity(name_uses),
-            labels: Vec::new(),
             resolved: Vec::new(),
             resolved_offsets,
             positions: Vec::with_capacity(name_uses),
@@ -235,39 +197,31 @@ impl Scoping {
             // No chunk has more distinct names than declarations and uses
             // together.
             names: Names::with_capacity(declarations + name_uses),
-            declared_globals: Vec::new(),
-            is_env_assigned: false,
         }
     }
 
     /// Empties every table and keeps its memory, for a build of a tree whose
     /// `counts` it then reserves room for, as [`Self::with_capacity`] does.
-    pub(crate) fn reset(&mut self, version: LuaVersion, counts: TreeCounts) {
+    pub(crate) fn reset(&mut self, counts: TreeCounts) {
         let declarations = counts.declarations as usize;
         let name_uses = counts.name_uses as usize;
         let Self {
-            version: table_version,
             scopes,
             symbols,
             references,
-            labels,
             resolved,
             resolved_offsets,
             positions,
             unfilled_positions,
             roles,
             names,
-            declared_globals,
-            is_env_assigned,
         } = self;
-        *table_version = version;
         scopes.clear();
         scopes.reserve(counts.blocks as usize);
         symbols.clear();
         symbols.reserve(declarations);
         references.clear();
         references.reserve(name_uses);
-        labels.clear();
         resolved.clear();
         resolved_offsets.clear();
         resolved_offsets.reserve(declarations + 1);
@@ -278,8 +232,6 @@ impl Scoping {
         roles.clear();
         roles.resize(counts.names as usize, NameRole::None);
         names.reset(declarations + name_uses);
-        declared_globals.clear();
-        *is_env_assigned = false;
     }
 
     pub(crate) fn next_scope_id(&self) -> ScopeId {
@@ -288,10 +240,6 @@ impl Scoping {
 
     pub(crate) fn add_scope(&mut self, scope: Scope) {
         self.scopes.push(scope);
-    }
-
-    pub(crate) fn mark_vararg_read(&mut self, function: ScopeId) {
-        self.scopes[function.index()].has_vararg_read = true;
     }
 
     pub(crate) fn add_symbol(
@@ -315,7 +263,6 @@ impl Scoping {
             is_upvalue: false,
             is_modified: false,
             is_exported: false,
-            is_close: false,
             is_read_only: false,
         });
         self.resolved_offsets.push(0);
@@ -357,27 +304,12 @@ impl Scoping {
         id
     }
 
-    pub(crate) fn add_label(&mut self, label: Label) -> LabelId {
-        let id = LabelId::from_index(self.labels.len());
-        self.labels.push(label);
-        id
-    }
-
-    pub(crate) fn label_mut(&mut self, id: LabelId) -> &mut Label {
-        &mut self.labels[id.index()]
-    }
-
     pub(crate) fn intern(&mut self, name: &str) -> NameId {
         self.names.intern(name)
     }
 
     pub(crate) fn mark_assigned_global(&mut self, name: NameId) {
         self.names.mark_assigned_global(name);
-    }
-
-    pub(crate) fn add_declared_global(&mut self, name: NameId, scope: ScopeId) {
-        self.names.mark_declared_global(name);
-        self.declared_globals.push((name, scope));
     }
 
     /// Records what the name of index `name_index` is, growing the table for
@@ -442,12 +374,6 @@ impl Scoping {
             let unfilled = unfilled_position();
             positions.retain(|&id| id != unfilled);
         }
-        self.is_env_assigned = self.version.has_env_upvalue()
-            && self.name_id("_ENV").is_some_and(|env| self.is_assigned_global(env));
-    }
-
-    pub const fn version(&self) -> LuaVersion {
-        self.version
     }
 
     /// The chunk's own scope first, then each in the order the walk enters
@@ -462,11 +388,6 @@ impl Scoping {
 
     pub fn references(&self) -> &[Reference] {
         &self.references
-    }
-
-    /// In source order.
-    pub fn labels(&self) -> &[Label] {
-        &self.labels
     }
 
     /// The chunk's distinct names, in [`NameId`] order.
@@ -487,10 +408,6 @@ impl Scoping {
 
     pub fn reference(&self, id: ReferenceId) -> &Reference {
         &self.references[id.index()]
-    }
-
-    pub fn label(&self, id: LabelId) -> &Label {
-        &self.labels[id.index()]
     }
 
     pub fn name(&self, id: NameId) -> &str {
@@ -539,15 +456,6 @@ impl Scoping {
         self.reference(self.reference_of(name)?).resolved
     }
 
-    /// The label `name` names: its own, or the one a `goto` with that name
-    /// jumps to.
-    pub fn label_of(&self, name: &Name<'_>) -> Option<LabelId> {
-        let NameRole::Label(id) = self.role(name) else {
-            return None;
-        };
-        Some(id)
-    }
-
     /// The references whose names lie within `span`, by where they start.
     pub fn references_within(&self, span: Span) -> impl Iterator<Item = ReferenceId> + '_ {
         let first =
@@ -584,58 +492,26 @@ impl Scoping {
     /// True when `name` reads the host's global of that name, so a stdlib
     /// fact about it holds there.
     ///
-    /// False for a local, a field of a local `_ENV`, a chunk that assigns its
-    /// own `_ENV`, a global this chunk writes anywhere, and a name that makes
-    /// no reference.
+    /// False for a local, a global this chunk writes anywhere, and a name that
+    /// makes no reference.
     pub fn reaches_host_global(&self, name: &Name<'_>) -> bool {
         self.reference_of(name).is_some_and(|id| self.is_host_global(self.reference(id)))
     }
 
     /// See [`Self::reaches_host_global`].
     pub fn is_host_global(&self, reference: &Reference) -> bool {
-        self.is_global(reference) && !self.is_assigned_global(reference.name)
-    }
-
-    /// Whether `reference` names a global. A free name that indexes a `_ENV`
-    /// the chunk controls doesn't.
-    pub const fn is_global(&self, reference: &Reference) -> bool {
-        reference.resolved.is_none() && reference.env.is_none() && !self.is_env_assigned
+        reference.is_global() && !self.is_assigned_global(reference.name)
     }
 
     /// Every reference to a global, in reference order.
     pub fn global_references(&self) -> impl Iterator<Item = &Reference> {
-        self.references.iter().filter(|reference| self.is_global(reference))
+        self.references.iter().filter(|reference| reference.is_global())
     }
 
     /// Whether this chunk writes a global of this name as a free name, so
     /// the host's value of it can't be assumed anywhere in the chunk.
     pub fn is_assigned_global(&self, name: NameId) -> bool {
         self.names.is_assigned_global(name)
-    }
-
-    /// Lua 5.5: whether a `global` statement declares this name, which makes
-    /// it defined wherever it's read.
-    pub fn is_declared_global(&self, name: NameId) -> bool {
-        self.names.is_declared_global(name)
-    }
-
-    /// Lua 5.5: each name a `global` statement declares, and the scope of the
-    /// block the statement is in, where from then on the name reads the
-    /// global, in source order.
-    pub fn declared_globals(&self) -> &[(NameId, ScopeId)] {
-        &self.declared_globals
-    }
-
-    /// Lua 5.2+: the chunk assigns its own `_ENV`, which redirects every
-    /// free name. A local `_ENV` is [`Reference::env`] instead.
-    pub const fn is_env_assigned(&self) -> bool {
-        self.is_env_assigned
-    }
-
-    /// Whether `symbol` is a Lua 5.2+ `_ENV`, which every free name in its
-    /// scope indexes.
-    pub fn is_env_binding(&self, symbol: SymbolId) -> bool {
-        self.version.has_env_upvalue() && self.name(self.symbol(symbol).name) == "_ENV"
     }
 
     /// Whether code in the scope `from` runs in a function nested inside the
@@ -652,10 +528,9 @@ mod tests {
 
     #[test]
     fn table_rows_stay_small() {
-        assert_eq!(size_of::<Reference>(), 32);
+        assert_eq!(size_of::<Reference>(), 28);
         assert_eq!(size_of::<Symbol>(), 36);
         assert_eq!(size_of::<Scope>(), 16);
-        assert_eq!(size_of::<Label>(), 24);
         assert_eq!(size_of::<NameRole>(), 8);
     }
 }

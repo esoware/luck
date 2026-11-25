@@ -2,19 +2,13 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: unreachable code
- --> Lua54:1:21
-1 | while true do break print(1) end
-  |                     ^^^^^^^^
+ --> Standalone:1:51
+1 | for i = 1, 3 do if i then break else continue end print(i) end
+  |                                                   ^^^^^^^^
 tag: unnecessary
 
 warning: unreachable code
- --> Lua54:1:23
-1 | for i = 1, 3 do break print(1) print(2) end
-  |                       ^^^^^^^^^^^^^^^^^
-tag: unnecessary
-
-warning: unreachable code
- --> Lua51:3:3
+ --> Standalone:3:3
 2 |   do return end
 3 |   print(1)
   |   ^^^^^^^^
@@ -22,21 +16,21 @@ warning: unreachable code
 tag: unnecessary
 
 warning: unreachable code
- --> Luau:2:1
+ --> Standalone:2:1
 1 | error('stop')
 2 | print(1)
   | ^^^^^^^^
 tag: unnecessary
 
 warning: unreachable code
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | while true do print(1) end
 2 | print(2)
   | ^^^^^^^^
 tag: unnecessary
 
 warning: unreachable code
- --> Lua54:3:3
+ --> Standalone:3:3
 2 |   if x then return 1 else return 2 end
 3 |   print(x)
   |   ^^^^^^^^
@@ -44,21 +38,13 @@ warning: unreachable code
 tag: unnecessary
 
 warning: unreachable code
- --> Lua54:2:1
-1 | goto skip
-2 | print(1)
-  | ^^^^^^^^
-3 | ::skip::
-tag: unnecessary
-
-warning: unreachable code
- --> Lua54:1:16
+ --> Standalone:1:16
 1 | while false do print(1) end
   |                ^^^^^^^^
 tag: unnecessary
 
 warning: unreachable code
- --> Lua54:3:3
+ --> Standalone:3:3
 2 |   do return end
 3 |   if x then print(x) end
   |   ^^^^^^^^^^^^^^^^^^^^^^
@@ -66,14 +52,8 @@ warning: unreachable code
 tag: unnecessary
 
 warning: unreachable code
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | do return end
 2 | local function g() print(1) end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-tag: unnecessary
-
-warning: unreachable code
- --> Lua54:1:18
-1 | while c do break ::a:: print(1) end
-  |                  ^^^^^^^^^^^^^^
 tag: unnecessary

@@ -4,13 +4,12 @@
 
 use luck_allocator::Allocator;
 use luck_semantic::SemanticBuilder;
-use luck_token::LuaVersion;
 
 use crate::common::for_each_valid_source;
 
-fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
+fn assert_counts_cover_the_tables(source: &str) {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+    let parsed = luck_parser::parse(&allocator, source.as_bytes());
     assert!(parsed.errors.is_empty(), "{:?}\n{source}", parsed.errors.first());
     let counts = parsed.counts;
     let chunk = allocator.alloc(parsed.chunk);
@@ -21,9 +20,7 @@ fn assert_counts_cover_the_tables(source: &str, version: LuaVersion) {
     assert_eq!(tree.scopes().len(), counts.blocks as usize, "{source}");
     assert!(tree.symbols().len() <= declarations, "{counts:?}\n{source}");
     assert!(tree.references().len() <= name_uses, "{counts:?}\n{source}");
-    // Every `goto` of a valid source names a label.
-    let names = declarations + name_uses + tree.labels().len();
-    assert!(tree.names().count() <= names, "{counts:?}\n{source}");
+    assert!(tree.names().count() <= declarations + name_uses, "{counts:?}\n{source}");
 }
 
 #[test]

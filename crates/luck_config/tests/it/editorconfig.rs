@@ -20,13 +20,13 @@ fn editorconfig_empty_value_keeps_the_other_properties() {
     let project = project_with(&[(
         ".editorconfig",
         "\
-[*.lua]
+[*.luau]
 indent_size = 2
 charset =
 ",
     )]);
     assert_eq!(
-        indent_width(&project.path().join("main.lua")),
+        indent_width(&project.path().join("main.luau")),
         2,
         "a valid `key =` pair must not discard the section's other properties"
     );
@@ -37,12 +37,12 @@ fn editorconfig_bom_before_the_first_section_keeps_its_properties() {
     let project = project_with(&[(
         ".editorconfig",
         "\
-\u{feff}[*.lua]
+\u{feff}[*.luau]
 indent_size = 2
 ",
     )]);
     assert_eq!(
-        indent_width(&project.path().join("main.lua")),
+        indent_width(&project.path().join("main.luau")),
         2,
         "a UTF-8 BOM before the first section header must be ignored"
     );
@@ -57,16 +57,16 @@ fn editorconfig_slash_section_applies_to_a_path_relative_to_a_subdirectory() {
             ".editorconfig",
             "\
 root = true
-[src/*.lua]
+[src/*.luau]
 indent_size = 3
 ",
         ),
-        ("src/a.lua", ""),
+        ("src/a.luau", ""),
     ]);
-    let width = in_directory(&project.path().join("src"), || indent_width(Path::new("a.lua")));
+    let width = in_directory(&project.path().join("src"), || indent_width(Path::new("a.luau")));
     assert_eq!(
         width, 3,
-        "`src/a.lua` matches `[src/*.lua]` however the working directory spells it"
+        "`src/a.luau` matches `[src/*.luau]` however the working directory spells it"
     );
 }
 
@@ -76,11 +76,11 @@ fn editorconfig_alternative_after_a_starred_one_still_matches() {
         ".editorconfig",
         "\
 root = true
-[{a*b,xb}.lua]
+[{a*b,xb}.luau]
 indent_size = 2
 ",
     )]);
-    assert_eq!(indent_width(&project.path().join("xb.lua")), 2, "`xb.lua` matches `xb`");
+    assert_eq!(indent_width(&project.path().join("xb.luau")), 2, "`xb.luau` matches `xb`");
 }
 
 #[test]
@@ -95,7 +95,7 @@ indent_size = 2
         "}".repeat(5000)
     );
     let project = project_with(&[(".editorconfig", &section)]);
-    let width = indent_width(&project.path().join("a.lua"));
+    let width = indent_width(&project.path().join("a.luau"));
     assert!(
         width == 2 || width == FormatOptions::default().indent_width,
         "the section either matches or is ignored as invalid: {width}"
@@ -107,13 +107,13 @@ fn editorconfig_alternation_section_matches_promptly() {
     let section = format!(
         "\
 root = true
-[b{}.lua]
+[b{}.luau]
 indent_size = 2
 ",
         "{a,aa}".repeat(40)
     );
     let project = project_with(&[(".editorconfig", &section)]);
-    let file_path = project.path().join(format!("{}.lua", "a".repeat(60)));
+    let file_path = project.path().join(format!("{}.luau", "a".repeat(60)));
     let is_finished = finishes_within(Duration::from_secs(10), move || indent_width(&file_path));
     assert!(is_finished, "a one-line section must not take exponential time to match");
 }

@@ -1,6 +1,5 @@
-use luck_token::LuaTarget;
-
 use crate::stdlib_map::StdlibMap;
+use crate::variant::Variant;
 
 /// Each variant holds a reference, so an entry is two words, and a table of
 /// them stays dense for the lookups that scan it.
@@ -21,7 +20,7 @@ impl<'lib> StdlibEntry<'lib> {
         }
     }
 
-    /// A namespace is always read-only, even when some members (`package.path`) aren't.
+    /// A namespace is always read-only, even when a member isn't.
     pub const fn is_read_only(&self) -> bool {
         match self {
             Self::Function(function) => function.is_read_only,
@@ -54,7 +53,7 @@ pub struct StdlibFunction<'lib> {
     /// params.
     pub is_method: bool,
     /// Shape of the call's first return value, if it has one (e.g.
-    /// `io.open` returns `file`).
+    /// `string.rep` returns `string`).
     pub returns_shape: Option<&'lib str>,
 }
 
@@ -180,7 +179,7 @@ pub enum StdlibArgKind<'lib> {
     String,
     Function,
     Table,
-    /// A type with no variant of its own, e.g. "file" or "buffer". The
+    /// A type with no variant of its own, e.g. "buffer" or "thread". The
     /// string is only a display label.
     Display(&'lib str),
     /// A fixed set of string literals, e.g. the options of
@@ -191,7 +190,7 @@ pub enum StdlibArgKind<'lib> {
 }
 
 /// One allowed value of a `Constant`-kind parameter. Individual values
-/// can be deprecated (e.g. `collectgarbage("setpause")` in 5.4).
+/// can be deprecated, as Roblox's deprecated classes are.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibConstant<'lib> {
     pub value: &'lib str,
@@ -222,8 +221,7 @@ pub struct StdlibReplacement<'lib> {
 pub struct StdlibValue<'lib> {
     pub is_read_only: bool,
     pub deprecated: Option<StdlibDeprecation<'lib>>,
-    /// The value's shape, if it has one (e.g. `game` is a `DataModel`,
-    /// `io.stdout` a `file`).
+    /// The value's shape, if it has one (e.g. `game` is a `DataModel`).
     pub shape: Option<&'lib str>,
 }
 
@@ -237,9 +235,8 @@ pub struct StdlibNamespace<'lib> {
     pub deprecated: Option<StdlibDeprecation<'lib>>,
 }
 
-/// The members of a kind of value, such as a file handle, a string, or a
-/// Roblox instance. Members with `is_method` are colon-callable; the rest
-/// are dot accesses.
+/// The members of a kind of value, such as a string or a Roblox instance.
+/// Members with `is_method` are colon-callable; the rest are dot accesses.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibShape<'lib> {
     pub members: StdlibMap<'lib, StdlibEntry<'lib>>,
@@ -248,11 +245,11 @@ pub struct StdlibShape<'lib> {
     pub extends: Option<&'lib str>,
 }
 
-/// A target's standard library, built in or with std definitions layered
+/// A variant's standard library, built in or with std definitions layered
 /// over it.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibLibrary<'lib> {
-    pub target: LuaTarget,
+    pub variant: Variant,
     pub globals: StdlibMap<'lib, StdlibEntry<'lib>>,
     pub shapes: StdlibMap<'lib, StdlibShape<'lib>>,
     /// The lists of constants a std definition's params can name, such as
@@ -263,9 +260,9 @@ pub struct StdlibLibrary<'lib> {
 impl<'lib> StdlibLibrary<'lib> {
     /// What the generated catalogs layer their files over.
     #[cfg(test)]
-    pub(crate) const fn empty(target: LuaTarget) -> Self {
+    pub(crate) const fn empty(variant: Variant) -> Self {
         Self {
-            target,
+            variant,
             globals: StdlibMap::EMPTY,
             shapes: StdlibMap::EMPTY,
             constant_sets: StdlibMap::EMPTY,

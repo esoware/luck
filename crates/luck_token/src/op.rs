@@ -14,7 +14,7 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
-    FloorDiv, // Lua 5.3+, Luau
+    FloorDiv,
     Mod,
     Pow,
     Concat,
@@ -26,41 +26,9 @@ pub enum BinOp {
     Ge,
     And,
     Or,
-    BitAnd, // Lua 5.3+
-    BitOr,  // Lua 5.3+
-    BitXor, // Lua 5.3+
-    Shl,    // Lua 5.3+
-    Shr,    // Lua 5.3+
 }
 
 impl BinOp {
-    /// Bitwise operators exist only in Lua 5.3+. Luau still lexes `&` and `|`
-    /// for its type grammar, so the parser checks this as well.
-    pub const fn is_bitwise(self) -> bool {
-        match self {
-            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr => true,
-            Self::Add
-            | Self::Sub
-            | Self::Mul
-            | Self::Div
-            | Self::FloorDiv
-            | Self::Mod
-            | Self::Pow
-            | Self::Concat
-            | Self::Eq
-            | Self::Ne
-            | Self::Lt
-            | Self::Le
-            | Self::Gt
-            | Self::Ge
-            | Self::And
-            | Self::Or => false,
-        }
-    }
-
-    /// Version-gated operators (bitwise, floor div) map unconditionally. The
-    /// lexer only produces them for versions that have them, except Luau's
-    /// `&` and `|`, which belong to its type syntax (see [`Self::is_bitwise`]).
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "None is the right answer for every non-operator token, present or future"
@@ -83,11 +51,6 @@ impl BinOp {
             TokenKind::GreaterEqual => Self::Ge,
             TokenKind::And => Self::And,
             TokenKind::Or => Self::Or,
-            TokenKind::Ampersand => Self::BitAnd,
-            TokenKind::Pipe => Self::BitOr,
-            TokenKind::Tilde => Self::BitXor,
-            TokenKind::ShiftLeft => Self::Shl,
-            TokenKind::ShiftRight => Self::Shr,
             _ => return None,
         })
     }
@@ -110,11 +73,6 @@ impl BinOp {
             Self::Ge => ">=",
             Self::And => "and",
             Self::Or => "or",
-            Self::BitAnd => "&",
-            Self::BitOr => "|",
-            Self::BitXor => "~",
-            Self::Shl => "<<",
-            Self::Shr => ">>",
         }
     }
 
@@ -128,14 +86,10 @@ impl BinOp {
             Self::Lt | Self::Gt | Self::Le | Self::Ge | Self::Ne | Self::Eq => {
                 (3, Associativity::Left)
             }
-            Self::BitOr => (4, Associativity::Left),
-            Self::BitXor => (5, Associativity::Left),
-            Self::BitAnd => (6, Associativity::Left),
-            Self::Shl | Self::Shr => (7, Associativity::Left),
-            Self::Concat => (8, Associativity::Right),
-            Self::Add | Self::Sub => (9, Associativity::Left),
-            Self::Mul | Self::Div | Self::Mod | Self::FloorDiv => (10, Associativity::Left),
-            Self::Pow => (12, Associativity::Right),
+            Self::Concat => (4, Associativity::Right),
+            Self::Add | Self::Sub => (5, Associativity::Left),
+            Self::Mul | Self::Div | Self::Mod | Self::FloorDiv => (6, Associativity::Left),
+            Self::Pow => (8, Associativity::Right),
         }
     }
 
@@ -151,12 +105,7 @@ impl BinOp {
             | Self::Pow
             | Self::Concat
             | Self::And
-            | Self::Or
-            | Self::BitAnd
-            | Self::BitOr
-            | Self::BitXor
-            | Self::Shl
-            | Self::Shr => false,
+            | Self::Or => false,
         }
     }
 }
@@ -166,12 +115,12 @@ pub enum UnOp {
     Not,
     Neg,
     Len,
-    BitNot, // Lua 5.3+
 }
 
 impl UnOp {
-    /// Sits between multiplicative (10) and `^` (12), per the Lua reference manual.
-    pub const PRECEDENCE: u8 = 11;
+    /// Sits between multiplicative (6) and `^` (8), as Luau's `unaryPriority`
+    /// does.
+    pub const PRECEDENCE: u8 = 7;
 
     #[expect(
         clippy::wildcard_enum_match_arm,
@@ -182,7 +131,6 @@ impl UnOp {
             TokenKind::Not => Self::Not,
             TokenKind::Minus => Self::Neg,
             TokenKind::Hash => Self::Len,
-            TokenKind::Tilde => Self::BitNot,
             _ => return None,
         })
     }
@@ -192,7 +140,6 @@ impl UnOp {
             Self::Not => "not",
             Self::Neg => "-",
             Self::Len => "#",
-            Self::BitNot => "~",
         }
     }
 }

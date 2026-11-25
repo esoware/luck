@@ -1,50 +1,25 @@
-//! The built-in libraries, one static library per target.
+//! The built-in libraries, one static library per variant.
 //!
 //! Each is an expression `just stdlib` generates from `stdlib_data/` by
 //! layering its files as std definitions over an empty library and printing
 //! the result, so nothing is parsed or checked at runtime. It names what it
 //! uses from this module.
 
-use luck_token::{LuaTarget, LuaVersion};
-
 use crate::stdlib_map::stdlib_map;
 use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };
+use crate::variant::Variant;
 
-static LUA51: StdlibLibrary<'static> = include!("stdlib_catalog/lua51.rs");
-static LUA52: StdlibLibrary<'static> = include!("stdlib_catalog/lua52.rs");
-static LUA53: StdlibLibrary<'static> = include!("stdlib_catalog/lua53.rs");
-static LUA54: StdlibLibrary<'static> = include!("stdlib_catalog/lua54.rs");
-static LUA55: StdlibLibrary<'static> = include!("stdlib_catalog/lua55.rs");
-static LUAU: StdlibLibrary<'static> = include!("stdlib_catalog/luau.rs");
-static LUAU_ROBLOX: StdlibLibrary<'static> = include!("stdlib_catalog/luau_roblox.rs");
+static STANDALONE: StdlibLibrary<'static> = include!("stdlib_catalog/standalone.rs");
+static ROBLOX: StdlibLibrary<'static> = include!("stdlib_catalog/roblox.rs");
 
-pub const fn library_for(target: LuaTarget) -> &'static StdlibLibrary<'static> {
-    match target {
-        LuaTarget::Lua51 => &LUA51,
-        LuaTarget::Lua52 => &LUA52,
-        LuaTarget::Lua53 => &LUA53,
-        LuaTarget::Lua54 => &LUA54,
-        LuaTarget::Lua55 => &LUA55,
-        LuaTarget::Luau => &LUAU,
-        LuaTarget::LuauRoblox => &LUAU_ROBLOX,
+pub const fn library_for(variant: Variant) -> &'static StdlibLibrary<'static> {
+    match variant {
+        Variant::Standalone => &STANDALONE,
+        Variant::Roblox => &ROBLOX,
     }
-}
-
-/// Whether `require(name)` under `version` returns a standard library.
-///
-/// The real `require` finds one in `package.loaded` before any searcher, so
-/// no file can stand in for it. Luau has no `package` table, so its
-/// `require` always resolves a path.
-pub fn is_preloaded_module(name: &str, version: LuaVersion) -> bool {
-    !version.is_luau()
-        && (name == "_G"
-            || matches!(
-                library_for(version.into()).globals.get(name),
-                Some(StdlibEntry::Namespace(_))
-            ))
 }
 
 pub(crate) const FUNCTION: StdlibFunction<'static> = StdlibFunction {
@@ -93,20 +68,15 @@ mod tests {
         /// Layered in this order, so a file can name what one before it
         /// declares.
         sources: &'static [&'static str],
-        target: LuaTarget,
+        variant: Variant,
     }
 
-    const LIBRARIES: [LibrarySpec; 7] = [
-        LibrarySpec { module: "lua51", sources: &["lua51.toml"], target: LuaTarget::Lua51 },
-        LibrarySpec { module: "lua52", sources: &["lua52.toml"], target: LuaTarget::Lua52 },
-        LibrarySpec { module: "lua53", sources: &["lua53.toml"], target: LuaTarget::Lua53 },
-        LibrarySpec { module: "lua54", sources: &["lua54.toml"], target: LuaTarget::Lua54 },
-        LibrarySpec { module: "lua55", sources: &["lua55.toml"], target: LuaTarget::Lua55 },
-        LibrarySpec { module: "luau", sources: &["luau.toml"], target: LuaTarget::Luau },
+    const LIBRARIES: [LibrarySpec; 2] = [
+        LibrarySpec { module: "standalone", sources: &["luau.toml"], variant: Variant::Standalone },
         LibrarySpec {
-            module: "luau_roblox",
-            sources: &["roblox_api.toml", "luau_roblox.toml", "roblox_enums.toml"],
-            target: LuaTarget::LuauRoblox,
+            module: "roblox",
+            sources: &["luau.toml", "roblox_api.toml", "roblox.toml", "roblox_enums.toml"],
+            variant: Variant::Roblox,
         },
     ];
 
@@ -361,12 +331,12 @@ static {}: [StdlibConstant<'static>; {}] = [
         let catalog = format!(
             "\
 StdlibLibrary {{
-{INDENT}target: LuaTarget::{:?},
+{INDENT}variant: Variant::{:?},
 {INDENT}globals: {},
 {INDENT}shapes: {},
 {INDENT}constant_sets: {},
 }}",
-            spec.target,
+            spec.variant,
             emitter.map(&library.globals, 1),
             emitter.shapes(&library.shapes),
             emitter.constant_sets(),
@@ -394,7 +364,7 @@ StdlibLibrary {{
 
     fn generate(spec: &LibrarySpec) -> String {
         let allocator = Allocator::new();
-        let mut library = StdlibLibrary::empty(spec.target);
+        let mut library = StdlibLibrary::empty(spec.variant);
         for file in spec.sources {
             let text = fs::read_to_string(crate_path(&format!("stdlib_data/{file}")))
                 .expect("read the std data");

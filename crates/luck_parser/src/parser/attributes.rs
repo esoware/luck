@@ -1,11 +1,8 @@
-//! Covers Lua `<const>`/`<close>` variable attributes (5.4+) and Luau
-//! `@native`/`@[deprecated(...)]` function attributes.
-//!
-//! Both are validated as they're parsed, since Lua and Luau reject unknown attributes as syntax
-//! errors.
+//! Function attributes, `@native` and `@[deprecated(...)]`, validated as
+//! they're parsed, since Luau rejects an unknown one as a syntax error.
 
 use luck_allocator::List;
-use luck_ast::{Attribute, Expression, Field, FunctionAttribute, GetSpan as _, Name};
+use luck_ast::{Expression, Field, FunctionAttribute, GetSpan as _, Name};
 use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
 
@@ -14,12 +11,11 @@ use super::recovery::Closer;
 
 impl<'ast> Parser<'ast> {
     /// Whether `expr` is a constant string, which a backtick string with no
-    /// holes also is in Luau, and the parentheses recorded from
-    /// `groupings_start` on don't hold it.
+    /// holes also is, and the parentheses recorded from `groupings_start` on
+    /// don't hold it.
     fn is_constant_string(&self, expr: &Expression<'_>, groupings_start: usize) -> bool {
         let is_constant = match expr {
             Expression::StringLiteral(_) => true,
-            // Luau
             Expression::InterpolatedString(interpolated) => interpolated.segments.is_empty(),
             Expression::Nil(_)
             | Expression::False(_)
@@ -59,7 +55,6 @@ impl<'ast> Parser<'ast> {
             | Expression::Integer(_)
             | Expression::StringLiteral(_)
             | Expression::Error(_) => true,
-            // Luau
             Expression::InterpolatedString(_) => self.is_constant_string(expr, groupings_start),
             Expression::TableConstructor(table) => table.fields.iter().all(|field| match field {
                 Field::Named { value, .. } | Field::Positional(value) => {
@@ -77,24 +72,6 @@ impl<'ast> Parser<'ast> {
             | Expression::IfExpression(_)
             | Expression::TypeCast(_) => false,
         }
-    }
-
-    pub(super) fn try_parse_attribute(&mut self) -> Option<Attribute<'ast>> {
-        (self.is_at(TokenKind::Less) && self.version.has_attributes())
-            .then(|| self.parse_attribute())
-    }
-
-    /// Parse a `< Name >` attribute; `<` must be the current token.
-    pub(super) fn parse_attribute(&mut self) -> Attribute<'ast> {
-        let open = self.advance(); // `<`
-        let name = self.expect_identifier_recover();
-        // 5.4 manual section 3.3.7: "There are two possible attributes"; Lua
-        // rejects any other name at parse time.
-        if !matches!(name.text.as_str(), "" | "const" | "close") {
-            self.error(name.span, format!("unknown attribute `{}`", name.text));
-        }
-        let close = self.expect(TokenKind::Greater);
-        Attribute::new(open.merge(close), name)
     }
 
     /// Grammar: `attribute ::= '@' NAME | '@[' parattr {',' parattr} ']'`

@@ -7,7 +7,7 @@ use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
 
-/// Lua's comparison operators share one precedence and associate left, so
+/// The comparison operators share one precedence and associate left, so
 /// `a < b == c` parses as `(a < b) == c`. Unary `not` binds tighter than
 /// any of them, so `not a == b` parses as `(not a) == b`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -81,12 +81,7 @@ fn check_pair(pair: OperatorPair<'_>, context: &LintContext<'_, '_>) {
             | BinOp::Pow
             | BinOp::Concat
             | BinOp::And
-            | BinOp::Or
-            | BinOp::BitAnd
-            | BinOp::BitOr
-            | BinOp::BitXor
-            | BinOp::Shl
-            | BinOp::Shr => return,
+            | BinOp::Or => return,
         };
         context.diagnostic(
             Finding::new(
@@ -113,7 +108,7 @@ mod tests {
         "local x = (not a) == b",
         // `not x == not y` compares two negations; Luau exempts this too.
         "local x = not a == not b",
-        // The idiomatic way to write a range check in Lua.
+        // The idiomatic way to write a range check.
         "local x = a < b and b < c",
     ];
 

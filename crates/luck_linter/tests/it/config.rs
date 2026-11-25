@@ -1,10 +1,9 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
 use luck_linter::{Category, FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::library_for;
-use luck_token::{LuaTarget, LuaVersion};
+use luck_stdlib::{Variant, library_for};
 
-use crate::common::{disable, enable, lint};
+use crate::common::{disable, enable, lint, lint_bytes};
 
 fn with_category(category: Category, level: RuleLevel) -> LintConfig {
     let mut config = LintConfig::default();
@@ -25,33 +24,34 @@ fn a_rule_parses_from_its_name_and_no_other_name_parses() {
 }
 
 #[test]
-fn game_is_a_global_of_roblox_luau_only() {
-    let standalone_diags = lint("print(game)", LuaTarget::Luau, &LintConfig::default());
+fn game_is_a_global_of_roblox_only() {
+    let config = LintConfig::default();
+    let standalone_diags = lint("print(game)", &config);
     assert!(
         standalone_diags
             .iter()
             .any(|diag| diag.code == "undefined_variable" && diag.message.contains("game"))
     );
-    let roblox_diags = lint("print(game)", LuaTarget::LuauRoblox, &LintConfig::default());
+    let roblox_diags = lint_bytes(b"print(game)", Variant::Roblox, &config, FixKind::empty());
     assert!(roblox_diags.iter().all(|diag| diag.code != "undefined_variable"));
 }
 
 #[test]
 fn analyze_defines_the_extra_globals_of_its_config() {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, b"return vim", LuaVersion::Lua54);
+    let parse = luck_parser::parse(&allocator, b"return app");
     let linter = Linter::new(LintConfig::default());
-    let without_vim = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+    let without_app = linter.analyze(&parse, library_for(Variant::Standalone));
     let flagged = linter
-        .run_analyzed(&without_vim, FixKind::empty(), None, &|| false)
+        .run_analyzed(&without_app, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(flagged.iter().any(|diag| diag.code == "undefined_variable"), "{flagged:?}");
 
-    let with_vim =
-        Linter::new(LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() });
-    let analysis = with_vim.analyze(&parse, library_for(LuaTarget::Lua54));
-    assert!(analysis.semantic().is_known_global("vim"));
-    let quiet = with_vim
+    let with_app =
+        Linter::new(LintConfig { extra_globals: vec!["app".to_owned()], ..LintConfig::default() });
+    let analysis = with_app.analyze(&parse, library_for(Variant::Standalone));
+    assert!(analysis.semantic().is_known_global("app"));
+    let quiet = with_app
         .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
     assert!(quiet.iter().all(|diag| diag.code != "undefined_variable"), "{quiet:?}");
@@ -60,9 +60,9 @@ fn analyze_defines_the_extra_globals_of_its_config() {
 #[test]
 fn run_analyzed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, b"local x =", LuaVersion::Lua54);
+    let parse = luck_parser::parse(&allocator, b"local x =");
     let linter = Linter::new(LintConfig::default());
-    let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+    let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
     let diags = linter
         .run_analyzed(&analysis, FixKind::empty(), None, &|| true)
         .expect("a parse error is reported before any rule could be cancelled");
@@ -72,51 +72,51 @@ fn run_analyzed_reports_parse_errors_without_running_rules() {
 
 #[test]
 fn run_reports_parse_errors_without_running_rules() {
-    let diags = lint("local x =", LuaTarget::Lua54, &LintConfig::default());
+    let diags = lint("local x =", &LintConfig::default());
     assert!(!diags.is_empty(), "{diags:?}");
     assert!(diags.iter().all(|diag| diag.code == "E008"), "{diags:?}");
 }
 
 #[test]
 fn run_defines_the_extra_globals_of_its_config() {
-    let config = LintConfig { extra_globals: vec!["vim".to_owned()], ..Default::default() };
-    let diags = lint("print(vim.fn)", LuaTarget::Lua54, &config);
+    let config = LintConfig { extra_globals: vec!["app".to_owned()], ..Default::default() };
+    let diags = lint("print(app.fn)", &config);
     assert!(
-        diags.iter().all(|diag| diag.code != "undefined_variable" || !diag.message.contains("vim"))
+        diags.iter().all(|diag| diag.code != "undefined_variable" || !diag.message.contains("app"))
     );
 }
 
 #[test]
 fn an_off_rule_level_turns_a_default_rule_off() {
     let config = disable(RuleId::UnusedVariable);
-    let diags = lint("local unused = 1", LuaTarget::Lua54, &config);
+    let diags = lint("local unused = 1", &config);
     assert!(diags.iter().all(|diag| diag.code != "unused_variable"));
 }
 
 #[test]
 fn a_category_level_runs_its_rules() {
     let config = with_category(Category::Suspicious, RuleLevel::Warn);
-    let diags = lint("if true then end", LuaTarget::Lua54, &config);
+    let diags = lint("if true then end", &config);
     assert!(diags.iter().any(|diag| diag.code == "empty_block"));
 }
 
 #[test]
 fn suspicious_rules_off_by_default() {
-    let diags = lint("if true then end", LuaTarget::Lua54, &LintConfig::default());
+    let diags = lint("if true then end", &LintConfig::default());
     assert!(diags.iter().all(|diag| diag.code != "empty_block"));
 }
 
 #[test]
 fn suspicious_rules_enabled_by_rule_level() {
     let config = enable(RuleId::EmptyBlock);
-    let diags = lint("if true then end", LuaTarget::Lua54, &config);
+    let diags = lint("if true then end", &config);
     assert!(diags.iter().any(|diag| diag.code == "empty_block"));
 }
 
 #[test]
 fn correctness_off_silences_the_default_rules() {
     let config = with_category(Category::Correctness, RuleLevel::Off);
-    let diags = lint("print(undefined_var)", LuaTarget::Lua54, &config);
+    let diags = lint("print(undefined_var)", &config);
     assert_eq!(diags, Vec::<Message>::new());
 }
 
@@ -124,7 +124,7 @@ fn correctness_off_silences_the_default_rules() {
 fn rule_level_wins_over_its_category() {
     let mut config = with_category(Category::Correctness, RuleLevel::Off);
     config.rules.set_level(RuleId::UndefinedVariable, RuleLevel::Warn);
-    let diags = lint("print(undefined_var)", LuaTarget::Lua54, &config);
+    let diags = lint("print(undefined_var)", &config);
     assert_eq!(diags.len(), 1, "{diags:?}");
     assert_eq!(diags[0].code, "undefined_variable");
     assert_eq!(diags[0].severity, Severity::Warning);
@@ -135,14 +135,14 @@ fn category_level_sets_the_severity_of_its_rules() {
     let source = "\
 local unused = 1
 print(undefined_var)";
-    let defaults = lint(source, LuaTarget::Lua54, &LintConfig::default());
+    let defaults = lint(source, &LintConfig::default());
     let default_severities: Vec<Severity> = defaults.iter().map(|diag| diag.severity).collect();
     assert_eq!(default_severities, [Severity::Warning, Severity::Error], "{defaults:?}");
 
     for (level, severity) in
         [(RuleLevel::Warn, Severity::Warning), (RuleLevel::Error, Severity::Error)]
     {
-        let diags = lint(source, LuaTarget::Lua54, &with_category(Category::Correctness, level));
+        let diags = lint(source, &with_category(Category::Correctness, level));
         assert_eq!(diags.len(), 2, "{diags:?}");
         assert!(diags.iter().all(|diag| diag.severity == severity), "{diags:?}");
     }
@@ -157,7 +157,7 @@ fn parsed(lint_json: &str) -> LintConfig {
 fn cyclomatic_complexity_fires_when_threshold_configured() {
     let config = parsed(r#"{ "rules": { "cyclomatic_complexity": ["warn", { "max": 2 }] } }"#);
     let source = "function f() if a then end if b then end if c then end if d then end end";
-    let diags = lint(source, LuaTarget::Lua54, &config);
+    let diags = lint(source, &config);
     assert!(
         diags.iter().any(|diag| diag.code == "cyclomatic_complexity"),
         "expected cyclomatic_complexity to fire; got: {diags:?}"
@@ -168,7 +168,7 @@ fn cyclomatic_complexity_fires_when_threshold_configured() {
 fn cyclomatic_complexity_inert_without_threshold() {
     let config = enable(RuleId::CyclomaticComplexity);
     let source = "function f() if a then end if b then end if c then end if d then end end";
-    let diags = lint(source, LuaTarget::Lua54, &config);
+    let diags = lint(source, &config);
     assert!(
         diags.iter().all(|diag| diag.code != "cyclomatic_complexity"),
         "expected no cyclomatic_complexity diagnostic when threshold is None; got: {diags:?}"
@@ -178,9 +178,9 @@ fn cyclomatic_complexity_inert_without_threshold() {
 #[test]
 fn restricted_module_paths_fires_when_configured() {
     let config = parsed(
-        r#"{ "rules": { "restricted_module_paths": ["error", { "paths": ["forbidden.lib"] }] } }"#,
+        r#"{ "rules": { "restricted_module_paths": ["error", { "paths": ["./forbidden/lib"] }] } }"#,
     );
-    let diags = lint("require(\"forbidden.lib\")", LuaTarget::Lua54, &config);
+    let diags = lint("require(\"./forbidden/lib\")", &config);
     assert!(
         diags.iter().any(|diag| diag.code == "restricted_module_paths"),
         "expected restricted_module_paths to fire; got: {diags:?}"
@@ -189,7 +189,7 @@ fn restricted_module_paths_fires_when_configured() {
 
 #[test]
 fn restricted_module_paths_inert_with_empty_list() {
-    let diags = lint("require(\"anything\")", LuaTarget::Lua54, &LintConfig::default());
+    let diags = lint("require(\"./anything\")", &LintConfig::default());
     assert!(
         diags.iter().all(|diag| diag.code != "restricted_module_paths"),
         "expected no restricted_module_paths diagnostic with empty list; got: {diags:?}"

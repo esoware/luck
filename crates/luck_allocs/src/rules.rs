@@ -23,9 +23,8 @@ pub(crate) fn write_report(allocator: &mut Allocator, files: &[TestFile]) -> io:
     let mut report = String::new();
     for file in files {
         allocator.reset();
-        let version = file.target.version();
-        let parse = luck_parser::parse(allocator, &file.source_text, version);
-        let analysis = every_rule.analyze(&parse, library_for(file.target));
+        let parse = luck_parser::parse(allocator, &file.source_text);
+        let analysis = every_rule.analyze(&parse, library_for(file.variant));
         let mut entries: Vec<(&str, StageStats)> = linters
             .iter()
             .map(|(rule, linter)| {

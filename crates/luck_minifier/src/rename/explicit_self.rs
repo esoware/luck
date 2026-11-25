@@ -6,7 +6,7 @@
 //! as its walk leaves each one.
 
 use luck_allocator::Allocator;
-use luck_ast::{FunctionDecl, Name, Parameter};
+use luck_ast::{FunctionDecl, Name, TypedName};
 
 /// Makes `function t:m(...)` `function t.m(receiver, ...)`.
 pub(super) fn take_receiver<'ast>(
@@ -16,19 +16,17 @@ pub(super) fn take_receiver<'ast>(
 ) {
     if let Some(method) = function_declaration.name.method.take() {
         function_declaration.name.names.push(method, allocator);
-        function_declaration.body.params.insert(0, Parameter::new(receiver, None), allocator);
+        function_declaration.body.params.insert(0, TypedName::new(receiver, None), allocator);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use crate::fixtures::{RENAMING, minify_with};
 
     /// Rewrites, then renames, so an explicit `self` shows up renamed.
     fn rewrite_and_rename(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &RENAMING)
+        minify_with(source, &RENAMING)
     }
 
     #[test]
@@ -73,17 +71,16 @@ return t
 ",
         );
         assert_eq!(result, "local e={}function e:method(e)return e end return e");
-        let luau = minify_with(
+        let typed = minify_with(
             "\
 function t:method(x)
   local y: typeof(self) = x
   return y
 end
 ",
-            LuaVersion::Luau,
             &RENAMING,
         );
-        assert_eq!(luau, "function t:method(e)local t:typeof(self)=e return t end");
+        assert_eq!(typed, "function t:method(e)local t:typeof(self)=e return t end");
     }
 
     #[test]

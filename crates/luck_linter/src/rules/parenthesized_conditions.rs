@@ -34,7 +34,7 @@ impl Rule for ParenthesizedConditions {
                 if_stmt.span,
                 context,
             )
-            .map(|finding| finding.with_help("Lua doesn't need parentheses around conditions"))
+            .map(|finding| finding.with_help("Luau doesn't need parentheses around conditions"))
         } else if let AstKind::ElseIfClause(clause) = kind {
             check_condition(
                 &clause.condition,

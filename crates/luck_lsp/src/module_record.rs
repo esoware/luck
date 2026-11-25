@@ -1,8 +1,8 @@
 //! What a file's requires load, and what its own table holds.
 //!
 //! A module's table is what its chunk ends by returning: a local nothing
-//! reassigns, as in `return M`, a table constructor, or in Luau, the table of
-//! the locals it exports. A member of it is a field the module reads or
+//! reassigns, as in `return M`, a table constructor, or the table of the
+//! locals it exports. A member of it is a field the module reads or
 //! writes on that local, a key of the constructor it returns or initializes
 //! the local with, or an exported local. A member of a required module's
 //! table is a field read or written on the call itself, as in
@@ -15,7 +15,7 @@
 
 use ls_types::{Position, Range};
 use luck_ast::{
-    Assignment, Chunk, Expression, Field, FunctionDecl, FunctionName, LocalAssignment, Name,
+    Assignment, Block, Expression, Field, FunctionDecl, FunctionName, LocalAssignment, Name,
     Statement, Suffix, SuffixedExpression, TableConstructor, Var, Visit,
 };
 use luck_semantic::{Scoping, Semantic, SymbolId};
@@ -32,8 +32,7 @@ pub(crate) struct ModuleRecord {
     members: Vec<Member>,
 }
 
-/// A call of the host's `require` with a string literal, which no standard
-/// library answers.
+/// A call of the host's `require` with a string literal.
 #[derive(Debug)]
 pub(crate) struct Require {
     /// As `require` receives it, escapes decoded.
@@ -59,8 +58,7 @@ pub(crate) struct Member {
 pub(crate) enum Table {
     /// The table the file returns.
     Returned,
-    /// Luau: the table of the locals the file exports, where this one is a
-    /// local.
+    /// The table of the locals the file exports, where this one is a local.
     Exported,
     /// The table the require at this index loads.
     Required(usize),
@@ -70,7 +68,7 @@ impl ModuleRecord {
     /// The record of `chunk`, whose `semantic` holds its `require` sites,
     /// with `range` placing each span.
     pub(crate) fn new(
-        chunk: &Chunk<'_>,
+        chunk: &Block<'_>,
         semantic: &Semantic<'_>,
         mut range: impl FnMut(Span) -> Range,
     ) -> Self {
@@ -81,10 +79,7 @@ impl ModuleRecord {
             let Some(path) = site.path else {
                 continue;
             };
-            let Some(module) = path
-                .as_str()
-                .filter(|module| !luck_stdlib::is_preloaded_module(module, chunk.version))
-            else {
+            let Some(module) = path.as_str() else {
                 continue;
             };
             sites.insert(site.call.callee.start, (requires.len(), site.call.callee.suffixes.len()));
@@ -94,7 +89,7 @@ impl ModuleRecord {
                 range: range(path.span),
             });
         }
-        let returned = chunk.block.stmts.last().and_then(|last| {
+        let returned = chunk.stmts.last().and_then(|last| {
             let Statement::Return(return_stmt) = last else {
                 return None;
             };
@@ -113,7 +108,7 @@ impl ModuleRecord {
         if let Some(Expression::TableConstructor(table)) = returned {
             collector.keys(table);
         }
-        collector.visit_chunk(chunk);
+        collector.visit_block(chunk);
         for symbol in scoping.symbols().iter().filter(|symbol| symbol.is_exported) {
             let name = scoping.name(symbol.name);
             collector.found.push(Found {
@@ -269,8 +264,8 @@ impl<'ast> Collector<'ast> {
     /// The locals `local_assignment` binds to a require's table, and the
     /// keys it gives the returned local.
     fn bind(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
-        for (attributed, expr) in local_assignment.names.iter().zip(&local_assignment.exprs) {
-            let Some(symbol) = self.scoping.symbol_of(&attributed.name) else {
+        for (local_name, expr) in local_assignment.names.iter().zip(&local_assignment.exprs) {
+            let Some(symbol) = self.scoping.symbol_of(&local_name.name) else {
                 continue;
             };
             if self.scoping.symbol(symbol).is_modified {
@@ -324,15 +319,14 @@ impl<'ast> Visit<'ast> for Collector<'ast> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_semantic::SemanticBuilder;
-    use luck_token::LuaVersion;
 
     use super::*;
 
     /// The record of `source`, with each span placed on line 0 at its
     /// offsets.
-    fn record(source: &str, version: LuaVersion) -> ModuleRecord {
+    fn record(source: &str) -> ModuleRecord {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let chunk = allocator.alloc(parsed.chunk);
         let semantic = SemanticBuilder::new().with_requires(true).build(chunk).semantic;
@@ -344,8 +338,8 @@ mod tests {
 
     /// Each member of `source`'s record as its table, name, and whether it's
     /// a definition, and each require's module.
-    fn record_of(source: &str, version: LuaVersion) -> (Vec<(Table, &str, bool)>, Vec<String>) {
-        let record = record(source, version);
+    fn record_of(source: &str) -> (Vec<(Table, &str, bool)>, Vec<String>) {
+        let record = record(source);
         let members = record
             .members()
             .iter()
@@ -371,7 +365,6 @@ M.count = 0
 M.inner.deep = 1
 local function bump() M.count = M.count + 1 end
 return M",
-            LuaVersion::Lua54,
         );
         assert_eq!(
             members,
@@ -390,8 +383,7 @@ return M",
 
     #[test]
     fn a_returned_constructor_s_keys_are_the_members() {
-        let (members, _) =
-            record_of("return { first = 1, [\"second\"] = 2, 3 }", LuaVersion::Lua54);
+        let (members, _) = record_of("return { first = 1, [\"second\"] = 2, 3 }");
         assert_eq!(members, [(Table::Returned, "first", true)]);
     }
 
@@ -411,7 +403,7 @@ return M, 2",
 local M = {}
 M.a = 1",
         ] {
-            assert_eq!(record_of(source, LuaVersion::Lua54).0, [], "{source}");
+            assert_eq!(record_of(source).0, [], "{source}");
         }
     }
 
@@ -419,19 +411,16 @@ M.a = 1",
     fn a_field_of_a_require_or_its_binding_is_a_member_of_its_table() {
         let (members, modules) = record_of(
             "\
-local util = require(\"util\")
-local other = require(\"other\")
-local string = require(\"string\")
+local util = require(\"./util\")
+local other = require(\"./other\")
 util.run(util.config.level, other:make())
-require(\"direct\").go()
-_G.require(\"global\").field = 1
+require(\"./direct\").go()
+_G.require(\"./global\").field = 1
 util.patched = true
 other = nil
-other.gone()
-string.format()",
-            LuaVersion::Lua54,
+other.gone()",
         );
-        assert_eq!(modules, ["util", "other", "direct", "global"]);
+        assert_eq!(modules, ["./util", "./other", "./direct", "./global"]);
         assert_eq!(
             members,
             [
@@ -441,17 +430,16 @@ string.format()",
                 (Table::Required(3), "field", false),
                 (Table::Required(0), "patched", false),
             ],
-            "`other` is reassigned, and `string` is the standard library"
+            "`other` is reassigned"
         );
     }
 
     #[test]
-    fn a_luau_export_and_its_reads_are_members_of_the_export_table() {
+    fn an_export_and_its_reads_are_members_of_the_export_table() {
         let (members, _) = record_of(
             "\
 export local version = 1
 export function describe() return version end",
-            LuaVersion::Luau,
         );
         assert_eq!(
             members,
@@ -465,7 +453,7 @@ export function describe() return version end",
 
     #[test]
     fn member_at_finds_the_name_under_either_end() {
-        let record = record("local m = require(\"m\") m.run()", LuaVersion::Lua54);
+        let record = record("local m = require(\"m\") m.run()");
         let name_at = |character| {
             record.member_at(Position::new(0, character)).map(|member| member.name.to_string())
         };

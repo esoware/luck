@@ -1,5 +1,4 @@
 use luck_formatter::FormatOptions;
-use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_with};
 
@@ -39,7 +38,6 @@ local t = {
 \tthird_key = 3,
 }
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -84,7 +82,6 @@ local t = {
 \tvery_long_field_name_here = some_very_long_value_here,
 }
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -208,7 +205,6 @@ local t = {
 \t6666,
 }
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }

@@ -8,7 +8,7 @@ use luck_bundler::DynamicRequire;
 use luck_formatter::FormatConfig;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use luck_token::LuaTarget;
+use luck_stdlib::Variant;
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 
@@ -60,16 +60,14 @@ pub(crate) struct OverrideConfig {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LuckConfig {
-    /// Dialect of every file but a `.luau` one (default `lua54`). Either key
-    /// can name any dialect, so a Roblox or Rojo tree that keeps Luau in
-    /// `.lua` files sets `"lua": "roblox"`.
-    pub lua: Option<LuaTarget>,
-    /// Dialect of `.luau` files (default `luau`).
-    pub luau: Option<LuaTarget>,
-    /// Std definition files, relative to this file's directory, that layer
-    /// a host's globals, fields, and functions, such as LOVE's or Neovim's,
-    /// over each dialect's standard library, in order. Each is TOML in the
-    /// format of luck's own `stdlib_data`, which
+    /// Where every `.luau` and `.lua` file runs (default `standalone`):
+    /// `"standalone"` for standalone Luau, or `"roblox"` for Roblox, whose globals,
+    /// services, and enums join Luau's standard library.
+    pub variant: Option<Variant>,
+    /// Std definition files, relative to this file's directory, that layer a
+    /// host's globals, fields, and functions over the variant's standard
+    /// library, in order. Each is TOML in the format of luck's own
+    /// `stdlib_data`, which
     /// <https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>
     /// describes.
     #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
@@ -80,7 +78,7 @@ pub(crate) struct LuckConfig {
     /// overrides an earlier one, and this file overrides them all.
     pub extends: Option<Vec<String>>,
     /// Globs of the files `lint`, `fmt`, and `check` take, relative to the
-    /// `luck.json` directory (default every `.lua` and `.luau` file). `*`
+    /// `luck.json` directory (default every `.luau` and `.lua` file). `*`
     /// stops at `/`, and `**/` crosses directories.
     #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
     pub include: Option<Vec<Glob>>,
@@ -103,10 +101,6 @@ pub(crate) struct LuckConfig {
     /// How the bundler treats a `require` whose argument isn't a string
     /// literal: `"error"`, `"warn"` (default), or `"allow"`.
     pub dynamic_require: Option<DynamicRequire>,
-    /// The Lua search path templates a `require` tries in order, relative to
-    /// the `luck.json` directory (default `?.lua` and `?/init.lua`). Luau
-    /// resolves relative and `@alias` requires instead.
-    pub search_paths: Option<Vec<String>>,
     pub transforms: Option<TransformConfig>,
     pub profiles: Option<FxHashMap<String, ProfileOverrides>>,
     /// A comment `luck build` writes at the top of each bundle.
@@ -126,14 +120,13 @@ impl LuckConfig {
     /// `self` layered on `base`, as a file is on the files it `extends`.
     ///
     /// `format` and `lint` merge field by field. `std`, `include`, `exclude`,
-    /// `search_paths`, and `overrides` list `base`'s items and then
-    /// `self`'s, without an item that comes again later. Every other key,
-    /// `entries`, `profiles`, and `transforms` among them, comes whole from
-    /// `self` when set there and from `base` otherwise.
+    /// and `overrides` list `base`'s items and then `self`'s, without an item
+    /// that comes again later. Every other key, `entries`, `profiles`, and
+    /// `transforms` among them, comes whole from `self` when set there and
+    /// from `base` otherwise.
     pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
-            lua: self.lua.or(base.lua),
-            luau: self.luau.or(base.luau),
+            variant: self.variant.or(base.variant),
             std: merge_with(self.std, base.std, layer),
             root: self.root.or(base.root),
             extends: None,
@@ -145,7 +138,6 @@ impl LuckConfig {
             entries: self.entries.or(base.entries),
             minify: self.minify.or(base.minify),
             dynamic_require: self.dynamic_require.or(base.dynamic_require),
-            search_paths: merge_with(self.search_paths, base.search_paths, layer),
             transforms: self.transforms.or(base.transforms),
             profiles: self.profiles.or(base.profiles),
             preamble: self.preamble.or(base.preamble),
@@ -272,31 +264,26 @@ mod tests {
     }
 
     #[test]
-    fn schema_names_every_dialect_the_config_takes() {
+    fn schema_names_every_variant_the_config_takes() {
         let schema = serde_json::to_value(schemars::schema_for!(LuckConfig)).expect("schema");
-        let dialects = serde_json::to_string(&schema["$defs"]["LuaTarget"]).expect("JSON");
-        for name in ["lua51", "lua52", "lua53", "lua54", "lua55", "luau", "roblox"] {
-            assert!(dialects.contains(&format!("\"{name}\"")), "{name}: {dialects}");
+        let variants = serde_json::to_string(&schema["$defs"]["Variant"]).expect("JSON");
+        for name in ["standalone", "roblox"] {
+            assert!(variants.contains(&format!("\"{name}\"")), "{name}: {variants}");
         }
     }
 
     #[test]
-    fn parses_dialect_and_build_keys() {
+    fn parses_variant_and_build_keys() {
         let config = parsed(
             r#"{
-            "lua": "lua54",
-            "entry": "src/main.lua",
-            "output_dir": "dist",
-            "search_paths": ["src/?.lua", "lib/?.lua"]
+            "variant": "roblox",
+            "entry": "src/main.luau",
+            "output_dir": "dist"
         }"#,
         );
-        assert_eq!(config.lua, Some(LuaTarget::Lua54));
-        assert_eq!(config.entry.as_deref(), Some("src/main.lua"));
+        assert_eq!(config.variant, Some(Variant::Roblox));
+        assert_eq!(config.entry.as_deref(), Some("src/main.luau"));
         assert_eq!(config.output_dir.as_deref(), Some("dist"));
-        assert_eq!(
-            config.search_paths.as_deref(),
-            Some(&["src/?.lua".to_owned(), "lib/?.lua".to_owned()][..])
-        );
     }
 
     #[test]
@@ -304,16 +291,16 @@ mod tests {
         let config = parsed(
             r#"{
             "entries": [
-                {"entry": "src/main.lua", "output": "dist/main.lua"},
-                {"entry": "src/other.lua", "output": "dist/other.lua"}
+                {"entry": "src/main.luau", "output": "dist/main.luau"},
+                {"entry": "src/other.luau", "output": "dist/other.luau"}
             ],
             "profiles": { "release": { "minify": true } }
         }"#,
         );
         let Entries(entries) = config.entries.expect("entries present");
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].entry, "src/main.lua");
-        assert_eq!(entries[0].output, "dist/main.lua");
+        assert_eq!(entries[0].entry, "src/main.luau");
+        assert_eq!(entries[0].output, "dist/main.luau");
         let profiles = config.profiles.expect("profiles present");
         assert_eq!(profiles.get("release").and_then(|release| release.minify), Some(true));
     }
@@ -372,16 +359,17 @@ mod tests {
     #[test]
     fn merge_onto_layers_lists_and_keeps_unset_base_keys() {
         let base = parsed(
-            r#"{ "lua": "lua54", "search_paths": ["a/?.lua", "b/?.lua"],
+            r#"{ "variant": "roblox", "include": ["a/**", "b/**"],
             "lint": { "extra_globals": ["a"], "rules": { "shadowing": "off" } } }"#,
         );
         let child = parsed(
-            r#"{ "search_paths": ["c/?.lua", "a/?.lua"],
+            r#"{ "include": ["c/**", "a/**"],
             "lint": { "extra_globals": ["b"], "rules": { "empty_block": "error" } } }"#,
         );
         let merged = child.merge_onto(base);
-        assert_eq!(merged.lua, Some(LuaTarget::Lua54));
-        assert_eq!(merged.search_paths.unwrap(), ["b/?.lua", "c/?.lua", "a/?.lua"]);
+        assert_eq!(merged.variant, Some(Variant::Roblox));
+        let include: Vec<&str> = merged.include.iter().flatten().map(Glob::pattern).collect();
+        assert_eq!(include, ["b/**", "c/**", "a/**"]);
         let lint = merged.lint.unwrap();
         assert_eq!(lint.extra_globals, ["a", "b"]);
         let rules: Vec<&str> = lint.rules.rules().map(RuleId::name).collect();

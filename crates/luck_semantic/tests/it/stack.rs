@@ -13,9 +13,9 @@ fn analyzing_fits_the_smallest_stack() {
         .into_iter()
         .chain(sources_past_the_nesting_cap())
         .chain(broken_sources());
-    on_the_smallest_stack(sources, |source, version| {
+    on_the_smallest_stack(sources, |source| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         let chunk = allocator.alloc(parsed.chunk);
         let built = SemanticBuilder::new()
             .with_counts(parsed.counts)
@@ -27,20 +27,16 @@ fn analyzing_fits_the_smallest_stack() {
     });
 }
 
-/// A long list of locals holds more than any Lua compiles in one function,
-/// which is all the checker finds.
+/// Luau's compiler counts a function's locals only after it optimizes, so
+/// the checker counts none, and a list of locals however long is no error.
 #[test]
-fn checking_valid_deep_and_long_sources_finds_only_their_excess_of_locals() {
-    on_the_smallest_stack(deep_and_long_sources(), |source, version| {
+fn checking_valid_deep_and_long_sources_finds_nothing() {
+    on_the_smallest_stack(deep_and_long_sources(), |source| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         let chunk = allocator.alloc(parsed.chunk);
         let built = SemanticBuilder::new().with_check(true).build(chunk);
-        let errors: Vec<&str> = built.errors.iter().map(|diag| &*diag.message).collect();
-        assert!(
-            errors.iter().all(|message| message.starts_with("too many local variables")),
-            "the source is valid but for its length: {errors:?}"
-        );
+        assert!(built.errors.is_empty(), "{:?}", built.errors.first());
     });
 }

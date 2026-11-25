@@ -65,8 +65,8 @@ impl<'ast> Compressor<'_, 'ast> {
         // An initializer can hold `local`s of its own, so the list is a
         // stack that every `local` leaves as it found it.
         let landed_start = self.landed_counts.len();
-        for attributed in &mut local.names {
-            self.visit_attributed_name(attributed);
+        for local_name in &mut local.names {
+            self.visit_typed_name(local_name);
         }
         let (name_count, value_count) = (local.names.len(), local.exprs.len());
         for (index, expr) in local.exprs.iter_mut().enumerate() {
@@ -81,13 +81,13 @@ impl<'ast> Compressor<'_, 'ast> {
             self.has_changed = true;
         }
         if self.config.inline_locals
-            && !has_fixed_binding(local, self.scoping)
+            && !has_fixed_binding(local)
             && local.names.len() == local.exprs.len()
         {
             let LocalAssignment { names, exprs, .. } = &mut **local;
-            for (index, (attributed, value)) in names.iter().zip(exprs).enumerate() {
+            for (index, (local_name, value)) in names.iter().zip(exprs).enumerate() {
                 let landed_locals = self.landed_counts[landed_start + index];
-                if let Some(symbol) = self.scoping.symbol_of(&attributed.name) {
+                if let Some(symbol) = self.scoping.symbol_of(&local_name.name) {
                     self.hold(symbol, value, landed_locals);
                 }
             }
@@ -149,8 +149,8 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     /// The value of the local `name` reads, to put in its place, if it
-    /// waits for this read and fits where it lands. A Luau integer it is
-    /// lands in parentheses under `-`.
+    /// waits for this read and fits where it lands. An integer it is lands in
+    /// parentheses under `-`.
     pub(super) fn take_held(&mut self, name: &Name<'_>) -> Option<Expression<'ast>> {
         let depth = self.depth;
         let held = self.waiting_value(name)?;
@@ -189,7 +189,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 continue;
             };
             // Only a `local` that gives each name its own value holds any.
-            if local.names.iter().all(|attributed| self.held_of(&attributed.name, start).is_none())
+            if local.names.iter().all(|local_name| self.held_of(&local_name.name, start).is_none())
             {
                 continue;
             }
@@ -235,8 +235,8 @@ impl<'ast> Compressor<'_, 'ast> {
             && let Some(value) = self.take_held(name)
         {
             self.has_landed_run |= matches!(value, Expression::BinaryOp(_));
-            // Luau: `-1i` is a negative integer literal, while `-x` negates
-            // the integer `x` holds, which raises.
+            // `-1i` is a negative integer literal, while `-x` negates the
+            // integer `x` holds, which raises.
             *operand = if place == Place::Negated && matches!(value, Expression::Integer(_)) {
                 parenthesize(self.allocator, value)
             } else {
@@ -255,7 +255,6 @@ mod tests {
     use luck_allocator::Allocator;
     use luck_ast::{Statement, expr_nesting_depth};
     use luck_codegen::LiteralSpelling;
-    use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with, walk_once};
     use crate::transform_config::TransformConfig;
@@ -263,11 +262,7 @@ mod tests {
     const INLINING: TransformConfig = TransformConfig { inline_locals: true, ..NO_PASSES };
 
     fn inline(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &INLINING)
-    }
-
-    fn inline_luau(source: &str) -> String {
-        minify_with(source, LuaVersion::Luau, &INLINING)
+        minify_with(source, &INLINING)
     }
 
     #[test]
@@ -319,8 +314,8 @@ mod tests {
         ] {
             assert_eq!(inline(source), source);
         }
-        assert_eq!(inline_luau("local x=1 x+=2"), "local x=1 x+=2");
-        assert_eq!(inline_luau("local x=foo::Bar return x"), "local x=foo::Bar return x");
+        assert_eq!(inline("local x=1 x+=2"), "local x=1 x+=2");
+        assert_eq!(inline("local x=foo::Bar return x"), "local x=foo::Bar return x");
     }
 
     #[test]
@@ -329,22 +324,6 @@ mod tests {
             inline("local self = 5 function M:get() return self end"),
             "local self=5 function M:get()return self end"
         );
-        assert_eq!(
-            minify_with(
-                "local arg = 5 local function f(...) return arg end return f",
-                LuaVersion::Lua51,
-                &INLINING
-            ),
-            "local arg=5 local function f(...)return arg end return f"
-        );
-        for source in [
-            "local args=1 local function f(...args)return args end",
-            "local x=1 global x print(x)",
-            "local x=1 global function g()local x=2 return x end return g",
-        ] {
-            let result = minify_with(source, LuaVersion::Lua55, &INLINING);
-            assert!(!result.contains("return 1"), "{source}: {result}");
-        }
     }
 
     #[test]
@@ -364,7 +343,7 @@ mod tests {
             ("local x = 1 print(x) print(false and x)", "print(1)print(false)"),
             ("local x = 1 print(x) local function f() return x end", "print(1)"),
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Lua54, &both), expected, "{source}");
+            assert_eq!(minify_with(source, &both), expected, "{source}");
         }
     }
 
@@ -372,11 +351,7 @@ mod tests {
     fn inlines_a_local_whose_value_takes_a_late_inlined_one() {
         let both = TransformConfig { remove_dead_code: true, ..INLINING };
         assert_eq!(
-            minify_with(
-                "local a = 6 local b = a if false then print(a) end print(b)",
-                LuaVersion::Lua54,
-                &both
-            ),
+            minify_with("local a = 6 local b = a if false then print(a) end print(b)", &both),
             "print(6)"
         );
     }
@@ -388,7 +363,7 @@ mod tests {
             ("local a = 5 local b: typeof(a) = 1 print(a, b)", INLINING),
             ("local a = 5 local b: typeof(a) = 1 if false then print(b) end print(a, b)", both),
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Luau, &config), "print(5,1)", "{source}");
+            assert_eq!(minify_with(source, &config), "print(5,1)", "{source}");
         }
     }
 
@@ -448,9 +423,9 @@ mod tests {
     }
 
     #[test]
-    fn inlines_into_luau_casts_and_instantiations() {
+    fn inlines_into_casts_and_instantiations() {
         assert_outputs(
-            inline_luau,
+            inline,
             &[
                 ("local s = 1 + 2 return s :: any", "return(1+2)::any"),
                 ("local s = -1 return s :: any", "return(-1)::any"),
@@ -497,7 +472,7 @@ mod tests {
         let allocator = Allocator::new();
         let source = sum_chain(links);
         let chunk = compressed(&allocator, &source, INLINING);
-        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
+        let [Statement::Return(return_stmt)] = &*chunk.stmts else {
             panic!("expected a return");
         };
         let run = return_stmt.exprs.first().expect("the return has its value");

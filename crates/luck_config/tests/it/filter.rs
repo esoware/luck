@@ -3,14 +3,14 @@ use crate::common::{load_error, loaded, project_with};
 #[test]
 fn star_in_include_stays_inside_one_directory() {
     let (directory, project) = loaded(&[
-        ("luck.json", r#"{ "include": ["src/*.lua"] }"#),
-        ("src/a.lua", ""),
-        ("src/nested/b.lua", ""),
+        ("luck.json", r#"{ "include": ["src/*.luau"] }"#),
+        ("src/a.luau", ""),
+        ("src/nested/b.luau", ""),
     ]);
     let filter = project.filter();
-    assert!(filter.is_included(&directory.path().join("src/a.lua")));
+    assert!(filter.is_included(&directory.path().join("src/a.luau")));
     assert!(
-        !filter.is_included(&directory.path().join("src/nested/b.lua")),
+        !filter.is_included(&directory.path().join("src/nested/b.luau")),
         "`*` must not cross `/`; the default include spells out `**/` because of that"
     );
 }
@@ -18,9 +18,9 @@ fn star_in_include_stays_inside_one_directory() {
 #[test]
 fn a_file_not_yet_on_disk_matches_relative_to_the_root() {
     let (directory, project) =
-        loaded(&[("luck.json", r#"{ "include": ["./src/**/*.lua"] }"#), ("src/a.lua", "")]);
+        loaded(&[("luck.json", r#"{ "include": ["./src/**/*.luau"] }"#), ("src/a.luau", "")]);
     assert!(
-        project.filter().is_included(&directory.path().join("src/unsaved.lua")),
+        project.filter().is_included(&directory.path().join("src/unsaved.luau")),
         "globs match relative to the config directory, even for a file not on disk yet"
     );
 }

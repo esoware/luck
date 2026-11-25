@@ -3,10 +3,10 @@ use std::{fmt, str};
 
 use luck_allocator::{ThinBytes, ThinStr};
 use luck_ast_macros::Ast;
-use luck_token::{LuaNumber, Span};
+use luck_token::Span;
 
-/// An identifier: a variable, a field, a parameter, a label, a type, or an
-/// attribute. A name the parser found missing has empty text.
+/// An identifier: a variable, a field, a parameter, a type, or an attribute.
+/// A name the parser found missing has empty text.
 ///
 /// Its [`NameIndex`] tells it apart from the tree's other names, not from a
 /// name in another tree, so `==`, `Debug`, and `ContentEq` leave it out, and
@@ -44,7 +44,7 @@ impl fmt::Debug for Name<'_> {
 }
 
 /// A name's index among the names of its tree, by which semantic analysis
-/// finds what it declares, refers to, or labels.
+/// finds what it declares or refers to.
 ///
 /// The parser numbers the names it reads from 0, in reading order, each its
 /// own. A pass that holds the tree mutably may number them its own way, but
@@ -69,17 +69,15 @@ impl fmt::Debug for NameIndex {
     }
 }
 
-/// A numeral's value, as its [`Chunk`](crate::Chunk)'s version reads it, and
-/// its spelling.
+/// A numeral's value, the double it reads as, and its spelling.
 ///
-/// A float is never negative or NaN, since no numeral spells one, and is
-/// infinite only for a decimal past the largest double. An integer exists
-/// only where Lua 5.3+ reads one, and is negative only where hex digits wrap.
-/// `ContentEq` compares the value alone, so `16` and `0x10` hold the same
-/// tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
+/// The value is never negative or NaN, since no numeral spells one, and is
+/// infinite only for a decimal past the largest double. Two values are equal
+/// when they're the same double bit for bit, and `ContentEq` compares the
+/// value alone, so `16` and `0x10` hold the same tree.
+#[derive(Debug, Clone, Copy, Ast)]
 pub struct NumberLiteral<'ast> {
-    pub value: LuaNumber,
+    pub value: f64,
     /// The numeral as written, or `None` for one built in code, which a
     /// printer spells from the value.
     #[content_eq(skip)]
@@ -91,8 +89,19 @@ pub struct NumberLiteral<'ast> {
     pub is_exact: bool,
 }
 
-/// Luau: an exact 64-bit integer, `123i`, negative where its hex or binary
-/// digits pass `i64::MAX`, and its spelling.
+impl PartialEq for NumberLiteral<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value.to_bits() == other.value.to_bits()
+            && self.raw == other.raw
+            && self.span == other.span
+            && self.is_exact == other.is_exact
+    }
+}
+
+impl Eq for NumberLiteral<'_> {}
+
+/// An exact 64-bit integer, `123i`, negative where its hex or binary digits
+/// pass `i64::MAX`, and its spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ast)]
 pub struct IntegerLiteral<'ast> {
     pub value: i64,

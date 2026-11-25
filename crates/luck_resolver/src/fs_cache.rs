@@ -241,19 +241,26 @@ mod tests {
 
     #[test]
     fn a_name_beside_one_that_is_not_ascii_goes_to_the_os() {
-        let project = project_with(&[("src/\u{e9}.lua", ""), ("src/plain.lua", "")]);
+        let project = project_with(&[("src/\u{e9}.luau", ""), ("src/plain.luau", "")]);
         assert_answers_as_the_os(
             &FsCache::new(FileSystemOs, &Arc::default()),
             &project.path().join("src"),
-            &["\u{e9}.lua", "\u{c9}.lua", "e\u{301}.lua", "e.lua", "plain.lua", "missing.lua"],
+            &[
+                "\u{e9}.luau",
+                "\u{c9}.luau",
+                "e\u{301}.luau",
+                "e.luau",
+                "plain.luau",
+                "missing.luau",
+            ],
         );
     }
 
     #[test]
     fn a_symlink_goes_to_the_os() {
-        let project = project_with(&[("target/module.lua", ""), ("src/plain.lua", "")]);
-        let target = project.path().join("target/module.lua");
-        let link = project.path().join("src/link.lua");
+        let project = project_with(&[("target/module.luau", ""), ("src/plain.luau", "")]);
+        let target = project.path().join("target/module.luau");
+        let link = project.path().join("src/link.luau");
         // Windows lets only an administrator or developer mode make one.
         if symlink_file(&target, &link).is_err() {
             return;
@@ -262,16 +269,16 @@ mod tests {
         assert_answers_as_the_os(
             &fs_cache,
             &project.path().join("src"),
-            &["link.lua", "plain.lua"],
+            &["link.luau", "plain.luau"],
         );
         assert_eq!(fs_cache.canonical_file(&link), FileSystemOs.canonicalize(&target).unwrap());
     }
 
     #[test]
     fn a_listing_is_kept_until_the_cache_clears() {
-        let project = project_with(&[("src/utils.lua", "")]);
-        let utils = project.path().join("src/utils.lua");
-        let added = project.path().join("src/added.lua");
+        let project = project_with(&[("src/utils.luau", "")]);
+        let utils = project.path().join("src/utils.luau");
+        let added = project.path().join("src/added.luau");
         let generation = Arc::default();
         let fs_cache = FsCache::new(FileSystemOs, &generation);
         let canonical = fs_cache.canonical_file(&utils);

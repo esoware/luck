@@ -34,20 +34,20 @@ use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    Assignment, AttributedName, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,
-    FunctionBody, GenericFor, GlobalDeclaration, Name, ReturnStatement, Statement, Suffix,
-    SuffixedExpression, TableConstructor, TreeCounts, Type, Visit, VisitMut,
+    Assignment, BinaryOp, Block, Expression, Field, FunctionArgs, FunctionBody, GenericFor, Name,
+    ReturnStatement, Statement, Suffix, SuffixedExpression, TableConstructor, TreeCounts, Type,
+    TypedName, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{Scoping, SymbolId};
-use luck_token::{LuaVersion, UnOp};
+use luck_token::UnOp;
 use luck_value::ConstantEvaluation as _;
 
 use self::inline_locals::Held;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
 use self::simplify_parens::Place;
-use crate::binding::{NameIndexes, ResolvedNames, analyze, is_droppable_function};
-use crate::limits::{GENERIC_FOR_STATE_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals};
+use crate::binding::{NameIndexes, ResolvedNames, analyze};
+use crate::limits::{NUMERIC_FOR_REGISTERS, generic_for_registers, parameter_locals};
 use crate::transform_config::TransformConfig;
 
 /// A pass leaves another only for what its own rewrites exposed, so a
@@ -64,7 +64,7 @@ const MAX_ROUNDS: usize = 4;
 /// Returns the last scoping, whose tables a later analysis can reuse.
 pub(crate) fn compress<'ast>(
     allocator: &'ast Allocator,
-    chunk: &mut Chunk<'ast>,
+    chunk: &mut Block<'ast>,
     counts: TreeCounts,
     config: TransformConfig,
     name_indexes: &mut NameIndexes,
@@ -72,10 +72,10 @@ pub(crate) fn compress<'ast>(
     let mut scoping = analyze(chunk, counts, None);
     for round in 1..=MAX_ROUNDS {
         let mut compressor = Compressor::new(allocator, config, &mut scoping);
-        compressor.run(&mut chunk.block);
+        compressor.run(chunk);
         #[cfg(debug_assertions)]
         compressor.assert_references_match(chunk, counts);
-        if !(config.lift_locals && compressor.lift(&mut chunk.block, name_indexes)) {
+        if !(config.lift_locals && compressor.lift(chunk, name_indexes)) {
             break;
         }
         debug_assert!(round < MAX_ROUNDS, "lifting a lifted tree lifted more");
@@ -117,7 +117,6 @@ impl<'tree> Visit<'tree> for Dropper<'_> {
 
 pub(crate) struct Compressor<'walk, 'ast> {
     allocator: &'ast Allocator,
-    version: LuaVersion,
     config: TransformConfig,
     scoping: &'walk mut Scoping,
     /// The references whose names a rewrite dropped since the scoping was
@@ -171,7 +170,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         let held_index = vec![inline_locals::NOT_HELD; scoping.symbols().len()];
         Self {
             allocator,
-            version: scoping.version(),
             config,
             scoping,
             dropped,
@@ -224,7 +222,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
     /// name that refers to a symbol is live and in its list, and no list
     /// holds a reference whose name left the tree.
     #[cfg(debug_assertions)]
-    fn assert_references_match(&self, chunk: &Chunk<'_>, counts: TreeCounts) {
+    fn assert_references_match(&self, chunk: &Block<'_>, counts: TreeCounts) {
         let fresh = analyze(chunk, counts, None);
         let mut check = FreshCheck {
             scoping: self.scoping,
@@ -232,7 +230,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             fresh: &fresh,
             pairs: vec![None; self.scoping.symbols().len()],
         };
-        check.visit_block(&chunk.block);
+        check.visit_block(chunk);
         for (symbol, pair) in self.scoping.symbols().iter().zip(&check.pairs) {
             let kept = self.scoping.resolved_references(symbol.id).len();
             let found =
@@ -260,8 +258,8 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
 
     /// Marks the references in the annotation of a name the walk drops from
     /// its `local`.
-    fn drop_annotation(&mut self, attributed: &AttributedName<'ast>) {
-        if let Some(ty) = &attributed.type_annotation {
+    fn drop_annotation(&mut self, local_name: &TypedName<'ast>) {
+        if let Some(ty) = &local_name.type_annotation {
             self.dropper().visit_type(ty);
         }
     }
@@ -301,7 +299,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         match stmt {
             Statement::LocalAssignment(local) => {
                 if should_remove_dead_code
-                    && local.names.iter().all(|attributed| !self.is_used(&attributed.name))
+                    && local.names.iter().all(|local_name| !self.is_used(&local_name.name))
                     && unused_local_action(local, self.names()) == UnusedLocalAction::Remove
                 {
                     self.drop_stmt(stmt);
@@ -311,7 +309,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             }
             Statement::LocalFunction(local_function) => {
                 if should_remove_dead_code
-                    && is_droppable_function(local_function, self.scoping)
+                    && !local_function.kind.is_exported()
                     && !self.is_used(&local_function.name)
                 {
                     self.drop_stmt(stmt);
@@ -345,14 +343,14 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                     self.has_changed = true;
                 }
                 let outer_registers = self.live_registers;
-                self.live_registers += NUMERIC_FOR_STATE_REGISTERS + 1;
+                self.live_registers += NUMERIC_FOR_REGISTERS;
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
             }
             Statement::GenericFor(generic_for) => {
                 let outer_registers = self.live_registers;
-                self.live_registers += GENERIC_FOR_STATE_REGISTERS + generic_for.names.len();
+                self.live_registers += generic_for_registers(generic_for.names.len());
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
@@ -363,11 +361,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Statement::Return(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
@@ -438,7 +431,6 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
                 }
                 self.ascend();
             }
-            // Luau
             Expression::TypeCast(cast) => {
                 if self.descend() {
                     self.visit_operand(&mut cast.expr, Place::OneValue);
@@ -547,8 +539,8 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         }
     }
 
-    /// The dialect and the names as the scoping resolves them, for what
-    /// `luck_value` tells of an expression.
+    /// The names as the scoping resolves them, for what `luck_value` tells of
+    /// an expression.
     const fn names(&self) -> ResolvedNames<'_> {
         ResolvedNames(self.scoping)
     }
@@ -586,8 +578,8 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
         }
     }
 
-    /// A prefix's parentheses go with the chain's, since a Luau
-    /// instantiation passes every value of what it follows.
+    /// A prefix's parentheses go with the chain's, since an instantiation
+    /// passes every value of what it follows.
     fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
         if self.descend() {
             self.visit_expr_in(&mut suffixed_expr.prefix, Place::AllValues);
@@ -596,8 +588,7 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
                     Suffix::Field(_) => {}
                     Suffix::Index { index, .. } => {
                         self.visit_expr(index);
-                        if self.config.simplify_indexes
-                            && simplify_indexes::index_to_field(suffix, self.version)
+                        if self.config.simplify_indexes && simplify_indexes::index_to_field(suffix)
                         {
                             self.has_changed = true;
                         }
@@ -609,7 +600,6 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
                         }
                         self.visit_function_args(&mut call.args);
                     }
-                    // Luau
                     Suffix::TypeInstantiation { type_args, .. } => self.visit_type_args(type_args),
                 }
             }
@@ -647,9 +637,7 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
             }
         }
         self.ascend();
-        if self.config.simplify_indexes
-            && simplify_indexes::simplify_table(table_constructor, self.version)
-        {
+        if self.config.simplify_indexes && simplify_indexes::simplify_table(table_constructor) {
             self.has_changed = true;
         }
     }
@@ -666,20 +654,11 @@ impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
         self.visit_values(&mut assignment.values, targets);
     }
 
-    // Lua 5.5
-    fn visit_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
-        for attributed in &mut global_declaration.names {
-            self.visit_attributed_name(attributed);
-        }
-        let names = global_declaration.names.len();
-        self.visit_values(&mut global_declaration.exprs, names);
-    }
-
     /// The values a generic `for` takes are its iterator, state, and control
-    /// value, and on Lua 5.4+ a closing value, so the last may spread.
+    /// value, so the last may spread.
     fn visit_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
         for param in &mut generic_for.names {
-            self.visit_param(param);
+            self.visit_typed_name(param);
         }
         self.visit_values(&mut generic_for.exprs, usize::MAX);
         self.visit_block(&mut generic_for.block);
@@ -729,8 +708,8 @@ impl<'tree> Visit<'tree> for FreshCheck<'_> {
             let fresh_resolved = self.fresh.reference(fresh).resolved;
             let paired = self.scoping.reference(reference).resolved.and_then(|symbol| {
                 let pair = &mut self.pairs[symbol.index()];
-                // An implicit `self` or `arg` has no name, so its first
-                // reference pairs it.
+                // An implicit `self` has no name, so its first reference
+                // pairs it.
                 if pair.is_none() {
                     *pair = fresh_resolved;
                 }

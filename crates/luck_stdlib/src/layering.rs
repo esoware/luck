@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
-use luck_token::LuaTarget;
 
 use crate::stdlib_catalog::library_for;
 use crate::stdlib_definition::{
@@ -14,6 +13,7 @@ use crate::stdlib_model::{
     StdlibArgKind, StdlibConstant, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary,
     StdlibNamespace, StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };
+use crate::variant::Variant;
 
 /// `definition` layered over `base`, as [`Stdlib::layer`](crate::Stdlib::layer)
 /// describes, in `allocator`.
@@ -36,7 +36,7 @@ pub(crate) fn layer<'lib>(
         })
     })?;
     Ok(StdlibLibrary {
-        target: base.target,
+        variant: base.variant,
         globals: layering.members(base.globals, &definition.globals, "")?,
         shapes: layering.map(shapes)?,
         constant_sets: layering.constant_sets,
@@ -210,10 +210,9 @@ impl<'lib> Layering<'lib, '_> {
         if let Some(values) = self.constant_sets.get(set) {
             return Ok(StdlibArgKind::Constant(values));
         }
-        if LuaTarget::ALL
-            .into_iter()
-            .any(|target| library_for(target).constant_sets.contains_key(set))
-        {
+        // Roblox's library is Luau's with more layered over it, so it holds
+        // every set and shape a built-in library declares.
+        if library_for(Variant::Roblox).constant_sets.contains_key(set) {
             return Ok(StdlibArgKind::String);
         }
         Err(Diagnostic::e014(
@@ -235,9 +234,7 @@ impl<'lib> Layering<'lib, '_> {
         let shape = reference.get_ref();
         let is_declared = self.definition.shapes.contains_key(shape)
             || self.base.shapes.contains_key(shape)
-            || LuaTarget::ALL
-                .into_iter()
-                .any(|target| library_for(target).shapes.contains_key(shape));
+            || library_for(Variant::Roblox).shapes.contains_key(shape);
         if !is_declared {
             return Err(Diagnostic::e014(
                 Some(place(reference)),

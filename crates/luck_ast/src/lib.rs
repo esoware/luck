@@ -1,12 +1,8 @@
 //! # `luck_ast`
 //!
-//! The syntax tree of Lua 5.1 to 5.5 and Luau, and what walks, measures,
-//! queries, and builds it. Every dialect's source reads into one shape. A
-//! tree's root is a [`Chunk`], which records the [`LuaVersion`] it's in and
-//! holds its [`Block`], a list of [`Statement`]s, and every value position
-//! is an [`Expression`].
-//!
-//! [`LuaVersion`]: luck_token::LuaVersion
+//! The syntax tree of Luau, and what walks, measures, queries, and builds it.
+//! A tree's root is the [`Block`] of its chunk, a list of [`Statement`]s,
+//! and every value position is an [`Expression`].
 //!
 //! A tree lives in a `luck_allocator` arena: every node is in a `Box` or a
 //! `List` there, and none needs dropping, so a tree is freed with its arena
@@ -62,7 +58,7 @@
 //! let spans = SpanCounter::new();
 //! let synth = Synth::new(&allocator, &spans);
 //! let expr = synth.number_f64(0.5);
-//! assert!(matches!(expr, Expression::Number(literal) if literal.value.to_f64() == 0.5));
+//! assert!(matches!(expr, Expression::Number(literal) if literal.value == 0.5));
 //! ```
 
 mod binary_run;
@@ -96,21 +92,18 @@ pub use expr::{
     IfExpression, InterpolatedSegment, InterpolatedString, MethodCall, ParenthesizedExpression,
     Suffix, SuffixedExpression, TableConstructor, TypeCast, UnaryOp, Var,
 };
-pub use function::{FunctionAttribute, FunctionBody, Parameter, VarArgParam};
+pub use function::{FunctionAttribute, FunctionBody, VarArgParam};
 pub use generated::{AST_TYPE_MAX, AstKind, AstType, Visit, VisitMut};
-pub use identifier::{
-    is_valid_identifier, is_valid_identifier_in, sanitize_identifier, sanitize_identifier_in,
-};
+pub use identifier::{is_valid_identifier, sanitize_identifier};
 pub use leaf::{IntegerLiteral, Name, NameIndex, NumberLiteral, StringLiteral};
 pub use one_or_more::OneOrMore;
 pub use parens::Slot;
 pub use span::GetSpan;
 pub use stmt::{
-    Assignment, Attribute, AttributedName, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
-    GlobalStar, GotoStatement, IfStatement, LabelStatement, LocalAssignment, LocalAssignmentKind,
-    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement,
-    TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    Assignment, Block, CompoundAssignment, DoBlock, ElseClause, ElseIfClause, FunctionDecl,
+    FunctionName, GenericFor, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
+    LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement, Statement, TypeDeclaration,
+    TypeDeclarationValue, TypedName, WhileLoop,
 };
 pub use synth::{
     FieldSpec, FunctionSignature, InterpolatedStringPart, SpanCounter, Synth, TypeFieldSpec,

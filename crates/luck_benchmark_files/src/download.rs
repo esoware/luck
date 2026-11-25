@@ -110,9 +110,9 @@ mod tests {
     #[test]
     fn extract_once_refetches_after_an_interrupted_extraction() {
         let complete_archive = tarball(&[
-            ("project-0123/first.lua", "return 1\n"),
-            ("project-0123/second.lua", "return 2\n"),
-            ("project-0123/third.lua", "return 3\n"),
+            ("project-0123/first.luau", "return 1\n"),
+            ("project-0123/second.luau", "return 2\n"),
+            ("project-0123/third.luau", "return 3\n"),
         ]);
         // Header and data of the first entry, then the second's header and
         // one byte of its data.
@@ -130,7 +130,7 @@ mod tests {
                 .expect("a whole tarball extracts");
 
         assert!(
-            directory.join("third.lua").is_file(),
+            directory.join("third.luau").is_file(),
             "a directory left by a failed extraction must not count as the finished project"
         );
     }
@@ -138,8 +138,8 @@ mod tests {
     #[test]
     fn extract_once_keeps_only_the_kept_directory() {
         let archive = tarball(&[
-            ("project-0123/src/main.lua", "return 1\n"),
-            ("project-0123/tests/conformance/basic.lua", "return 2\n"),
+            ("project-0123/src/main.luau", "return 1\n"),
+            ("project-0123/tests/conformance/basic.luau", "return 2\n"),
         ]);
         let cache = tempfile::tempdir().expect("create temporary cache");
 
@@ -148,7 +148,7 @@ mod tests {
                 .expect("the tarball extracts");
 
         assert_eq!(directory, cache.path().join("tests"));
-        assert!(directory.join("conformance/basic.lua").is_file());
+        assert!(directory.join("conformance/basic.luau").is_file());
         let mut cached: Vec<_> = fs::read_dir(cache.path())
             .expect("read the cache")
             .map(|entry| entry.expect("cache entry").file_name())

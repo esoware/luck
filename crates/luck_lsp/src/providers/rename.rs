@@ -3,8 +3,7 @@
 //! A member of a module's table is renamed in every file of the workspace
 //! that names it. [`prepare`] refuses globals, stdlib names, a member of a
 //! module outside the workspace, whose readers the server can't know, and a
-//! local whose name something outside its declaration depends on, a method's
-//! implicit `self` or a local `_ENV`.
+//! method's implicit `self`, which no declaration spells.
 //!
 //! A rename is also refused whenever the new name could change meaning: an
 //! invalid identifier or a reserved word in any file it lands in, another
@@ -16,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use ls_types::{Position, PrepareRenameResponse, RenameParams, TextEdit, Uri, WorkspaceEdit};
-use luck_ast::is_valid_identifier_in;
+use luck_ast::is_valid_identifier;
 use luck_semantic::SymbolId;
 use luck_token::Span;
 
@@ -60,11 +59,6 @@ fn rename_target(
         return Err(
             "`self` is the method's implicit parameter, so it has no declaration to rename"
                 .to_owned(),
-        );
-    }
-    if tree.is_env_binding(symbol_id) {
-        return Err(
-            "renaming `_ENV` would change what every free name in its scope means".to_owned()
         );
     }
     Ok(Some((symbol_id, span)))
@@ -141,7 +135,7 @@ fn rename_member(
                 });
                 continue;
             }
-            if !is_valid_identifier_in(new_name, source.version) {
+            if !is_valid_identifier(new_name) {
                 refusal.get_or_insert_with(|| format!("`{new_name}` isn't a valid identifier"));
             }
             is_exported |= member.table == Table::Exported;
@@ -168,9 +162,7 @@ fn rename_member(
 }
 
 fn validate_new_name(document: &DocumentState, new_name: &str) -> Result<(), String> {
-    // Checked under the document's Lua version, so keywords are rejected
-    // version-accurately (`goto` is an identifier in 5.1).
-    if !is_valid_identifier_in(new_name, document.version()) {
+    if !is_valid_identifier(new_name) {
         return Err(format!("`{new_name}` isn't a valid identifier"));
     }
     // The analysis knows only the configured globals the document names.
@@ -197,7 +189,6 @@ mod tests {
         Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     };
     use luck_config::Project;
-    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::{document, document_at, session, uri};
@@ -244,7 +235,6 @@ function t:m()
   return value + self.x
 end
 ",
-            LuaTarget::Lua54,
         );
         let edit = rename_at(&document, 2, 9, "total")
             .expect("rename succeeds")
@@ -271,7 +261,6 @@ function t:m()
   return self.x
 end
 ",
-            LuaTarget::Lua54,
         );
         let result = rename_at(&document, 2, 10, "me");
         assert!(
@@ -289,7 +278,6 @@ function t:m()
   return 1
 end
 ",
-            LuaTarget::Lua54,
         );
         let prepared = prepare_at(&document, Position::new(2, 3));
         assert!(
@@ -302,33 +290,13 @@ end
     fn prepare_rename_refuses_a_recovered_name() {
         // Recovery gives the loop variable the `=` token's span and an empty
         // name.
-        let document = document("for = 1, 2 do end\n", LuaTarget::Lua54);
+        let document = document("for = 1, 2 do end\n");
         let prepared = prepare_at(&document, Position::new(0, 4));
         assert!(prepared.is_none(), "`=` is no name to rename: {prepared:?}");
     }
 
-    #[test]
-    fn rename_and_prepare_refuse_a_local_env() {
-        // In 5.2+ `_ENV` resolves every free name, so renaming the local
-        // sends `x` to the real globals. `local _ENV = {x = 1}; return x`
-        // returns 1 while the renamed form returns nil on lua5.4.
-        let document = document(
-            "\
-local _ENV = {x = 1}
-return x
-",
-            LuaTarget::Lua54,
-        );
-        let result = rename_at(&document, 0, 8, "scope");
-        assert!(
-            result.is_err(),
-            "renaming `_ENV` changes what every free name means, got {result:?}"
-        );
-        assert!(prepare_at(&document, Position::new(0, 8)).is_none());
-    }
-
-    /// An exported name is a field of the module's table, per the Luau
-    /// export RFC, so a module outside the workspace keeps it.
+    /// An exported name is a field of the module's table, per the export
+    /// RFC, so a module outside the workspace keeps it.
     #[test]
     fn an_export_of_a_module_outside_the_workspace_is_not_renamed() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -339,7 +307,7 @@ print(version)
 ";
         fs::write(&path, text).expect("write version.luau");
         let project = Project::defaults(directory.path().to_path_buf());
-        let exported = document_at(text, LuaTarget::Luau, project, &path);
+        let exported = document_at(text, project, &path);
         assert!(exported.parse().errors.is_empty(), "{:?}", exported.parse().errors);
         let result = rename_at(&exported, 0, 15, "release");
         assert!(result.is_err(), "renaming the export could miss its readers, got {result:?}");
@@ -355,7 +323,6 @@ print(version)
 export local version = 1
 print(version)
 ",
-            LuaTarget::Luau,
         );
         let edit = rename_at(&document, 0, 15, "release")
             .expect("rename succeeds")

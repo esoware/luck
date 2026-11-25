@@ -7,11 +7,10 @@ use globset::GlobSet;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_config::{
     CONFIG_FILE_NAME, Project, ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor,
-    find_config, glob_set, walk_lua_files,
+    find_config, glob_set, walk_source_files,
 };
 use luck_linter::LintConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs, lexically_normalized};
-use luck_token::LuaVersion;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
@@ -26,20 +25,13 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
 }
 
 /// How `bundle` and `graph` resolve and read modules: as `project` says, with
-/// `-s` replacing its search paths and `--dynamic-require` its mode when
-/// given.
-pub(crate) fn bundle_options<'project>(
-    project: &'project Project,
-    version: LuaVersion,
-    search_paths: &'project [String],
+/// `--dynamic-require` replacing its mode when given.
+pub(crate) fn bundle_options(
+    project: &Project,
     dynamic_require: Option<DynamicRequire>,
-) -> BundleOptions<'project> {
-    let options = project.bundle_options(version);
-    BundleOptions {
-        search_paths: if search_paths.is_empty() { options.search_paths } else { search_paths },
-        dynamic_require: dynamic_require.unwrap_or(options.dynamic_require),
-        ..options
-    }
+) -> BundleOptions<'_> {
+    let options = project.bundle_options();
+    BundleOptions { dynamic_require: dynamic_require.unwrap_or(options.dynamic_require), ..options }
 }
 
 pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
@@ -50,7 +42,7 @@ pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
 /// given, or else the `luck.json` that governs `input`.
 ///
 /// Discovery starts in the input's own directory, or in the input when it's a
-/// directory, not cwd, so `luck bundle path/to/project/src/main.lua` sees that
+/// directory, not cwd, so `luck bundle path/to/project/src/main.luau` sees that
 /// project's config. With none, it's the defaults rooted where discovery
 /// started, so a bundle resolves its modules from the entry's directory.
 pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Result<Project, Exit> {
@@ -145,7 +137,7 @@ pub(crate) fn project_files(
                 projects.collect_tree(&base, Some(&selection), &mut found)?;
             }
             if found.len() == found_before && !can_match_nothing {
-                return Err(usage_error(format!("no `.lua` or `.luau` files matched `{arg}`")));
+                return Err(usage_error(format!("no `.luau` or `.lua` files matched `{arg}`")));
             }
         } else {
             return Err(usage_error(format!("path not found: `{arg}`")));
@@ -187,7 +179,7 @@ pub(crate) fn project_files(
         let quoted_args: Vec<String> = paths.iter().map(|arg| format!("`{arg}`")).collect();
         let selection =
             if quoted_args.is_empty() { "`.`".to_owned() } else { quoted_args.join(", ") };
-        return Err(usage_error(format!("no `.lua` or `.luau` files matched {selection}")));
+        return Err(usage_error(format!("no `.luau` or `.lua` files matched {selection}")));
     }
     Ok(found)
 }
@@ -300,8 +292,9 @@ impl<'overlay> Projects<'overlay> {
         Ok(project)
     }
 
-    /// Appends the Lua files under `directory` that their project's filter
-    /// takes and `selection` matches relative to `directory`, sorted by path.
+    /// Appends the `.luau` and `.lua` files under `directory` that their
+    /// project's filter takes and `selection` matches relative to
+    /// `directory`, sorted by path.
     fn collect_tree(
         &mut self,
         directory: &Path,
@@ -329,7 +322,7 @@ impl<'overlay> Projects<'overlay> {
                 nested_trees: nested_tree_sender,
             };
             let root = WalkRoot { path: &tree, canonical: &canonical_tree };
-            let walked = walk_lua_files(&[root], tree_max_depth, &visitor)
+            let walked = walk_source_files(&[root], tree_max_depth, &visitor)
                 .map_err(|error| operation_error(format!("cannot walk directory: {error}")))?;
             tree_files.extend(
                 walked
@@ -397,7 +390,7 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
 mod tests {
     use std::fs;
 
-    use luck_token::LuaTarget;
+    use luck_stdlib::Variant;
 
     use super::*;
 
@@ -412,8 +405,8 @@ mod tests {
             .collect()
     }
 
-    fn target(file: &ProjectFile) -> LuaTarget {
-        file.project.target_for(Some(&file.path))
+    fn variant(file: &ProjectFile) -> Variant {
+        file.project.variant()
     }
 
     fn write_file(path: &Path, contents: &str) {
@@ -421,18 +414,16 @@ mod tests {
         fs::write(path, contents).expect("write file");
     }
 
-    /// The one-shot commands must honor the project's per-extension dialect,
-    /// or a Roblox tree keeping Luau in `.lua` files can't bundle at all.
     #[test]
     fn one_shot_project_is_the_one_above_the_input() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("luck.json"), r#"{"lua":"roblox"}"#)
+        fs::write(directory.path().join("luck.json"), r#"{"variant":"roblox"}"#)
             .expect("write luck.json");
-        let entry = directory.path().join("src/main.lua");
+        let entry = directory.path().join("src/main.luau");
         fs::create_dir_all(entry.parent().expect("a parent")).expect("mkdir src");
 
         let project = one_shot_project(None, &entry).expect("project loads");
-        assert_eq!(project.target_for(Some(&entry)), LuaTarget::LuauRoblox);
+        assert_eq!(project.variant(), Variant::Roblox);
     }
 
     /// With no `luck.json`, the defaults root where discovery started, so a
@@ -444,7 +435,7 @@ mod tests {
         write_file(&entry, "return 1\n");
 
         let project = one_shot_project(None, &entry).expect("defaults");
-        assert_eq!(project.target_for(Some(&entry)), LuaTarget::Luau);
+        assert_eq!(project.variant(), Variant::Standalone);
         let canonical_sources =
             entry.parent().and_then(|parent| FileSystemOs.canonicalize(parent).ok());
         if find_config(directory.path()).is_none() {
@@ -452,27 +443,24 @@ mod tests {
         }
     }
 
-    /// A `.luau` file under a roblox config must resolve to the roblox target,
-    /// since the path commands pick each file's parse dialect from it.
+    /// Every `.luau` and `.lua` file under a roblox config gets the roblox
+    /// variant, whatever its extension.
     #[test]
-    fn files_resolve_each_target_from_the_config() {
+    fn files_take_the_variant_of_their_config() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{"luau":"roblox"}"#).expect("write luck.json");
+        fs::write(&config_path, r#"{"variant":"roblox"}"#).expect("write luck.json");
         fs::write(directory.path().join("main.lua"), "return 1\n").expect("write main.lua");
         fs::write(directory.path().join("main.luau"), "return 2\n").expect("write main.luau");
 
         let root = directory.path().display().to_string();
-        let targets: Vec<(String, LuaTarget)> = selected(Some(&config_path), &[root])
+        let variants: Vec<(String, Variant)> = selected(Some(&config_path), &[root])
             .iter()
-            .map(|file| (file.path.file_name().unwrap().to_string_lossy().into(), target(file)))
+            .map(|file| (file.path.file_name().unwrap().to_string_lossy().into(), variant(file)))
             .collect();
         assert_eq!(
-            targets,
-            [
-                ("main.lua".to_owned(), LuaTarget::Lua54),
-                ("main.luau".to_owned(), LuaTarget::LuauRoblox),
-            ]
+            variants,
+            [("main.lua".to_owned(), Variant::Roblox), ("main.luau".to_owned(), Variant::Roblox),]
         );
     }
 
@@ -480,23 +468,23 @@ mod tests {
     fn files_take_the_nearest_config_above_them() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(&root.join("luck.json"), r#"{"lua":"lua51"}"#);
-        write_file(&root.join("pkg/luck.json"), r#"{"lua":"lua53"}"#);
-        write_file(&root.join("a.lua"), "return 1\n");
-        write_file(&root.join("pkg/deep/b.lua"), "return 2\n");
+        write_file(&root.join("luck.json"), r#"{"variant":"roblox"}"#);
+        write_file(&root.join("pkg/luck.json"), r#"{"variant":"standalone"}"#);
+        write_file(&root.join("a.luau"), "return 1\n");
+        write_file(&root.join("pkg/deep/b.luau"), "return 2\n");
 
         let walked = selected(None, &[root.display().to_string()]);
-        let walked_targets: Vec<LuaTarget> = walked.iter().map(target).collect();
-        assert_eq!(file_names(&walked), ["a.lua", "b.lua"]);
-        assert_eq!(walked_targets, [LuaTarget::Lua51, LuaTarget::Lua53]);
+        let walked_targets: Vec<Variant> = walked.iter().map(variant).collect();
+        assert_eq!(file_names(&walked), ["a.luau", "b.luau"]);
+        assert_eq!(walked_targets, [Variant::Roblox, Variant::Standalone]);
 
-        let named = selected(None, &[root.join("pkg/deep/b.lua").display().to_string()]);
-        assert_eq!(target(&named[0]), LuaTarget::Lua53);
+        let named = selected(None, &[root.join("pkg/deep/b.luau").display().to_string()]);
+        assert_eq!(variant(&named[0]), Variant::Standalone);
 
         // `-c` puts every file under the one config.
         let pinned = selected(Some(&root.join("luck.json")), &[root.display().to_string()]);
-        assert!(pinned.iter().all(|file| target(file) == LuaTarget::Lua51), "{pinned:?}");
-        assert_eq!(file_names(&pinned), ["a.lua", "b.lua"]);
+        assert!(pinned.iter().all(|file| variant(file) == Variant::Roblox), "{pinned:?}");
+        assert_eq!(file_names(&pinned), ["a.luau", "b.luau"]);
     }
 
     /// A nested project isn't under its parent's globs, but the parent can
@@ -506,30 +494,33 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
         write_file(&root.join("luck.json"), r#"{"exclude":["**/gen/**","vendor/**"]}"#);
-        write_file(&root.join("gen/skip.lua"), "return 1\n");
+        write_file(&root.join("gen/skip.luau"), "return 1\n");
         write_file(&root.join("pkg/luck.json"), r#"{"exclude":["**/tmp/**"]}"#);
-        write_file(&root.join("pkg/gen/keep.lua"), "return 2\n");
-        write_file(&root.join("pkg/tmp/skip.lua"), "return 3\n");
+        write_file(&root.join("pkg/gen/keep.luau"), "return 2\n");
+        write_file(&root.join("pkg/tmp/skip.luau"), "return 3\n");
         write_file(&root.join("vendor/lib/luck.json"), "{}");
-        write_file(&root.join("vendor/lib/skip.lua"), "return 4\n");
+        write_file(&root.join("vendor/lib/skip.luau"), "return 4\n");
 
         let files = selected(None, &[root.display().to_string()]);
-        assert_eq!(file_names(&files), ["keep.lua"]);
+        assert_eq!(file_names(&files), ["keep.luau"]);
     }
 
     #[test]
     fn named_file_skips_include_but_not_exclude() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(&root.join("luck.json"), r#"{"include":["src/**/*.lua"],"exclude":["gen/**"]}"#);
-        write_file(&root.join("tools/run.lua"), "return 1\n");
-        write_file(&root.join("gen/out.lua"), "return 2\n");
+        write_file(
+            &root.join("luck.json"),
+            r#"{"include":["src/**/*.luau"],"exclude":["gen/**"]}"#,
+        );
+        write_file(&root.join("tools/run.luau"), "return 1\n");
+        write_file(&root.join("gen/out.luau"), "return 2\n");
 
         let paths = [
-            root.join("tools/run.lua").display().to_string(),
-            root.join("gen/out.lua").display().to_string(),
+            root.join("tools/run.luau").display().to_string(),
+            root.join("gen/out.luau").display().to_string(),
         ];
-        assert_eq!(file_names(&selected(None, &paths)), ["run.lua"]);
+        assert_eq!(file_names(&selected(None, &paths)), ["run.luau"]);
     }
 
     #[test]
@@ -547,34 +538,31 @@ mod tests {
         let root = directory.path();
         write_file(&root.join("luck.json"), r#"{"lint":{"extra_globals":["a"]}}"#);
         write_file(&root.join("pkg/luck.json"), r#"{"lint":{"extra_globals":["b"]}}"#);
-        write_file(&root.join("a.lua"), "return 1\n");
-        write_file(&root.join("pkg/b.lua"), "return 2\n");
+        write_file(&root.join("a.luau"), "return 1\n");
+        write_file(&root.join("pkg/b.luau"), "return 2\n");
 
-        let overlay = LintConfig { extra_globals: vec!["vim".to_owned()], ..LintConfig::default() };
+        let overlay = LintConfig { extra_globals: vec!["app".to_owned()], ..LintConfig::default() };
         let files = project_files(None, &[root.display().to_string()], false, Some(&overlay))
             .expect("files resolve");
         let globals: Vec<Vec<String>> = files
             .iter()
             .map(|file| file.project.linter_for(Some(&file.path)).config().extra_globals.clone())
             .collect();
-        assert_eq!(globals, [["a", "vim"], ["b", "vim"]]);
+        assert_eq!(globals, [["a", "app"], ["b", "app"]]);
     }
 
     #[test]
     fn collect_tree_honors_exclude_glob() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(
-            &root.join("luck.json"),
-            r#"{"lua":"lua54","entry":"src/main.lua","exclude":["gen/**"]}"#,
-        );
-        write_file(&root.join("src/keep.lua"), "return 1\n");
-        write_file(&root.join("gen/skip.lua"), "return 2\n");
+        write_file(&root.join("luck.json"), r#"{"entry":"src/main.luau","exclude":["gen/**"]}"#);
+        write_file(&root.join("src/keep.luau"), "return 1\n");
+        write_file(&root.join("gen/skip.luau"), "return 2\n");
 
         // A raw, non-canonical root, as production passes; `ProjectFilter`
         // canonicalizes it.
         let files = selected(None, &[root.display().to_string()]);
-        assert_eq!(file_names(&files), ["keep.lua"]);
+        assert_eq!(file_names(&files), ["keep.luau"]);
     }
 
     #[cfg(unix)]
@@ -587,18 +575,18 @@ mod tests {
         let excluded = root.join("gen");
         fs::create_dir_all(&excluded).expect("mkdir gen");
         write_file(&root.join("luck.json"), r#"{"exclude":["gen/**"]}"#);
-        write_file(&root.join("keep.lua"), "return 1\n");
+        write_file(&root.join("keep.luau"), "return 1\n");
         fs::set_permissions(&excluded, fs::Permissions::from_mode(0o000)).expect("lock gen");
 
         let walked = project_files(None, &[root.display().to_string()], false, None);
         fs::set_permissions(&excluded, fs::Permissions::from_mode(0o755)).expect("unlock gen");
 
         let files = walked.expect("an excluded directory must not fail the walk");
-        assert_eq!(file_names(&files), ["keep.lua"]);
+        assert_eq!(file_names(&files), ["keep.luau"]);
     }
 
     #[test]
-    fn collect_tree_default_filter_takes_all_lua() {
+    fn collect_tree_default_filter_takes_every_source_file() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
         write_file(&root.join("a.lua"), "return 1\n");
@@ -616,17 +604,17 @@ mod tests {
             (base.to_string_lossy().replace('\\', "/"), pattern)
         };
         let pair = |base: &str, pattern: &str| (base.to_owned(), pattern.to_owned());
-        assert_eq!(split("src/**/*.lua"), pair("src/", "**/*.lua"));
+        assert_eq!(split("src/**/*.luau"), pair("src/", "**/*.luau"));
         assert_eq!(
-            split(&format!(".{MAIN_SEPARATOR}src{MAIN_SEPARATOR}*.lua")),
-            pair("src/", "*.lua")
+            split(&format!(".{MAIN_SEPARATOR}src{MAIN_SEPARATOR}*.luau")),
+            pair("src/", "*.luau")
         );
-        assert_eq!(split("src/gen/a*.lua"), pair("src/gen/", "a*.lua"));
-        assert_eq!(split("../pkg/*.lua"), pair("../pkg/", "*.lua"));
-        assert_eq!(split("/abs/*.lua"), pair("/abs/", "*.lua"));
-        assert_eq!(split("/*.lua"), pair("/", "*.lua"));
-        assert_eq!(split("*.lua"), pair(".", "*.lua"));
-        assert_eq!(split("{a,b}/x.lua"), pair(".", "{a,b}/x.lua"));
+        assert_eq!(split("src/gen/a*.luau"), pair("src/gen/", "a*.luau"));
+        assert_eq!(split("../pkg/*.luau"), pair("../pkg/", "*.luau"));
+        assert_eq!(split("/abs/*.luau"), pair("/abs/", "*.luau"));
+        assert_eq!(split("/*.luau"), pair("/", "*.luau"));
+        assert_eq!(split("*.luau"), pair(".", "*.luau"));
+        assert_eq!(split("{a,b}/x.luau"), pair(".", "{a,b}/x.luau"));
         assert_eq!(split("vendor"), pair("vendor/", ""));
     }
 
@@ -636,11 +624,11 @@ mod tests {
     fn discovery_ignores_a_config_reached_only_through_dot_dot() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(&root.join("here/luck.json"), r#"{"lua":"lua51"}"#);
-        write_file(&root.join("pkg/a.lua"), "return 1\n");
+        write_file(&root.join("here/luck.json"), r#"{"variant":"roblox"}"#);
+        write_file(&root.join("pkg/a.luau"), "return 1\n");
 
         let mut projects = Projects::new(None, &root.join("here"), None).expect("projects");
         let project = projects.for_directory(&root.join("here/../pkg")).expect("project resolves");
-        assert_eq!(project.target_for(Some(Path::new("a.lua"))), LuaTarget::Lua54);
+        assert_eq!(project.variant(), Variant::Standalone);
     }
 }

@@ -23,7 +23,7 @@ pub(crate) fn parenthesize<'ast>(
 }
 
 /// Parenthesizes a call or `...` that replaces an expression that always
-/// yields one value, an `and`/`or` or a Luau cast.
+/// yields one value, an `and`/`or` or a cast.
 pub(crate) fn truncate_multi_value<'ast>(
     allocator: &'ast Allocator,
     expr: Expression<'ast>,

@@ -1,14 +1,12 @@
 use std::borrow::Cow;
 
-use luck_diagnostics::Diagnostic;
-use luck_token::{EscapeError, LuaVersion, Span, StringKind, Token, TokenKind, read_escape};
-use memchr::memmem;
+use luck_token::{EscapeError, StringKind, Token, TokenKind, read_escape};
 
 use super::Lexer;
 use crate::search::{ByteMatchTable, byte_match_table, find_match};
 
 // Stop bytes for raw interpolated-string text: escape lead, interpolation
-// opener, closing backtick, and the line breaks Luau rejects.
+// opener, closing backtick, and the CR and LF that leave it unterminated.
 static INTERPOLATED_STRING_STOP: ByteMatchTable =
     byte_match_table!(|b| matches!(b, b'\\' | b'{' | b'`' | b'\n' | b'\r'));
 
@@ -124,40 +122,29 @@ impl Lexer<'_> {
     }
 
     /// Consume the escape sequence at the cursor's `\`, as [`read_escape`]
-    /// reads it for every stage. A malformed one goes to `errors`, and one
-    /// only Lua 5.1 and Luau read, as the character it escapes, to
-    /// `lenient_escapes`. At the end of the source it consumes only the `\`,
-    /// and the string's scan reports the string unterminated.
+    /// reads it for every stage. A malformed one goes to `errors`, and one of
+    /// a character Luau defines no escape for, which it reads as the
+    /// character, to `lenient_escapes`. At the end of the source it consumes
+    /// only the `\`, and the string's scan reports the string unterminated.
     fn scan_escape(&mut self, kind: StringKind) {
         let escape_start = self.cursor.position();
         self.cursor.bump();
-        let Some(escaped_byte) = self.cursor.peek() else {
+        if self.cursor.peek().is_none() {
             return;
-        };
+        }
         self.has_escape = true;
         let character_start = self.cursor.position();
-        let (length, meaning) = read_escape(self.cursor.rest(), kind, self.version);
+        let (length, meaning) = read_escape(self.cursor.rest(), kind);
         self.cursor.advance_by(length);
-        // A lenient or undefined escape takes the first byte of a multi-byte
-        // character, and its span and its error take the whole character.
         match meaning {
-            // Lua 5.1, Luau
+            // A lenient escape takes the first byte of a multi-byte
+            // character, and its span takes the whole character.
             Ok(escaped) if escaped.is_lenient() => {
                 self.cursor.eat_rest_of_char(character_start);
                 self.lenient_escapes.push(self.cursor.span_since(escape_start));
             }
             Ok(_) => {}
-            // Lua 5.2+
-            Err(EscapeError::Undefined) => {
-                let message = match self.cursor.eat_rest_of_char(character_start) {
-                    Some(character) => format!("invalid escape sequence `\\{character}`"),
-                    None => {
-                        format!("invalid escape sequence, `\\` before byte 0x{escaped_byte:02X}")
-                    }
-                };
-                self.reject(escape_start, message);
-            }
-            Err(error) => self.reject(escape_start, escape_message(error, self.version)),
+            Err(error) => self.reject(escape_start, escape_message(error)),
         }
     }
 
@@ -171,8 +158,8 @@ impl Lexer<'_> {
     fn scan_interpolated_segment(&mut self, start: usize) -> SegmentEnd {
         loop {
             match self.cursor.peek() {
-                // Luau rejects unescaped line breaks in backtick strings, same
-                // as in short strings.
+                // An unescaped CR or LF ends the string unterminated, as it
+                // ends a quoted one.
                 None | Some(b'\n' | b'\r') => {
                     self.reject(start, "unterminated interpolated string");
                     return SegmentEnd::Unterminated;
@@ -224,16 +211,13 @@ impl Lexer<'_> {
     /// same pass.
     ///
     /// A missing closer leaves the cursor at the end of the source and goes
-    /// to `errors`, spanning from `start`. A level-0 body holding a `[[` that
-    /// the version rejects goes there too, at its first `[[`, where Lua 5.1
-    /// stops.
+    /// to `errors`, spanning from `start`.
     pub(super) fn scan_long_bracket_body(
         &mut self,
         start: usize,
         level: usize,
         kind: LongBracketKind,
     ) -> LongBracketBody {
-        let body_start = self.cursor.position();
         let should_find_cr = kind == LongBracketKind::String;
         let mut has_cr = false;
         loop {
@@ -261,23 +245,13 @@ impl Lexer<'_> {
             let closing_level = after_bracket.iter().take_while(|&&b| b == b'=').count();
             if closing_level == level && after_bracket.get(level) == Some(&b']') {
                 self.cursor.advance_by(level + 1);
-                if level == 0
-                    && self.version.has_long_bracket_nesting_error()
-                    && let Some(offset) = memmem::find(self.cursor.text_since(body_start), b"[[")
-                {
-                    let nested_open = body_start + offset;
-                    self.errors.push(Diagnostic::e008(
-                        Span::from_indices(nested_open, nested_open + 2),
-                        "nesting of `[[...]]` is deprecated",
-                    ));
-                }
                 return LongBracketBody { is_closed: true, has_cr };
             }
         }
     }
 }
 
-fn escape_message(error: EscapeError, version: LuaVersion) -> Cow<'static, str> {
+fn escape_message(error: EscapeError) -> Cow<'static, str> {
     match error {
         EscapeError::DecimalTooLarge(value) => {
             format!("decimal escape too large (`\\{value}`), maximum is `\\255`").into()
@@ -288,10 +262,8 @@ fn escape_message(error: EscapeError, version: LuaVersion) -> Cow<'static, str> 
         EscapeError::UnicodeBrace => "`\\u` escape requires `{`".into(),
         EscapeError::UnicodeDigits => "`\\u{}` requires at least one hex digit".into(),
         EscapeError::UnicodeTooLarge => {
-            let limit = if version.has_extended_unicode_escape() { "2^31" } else { "0x110000" };
-            format!("`\\u` codepoint too large (must be less than {limit})").into()
+            "`\\u` codepoint too large (must be less than 0x110000)".into()
         }
         EscapeError::UnicodeUnclosed => "`\\u` escape missing closing `}`".into(),
-        EscapeError::Undefined => "invalid escape sequence".into(),
     }
 }

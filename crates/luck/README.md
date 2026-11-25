@@ -12,7 +12,7 @@ The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::
 | `minifier` | `luck::minifier` |
 | `formatter` | `luck::formatter` |
 | `semantic` | `luck::semantic`, scoping, compile-time checks, the node table, and `require` sites, in one pass |
-| `stdlib` | `luck::stdlib`, each target's standard library, the std definitions that layer a host's library over one, and what a chunk reaches in it, and `semantic` |
+| `stdlib` | `luck::stdlib`, the Luau and Roblox standard libraries, the std definitions that layer a host's library over one, and what a chunk reaches in it, and `semantic` |
 | `linter` | `luck::linter`, and `stdlib` |
 | `resolver` | `luck::resolver`, module resolution and source reading |
 | `bundler` | `luck::bundler`, and `resolver` and `minifier` |
@@ -27,11 +27,10 @@ A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the 
 
 ```rust
 use luck::allocator::Allocator;
-use luck::token::LuaVersion;
 
 let mut allocator = Allocator::new();
 for source in [&b"local x = 1"[..], b"return x"] {
-    let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
+    let parsed = luck::parser::parse(&allocator, source);
     assert!(parsed.errors.is_empty());
     // The parse borrows the arena, so it goes first.
     drop(parsed);
@@ -44,10 +43,8 @@ With the `formatter` feature:
 ```rust
 use luck::allocator::Allocator;
 use luck::formatter::FormatOptions;
-use luck::token::LuaVersion;
 
 let allocator = Allocator::new();
-let formatted =
-    luck::formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+let formatted = luck::formatter::format(&allocator, b"local x=1", &FormatOptions::default());
 assert_eq!(formatted.output, b"local x = 1\n");
 ```

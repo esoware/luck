@@ -22,8 +22,6 @@ struct NameEntry {
     end: u32,
     /// A free name the chunk writes as a global.
     is_assigned_global: bool,
-    /// Lua 5.5: a name a `global` statement declares.
-    is_declared_global: bool,
 }
 
 /// As bytes, so a comparison checks no char boundaries.
@@ -83,7 +81,6 @@ impl Names {
                     end: u32::try_from(text.len())
                         .expect("a chunk's names total fewer bytes than `u32::MAX`"),
                     is_assigned_global: false,
-                    is_declared_global: false,
                 });
                 vacant.insert(id);
                 id
@@ -106,16 +103,8 @@ impl Names {
         self.entries[id.index()].is_assigned_global
     }
 
-    pub(crate) fn is_declared_global(&self, id: NameId) -> bool {
-        self.entries[id.index()].is_declared_global
-    }
-
     pub(crate) fn mark_assigned_global(&mut self, id: NameId) {
         self.entries[id.index()].is_assigned_global = true;
-    }
-
-    pub(crate) fn mark_declared_global(&mut self, id: NameId) {
-        self.entries[id.index()].is_declared_global = true;
     }
 }
 

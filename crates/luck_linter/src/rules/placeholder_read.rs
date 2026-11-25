@@ -7,8 +7,8 @@ use crate::rule::{Rule, declare_lint_rule};
 /// Flags reads of `_`, which by convention names a value being thrown away.
 ///
 /// A read usually means the author grabbed the wrong binding, or a nearer `_`
-/// shadows the one they meant. Only a plain read counts, so not Luau's
-/// `_ += 1`, which does read `_`, but is rare and clearly deliberate.
+/// shadows the one they meant. Only a plain read counts, so not `_ += 1`,
+/// which does read `_`, but is rare and clearly deliberate.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct PlaceholderRead;
 
@@ -41,30 +41,20 @@ impl Rule for PlaceholderRead {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local _ = f()", LuaTarget::Lua54),
-        ("_ = f()", LuaTarget::Lua54),
-        ("_ += 1", LuaTarget::Luau),
-        ("for _ = 1, 10 do end", LuaTarget::Lua54),
-        ("local function f(_) end", LuaTarget::Lua54),
-    ];
+    const PASS: &[&str] =
+        &["local _ = f()", "_ = f()", "_ += 1", "for _ = 1, 10 do end", "local function f(_) end"];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("print(_)", LuaTarget::Lua54),
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "print(_)",
+        "\
 _[_] = 1
 _.x = 2",
-            LuaTarget::Lua54,
-        ),
         // Only the read in the body fires, not the binding.
-        ("for _, v in pairs(t) do print(_) end", LuaTarget::Lua54),
-        ("local function f(_) return _ end", LuaTarget::Lua54),
+        "for _, v in pairs(t) do print(_) end",
+        "local function f(_) return _ end",
     ];
 
     #[test]

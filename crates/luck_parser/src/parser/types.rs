@@ -38,7 +38,7 @@ impl<'ast> Parser<'ast> {
     /// Parse `: T` if present, on a binding that takes a single type.
     #[inline]
     pub(super) fn try_parse_type_annotation(&mut self) -> Option<Box<'ast, Type<'ast>>> {
-        (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
+        self.eat(TokenKind::Colon).then(|| {
             let ty = self.parse_type();
             self.alloc(ty)
         })

@@ -2,18 +2,17 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
-    ContentEq, DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field,
-    FunctionArgs, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
-    FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
-    GenericTypeParam, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression,
-    IfStatement, IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType,
-    LabelStatement, LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind,
-    MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
-    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypeFieldAccess, TypePack,
-    TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ContentEq, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
+    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NamedType,
+    NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
+    TypeField, TypeFieldAccess, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var,
+    VarArgParam, VariadicType, WhileLoop,
 };
 
 impl ContentEq for Expression<'_> {
@@ -248,17 +247,9 @@ impl ContentEq for FunctionBody<'_> {
     }
 }
 
-impl ContentEq for Parameter<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-            && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
-    }
-}
-
 impl ContentEq for VarArgParam<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-            && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
+        ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
     }
 }
 
@@ -293,13 +284,6 @@ impl ContentEq for StringLiteral<'_> {
     }
 }
 
-impl ContentEq for Chunk<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.version, &other.version)
-            && ContentEq::content_eq(&self.block, &other.block)
-    }
-}
-
 impl ContentEq for Block<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.stmts, &other.stmts)
@@ -326,15 +310,6 @@ impl ContentEq for Statement<'_> {
             (Self::Break(_), Self::Break(_))
             | (Self::Continue(_), Self::Continue(_))
             | (Self::Error(_), Self::Error(_)) => true,
-            (Self::Goto(lhs), Self::Goto(rhs)) => ContentEq::content_eq(lhs, rhs),
-            (Self::Label(lhs), Self::Label(rhs)) => ContentEq::content_eq(lhs, rhs),
-            (Self::GlobalDeclaration(lhs), Self::GlobalDeclaration(rhs)) => {
-                ContentEq::content_eq(lhs, rhs)
-            }
-            (Self::GlobalFunction(lhs), Self::GlobalFunction(rhs)) => {
-                ContentEq::content_eq(lhs, rhs)
-            }
-            (Self::GlobalStar(lhs), Self::GlobalStar(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::CompoundAssignment(lhs), Self::CompoundAssignment(rhs)) => {
                 ContentEq::content_eq(lhs, rhs)
             }
@@ -356,11 +331,6 @@ impl ContentEq for Statement<'_> {
                 | Self::Return(_)
                 | Self::Break(_)
                 | Self::Continue(_)
-                | Self::Goto(_)
-                | Self::Label(_)
-                | Self::GlobalDeclaration(_)
-                | Self::GlobalFunction(_)
-                | Self::GlobalStar(_)
                 | Self::CompoundAssignment(_)
                 | Self::TypeDeclaration(_)
                 | Self::Error(_),
@@ -421,8 +391,7 @@ impl ContentEq for ElseClause<'_> {
 
 impl ContentEq for NumericFor<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-            && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
+        ContentEq::content_eq(&self.variable, &other.variable)
             && ContentEq::content_eq(&self.start, &other.start)
             && ContentEq::content_eq(&self.limit, &other.limit)
             && ContentEq::content_eq(&self.step, &other.step)
@@ -468,24 +437,16 @@ impl ContentEq for LocalFunctionKind {
     }
 }
 
-impl ContentEq for Attribute<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-    }
-}
-
-impl ContentEq for AttributedName<'_> {
+impl ContentEq for TypedName<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.name, &other.name)
             && ContentEq::content_eq(&self.type_annotation, &other.type_annotation)
-            && ContentEq::content_eq(&self.attribute, &other.attribute)
     }
 }
 
 impl ContentEq for LocalAssignment<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.attribute, &other.attribute)
-            && ContentEq::content_eq(&self.names, &other.names)
+        ContentEq::content_eq(&self.names, &other.names)
             && ContentEq::content_eq(&self.exprs, &other.exprs)
             && ContentEq::content_eq(&self.kind, &other.kind)
     }
@@ -494,18 +455,6 @@ impl ContentEq for LocalAssignment<'_> {
 impl ContentEq for LocalAssignmentKind {
     fn content_eq(&self, other: &Self) -> bool {
         self == other
-    }
-}
-
-impl ContentEq for GotoStatement<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-    }
-}
-
-impl ContentEq for LabelStatement<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
     }
 }
 
@@ -539,27 +488,6 @@ impl ContentEq for TypeDeclarationValue<'_> {
             (Self::TypeFunction(lhs), Self::TypeFunction(rhs)) => ContentEq::content_eq(lhs, rhs),
             (Self::Alias(_) | Self::TypeFunction(_), _) => false,
         }
-    }
-}
-
-impl ContentEq for GlobalDeclaration<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.attribute, &other.attribute)
-            && ContentEq::content_eq(&self.names, &other.names)
-            && ContentEq::content_eq(&self.exprs, &other.exprs)
-    }
-}
-
-impl ContentEq for GlobalFunction<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.name, &other.name)
-            && ContentEq::content_eq(&self.body, &other.body)
-    }
-}
-
-impl ContentEq for GlobalStar<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.attribute, &other.attribute)
     }
 }
 

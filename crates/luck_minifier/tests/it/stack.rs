@@ -8,13 +8,13 @@ use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
 
 #[test]
 fn minifying_fits_the_smallest_stack() {
-    on_the_smallest_stack(deep_and_long_sources(), |source, version| {
+    on_the_smallest_stack(deep_and_long_sources(), |source| {
         let allocator = Allocator::new();
         let config = TransformConfig::default();
-        let minified = luck_minifier::minify(&allocator, source.as_bytes(), version, &config)
+        let minified = luck_minifier::minify(&allocator, source.as_bytes(), &config)
             .expect("the source parses");
-        let again = luck_minifier::minify(&allocator, &minified, version, &config)
-            .expect("the output parses");
+        let again =
+            luck_minifier::minify(&allocator, &minified, &config).expect("the output parses");
         assert!(again == minified, "minifying is idempotent");
     });
 }

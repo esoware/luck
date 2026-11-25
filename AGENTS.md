@@ -37,7 +37,7 @@ Closes #24
 ### Output keeps the input's meaning
 
 - Purity analysis assumes metamethods. Reading a local or an upvalue runs nothing, but reading a global indexes the environment, which can call `__index` as any index can, and an operator can call one or raise unless its operands' types rule that out, as two numbers do for `+` and a `nil` does for `==`. `luck_value` holds these rules.
-- Constant evaluation reproduces the target's arithmetic exactly, so it never fuses or reorders an operation.
+- Constant evaluation reproduces Luau's arithmetic exactly, so it never fuses or reorders an operation.
 - `minify(minify(x)) == minify(x)` and `format(format(x)) == format(x)`, and both outputs reparse with no errors. Tests check both.
 - Emitters never read source text. Codegen and the formatter read it only for trivia and verbatim regions, and work without it, because a synthetic AST must still print.
 - A bundle names no host path. Every path the bundle carries comes from `ModuleInfo::relative_path`. `ModuleInfo::path`, `source_files`, and the line map stay canonical. They're local build data and never reach the output.
@@ -55,7 +55,7 @@ If you can't fix a lint, suppress it on that one line with a reason:
 - Use these domain abbreviations instead of the long form: `ast`, `ir`, `expr`, `stmt`, `op`, `ty`, `lhs`, `rhs`, `diag`, `diags`, `id`, `url`, `params`, and `args`. `cfg` always means the control-flow graph in `luck_linter`'s `cfg.rs`, never config.
 - A bool starts with `is`, `has`, `should`, or `can`: `is_open` in Rust, `isOpen` in TypeScript.
 - A raw integer that carries a unit names it: `utf16_column` or `timeout_millis` in Rust, `TICK_MS` or `unixSeconds` in TypeScript. A byte offset, a `Span`, or a `Duration` doesn't need to.
-- A field that mirrors the LSP protocol, a `luck.json` key, a CLI flag, or a Lua or Roblox API keeps the name it mirrors.
+- A field that mirrors the LSP protocol, a `luck.json` key, a CLI flag, or a Luau or Roblox API keeps the name it mirrors.
 
 ### Comments
 
@@ -64,7 +64,6 @@ Plain ASCII, in every file.
 - **TypeScript:** none, except tool directives.
 - **Everything else:** none, in Rust, TOML, YAML, the justfile, or any other file, unless the comment gives context an experienced engineer or agent couldn't work out from the file itself, such as an external fact, a spec rule, a disk or wire format, or why a choice that looks wrong is right. If you're unsure, leave it out. A comment that passes says that one thing and nothing else, and is never a TODO, a history note, or a note about the edit. Doc comments follow the same rule.
 - Exempt from that rule: tool directives, comments that are test input, `// SAFETY:` on an `unsafe` block, the `# Errors`, `# Panics`, and `# Safety` sections clippy asks for, and the crate doc in `lib.rs`. Doc comments on config types and the justfile's recipe comments are exempt too, because the schema and `just --list` show them.
-- In Rust, a match arm that handles a version-specific construct opens with a version marker, `// Lua 5.2+` or `// Luau`. An or-pattern entry that handles it like any other node gets none.
 
 ### Copy
 
@@ -82,7 +81,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 
 ## Language server
 
-- The extension has no language logic. Everything that has to understand Lua runs in `luck_lsp`, so if the extension needs something new, add it there.
+- The extension has no language logic. Everything that has to understand Luau runs in `luck_lsp`, so if the extension needs something new, add it there.
 - `editors/vscode/schemas/luckrc.schema.json` is generated from the Rust config types, doc comments included. Never hand-edit it. `just schema` regenerates it.
 
 ## Rust
@@ -92,10 +91,9 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - `luck_allocator`, `luck_token`, `luck_data_structures`, `luck_simd`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace, and `luck_diagnostics` on `luck_token` only.
 - `luck_codegen` and `luck_formatter` never depend on `luck_semantic`, and neither they nor `luck_minifier` depend on `luck_stdlib`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, nothing depends on `luck_cli` or on the `luck` facade, and only `luck_allocs` turns on `luck_allocator`'s `track_allocations` feature.
-- `LuaTarget` in `luck_token` is the dialect a user names, and the only valid pairs of a `LuaVersion` and a host. Whatever needs the stdlib, such as `luck_stdlib`'s analysis and the linter, takes a `StdlibLibrary`, the target's or one with a project's std definitions layered over it, whatever else needs the host takes a `LuaTarget`, and whatever reads only syntax or scoping takes its `version()`. The parser, codegen, formatter, and minifier read only `LuaVersion`, so `-t roblox` and `-t luau` minify identically.
-- Check a version's syntax with a `LuaVersion::has_<feature>` predicate, never by comparing `LuaVersion` variants. The only `is_` forms are `is_luau` and `is_roblox`.
+- `Variant` in `luck_stdlib` is the Luau a user names, standalone or Roblox, and it decides only the stdlib. Whatever needs the stdlib, such as `luck_stdlib`'s analysis and the linter, takes a `StdlibLibrary`, the variant's or one with a project's std definitions layered over it, and whatever else needs the variant takes a `Variant`. The lexer, parser, semantic analysis, codegen, formatter, minifier, and bundler never take one, so both variants read and print identically.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
-- Types that two crates share when neither depends on the other live in `luck_token`, diagnostics in `luck_diagnostics`, and data structures that know nothing of Lua in `luck_data_structures`.
+- Types that two crates share when neither depends on the other live in `luck_token`, diagnostics in `luck_diagnostics`, and data structures that know nothing of Luau in `luck_data_structures`.
 - Every crate in the workspace and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it.
 
 ### Types and errors
@@ -115,7 +113,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Helpers that several files' inline tests share live in `#[cfg(test)] mod fixtures;`, declared in `lib.rs` among the other modules.
 - A crate's integration tests are one binary. `tests/it/main.rs` declares a module per file, and shared helpers live in `tests/it/common/mod.rs`. Declare `mod common;`, never `pub mod common;`, and give its items `pub(crate)`. A `pub` module hides a helper nothing calls from the dead-code lint.
 - A test that rewrites a committed file is `#[ignore]`d and named `regenerate_*`, so it runs only when asked for with `--ignored`.
-- Lua fixtures that several crates' tests read live in `tests/fixtures/`, whose `idiomatic/` must stay lint-clean.
+- Luau fixtures that several crates' tests read live in `tests/fixtures/`, whose `idiomatic/` must stay lint-clean.
 - A lint rule's tests are its `PASS` and `FAIL` cases run through `crate::fixtures::Tester`. Suppression has its own tests in `luck_linter`, so a rule's cases leave it out.
 - A fix test applies the edit and asserts that the result reparses.
 - An error path asserts on the returned errors, never with `#[should_panic]`.

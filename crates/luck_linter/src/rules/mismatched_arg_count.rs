@@ -96,7 +96,7 @@ mod tests {
         "\
 local function f(a, b) return a + b end
 f(1, 2)",
-        // Missing args are nil, which is how Lua does optional arguments.
+        // Missing args are nil, which is how Luau does optional arguments.
         "\
 local function f(a, b) return a or b end
 f(1)",

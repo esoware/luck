@@ -3,22 +3,13 @@ use super::{FullGenerator, Varargs};
 const MAX_STMT_DEPTH: usize = 4;
 const MAX_EXPR_DEPTH: usize = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoopEnd {
-    End,
-    Until,
-}
-
 impl FullGenerator {
     pub(super) fn stmt(&mut self) {
         let can_nest = self.stmt_depth < MAX_STMT_DEPTH;
         match self.rng.below(24) {
-            20 if self.version.is_luau() => self.type_alias_stmt(),
-            20 if self.version.has_global() => self.line("global sink"),
-            20 if self.version.has_empty_stmt() => self.line(";"),
-            0..=4 | 20 => self.local_declaration(),
-            10 if self.version.has_compound_assignment() => self.compound_assignment(),
-            8..=10 => self.assignment(),
+            0..=4 => self.local_declaration(),
+            8..=9 => self.assignment(),
+            10 => self.compound_assignment(),
             11..=12 if can_nest => self.if_stmt(),
             13 if can_nest => self.numeric_for(),
             14 if can_nest => self.generic_for(),
@@ -26,6 +17,7 @@ impl FullGenerator {
             16 if can_nest => self.repeat_stmt(),
             17..=18 if can_nest => self.function_stmt(),
             19 if can_nest => self.do_block(),
+            20 => self.type_alias_stmt(),
             21 => self.multi_local(),
             22 => self.multi_assignment(),
             _ => self.call_stmt(),
@@ -36,21 +28,10 @@ impl FullGenerator {
         let name = self.fresh_name();
         let value = self.expr(MAX_EXPR_DEPTH);
         let semicolon = if self.rng.chance(15) { ";" } else { "" };
-        if self.version.has_attributes() && self.rng.chance(10) {
-            self.read_only_names.push(name.clone());
-            let attribute = self.rng.pick(&["const", "close"]);
-            if self.version.has_leading_attributes() && self.rng.chance(50) {
-                // Lua 5.5
-                self.line(&format!("local <{attribute}> {name} = {value}{semicolon}"));
-            } else {
-                // Lua 5.4+
-                self.line(&format!("local {name} <{attribute}> = {value}{semicolon}"));
-            }
-        } else if self.version.is_luau() && self.rng.chance(10) {
-            // Luau const binding
+        if self.rng.chance(10) {
             self.read_only_names.push(name.clone());
             self.line(&format!("const {name} = {value}{semicolon}"));
-        } else if self.version.is_luau() && self.rng.chance(35) {
+        } else if self.rng.chance(35) {
             let annotation = self.type_expr(2);
             self.line(&format!("local {name}: {annotation} = {value}{semicolon}"));
         } else {
@@ -95,7 +76,6 @@ impl FullGenerator {
     }
 
     fn compound_assignment(&mut self) {
-        // Luau
         let target = self.assign_target();
         let op = self.rng.pick(&["+=", "-=", "*=", "/=", "//=", "%=", "^=", "..="]);
         let value = self.expr(2);
@@ -147,10 +127,6 @@ impl FullGenerator {
 
     fn numeric_for(&mut self) {
         let loop_variable = self.fresh_name();
-        // 5.5 makes for control variables read-only.
-        if self.version.has_const_for_variables() {
-            self.read_only_names.push(loop_variable.clone());
-        }
         let stop = self.expr(1);
         let header = if self.rng.chance(40) {
             format!("for {loop_variable} = 1, {stop}, 2 do")
@@ -158,17 +134,13 @@ impl FullGenerator {
             format!("for {loop_variable} = 1, {stop} do")
         };
         self.line(&header);
-        self.loop_body(LoopEnd::End);
+        self.loop_body();
         self.line("end");
     }
 
     fn generic_for(&mut self) {
         let key = self.fresh_name();
         let value = self.fresh_name();
-        if self.version.has_const_for_variables() {
-            self.read_only_names.push(key.clone());
-            self.read_only_names.push(value.clone());
-        }
         let subject = self.known_name();
         let iterator = match self.rng.below(3) {
             0 => format!("ipairs({subject})"),
@@ -176,23 +148,20 @@ impl FullGenerator {
             _ => format!("next, {subject}, nil"),
         };
         self.line(&format!("for {key}, {value} in {iterator} do"));
-        self.loop_body(LoopEnd::End);
+        self.loop_body();
         self.line("end");
     }
 
     fn while_stmt(&mut self) {
         let condition = self.condition();
         self.line(&format!("while {condition} do"));
-        self.loop_body(LoopEnd::End);
+        self.loop_body();
         self.line("end");
     }
 
     fn repeat_stmt(&mut self) {
-        // No goto-continue idiom here: a repeat block's trailing label still
-        // precedes `until`, which can see the block's locals, so Lua rejects
-        // a goto that jumps over any of them.
         self.line("repeat");
-        self.loop_body(LoopEnd::Until);
+        self.loop_body();
         let condition = self.condition();
         self.line(&format!("until {condition}"));
     }
@@ -203,48 +172,27 @@ impl FullGenerator {
         self.line("end");
     }
 
-    /// Loop bodies exercise the exit statements: `break` (as the last
-    /// statement of an `if` block, valid in every version including the
-    /// 5.1/Luau last-statement restriction), Luau `continue`, and the
-    /// 5.2+ goto-continue idiom with the label in end-of-block position.
-    fn loop_body(&mut self, loop_end: LoopEnd) {
-        let has_goto_continue =
-            loop_end == LoopEnd::End && self.version.has_goto() && self.rng.chance(30);
-        let continue_label = has_goto_continue.then(|| {
-            self.next_label += 1;
-            format!("continue_{}", self.next_label)
-        });
+    /// Loop bodies exercise the exit statements, each where it ends its
+    /// block, as it must: `break` as the last statement of an `if` block,
+    /// and `continue` as the last of the loop's.
+    fn loop_body(&mut self) {
         self.block(|generator| {
-            if let Some(label) = &continue_label {
-                let condition = generator.condition();
-                generator.line(&format!("if {condition} then goto {label} end"));
-            }
             generator.small_body(2);
             if generator.rng.chance(25) {
                 let condition = generator.condition();
                 generator.line(&format!("if {condition} then break end"));
             }
-            match &continue_label {
-                Some(label) => generator.line(&format!("::{label}::")),
-                // Luau: last statement of the block only.
-                None if generator.version.has_continue() && generator.rng.chance(20) => {
-                    generator.line("continue");
-                }
-                None => {}
+            if generator.rng.chance(20) {
+                generator.line("continue");
             }
         });
     }
 
     fn function_stmt(&mut self) {
-        match self.rng.below(4) {
-            1 => self.dotted_function(),
-            2 if self.version.has_global() => {
-                let name = self.fresh_name();
-                self.line(&format!("global function {name}()"));
-                self.function_body(Varargs::Forbidden);
-                self.callables.push(name);
-            }
-            _ => self.local_function(),
+        if self.rng.below(4) == 1 {
+            self.dotted_function();
+        } else {
+            self.local_function();
         }
     }
 
@@ -252,21 +200,15 @@ impl FullGenerator {
         let name = self.fresh_name();
         let param = self.fresh_name();
         let varargs = if self.rng.chance(40) { Varargs::Allowed } else { Varargs::Forbidden };
-        let generics = if self.version.is_luau() && self.rng.chance(25) { "<T>" } else { "" };
+        let generics = if self.rng.chance(25) { "<T>" } else { "" };
         let vararg_param = match varargs {
-            Varargs::Allowed if self.version.has_named_varargs() && self.rng.chance(50) => {
-                ", ...rest"
-            }
             Varargs::Allowed => ", ...",
             Varargs::Forbidden => "",
         };
-        let signature = if self.version.is_luau() {
-            let annotation = self.type_expr(1);
-            format!("local function {name}{generics}({param}: {annotation}{vararg_param}): number")
-        } else {
-            format!("local function {name}({param}{vararg_param})")
-        };
-        self.line(&signature);
+        let annotation = self.type_expr(1);
+        self.line(&format!(
+            "local function {name}{generics}({param}: {annotation}{vararg_param}): number"
+        ));
         self.function_body(varargs);
         self.callables.push(name);
     }

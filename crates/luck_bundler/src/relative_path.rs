@@ -4,7 +4,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 
 /// `project_root` canonicalized, or made absolute when it doesn't exist.
 ///
-/// An empty root, which `luck bundle main.lua` passes for the entry's parent,
+/// An empty root, which `luck bundle main.luau` passes for the entry's parent,
 /// is the working directory. When that is unavailable too, the root comes back
 /// unchanged and the build goes on, though host paths can then reach the
 /// output.
@@ -66,11 +66,11 @@ mod tests {
     #[test]
     fn path_inside_the_project_root_loses_the_prefix() {
         assert_eq!(
-            make_relative(Path::new("/proj/src/utils.lua"), Path::new("/proj")),
-            "src/utils.lua"
+            make_relative(Path::new("/proj/src/utils.luau"), Path::new("/proj")),
+            "src/utils.luau"
         );
         // A trailing separator on the root must not survive into the path.
-        assert_eq!(make_relative(Path::new("/proj/main.lua"), Path::new("/proj/")), "main.lua");
+        assert_eq!(make_relative(Path::new("/proj/main.luau"), Path::new("/proj/")), "main.luau");
     }
 
     /// A vendored dependency above the root keeps its shape, but nothing from
@@ -78,12 +78,12 @@ mod tests {
     #[test]
     fn path_above_the_project_root_walks_up() {
         assert_eq!(
-            make_relative(Path::new("/work/shared/util.lua"), Path::new("/work/proj/src")),
-            "../../shared/util.lua"
+            make_relative(Path::new("/work/shared/util.luau"), Path::new("/work/proj/src")),
+            "../../shared/util.luau"
         );
         assert_eq!(
-            make_relative(Path::new("/work/sibling/a.lua"), Path::new("/work/proj")),
-            "../sibling/a.lua"
+            make_relative(Path::new("/work/sibling/a.luau"), Path::new("/work/proj")),
+            "../sibling/a.luau"
         );
     }
 
@@ -93,30 +93,30 @@ mod tests {
     #[test]
     fn path_without_a_shared_root_keeps_only_the_file_name() {
         assert_eq!(
-            make_relative(Path::new(r"E:\elsewhere\lib.lua"), Path::new(r"D:\proj")),
-            "lib.lua"
+            make_relative(Path::new(r"E:\elsewhere\lib.luau"), Path::new(r"D:\proj")),
+            "lib.luau"
         );
         assert_eq!(
-            make_relative(Path::new(r"\\server-a\share\lib.lua"), Path::new(r"\\server-b\proj")),
-            "lib.lua"
+            make_relative(Path::new(r"\\server-a\share\lib.luau"), Path::new(r"\\server-b\proj")),
+            "lib.luau"
         );
         assert_eq!(
-            make_relative(Path::new(r"\\server\other\lib.lua"), Path::new(r"\\server\share\proj")),
-            "lib.lua"
+            make_relative(Path::new(r"\\server\other\lib.luau"), Path::new(r"\\server\share\proj")),
+            "lib.luau"
         );
-        assert_eq!(make_relative(Path::new(r"D:\lib.lua"), Path::new(r"\proj")), "lib.lua");
+        assert_eq!(make_relative(Path::new(r"D:\lib.luau"), Path::new(r"\proj")), "lib.luau");
     }
 
     #[cfg(windows)]
     #[test]
     fn path_on_the_same_drive_walks_up() {
         assert_eq!(
-            make_relative(Path::new(r"D:\work\shared\util.lua"), Path::new(r"D:\work\proj")),
-            "../shared/util.lua"
+            make_relative(Path::new(r"D:\work\shared\util.luau"), Path::new(r"D:\work\proj")),
+            "../shared/util.luau"
         );
     }
 
-    /// `luck bundle main.lua` passes the entry's parent, which is empty for a
+    /// `luck bundle main.luau` passes the entry's parent, which is empty for a
     /// bare file name.
     #[test]
     fn empty_project_root_resolves_to_the_working_directory() {
@@ -126,7 +126,7 @@ mod tests {
         assert_eq!(absolute_project_root(Path::new(".")), working_directory);
 
         let root = absolute_project_root(Path::new(""));
-        assert_eq!(make_relative(&root.join("main.lua"), &root), "main.lua");
+        assert_eq!(make_relative(&root.join("main.luau"), &root), "main.luau");
     }
 
     #[test]

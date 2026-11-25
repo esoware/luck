@@ -1,5 +1,10 @@
 use super::{FullGenerator, Varargs};
 
+const BINARY_OPS: [&str; 16] =
+    ["+", "-", "*", "/", "%", "^", "..", "==", "~=", "<", "<=", ">", ">=", "and", "or", "//"];
+
+const UNARY_OPS: [&str; 3] = ["-", "not ", "#"];
+
 impl FullGenerator {
     pub(super) fn condition(&mut self) -> String {
         let lhs = self.expr(1);
@@ -27,19 +32,19 @@ impl FullGenerator {
             3..=5 => {
                 let lhs = self.expr(inner_depth);
                 let rhs = self.expr(inner_depth);
-                let op = self.binary_op();
+                let op = self.rng.pick(&BINARY_OPS);
                 format!("({lhs} {op} {rhs})")
             }
             6 => {
                 let operand = self.expr(inner_depth);
-                let op = self.unary_op();
+                let op = self.rng.pick(&UNARY_OPS);
                 format!("({op}{operand})")
             }
             7 => self.call_expr(inner_depth),
             8 => self.table_expr(inner_depth),
             9 => self.index_expr(),
             10 => self.function_expr(),
-            11 if self.version.is_luau() => self.luau_expr(inner_depth),
+            11 => self.extended_expr(inner_depth),
             12 if self.is_vararg_allowed() => "...".to_owned(),
             _ => {
                 let inner = self.expr(inner_depth);
@@ -50,26 +55,6 @@ impl FullGenerator {
 
     fn is_vararg_allowed(&self) -> bool {
         self.function_varargs.last() == Some(&Varargs::Allowed)
-    }
-
-    fn binary_op(&mut self) -> &'static str {
-        let mut ops =
-            vec!["+", "-", "*", "/", "%", "^", "..", "==", "~=", "<", "<=", ">", ">=", "and", "or"];
-        if self.version.has_floor_div() {
-            ops.push("//");
-        }
-        if self.version.has_bitwise_ops() {
-            ops.extend(["&", "|", "~", "<<", ">>"]);
-        }
-        self.rng.pick(&ops)
-    }
-
-    fn unary_op(&mut self) -> &'static str {
-        let mut ops = vec!["-", "not ", "#"];
-        if self.version.has_bitwise_ops() {
-            ops.push("~");
-        }
-        self.rng.pick(&ops)
     }
 
     fn leaf_expr(&mut self) -> String {
@@ -90,15 +75,10 @@ impl FullGenerator {
             2 => format!("0x{:X}", self.rng.below(0xFFFF)),
             3 => format!("{}e{}", self.rng.one_through(9), self.rng.below(6)),
             4 => format!("{}.5e-{}", self.rng.below(50), self.rng.one_through(3)),
-            5 if self.version.has_hex_floats() => {
-                format!("0x{:x}.8p{}", self.rng.one_through(15), self.rng.below(4))
-            }
-            6 if self.version.has_binary_literals() => {
-                format!("0b{:b}", self.rng.below(256))
-            }
-            7 if self.version.has_underscore_separators() => "1_000_000".to_owned(),
-            8 if self.version.has_luau_integer_literals() => "1_000_000i".to_owned(),
-            9 if self.version.has_luau_integer_literals() => match self.rng.below(3) {
+            6 => format!("0b{:b}", self.rng.below(256)),
+            7 => "1_000_000".to_owned(),
+            8 => "1_000_000i".to_owned(),
+            9 => match self.rng.below(3) {
                 0 => format!("{}i", self.rng.below(10_000)),
                 1 => format!("0x{:X}i", self.rng.below(0xFFFF)),
                 _ => format!("0b{:b}i", self.rng.below(256)),
@@ -113,12 +93,11 @@ impl FullGenerator {
             1 => "'plain single'",
             2 => "\"escaped\\ttab\\nline\\\\slash\"",
             3 => "\"dec\\101scape\"",
-            4 if self.version.has_hex_escape() => "\"hex\\x41escape\"",
-            5 if self.version.has_whitespace_escape() => "\"skip\\z   joined\"",
-            6 if self.version.has_unicode_escape() => "\"uni\\u{48}escape\"",
+            4 => "\"hex\\x41escape\"",
+            5 => "\"skip\\z   joined\"",
+            6 => "\"uni\\u{48}escape\"",
             7 => "[[long bracket string]]",
-            8 => "[==[leveled ]] bracket]==]",
-            _ => "\"fallback\"",
+            _ => "[==[leveled ]] bracket]==]",
         }
     }
 
@@ -205,7 +184,7 @@ impl FullGenerator {
         }
     }
 
-    fn luau_expr(&mut self, inner_depth: usize) -> String {
+    fn extended_expr(&mut self, inner_depth: usize) -> String {
         match self.rng.below(6) {
             0 => {
                 let operand = self.expr(inner_depth);
@@ -225,13 +204,13 @@ impl FullGenerator {
                 let second = self.expr(0);
                 format!("`count {{{first}}}, next {{{second}}}`")
             }
-            4 if self.version.has_explicit_type_instantiation() => {
+            4 => {
                 let callee = self.known_callable();
                 let type_arg = self.leaf_type();
                 let arg = self.expr(inner_depth);
                 format!("{callee}<<{type_arg}>>({arg})")
             }
-            5 if self.version.has_explicit_type_instantiation() => {
+            5 => {
                 let receiver = self.known_name();
                 let type_arg = self.leaf_type();
                 format!("{receiver}:clone<<{type_arg}>>()")

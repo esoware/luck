@@ -73,11 +73,11 @@ mod tests {
     #[test]
     fn strip_verbatim_prefix_gives_the_plain_form() {
         for (verbatim, plain) in [
-            (r"\\?\C:\Users\user\main.lua", r"C:\Users\user\main.lua"),
+            (r"\\?\C:\Users\user\main.luau", r"C:\Users\user\main.luau"),
             (r"\\?\C:\", r"C:\"),
-            (r"\\?\UNC\server\share\main.lua", r"\\server\share\main.lua"),
-            (r"C:\Users\user\main.lua", r"C:\Users\user\main.lua"),
-            (r"\\server\share\main.lua", r"\\server\share\main.lua"),
+            (r"\\?\UNC\server\share\main.luau", r"\\server\share\main.luau"),
+            (r"C:\Users\user\main.luau", r"C:\Users\user\main.luau"),
+            (r"\\server\share\main.luau", r"\\server\share\main.luau"),
         ] {
             assert_eq!(strip_verbatim_prefix(PathBuf::from(verbatim)).as_os_str(), plain);
         }
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn strip_verbatim_prefix_keeps_a_volume_guid_path() {
-        let volume_path = r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\src\main.lua";
+        let volume_path = r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\src\main.luau";
         let stripped = strip_verbatim_prefix(PathBuf::from(volume_path));
         assert_eq!(stripped.as_os_str(), volume_path);
         assert!(stripped.is_absolute());

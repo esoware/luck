@@ -1,7 +1,7 @@
 //! # `luck_minifier`
 //!
-//! Lua and Luau minification on the arena tree, in place, as `oxc_minifier`
-//! minifies JavaScript.
+//! Luau minification on the arena tree, in place, as `oxc_minifier` minifies
+//! JavaScript.
 //!
 //! [`minify`] parses source into the caller's arena and [`minify_chunk`]
 //! takes a tree. Both rewrite the tree in place and print it once, with
@@ -9,7 +9,7 @@
 //!
 //! The work runs in three phases:
 //!
-//! - **Type stripping**, a Luau tree's annotations, casts, and `type`
+//! - **Type stripping**, a tree's annotations, casts, and `type`
 //!   declarations gone before anything else reads it.
 //! - **Compression**, which reads the tree's bindings from `luck_semantic`'s
 //!   scoping and runs passes of an in-place walk until one changes nothing:
@@ -21,8 +21,7 @@
 //!   top, and the passes run again on what that leaves.
 //! - **Renaming**, which gives locals the shortest names their scopes allow,
 //!   from a fresh analysis of the tree and an alphabet in the order its
-//!   characters are frequent in minified Lua, as `oxc_mangler` names them,
-//!   and labels the shortest their functions allow.
+//!   characters are frequent in minified Luau, as `oxc_mangler` names them.
 //!
 //! A rewrite asks `luck_value` what an expression evaluates to, whether it's
 //! truthy, and whether evaluating it can do anything, with the scoping
@@ -37,11 +36,10 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_minifier::TransformConfig;
-//! use luck_token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
 //! let config = TransformConfig::default();
-//! let output = luck_minifier::minify(&allocator, b"return 1 + 2", LuaVersion::Lua54, &config);
+//! let output = luck_minifier::minify(&allocator, b"return 1 + 2", &config);
 //! assert_eq!(output.as_deref(), Ok(&b"return 3"[..]));
 //! ```
 

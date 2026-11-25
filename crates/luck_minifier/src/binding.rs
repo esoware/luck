@@ -2,20 +2,15 @@
 //! binding beyond it: how its declaration fixes it, and how `luck_value`
 //! tells a local's read from a global's.
 
-use luck_ast::{
-    Chunk, LocalAssignment, LocalAssignmentKind, LocalFunction, Name, NameIndex, TreeCounts,
-};
+use luck_ast::{Block, LocalAssignment, LocalAssignmentKind, Name, NameIndex, TreeCounts};
 use luck_semantic::{Scoping, SemanticBuilder};
-use luck_token::LuaVersion;
 use luck_value::ValueContext;
 
 pub(crate) const METHOD_RECEIVER_NAME: &str = "self";
 
-pub(crate) const IMPLICIT_VARARG_TABLE_NAME: &str = "arg";
-
 /// `chunk`'s scoping, which a rewrite reads its bindings from, in the tables
 /// of `reused`, an earlier analysis', when there is one.
-pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts, reused: Option<Scoping>) -> Scoping {
+pub(crate) fn analyze(chunk: &Block<'_>, counts: TreeCounts, reused: Option<Scoping>) -> Scoping {
     let builder = SemanticBuilder::new().with_counts(counts);
     let built = match reused {
         Some(scoping) => builder.rebuild(chunk, scoping),
@@ -31,10 +26,6 @@ pub(crate) fn analyze(chunk: &Chunk<'_>, counts: TreeCounts, reused: Option<Scop
 pub(crate) struct ResolvedNames<'scoping>(pub &'scoping Scoping);
 
 impl ValueContext for ResolvedNames<'_> {
-    fn version(&self) -> LuaVersion {
-        self.0.version()
-    }
-
     fn is_global_reference(&self, name: &Name<'_>) -> bool {
         !self.0.resolves_to_local(name)
     }
@@ -59,30 +50,8 @@ impl NameIndexes {
     }
 }
 
-/// Whether `name` declares the `_ENV` upvalue every global read and write
-/// goes through. Outside 5.2+ the name binds an ordinary local, so pinning
-/// it would cost bytes for nothing.
-pub(crate) fn declares_env(name: &Name<'_>, scoping: &Scoping) -> bool {
-    scoping.symbol_of(name).is_some_and(|symbol| scoping.is_env_binding(symbol))
-}
-
-/// Whether a `local` declaration binds a name with an attribute (`<close>`
-/// runs `__close` at scope exit and `<const>` affects validity) or a 5.2+
-/// `_ENV`, which redirects global lookup for everything after it.
-pub(crate) fn has_attributed_or_env_name(local: &LocalAssignment<'_>, scoping: &Scoping) -> bool {
-    local.attribute.is_some()
-        || local.names.iter().any(|attributed| {
-            attributed.attribute.is_some() || declares_env(&attributed.name, scoping)
-        })
-}
-
 /// Whether no transform may reshape, merge away, or move a `local`
-/// declaration: an export, a `const`, or one that
-/// [`has_attributed_or_env_name`].
-pub(crate) fn has_fixed_binding(local: &LocalAssignment<'_>, scoping: &Scoping) -> bool {
-    local.kind != LocalAssignmentKind::Local || has_attributed_or_env_name(local, scoping)
-}
-
-pub(crate) fn is_droppable_function(local_function: &LocalFunction<'_>, scoping: &Scoping) -> bool {
-    !local_function.kind.is_exported() && !declares_env(&local_function.name, scoping)
+/// declaration: an export or a `const`.
+pub(crate) fn has_fixed_binding(local: &LocalAssignment<'_>) -> bool {
+    local.kind != LocalAssignmentKind::Local
 }

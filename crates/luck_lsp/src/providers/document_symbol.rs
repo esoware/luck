@@ -13,7 +13,7 @@ use luck_token::Span;
 use crate::document::{DocumentState, span_text};
 
 pub(crate) fn document_symbols(document: &DocumentState) -> Vec<DocumentSymbol> {
-    outline(document, &document.parse().chunk.block)
+    outline(document, &document.parse().chunk)
 }
 
 fn outline(document: &DocumentState, block: &Block<'_>) -> Vec<DocumentSymbol> {
@@ -47,21 +47,14 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
                 &local_function.body,
                 local_function.span,
             ),
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => self.push_named_function(
-                &global_function.name,
-                &global_function.body,
-                global_function.span,
-            ),
-            // Luau
             Statement::TypeDeclaration(declaration) => {
                 if let TypeDeclarationValue::TypeFunction(body) = &declaration.value {
                     self.push_named_function(&declaration.name, body, declaration.span);
                 }
             }
             Statement::LocalAssignment(local) => {
-                for (index, attributed) in local.names.iter().enumerate() {
-                    let Some(name) = attributed.name.written() else {
+                for (index, local_name) in local.names.iter().enumerate() {
+                    let Some(name) = local_name.name.written() else {
                         continue;
                     };
                     if let Some(Expression::FunctionDef(function)) = local.exprs.get(index) {
@@ -70,7 +63,7 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
                             SymbolKind::FUNCTION,
                             &function.body,
                             local.span,
-                            attributed.name.span,
+                            local_name.name.span,
                         );
                         continue;
                     }
@@ -81,7 +74,7 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
                         tags: None,
                         deprecated: None,
                         range: self.document.range(local.span),
-                        selection_range: self.document.range(attributed.name.span),
+                        selection_range: self.document.range(local_name.name.span),
                         children: None,
                     });
                 }
@@ -95,10 +88,6 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
             | Statement::GenericFor(_) => self.walk_stmt(stmt),
             Statement::FunctionCall(_)
             | Statement::Return(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
@@ -201,13 +190,11 @@ fn format_params(body: &FunctionBody<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use super::*;
     use crate::fixtures::document;
 
-    fn symbols_of(text: &str, target: LuaTarget) -> Vec<DocumentSymbol> {
-        document_symbols(&document(text, target))
+    fn symbols_of(text: &str) -> Vec<DocumentSymbol> {
+        document_symbols(&document(text))
     }
 
     #[test]
@@ -218,7 +205,6 @@ M.foo = function()
   local x = 1
 end
 ",
-            LuaTarget::Lua54,
         );
         let foo = symbols.first().expect("the assigned function is outlined");
         assert_eq!(
@@ -230,7 +216,7 @@ end
     #[test]
     fn a_recovered_function_name_yields_no_empty_symbol() {
         // LSP: a symbol's name "must not be an empty string".
-        let symbols = symbols_of("local function (x) end\n", LuaTarget::Lua54);
+        let symbols = symbols_of("local function (x) end\n");
         assert!(
             symbols.iter().all(|symbol| !symbol.name.trim().is_empty()),
             "a nameless function being typed must not produce an empty symbol: {symbols:?}"
@@ -238,17 +224,17 @@ end
     }
 
     #[test]
-    fn lua55_global_function_is_outlined() {
+    fn a_type_function_is_outlined() {
         let symbols = symbols_of(
             "\
-global function setup()
+type function setup(t)
+  return t
 end
 ",
-            LuaTarget::Lua55,
         );
         assert!(
             symbols.iter().any(|symbol| symbol.name == "setup"),
-            "a `global function` is a function in the outline: {symbols:?}"
+            "a `type function` is a function in the outline: {symbols:?}"
         );
     }
 }

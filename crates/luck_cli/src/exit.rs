@@ -3,7 +3,6 @@ use std::process::ExitCode;
 use std::slice;
 
 use luck_diagnostics::FileDiagnostics;
-use luck_token::LuaVersion;
 
 use crate::reporter::print_files;
 
@@ -42,14 +41,13 @@ pub(crate) fn operation_error(message: impl Display) -> Exit {
     report_error(message, Exit::Failure)
 }
 
-pub(crate) fn fail_with_diags(files: &[FileDiagnostics], version: LuaVersion) -> Exit {
-    print_files(files, version);
+pub(crate) fn fail_with_diags(files: &[FileDiagnostics]) -> Exit {
+    print_files(files);
     Exit::Failure
 }
 
 /// A `luck.json` that doesn't load is a usage error.
 pub(crate) fn config_error(file: &FileDiagnostics) -> Exit {
-    // Lua 5.4 ends a line where JSON5 does, but at the rare LS and PS.
-    print_files(slice::from_ref(file), LuaVersion::Lua54);
+    print_files(slice::from_ref(file));
     Exit::Usage
 }

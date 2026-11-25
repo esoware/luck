@@ -22,7 +22,7 @@ impl Rule for SettingGlobal {
                 continue;
             }
             // Writing a known global like `print` isn't a forgotten `local`.
-            if semantic.is_defined_global(reference) {
+            if semantic.is_known_global_name(reference.name) {
                 continue;
             }
             let name = tree.name(reference.name);
@@ -44,54 +44,19 @@ impl Rule for SettingGlobal {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("global x = 1", LuaTarget::Lua55),
-        (
-            "\
-global x
-x = 1",
-            LuaTarget::Lua55,
-        ),
-        (
-            "\
-global function f() end
-f = nil",
-            LuaTarget::Lua55,
-        ),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 print = print
 _ = 1",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local counter
 counter = 1",
-            LuaTarget::Lua54,
-        ),
-        // `x` is a field of the local `_ENV`.
-        (
-            "\
-local _ENV = {}
-x = 1",
-            LuaTarget::Lua54,
-        ),
-        // `global *` declares every free name.
-        (
-            "\
-global *
-x = 1",
-            LuaTarget::Lua55,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[("counter = 1", LuaTarget::Lua54)];
+    const FAIL: &[&str] = &["counter = 1"];
 
     #[test]
     fn test() {

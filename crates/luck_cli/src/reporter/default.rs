@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_diagnostics::{Diagnostic, Severity};
-use luck_token::{LuaVersion, Span, chunk_start};
+use luck_token::Span;
 
 use super::{Reporter, SourceFile};
 
@@ -26,9 +26,9 @@ impl Reporter for DefaultReporter {
             }
             return;
         };
-        let snippet = Snippet::new(text, file.version);
+        let source = Source::from(renderable(text));
         let is_too_long = |span: Span| {
-            let line = snippet.source.get_byte_line(snippet.shifted(span).start);
+            let line = source.get_byte_line(Range::<usize>::from(span).start);
             line.is_some_and(|(found, _, _)| found.len() > MAX_RENDERABLE_LINE_CHARS)
         };
         for diag in diags {
@@ -40,39 +40,19 @@ impl Reporter for DefaultReporter {
                 write_compact(file.label, diag, output);
                 continue;
             }
-            let cache = (file.label, &snippet.source);
+            let cache = (file.label, &source);
             // A failed write has nowhere to be reported.
-            let _ = report(file.label, diag, span, &snippet).write(cache, &mut *output);
+            let _ = report(file.label, diag, span).write(cache, &mut *output);
         }
-    }
-}
-
-/// A file's text as ariadne reads it.
-struct Snippet {
-    source: Source<String>,
-    /// How far spans shift to reach `source`, which drops a BOM the file's
-    /// dialect skips.
-    span_shift: usize,
-}
-
-impl Snippet {
-    fn new(text: &[u8], version: LuaVersion) -> Self {
-        let span_shift = chunk_start(text, version);
-        Self { source: Source::from(renderable(&text[span_shift..], version)), span_shift }
-    }
-
-    fn shifted(&self, span: Span) -> Range<usize> {
-        let Range { start, end } = Range::<usize>::from(span);
-        start.saturating_sub(self.span_shift)..end.saturating_sub(self.span_shift)
     }
 }
 
 /// `bytes` as text ariadne renders at the same byte offsets.
 ///
 /// Each byte that isn't UTF-8 is a `?`, one column as a one-byte encoding
-/// shows it, and only `version`'s line breaks still end a line, since
-/// ariadne's own set adds VT, FF, NEL, LS, and PS and counts LFCR as two.
-fn renderable(bytes: &[u8], version: LuaVersion) -> String {
+/// shows it, and only an LF still ends a line, since ariadne's own set adds
+/// CR, VT, FF, NEL, LS, and PS.
+fn renderable(bytes: &[u8]) -> String {
     let mut rendered = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         let text = chunk.valid();
@@ -87,9 +67,9 @@ fn renderable(bytes: &[u8], version: LuaVersion) -> String {
                 0xC2 if next(1) == Some(0x85) => "  ",
                 // LS and PS
                 0xE2 if next(1) == Some(0x80) && matches!(next(2), Some(0xA8 | 0xA9)) => "   ",
-                // Luau
-                b'\r' if !version.has_lfcr_line_break() && next(1) != Some(b'\n') => " ",
-                b'\n' if version.has_lfcr_line_break() && next(1) == Some(b'\r') => "\r\n",
+                // A CRLF stays, since ariadne ends one line there, as Luau
+                // does at its LF.
+                b'\r' if next(1) != Some(b'\n') => " ",
                 _ => {
                     index += 1;
                     continue;
@@ -112,23 +92,26 @@ fn report<'label>(
     label: &'label str,
     diag: &Diagnostic,
     span: Span,
-    snippet: &Snippet,
 ) -> Report<'label, (&'label str, Range<usize>)> {
     let kind = match diag.severity {
         Severity::Error => ReportKind::Error,
         Severity::Warning => ReportKind::Warning,
     };
-    let primary = (label, snippet.shifted(span));
-    let mut builder = Report::build(kind, primary.clone())
+    let mut places: Vec<(Span, &str)> = iter::once((span, &*diag.message))
+        .chain(diag.labels.iter().map(|other| (other.span, &*other.message)))
+        .collect();
+    // ariadne starts a new snippet at a label that ends on an earlier line
+    // than the one before it, and heads each snippet in the file with the
+    // primary location, so a label that ends first goes in first.
+    places.sort_by_key(|(place, _)| place.end.saturating_sub(1).max(place.start));
+    let labels = places.into_iter().map(|(place, message)| {
+        Label::new((label, Range::<usize>::from(place))).with_message(message)
+    });
+    let mut builder = Report::build(kind, (label, Range::<usize>::from(span)))
         .with_code(diag.code)
         .with_message(&diag.message)
         .with_config(Config::default().with_index_type(IndexType::Byte))
-        .with_label(Label::new(primary).with_message(&diag.message));
-    for (order, other) in (1..).zip(&diag.labels) {
-        let place = (label, snippet.shifted(other.span));
-        builder =
-            builder.with_label(Label::new(place).with_message(&other.message).with_order(order));
-    }
+        .with_labels(labels);
     if let Some(help) = &diag.help {
         builder = builder.with_help(help);
     }
@@ -165,7 +148,7 @@ mod tests {
 
     fn rendered(label: &str, text: Option<&[u8]>, diags: &[Diagnostic]) -> String {
         let mut output = Vec::new();
-        let file = SourceFile { label, text, version: LuaVersion::Lua54 };
+        let file = SourceFile { label, text };
         DefaultReporter.render(file, diags, &mut output);
         String::from_utf8(output).expect("the report is UTF-8")
     }
@@ -177,10 +160,29 @@ mod tests {
             "expected `end` to close `function`, found end of file",
         )
         .with_label(Span::new(6, 14), "unclosed `function`");
-        let text = rendered("test.lua", Some(b"local function f()"), &[diag]);
+        let text = rendered("test.luau", Some(b"local function f()"), &[diag]);
         assert!(text.contains("E008"), "{text}");
         assert!(text.contains("expected `end` to close `function`"), "{text}");
         assert!(text.contains("unclosed `function`"), "{text}");
+    }
+
+    #[test]
+    fn a_label_before_the_problem_shares_its_snippet() {
+        let source = "\
+local a = require(\"./x\")
+local b = require(\"./x\")
+";
+        let diag = Diagnostic::w001(Span::new(35, 49), "./x", Span::new(10, 24));
+        let text = rendered("twice.luau", Some(source.as_bytes()), &[diag]);
+        let headers: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.split_once("twice.luau:"))
+            .filter_map(|(_, place)| place.split_whitespace().next())
+            .collect();
+        assert_eq!(headers, ["2:11"], "{text}");
+        let first = text.find("first required here");
+        let again = text.rfind("required multiple times");
+        assert!(first.is_some_and(|first| again.is_some_and(|again| first < again)), "{text}");
     }
 
     #[test]
@@ -191,13 +193,13 @@ mod tests {
         let offset = huge.len() - 1;
         let diag = Diagnostic::e008(Span::from_indices(offset, offset + 1), "boom")
             .with_label(Span::new(0, 5), "here");
-        let text = rendered("big.lua", Some(huge.as_bytes()), &[diag]);
+        let text = rendered("big.luau", Some(huge.as_bytes()), &[diag]);
         assert_eq!(
             text,
             format!(
                 "\
-[E008] error: boom (big.lua: byte {offset})
-  here (big.lua: byte 0)
+[E008] error: boom (big.luau: byte {offset})
+  here (big.luau: byte 0)
 "
             ),
             "{text}"
@@ -207,12 +209,12 @@ mod tests {
     #[test]
     fn unreadable_file_uses_compact_rendering_with_its_help() {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "no such file");
-        let diag = Diagnostic::e010("gone.lua", &io_error);
-        let text = rendered("gone.lua", None, &[diag]);
+        let diag = Diagnostic::e010("gone.luau", &io_error);
+        let text = rendered("gone.luau", None, &[diag]);
         assert_eq!(
             text,
             "\
-[E010] error: cannot read file `gone.lua`: no such file (gone.lua)
+[E010] error: cannot read file `gone.luau`: no such file (gone.luau)
 help: check that the file exists and is readable
 ",
             "{text}"
@@ -220,32 +222,25 @@ help: check that the file exists and is readable
     }
 
     #[test]
-    fn only_lua_line_breaks_still_end_a_line_at_the_same_offsets() {
-        let render = |text: &str, version| renderable(text.as_bytes(), version);
-        assert_eq!(
-            render("a\x0Bb\x0Cc\u{85}d\u{2028}e\u{2029}f", LuaVersion::Lua54),
-            "a b c  d   e   f"
-        );
-        assert_eq!(render("a\n\rb\r\nc\rd", LuaVersion::Lua54), "a\r\nb\r\nc\rd");
-        assert_eq!(render("a\n\rb\r\nc\rd", LuaVersion::Luau), "a\n b\r\nc d");
-        assert_eq!(render("\u{e9}\u{2027}\u{c5}", LuaVersion::Lua54), "\u{e9}\u{2027}\u{c5}");
+    fn only_luau_line_breaks_still_end_a_line_at_the_same_offsets() {
+        let render = |text: &str| renderable(text.as_bytes());
+        assert_eq!(render("a\x0Bb\x0Cc\u{85}d\u{2028}e\u{2029}f"), "a b c  d   e   f");
+        assert_eq!(render("a\n\rb\r\nc\rd"), "a\n b\r\nc d");
+        assert_eq!(render("\u{e9}\u{2027}\u{c5}"), "\u{e9}\u{2027}\u{c5}");
     }
 
     #[test]
     fn a_byte_that_is_not_utf8_renders_as_one_mark_at_its_offset() {
-        assert_eq!(
-            renderable(b"-- caf\xE9\x0B\xC2\n\xFF\xE2\x80", LuaVersion::Lua51),
-            "-- caf? ?\n???"
-        );
+        assert_eq!(renderable(b"-- caf\xE9\x0B\xC2\n\xFF\xE2\x80"), "-- caf? ?\n???");
         let diag = Diagnostic::e008(Span::new(17, 22), "boom");
-        let text = rendered("latin1.lua", Some(b"local s = 'caf\xE9' local"), &[diag]);
-        assert!(text.contains("latin1.lua:1:18"), "{text}");
+        let text = rendered("latin1.luau", Some(b"local s = 'caf\xE9' local"), &[diag]);
+        assert!(text.contains("latin1.luau:1:18"), "{text}");
     }
 
     #[test]
     fn a_short_line_renders_its_snippet() {
         let diag = Diagnostic::e008(Span::new(6, 7), "boom");
-        let text = rendered("small.lua", Some(b"local x = 1\n"), &[diag]);
-        assert!(text.contains("small.lua:1:7"), "{text}");
+        let text = rendered("small.luau", Some(b"local x = 1\n"), &[diag]);
+        assert!(text.contains("small.luau:1:7"), "{text}");
     }
 }

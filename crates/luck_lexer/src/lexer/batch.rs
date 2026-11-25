@@ -1,8 +1,8 @@
 use luck_simd::DynCpu;
-use luck_token::{Keywords, Span, Token, TokenKind};
+use luck_token::{Span, Token, TokenKind};
 
 use super::Lexer;
-use crate::window::{Classify, Planes, Tables, WINDOW_BYTES, WindowBytes};
+use crate::window::{Classify, Planes, WINDOW_BYTES, WindowBytes};
 
 /// A batch's tokens, which stay in the cache while the parser reads them.
 pub(super) const BUFFER_TOKENS: usize = 256;
@@ -38,8 +38,6 @@ impl Lexer<'_> {
     fn fill_buffer(&mut self, cpu: impl Classify) {
         self.buffered = 0;
         self.taken = 0;
-        let tables = Tables::of(self.version);
-        let keywords = Keywords::of(self.version);
         while self.buffered + WINDOW_BYTES < BUFFER_TOKENS {
             // A comment waiting for its token, or an interpolation's braces,
             // which `scan_token` counts, take the scalar lexer.
@@ -49,8 +47,8 @@ impl Lexer<'_> {
                 let base = self.cursor.position();
                 let bytes = window_bytes(self.cursor.rest());
                 let (head, _) = bytes.split_first_chunk().expect("72 bytes");
-                let planes = cpu.classify(head, tables);
-                if !self.emit_window(base, &bytes, planes, keywords) {
+                let planes = cpu.classify(head);
+                if !self.emit_window(base, &bytes, planes) {
                     continue;
                 }
             }
@@ -75,13 +73,7 @@ impl Lexer<'_> {
     /// or the window ended inside it.
     #[expect(clippy::inline_always, reason = "the batch loop's body")]
     #[inline(always)]
-    fn emit_window(
-        &mut self,
-        base: usize,
-        bytes: &WindowBytes,
-        planes: Planes,
-        keywords: &Keywords,
-    ) -> bool {
+    fn emit_window(&mut self, base: usize, bytes: &WindowBytes, planes: Planes) -> bool {
         let Planes { whitespace, name, digit, line_break, punct, continuation, dot } = planes;
         // The window opens at the cursor, where no name runs on from before.
         let name_starts = name & !(name << 1);
@@ -127,7 +119,7 @@ impl Lexer<'_> {
             } else if (digit >> offset) & 1 == 1 {
                 TokenKind::Number
             } else {
-                keywords.kind(u64::from_le_bytes(*first_eight), name_length)
+                TokenKind::of_name(u64::from_le_bytes(*first_eight), name_length)
             };
             let start = base + index;
             self.buffer[self.buffered] = Token {
@@ -210,7 +202,6 @@ const fn punct_kind(byte: u8) -> TokenKind {
         b'{' => TokenKind::LeftBrace,
         b'|' => TokenKind::Pipe,
         b'}' => TokenKind::RightBrace,
-        b'~' => TokenKind::Tilde,
         _ => TokenKind::Identifier,
     }
 }

@@ -200,7 +200,7 @@ impl Renamer<'_> {
     /// candidate it can wear.
     ///
     /// `oxc_mangler` then hands each length's names out again in slot order,
-    /// after Closure Compiler's `RenameVars`, which compresses worse on Lua.
+    /// after Closure Compiler's `RenameVars`, which compresses worse on Luau.
     fn name_slots(&self, choice: &mut Choice, slot_count: usize, pool: &mut CandidatePool<'_, '_>) {
         let Self { renamed: bindings, scopes, .. } = self;
         let starts = &mut choice.declared_starts;
@@ -266,12 +266,12 @@ impl Reads<'_> {
     }
 }
 
-/// Gives each slot that asks the first candidate it can wear: no keyword,
-/// no other slot's, and none the chunk reads as a global in or below a
-/// scope one of the slot's bindings is declared in.
+/// Gives each slot that asks the first candidate it can wear: no other
+/// slot's, and none the chunk reads as a global in or below a scope one of
+/// the slot's bindings is declared in.
 #[derive(Default)]
 struct Picker {
-    /// Every candidate below it is a keyword, another slot's, or passed over.
+    /// Every candidate below it is another slot's or passed over.
     next: usize,
     /// The candidates below `next` a slot passed over for a global it would
     /// capture, which a later slot may still wear, ascending.
@@ -296,9 +296,6 @@ impl Picker {
             let index = self.next;
             self.next = index + 1;
             let candidate = pool.get(index);
-            if candidate.is_reserved {
-                continue;
-            }
             if reads.is_read_below(candidate.name_id, declared_scopes) {
                 self.passed_over.push((index, candidate.name_id));
                 continue;
@@ -312,12 +309,10 @@ impl Picker {
 mod tests {
     use std::fmt::Write as _;
 
-    use luck_token::LuaVersion;
-
     use crate::fixtures::{RENAMING, minify_with};
 
     fn apply(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &RENAMING)
+        minify_with(source, &RENAMING)
     }
 
     #[test]

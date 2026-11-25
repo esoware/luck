@@ -18,7 +18,7 @@ impl<'ast> Parser<'ast> {
         let outer = self.begin_operand();
         let start = self.token.span.start;
         let mut lhs = self.parse_prefix();
-        while let Some(op) = self.peek_binary_op() {
+        while let Some(op) = BinOp::from_token_kind(self.peek()) {
             let precedence = op.precedence().0;
             if precedence < min_precedence {
                 break;
@@ -50,8 +50,8 @@ impl<'ast> Parser<'ast> {
         let links_start = self.scratch.binary_links.len();
         let operand = self.parse_expr(operand_precedence);
         self.scratch.binary_links.push(BinaryLink::new(op, operand));
-        while let Some(next_op) =
-            self.peek_binary_op().filter(|next_op| next_op.precedence().0 == precedence)
+        while let Some(next_op) = BinOp::from_token_kind(self.peek())
+            .filter(|next_op| next_op.precedence().0 == precedence)
         {
             self.advance();
             let next_operand = self.parse_expr(operand_precedence);
@@ -61,14 +61,6 @@ impl<'ast> Parser<'ast> {
             OneOrMore::split_off_in(&mut self.scratch.binary_links, links_start, self.allocator);
         let span = Span::new(start, self.previous_span.end);
         Expression::new_binary_op(span, first, links, self.allocator)
-    }
-
-    #[inline]
-    fn peek_binary_op(&self) -> Option<BinOp> {
-        let op = BinOp::from_token_kind(self.peek())?;
-        // Luau's lexer emits `&` and `|` for the type grammar only; they
-        // aren't binary operators there.
-        (!op.is_bitwise() || self.version.has_bitwise_ops()).then_some(op)
     }
 
     pub(super) fn parse_expr_list(&mut self) -> List<'ast, Expression<'ast>> {
@@ -95,7 +87,7 @@ impl<'ast> Parser<'ast> {
         let primary = self.parse_primary_expr();
         // Casts apply to any simpleexp (`1 :: number`, `{} :: Foo`), not just
         // suffix chains, so they're parsed here.
-        if self.is_at(TokenKind::DoubleColon) && self.version.has_type_syntax() {
+        if self.is_at(TokenKind::DoubleColon) {
             return self.parse_type_cast(primary, level, start);
         }
         primary
@@ -156,15 +148,11 @@ impl<'ast> Parser<'ast> {
                 self.parse_table_constructor()
                     .map_or(Expression::Error(open), Expression::TableConstructor)
             }
-            TokenKind::Function => self.parse_function_def(),
+            // `simpleexp ::= attributes 'function' funcbody`
+            TokenKind::Function | TokenKind::At => self.parse_function_def(),
             TokenKind::DotDotDot => self.parse_vararg(),
-            // Luau
             TokenKind::Integer => Expression::Integer(self.advance_integer()),
-            // Luau: `simpleexp ::= attributes 'function' funcbody`
-            TokenKind::At if self.version.has_function_attributes() => self.parse_function_def(),
-            // Luau
-            TokenKind::If if self.version.has_if_exprs() => self.parse_if_expr(),
-            // Luau
+            TokenKind::If => self.parse_if_expr(),
             TokenKind::InterpolatedStringBegin | TokenKind::InterpolatedStringSimple => {
                 self.parse_interpolated_string()
             }
@@ -181,8 +169,8 @@ impl<'ast> Parser<'ast> {
     }
 
     /// The tree keeps the parentheses around a call or `...`, which they
-    /// truncate to one value, and around a Luau integer literal, whose
-    /// negation they keep from reading as a negative literal. It records the
+    /// truncate to one value, and around an integer literal, whose negation
+    /// they keep from reading as a negative literal. It records the
     /// rest and reads what they hold as if they weren't there, so they open
     /// no level.
     fn parse_parenthesized(&mut self) -> Expression<'ast> {
@@ -316,8 +304,8 @@ impl<'ast> Parser<'ast> {
                 Suffix::Index { span: open.merge(close), index }
             }
             TokenKind::Colon => self.parse_method_call(),
-            // Luau: explicit type-parameter instantiation is a suffix, so it
-            // composes with field access, indexing, and calls.
+            // Explicit type instantiation is a suffix, so it composes with
+            // field access, indexing, and calls.
             TokenKind::Less => {
                 let open = self.token.span;
                 let (type_args, close) = self.parse_type_instantiation();
@@ -344,13 +332,11 @@ impl<'ast> Parser<'ast> {
 
     #[inline]
     fn is_at_type_instantiation(&self) -> bool {
-        self.is_at(TokenKind::Less)
-            && self.version.has_explicit_type_instantiation()
-            && self.peek_next() == TokenKind::Less
+        self.is_at(TokenKind::Less) && self.peek_next() == TokenKind::Less
     }
 
-    /// Parse Luau's `<<T, U>>`, returning the type arguments and the span of
-    /// the final `>`.
+    /// Parse `<<T, U>>`, returning the type arguments and the span of the
+    /// final `>`.
     fn parse_type_instantiation(&mut self) -> (TypeArgs<'ast>, Span) {
         let open = self.advance(); // first `<`
         let type_args = self.parse_type_args(); // second `<` through first `>`
@@ -475,12 +461,9 @@ impl<'ast> Parser<'ast> {
     fn parse_function_args(&mut self) -> FunctionArgs<'ast> {
         match self.peek() {
             TokenKind::LeftParen => {
-                // 5.1 and Luau reject a call whose `(` starts on a new line
-                // ("ambiguous syntax: function call x new statement"); 5.2+
-                // dropped the restriction.
-                if self.token.has_line_break_before
-                    && self.version.has_ambiguous_call_newline_error()
-                {
+                // Luau rejects a call whose `(` starts on a new line ("ambiguous
+                // syntax: function call x new statement").
+                if self.token.has_line_break_before {
                     self.report_ambiguous_call();
                 }
                 let open = self.advance();
@@ -551,8 +534,8 @@ impl<'ast> Parser<'ast> {
         let open = self.advance(); // `{`
         self.open(Closer::Brace);
 
-        // Every Lua version rejects a leading separator (`{;}`, `{, 1}`), and
-        // so does Luau. Consume it so parsing recovers.
+        // Luau rejects a leading separator (`{;}`, `{, 1}`). Consume it so
+        // parsing recovers.
         if matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon) {
             self.report_leading_separator();
         }

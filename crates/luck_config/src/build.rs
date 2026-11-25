@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use luck_minifier::TransformConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::LuaTarget;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::{EntryConfig, ProfileOverrides};
@@ -12,7 +11,6 @@ use crate::project::Project;
 /// One bundle `luck build` writes, with the settings its profile gives it.
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
-    pub target: LuaTarget,
     pub entry: PathBuf,
     pub output: PathBuf,
     pub minify: bool,
@@ -60,7 +58,6 @@ impl BuildKeys {
                 return Err(format!("entry file not found: `{}`", entry.display()));
             }
             Ok(BuildConfig {
-                target: project.target_for(Some(&entry)),
                 entry,
                 output,
                 minify,
@@ -146,11 +143,11 @@ mod tests {
 
     #[test]
     fn output_paths_collide_through_a_directory_not_on_disk() {
-        let directory = project_with(&[("main.lua", "return 1")]);
-        let entry = directory.path().join("main.lua");
-        let same_as_entry = directory.path().join("gone/../main.lua");
+        let directory = project_with(&[("main.luau", "return 1")]);
+        let entry = directory.path().join("main.luau");
+        let same_as_entry = directory.path().join("gone/../main.luau");
         assert!(check_output_paths([&entry], [&same_as_entry]).is_err());
-        let spare = directory.path().join("out/bundle.lua");
+        let spare = directory.path().join("out/bundle.luau");
         check_output_paths([&entry], [&spare]).expect("a spare output doesn't collide");
         assert!(check_output_paths([&entry], [&spare, &spare]).is_err());
     }

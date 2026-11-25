@@ -7,8 +7,8 @@ use crate::call::{CallArg, CallArgs, dotted_callee};
 use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::format_pattern::{
-    PatternError, validate_format, validate_gsub_replacement, validate_lua_pattern,
-    validate_os_date, validate_pack_format,
+    PatternError, validate_format, validate_gsub_replacement, validate_os_date,
+    validate_pack_format, validate_pattern,
 };
 use crate::rule::{Rule, declare_lint_rule};
 
@@ -44,7 +44,7 @@ impl Rule for FormatString {
                 context.diagnostic(finding);
             }
             if dsl == DslKind::Gsub
-                && let Some(finding) = check_gsub_replacement(call, context)
+                && let Some(finding) = check_gsub_replacement(call)
             {
                 context.diagnostic(finding);
             }
@@ -96,7 +96,7 @@ impl DslKind {
         }
     }
 
-    /// Whether the literal is a Lua pattern, which follows the string it
+    /// Whether the literal is a Luau pattern, which follows the string it
     /// searches. Every other DSL's literal is the call's first operand.
     const fn is_pattern(self) -> bool {
         match self {
@@ -124,7 +124,6 @@ fn dsl_literal(call: Call<'_>, dsl: DslKind) -> Option<(&StringLiteral<'_>, Call
 }
 
 fn check_dsl_literal(call: Call<'_>, dsl: DslKind, context: &dyn ValueContext) -> Option<Finding> {
-    let version = context.version();
     let (literal, trailing_args) = dsl_literal(call, dsl)?;
     let body = literal.as_str()?;
     if dsl == DslKind::Find && is_plain_find(body, trailing_args.clone(), context) {
@@ -134,14 +133,14 @@ fn check_dsl_literal(call: Call<'_>, dsl: DslKind, context: &dyn ValueContext) -
     // functions, `os.date`, and the other pack functions take arguments the
     // literal doesn't determine.
     let (noun, expected_arg_count) = match dsl {
-        DslKind::Format => ("format", validate_format(body, version).map(Some)),
+        DslKind::Format => ("format", validate_format(body).map(Some)),
         DslKind::Match | DslKind::Find | DslKind::Gsub => {
-            ("pattern", validate_lua_pattern(body).map(|_| None))
+            ("pattern", validate_pattern(body).map(|_| None))
         }
         DslKind::Pack => ("pack format", validate_pack_format(body, false).map(Some)),
         DslKind::PackSize => ("pack format", validate_pack_format(body, true).map(|_| None)),
         DslKind::Unpack => ("pack format", validate_pack_format(body, false).map(|_| None)),
-        DslKind::OsDate => ("date format", validate_os_date(body, version).map(|()| None)),
+        DslKind::OsDate => ("date format", validate_os_date(body).map(|()| None)),
     };
     match expected_arg_count {
         Ok(Some(expected)) => check_arg_count(trailing_args, literal.span, expected),
@@ -184,15 +183,15 @@ fn check_arg_count(mut args: CallArgs<'_>, literal_span: Span, expected: usize) 
 }
 
 /// Capture indices are only checked when the pattern is a valid literal too.
-fn check_gsub_replacement(call: Call<'_>, context: &dyn ValueContext) -> Option<Finding> {
+fn check_gsub_replacement(call: Call<'_>) -> Option<Finding> {
     let pattern_index = usize::from(call.method.is_none());
     let mut args = CallArgs::new(call.args);
     let pattern = args.nth(pattern_index).and_then(CallArg::string_literal);
     let replacement = args.next()?.string_literal()?;
     let replacement_body = replacement.as_str()?;
     let capture_count =
-        pattern.and_then(StringLiteral::as_str).and_then(|body| validate_lua_pattern(body).ok());
-    validate_gsub_replacement(replacement_body, capture_count, context.version())
+        pattern.and_then(StringLiteral::as_str).and_then(|body| validate_pattern(body).ok());
+    validate_gsub_replacement(replacement_body, capture_count)
         .err()
         .map(|e| literal_error(e, replacement, replacement_body, "replacement"))
 }
@@ -226,135 +225,110 @@ fn literal_error(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (r#"string.format("%d", 1)"#, LuaTarget::Lua54),
-        (r#"local s = ("%s"):format"x""#, LuaTarget::Lua54),
-        (r#"local s = ("%s"):format{}"#, LuaTarget::Lua54),
-        (r#"string.pack(">i4", 1)"#, LuaTarget::Lua54),
+    const PASS: &[&str] = &[
+        r#"string.format("%d", 1)"#,
+        r#"local s = ("%s"):format"x""#,
+        r#"local s = ("%s"):format{}"#,
+        r#"string.pack(">i4", 1)"#,
         // The receiver is the format string, so `1` is the one argument that `%d`
         // needs.
-        (r#"("%d"):format(1)"#, LuaTarget::Lua54),
-        (
-            "\
+        r#"("%d"):format(1)"#,
+        "\
 local fmt = \"%d\"
 string.format(fmt, 1)",
-            LuaTarget::Lua54,
-        ),
-        (r#"local function f(...) return string.format("%d %d", ...) end"#, LuaTarget::Lua54),
+        r#"local function f(...) return string.format("%d %d", ...) end"#,
         // `f()` can return any number of values.
-        (
-            "\
+        "\
 local function f() end
 string.format(\"%d %d\", f())",
-            LuaTarget::Lua54,
-        ),
         // `%%` escapes, `%0` is the whole match, and `%1` is the first capture, or
         // the whole match when the pattern has none.
-        (r#"string.gsub("x", "(a)", "%%%0%1")"#, LuaTarget::Lua54),
-        (r#"string.gsub("x", "a", "%1")"#, LuaTarget::Lua54),
+        r#"string.gsub("x", "(a)", "%%%0%1")"#,
+        r#"string.gsub("x", "a", "%1")"#,
         // An unknown capture count disables the index check.
-        (
-            "\
+        "\
 local p = \"(a)\"
 string.gsub(\"x\", p, \"%9\")",
-            LuaTarget::Lua54,
-        ),
-        (r#"os.date("%Y-%m-%d %H:%M:%S")"#, LuaTarget::Lua54),
-        (r#"os.date("*t")"#, LuaTarget::Lua54),
-        (r#"os.date("!*t")"#, LuaTarget::Lua54),
-        (r#"os.date("100%%")"#, LuaTarget::Lua54),
-        (
-            "\
+        r#"os.date("%Y-%m-%d %H:%M:%S")"#,
+        r#"os.date("*t")"#,
+        r#"os.date("!*t")"#,
+        r#"os.date("100%%")"#,
+        // A trailing `%` is text.
+        r#"os.date("abc%")"#,
+        "\
 local os = {}
 os.date(\"%Q\")",
-            LuaTarget::Lua54,
-        ),
-        // Luau accepts the `%*` conversion.
-        (r#"local s = string.format("%*", 1)"#, LuaTarget::Luau),
-        // Lua 5.4 accepts the `%p` conversion.
-        (r#"local s = string.format("%p", {})"#, LuaTarget::Lua54),
-        // Every dialect accepts a repeated format flag.
-        (r#"local s = string.format("%--d", 1)"#, LuaTarget::Lua54),
+        // `%*` takes any value.
+        r#"local s = string.format("%*", 1)"#,
+        // `scanformat` takes a repeated flag, and any flag, width, or precision
+        // before any conversion.
+        r#"local s = string.format("%--d", 1)"#,
+        r#"local s = string.format("%5q", "a")"#,
+        r#"local s = string.format("%#d", 1)"#,
         // A plain find doesn't read a pattern.
-        (r#"local i = string.find(s, "[", 1, true)"#, LuaTarget::Lua54),
+        r#"local i = string.find(s, "[", 1, true)"#,
         // The receiver of `:match` is the subject.
-        (r#"local m = ("[abc"):match("b")"#, LuaTarget::Lua54),
-        // `lstrlib.c` reads these as literals.
-        (r#"local s = string.gsub(x, "-", "_")"#, LuaTarget::Lua54),
-        (r#"local s = string.find(x, "+")"#, LuaTarget::Lua54),
-        (r#"local s = string.match(x, "^-?%d+$")"#, LuaTarget::Lua54),
+        r#"local m = ("[abc"):match("b")"#,
+        // `lstrlib.cpp` reads these as literals.
+        r#"local s = string.gsub(x, "-", "_")"#,
+        r#"local s = string.find(x, "+")"#,
+        r#"local s = string.match(x, "^-?%d+$")"#,
         // A `]` first in a set is a member.
-        (r#"local i = string.find(s, "[]]")"#, LuaTarget::Lua54),
+        r#"local i = string.find(s, "[]]")"#,
         // `string.packsize` takes only the format.
-        (r#"local n = string.packsize("i4")"#, LuaTarget::Lua54),
+        r#"local n = string.packsize("i4")"#,
         // `string.unpack` takes the data, not one value each.
-        (r#"local a, b = string.unpack("i4 i4", s)"#, LuaTarget::Lua54),
+        r#"local a, b = string.unpack("i4 i4", s)"#,
         // A pattern with no special characters is plain.
-        (r#"local i = string.find(s, "a)")"#, LuaTarget::Lua54),
-        (r#"local i = string.find(s, "[", 1, plain)"#, LuaTarget::Lua54),
+        r#"local i = string.find(s, "a)")"#,
+        r#"local i = string.find(s, "[", 1, plain)"#,
         // `obj` isn't known to be a string.
-        (r#"local i = obj:match("[")"#, LuaTarget::Lua54),
+        r#"local i = obj:match("[")"#,
         // `\37` spells a `%` the raw body can't show.
-        (r#"local s = string.format("\37d", 1)"#, LuaTarget::Lua54),
-        // Lua 5.1 has no `string.pack`.
-        (r#"local p = string.pack("i17", 1)"#, LuaTarget::Lua51),
-        (
-            "\
+        r#"local s = string.format("\37d", 1)"#,
+        "\
 string = {}
 local i = string.match(\"x\", \"[\")",
-            LuaTarget::Lua54,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (r#"string.format("%q")"#, LuaTarget::Lua54),
-        (r#"string.format"%d""#, LuaTarget::Lua54),
-        (r#"local s = ("%d %d"):format"x""#, LuaTarget::Lua54),
-        (r#"local s = ("%d %d"):format{}"#, LuaTarget::Lua54),
-        (r#"string.format("%z", 1)"#, LuaTarget::Lua54),
-        (r#"string.match("abc", "[abc")"#, LuaTarget::Lua54),
-        (r#"string.pack("Q", 1)"#, LuaTarget::Lua54),
-        (r#"("%z"):format(1)"#, LuaTarget::Lua54),
-        (
-            "\
+    const FAIL: &[&str] = &[
+        r#"string.format("%q")"#,
+        r#"string.format"%d""#,
+        r#"local s = ("%d %d"):format"x""#,
+        r#"local s = ("%d %d"):format{}"#,
+        r#"string.format("%z", 1)"#,
+        r#"string.match("abc", "[abc")"#,
+        r#"string.pack("Q", 1)"#,
+        r#"("%z"):format(1)"#,
+        "\
 string.format([==[
 %z]==], 1)",
-            LuaTarget::Lua54,
-        ),
-        (r#"string.format("\37z", 1)"#, LuaTarget::Lua54),
-        (r#"string.gsub("x", "y", "%q")"#, LuaTarget::Lua54),
-        (r#"string.gsub("x", "y", "a%")"#, LuaTarget::Lua54),
-        (r#"string.gsub("x", "(a)(b)", "%3")"#, LuaTarget::Lua54),
-        (r#"("x"):gsub("(a)", "%2")"#, LuaTarget::Lua54),
-        (r#"os.date("%Q")"#, LuaTarget::Lua54),
-        (r#"os.date("abc%")"#, LuaTarget::Lua54),
-        // Lua 5.1 rejects the `%a` conversion.
-        (r#"local s = string.format("%a", 1)"#, LuaTarget::Lua51),
-        // Lua 5.4 rejects a modifier on `%q`.
-        (r#"local s = string.format("%5q", "a")"#, LuaTarget::Lua54),
-        // Lua 5.4 rejects the `#` flag on `%d`.
-        (r#"local s = string.format("%#d", 1)"#, LuaTarget::Lua54),
+        r#"string.format("\37z", 1)"#,
+        r#"string.gsub("x", "y", "%q")"#,
+        r#"string.gsub("x", "y", "a%")"#,
+        r#"string.gsub("x", "(a)(b)", "%3")"#,
+        r#"("x"):gsub("(a)", "%2")"#,
+        r#"os.date("%Q")"#,
+        // `os.date` takes only the C89 specifiers.
+        r#"os.date("%F")"#,
+        // `string.format` takes neither `%a` nor `%p`.
+        r#"local s = string.format("%a", 1)"#,
+        r#"local s = string.format("%p", {})"#,
         // The argument of `:match` is the pattern.
-        (r#"local m = ("abc"):match("[")"#, LuaTarget::Lua54),
+        r#"local m = ("abc"):match("[")"#,
         // `%1` with no capture raises an error.
-        (r#"local i = string.find(s, "%1")"#, LuaTarget::Lua54),
+        r#"local i = string.find(s, "%1")"#,
         // Integer sizes above 16 raise an error.
-        (r#"local p = string.pack("i17", 1)"#, LuaTarget::Lua54),
+        r#"local p = string.pack("i17", 1)"#,
         // The span and the message take the whole character, not its first byte.
-        ("local s = string.format(\"%\u{e9}\", 1)", LuaTarget::Lua54),
-        (r#"local i = string.find(s, "[", 1, false)"#, LuaTarget::Lua54),
-        (
-            "\
+        "local s = string.format(\"%\u{e9}\", 1)",
+        r#"local i = string.find(s, "[", 1, false)"#,
+        "\
 local s = \"abc\"
 local i = s:match(\"[\")",
-            LuaTarget::Lua54,
-        ),
-        (r#"local p = string.pack("i17", 1)"#, LuaTarget::Lua53),
     ];
 
     #[test]

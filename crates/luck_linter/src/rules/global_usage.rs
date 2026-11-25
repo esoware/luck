@@ -16,7 +16,7 @@ declare_lint_rule!(
 impl Rule for GlobalUsage {
     fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
-        let is_roblox = context.semantic.target().is_roblox();
+        let is_roblox = context.semantic.variant().is_roblox();
         let environments = [tree.name_id("_G"), tree.name_id("shared").filter(|_| is_roblox)];
         for reference in tree.global_references() {
             if environments.contains(&Some(reference.name)) {
@@ -32,27 +32,23 @@ impl Rule for GlobalUsage {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local function init() shared = {} end", LuaTarget::Lua54),
-        ("print(pairs(items)); custom = 1", LuaTarget::Lua54),
-        (
-            "local _G, shared = {}, {}; _G.x = shared.x; object._G = object.shared",
-            LuaTarget::LuauRoblox,
-        ),
-    ];
+    const PASS: &[&str] =
+        &["local function init() shared = {} end", "print(pairs(items)); custom = 1"];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("_G.value = shared.value; shared = {}", LuaTarget::LuauRoblox),
-        ("_G.value = 1", LuaTarget::Lua54),
-    ];
+    const FAIL: &[&str] = &["_G.value = 1"];
+
+    const ROBLOX_PASS: &[&str] =
+        &["local _G, shared = {}, {}; _G.x = shared.x; object._G = object.shared"];
+
+    const ROBLOX_FAIL: &[&str] = &["_G.value = shared.value; shared = {}"];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::GlobalUsage, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::GlobalUsage, PASS, FAIL)
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }
