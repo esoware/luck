@@ -1,44 +1,27 @@
-use luck_ast::{Expression, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::MAX_ACTIVE_LOCALS;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::function_node::FunctionNode;
-use crate::node_type::NodeTypeSet;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DuplicateParameter;
 
-impl_rule!(
+declare_lint_rule!(
     DuplicateParameter,
-    "duplicate_parameter",
     Correctness,
     Error,
     "function declares two parameters with the same name"
 );
 
-impl NodeRule for DuplicateParameter {
-    fn node_types(&self) -> NodeTypeSet {
-        FunctionNode::NODE_TYPES
-    }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Some(function) = FunctionNode::of_stmt(stmt) {
-            check_params(function, findings);
-        }
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        if let Some(function) = FunctionNode::of_expr(expr) {
-            check_params(function, findings);
+impl Rule for DuplicateParameter {
+    const NODE_TYPES: AstTypesBitset = FunctionNode::NODE_TYPES;
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        if let Some(function) = FunctionNode::of(node, context.nodes) {
+            check_params(function, context);
         }
     }
 }
@@ -49,10 +32,10 @@ impl NodeRule for DuplicateParameter {
 ///
 /// Parameters are locals, so no Lua compiles a function with more than
 /// [`MAX_ACTIVE_LOCALS`] of them, and one that has more isn't checked.
-fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
+fn check_params(function: FunctionNode<'_>, context: &LintContext<'_, '_>) {
     let params = &function.body.params;
     let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
-    if params.len().saturating_add(usize::from(vararg_name.is_some())) > MAX_ACTIVE_LOCALS {
+    if params.len() + usize::from(vararg_name.is_some()) > MAX_ACTIVE_LOCALS {
         return;
     }
     for (i, param_name) in params.iter().map(|param| &param.name).chain(vararg_name).enumerate() {
@@ -60,110 +43,74 @@ fn check_params(function: FunctionNode<'_>, findings: &mut Vec<Finding>) {
         if name == "_" {
             continue;
         }
-        let is_repeat = params.iter().take(i).any(|earlier| earlier.name.text == name);
-        if is_repeat || (function.is_method && name == "self") {
-            findings.push(Finding::new(
-                format!("parameter `{name}` is already defined"),
-                param_name.span,
-            ));
+        let first = params.iter().take(i).find(|earlier| earlier.name.text == name);
+        if first.is_some() || (function.is_method && name == "self") {
+            let finding =
+                Finding::new(format!("parameter `{name}` is already defined"), param_name.span);
+            context.diagnostic(match first {
+                Some(earlier) => finding.with_label(earlier.name.span, "first defined here"),
+                None => finding.with_help("a method declared with `:` already has `self`"),
+            });
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaVersion, offset_to_index};
+    use std::fmt::Write as _;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use luck_token::LuaTarget;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&DuplicateParameter, source, LuaVersion::Lua54)
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
+
+    /// A function of `count` parameters, one a line, then the first again.
+    fn params_then_the_first_again(count: usize) -> String {
+        let mut source = String::new();
+        writeln!(source, "local function f(").unwrap();
+        for i in 0..count {
+            writeln!(source, "p{i},").unwrap();
+        }
+        source.push_str("p0) end");
+        source
     }
 
-    #[test]
-    fn flags_duplicate_parameter() {
-        let source = "local function f(a, b, a) end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`a`"));
-        // The second occurrence is the one flagged.
-        assert_eq!(offset_to_index(diags[0].span.start), source.rfind('a').unwrap());
-    }
-
-    #[test]
-    fn flags_duplicate_in_function_expr() {
-        let diags = run("local f = function(x, x) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn flags_duplicate_in_function_decl() {
-        let diags = run("function f(a, a) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_every_duplicate_occurrence() {
-        let diags = run("local function f(a, a, a) end");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_explicit_self_in_colon_method() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local function f(a, b, c) end", LuaTarget::Lua54),
+        ("local function f(_, _) end", LuaTarget::Lua54),
+        (
+            "\
 local t = {}
-function t:m(self) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`self`"));
-    }
+function t.m(self) end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
-    #[test]
-    fn flags_duplicate_in_global_function() {
-        let diags = run_rule(&DuplicateParameter, "global function f(a, a) end", LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_distinct_parameters() {
-        let diags = run("local function f(a, b, c) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_parameters() {
-        let diags = run("local function f(_, _) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_self_in_dot_function() {
-        let diags = run("\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local function f(a, b, a) end", LuaTarget::Lua54),
+        ("local f = function(x, x) end", LuaTarget::Lua54),
+        ("function f(a, a) end", LuaTarget::Lua54),
+        ("local function f(a, a, a) end", LuaTarget::Lua54),
+        (
+            "\
 local t = {}
-function t.m(self) end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+function t:m(self) end",
+            LuaTarget::Lua54,
+        ),
+        ("global function f(a, a) end", LuaTarget::Lua55),
+        // The named vararg repeats parameter `a`.
+        ("local function f(a, ...a) return a end", LuaTarget::Lua55),
+    ];
 
     #[test]
-    fn flags_named_vararg_matching_parameter() {
-        let source = "local function f(a, ...a) return a end";
-        let diags = run_rule(&DuplicateParameter, source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "the named vararg repeats parameter `a`: {diags:?}");
-    }
-
-    #[test]
-    fn flags_each_repeat_in_a_list_at_the_local_limit() {
-        let params = (0..100u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
-        let diags = run(&format!("local function f({params}, {params}) end"));
-        assert_eq!(diags.len(), 100, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_a_list_past_the_local_limit() {
-        let params = (0..101u32).map(|i| format!("p{i}")).collect::<Vec<_>>().join(", ");
-        let diags = run(&format!("local function f({params}, {params}) end"));
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        let at_limit = params_then_the_first_again(199);
+        // Only Luau's compiler, not luck, rejects this many parameters.
+        let past_limit = params_then_the_first_again(200);
+        let pass: Vec<_> =
+            PASS.iter().copied().chain([(past_limit.as_str(), LuaTarget::Luau)]).collect();
+        let fail: Vec<_> =
+            FAIL.iter().copied().chain([(at_limit.as_str(), LuaTarget::Lua54)]).collect();
+        Tester::new(RuleId::DuplicateParameter, &pass, &fail).test_and_snapshot();
     }
 }

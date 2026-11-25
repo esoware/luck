@@ -1,23 +1,17 @@
 //! `t["foo"]` becomes `t.foo`, `{["foo"] = 1}` becomes `{foo = 1}`, and
 //! `{[1] = a, [2] = b}` becomes `{a, b}`.
 
-use luck_ast::{
-    Expression, Field, Name, Suffix, TableConstructor, is_multi_value, is_valid_identifier_in,
-};
-use luck_token::{LuaVersion, short_string_body};
+use luck_ast::{Expression, Field, Name, Suffix, TableConstructor, is_valid_identifier_in};
+use luck_token::LuaVersion;
 
-/// The name a `["name"]` key spells, when it's an identifier.
+/// The name a `["name"]` key's value is, when it's an identifier, however
+/// the key is spelled.
 fn key_name<'ast>(key: &Expression<'ast>, version: LuaVersion) -> Option<Name<'ast>> {
     let Expression::StringLiteral(literal) = key else {
         return None;
     };
-    let text: &'ast str = literal.text;
-    let name = short_string_body(text)?;
-    is_valid_identifier_in(name, version).then_some(Name {
-        text: name.into(),
-        index: None,
-        span: literal.span,
-    })
+    let name = literal.as_str()?;
+    is_valid_identifier_in(name, version).then_some(Name::new(name.into(), None, literal.span))
 }
 
 /// Says whether it rewrote the suffix.
@@ -53,12 +47,14 @@ pub(super) fn simplify_table(table: &mut TableConstructor<'_>, version: LuaVersi
     has_changed
 }
 
+/// A float key with an integer's value is that integer's key (Lua 5.3+), so
+/// `[1.0]` is positional too.
 fn is_sequential_from_one(fields: &[Field<'_>]) -> bool {
-    let has_sequential_keys = (1usize..).zip(fields).all(|(expected, field)| {
+    let has_sequential_keys = (1..).zip(fields).all(|(expected, field)| {
         matches!(
             field,
             Field::Bracketed { key: Expression::Number(literal), .. }
-                if literal.text.parse::<usize>() == Ok(expected)
+                if literal.value.to_integer() == Some(expected)
         )
     });
     // `{[1] = f()}` truncates f() to one value, while `{f()}` in final
@@ -66,7 +62,7 @@ fn is_sequential_from_one(fields: &[Field<'_>]) -> bool {
     // a call or `...`.
     let has_multi_value_tail = matches!(
         fields.last(),
-        Some(Field::Bracketed { value, .. }) if is_multi_value(value)
+        Some(Field::Bracketed { value, .. }) if value.is_multi_value()
     );
     !fields.is_empty() && has_sequential_keys && !has_multi_value_tail
 }

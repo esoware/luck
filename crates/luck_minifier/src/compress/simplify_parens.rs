@@ -1,100 +1,54 @@
-//! Dropping parentheses that change neither grouping nor how many values an
-//! expression yields.
+//! Dropping parentheses that change nothing.
+//!
+//! The tree keeps only those that truncate a call or `...` to one value or
+//! stop a `-` before a Luau integer literal from reading as a negative one,
+//! and the printer writes whatever grouping needs. So what's left to drop
+//! is a truncation wherever only the first value counts anyway, the
+//! parentheses around a lone string or table argument, and the ones a run
+//! held in a run at its level prints with where it groups the same without.
 
 use luck_allocator::Allocator;
-use luck_ast::{
-    Expression, FunctionArgs, Suffix, SuffixedExpression, is_multi_value, is_prefix_expr,
-};
-use luck_token::{BinOp, OperandSide};
+use luck_ast::{Expression, FunctionArgs, Slot, Suffix, SuffixedExpression};
 
-use crate::expr::{
-    binds_looser_than_unary, can_unwrap_in_binop, ends_in_if_expr, inner_operand_side,
-};
-
-/// Strips the parentheses around `expr`, its operands, or a unary
-/// operator's operand, wherever printing them bare reparses as the same
-/// tree. Says whether it did.
-pub(super) fn strip<'ast>(allocator: &'ast Allocator, expr: &mut Expression<'ast>) -> bool {
-    match expr {
-        Expression::Parenthesized(paren) if can_remove_parens(&paren.expr) => {
-            *expr = paren.expr.take();
-            true
-        }
-        Expression::BinaryOp(binary_op) => {
-            let op = binary_op.links.first().op;
-            let inner_side = inner_operand_side(binary_op);
-            let run = &mut **binary_op;
-            let mut stripped = strip_operand(&mut run.first, op, OperandSide::Left);
-            if let Some((last, inner)) = run.links.split_last_mut() {
-                for link in inner {
-                    stripped = stripped.max(strip_operand(&mut link.operand, op, inner_side));
-                }
-                stripped = stripped.max(strip_operand(&mut last.operand, op, OperandSide::Right));
-            }
-            // A run the parens held at this level now prints as part of it.
-            if stripped == Stripped::RunAtLevel {
-                run.splice_operands(allocator);
-            }
-            stripped != Stripped::Nothing
-        }
-        Expression::UnaryOp(unop) => {
-            if let Expression::Parenthesized(paren) = &mut unop.operand
-                && can_unwrap_in_unary(&paren.expr)
-            {
-                unop.operand = paren.expr.take();
-                return true;
-            }
-            false
-        }
-        Expression::Nil(_)
-        | Expression::False(_)
-        | Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::VarArg(_)
-        | Expression::FunctionDef(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::TableConstructor(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
+/// Where an expression the walk leaves stands, as far as its parentheses
+/// go.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Place {
+    /// Where every value it yields may count: the last of a list that takes
+    /// more values than it has items, as a `return` or a call's arguments
+    /// does, or a type, which the walk doesn't read.
+    AllValues,
+    /// Where only its first value counts: an operand, a condition, a key, a
+    /// field, an index, or any but the last of a list.
+    OneValue,
+    /// The operand of a `-`, under which a Luau integer literal reads as a
+    /// negative one.
+    Negated,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Stripped {
-    Nothing,
-    Operand,
-    /// The parens held a run at the operator's own level, which the run
-    /// around it has to splice.
-    RunAtLevel,
-}
-
-fn strip_operand(operand: &mut Expression<'_>, op: BinOp, side: OperandSide) -> Stripped {
-    let Expression::Parenthesized(paren) = operand else {
-        return Stripped::Nothing;
+/// Strips the parentheses around `expr` where they change nothing at
+/// `place`, and says whether it did.
+pub(super) fn strip(expr: &mut Expression<'_>, place: Place) -> bool {
+    let Expression::Parenthesized(paren) = expr else {
+        return false;
     };
-    if !can_unwrap_in_binop(&paren.expr, op, side) {
-        return Stripped::Nothing;
+    let is_kept = match place {
+        Place::AllValues => paren.expr.is_multi_value(),
+        Place::OneValue => false,
+        Place::Negated => matches!(paren.expr, Expression::Integer(_)),
+    };
+    if is_kept || matches!(paren.expr, Expression::Error(_)) {
+        return false;
     }
-    *operand = paren.expr.take();
-    if matches!(operand, Expression::BinaryOp(run) if run.precedence().0 == op.precedence().0) {
-        Stripped::RunAtLevel
-    } else {
-        Stripped::Operand
-    }
+    *expr = paren.expr.take();
+    true
 }
 
-/// Strips a chain's parenthesized prefix wherever what it holds can stand
-/// bare there, and says whether it did.
+/// Strips a chain's parenthesized prefix where what it holds stands bare
+/// there, which a chain does, and says whether it did.
 ///
-/// That's a name, a chain, or nested parentheses, and not a literal, as in
-/// `("s"):rep(2)`. In front of a Luau instantiation the parentheses also
-/// stay around a call or `...`, whose values they truncate.
+/// In front of a Luau instantiation the parentheses stay around a call,
+/// whose values they truncate.
 pub(super) fn strip_prefix<'ast>(
     allocator: &'ast Allocator,
     chain: &mut SuffixedExpression<'ast>,
@@ -103,29 +57,11 @@ pub(super) fn strip_prefix<'ast>(
         return false;
     };
     let is_instantiated = matches!(chain.suffixes.first(), Suffix::TypeInstantiation { .. });
-    let can_strip =
-        is_prefix_expr(&paren.expr) && (!is_instantiated || can_remove_parens(&paren.expr));
-    if !can_strip {
+    if paren.expr.needs_parens(Slot::PREFIX) || (is_instantiated && paren.expr.is_multi_value()) {
         return false;
     }
     chain.prefix = paren.expr.take();
     chain.splice_prefix(allocator);
-    true
-}
-
-/// Strips parentheses where nothing groups with what they hold, and says
-/// whether it did.
-///
-/// That's anywhere but an operand or a chain's prefix. They stay only around
-/// a call or `...`, whose values they truncate.
-pub(super) fn strip_standalone(expr: &mut Expression<'_>) -> bool {
-    let Expression::Parenthesized(paren) = expr else {
-        return false;
-    };
-    if is_multi_value(&paren.expr) || matches!(paren.expr, Expression::Error(_)) {
-        return false;
-    }
-    *expr = paren.expr.take();
     true
 }
 
@@ -138,8 +74,9 @@ pub(super) fn strip_call_args(args: &mut FunctionArgs<'_>) -> bool {
     let [arg] = &mut **exprs else {
         return false;
     };
-    if let Expression::StringLiteral(boxed) = arg {
-        let literal = **boxed;
+    if matches!(arg, Expression::StringLiteral(_))
+        && let Expression::StringLiteral(literal) = arg.take()
+    {
         *args = FunctionArgs::StringLiteral(literal);
         return true;
     }
@@ -152,88 +89,71 @@ pub(super) fn strip_call_args(args: &mut FunctionArgs<'_>) -> bool {
     false
 }
 
-fn can_remove_parens(inner: &Expression<'_>) -> bool {
-    match inner {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Name(_)
-        | Expression::TableConstructor(_)
-        | Expression::Parenthesized(_)
-        | Expression::FunctionDef(_) => true,
-        // Calls and `...` aren't safe: dropping the parens restores multiple
-        // values.
-        Expression::Suffixed(chain) => !chain.is_call(),
-        Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::VarArg(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
-}
-
-fn can_unwrap_in_unary(inner: &Expression<'_>) -> bool {
-    match inner {
-        Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::Nil(_)
-        | Expression::True(_)
-        | Expression::False(_)
-        | Expression::Name(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => true,
-        Expression::Suffixed(chain) => chain.is_var(),
-        Expression::UnaryOp(_) => !ends_in_if_expr(inner),
-        // Not safe: `-(a+b)` isn't `-a+b`.
-        Expression::BinaryOp(binary_op) => {
-            !binds_looser_than_unary(binary_op) && !ends_in_if_expr(inner)
-        }
-        Expression::VarArg(_)
-        | Expression::Parenthesized(_)
-        | Expression::IfExpression(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_ast::{LastStatement, expr_nesting_depth};
+    use luck_ast::{Statement, expr_nesting_depth};
     use luck_token::LuaVersion;
 
-    use crate::fixtures::{NO_PASSES, compressed, minify_with};
+    use crate::fixtures::{NO_PASSES, assert_outputs, compressed, minify_with};
     use crate::transform_config::TransformConfig;
 
     const PARENS: TransformConfig = TransformConfig { simplify_parens: true, ..NO_PASSES };
 
-    fn assert_outputs(version: LuaVersion, cases: &[(&str, &str)]) {
-        for &(source, expected) in cases {
-            assert_eq!(minify_with(source, version, &PARENS), expected, "source: {source}");
-        }
+    fn apply(source: &str) -> String {
+        minify_with(source, LuaVersion::Lua54, &PARENS)
+    }
+
+    fn apply_luau(source: &str) -> String {
+        minify_with(source, LuaVersion::Luau, &PARENS)
     }
 
     #[test]
     fn strips_what_grouping_and_value_counts_allow() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("local x = (42)", "local x=42"),
                 ("local x = (y)", "local x=y"),
                 ("return (a * b) + c", "return a*b+c"),
                 ("return (x) * 3", "return x*3"),
                 ("return a .. (b .. c)", "return a..b..c"),
+                ("return (a + b) - c", "return a+b-c"),
                 ("print(\"hello\")", "print\"hello\""),
                 ("foo({1, 2})", "foo{1,2}"),
                 ("return -(x)", "return-x"),
                 ("return not (a.b)", "return not a.b"),
+                ("return (f()) + 1, -(...), #(f())", "return f()+1,-...,#f()"),
+            ],
+        );
+    }
+
+    #[test]
+    fn strips_a_truncation_wherever_one_value_counts() {
+        assert_outputs(
+            apply,
+            &[
+                ("if (f()) then g() end", "if f()then g()end"),
+                ("while (f()) do end repeat until (...)", "while f()do end repeat until..."),
+                (
+                    "return {(f()), x}, {x, (f())}, {(f()), k = 1}",
+                    "return{f(),x},{x,(f())},{f(),k=1}",
+                ),
+                ("return t[(f())], {k = (f()), [(f())] = 1}", "return t[f()],{k=f(),[f()]=1}"),
+                ("local a = (f()) local b, c = (f())", "local a=f()local b,c=(f())"),
+                ("a, b = (f()), (g()) c, d = (h())", "a,b=f(),g()c,d=(h())"),
+                ("g((f()), (...)) return (f()), (...)", "g(f(),(...))return f(),(...)"),
+                (
+                    "for i = (f()), (g()) do end for k in (f()) do end",
+                    "for i=f(),g()do end for k in(f())do end",
+                ),
+            ],
+        );
+        assert_outputs(
+            apply_luau,
+            &[
+                ("x += (f()) return `{(f())}`", "x+=f()return`{f()}`"),
+                ("return if (f()) then (g()) else (...)", "return if f()then g()else..."),
             ],
         );
     }
@@ -241,7 +161,7 @@ mod tests {
     #[test]
     fn strips_parens_where_nothing_groups_with_them() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("local x = (a + b)", "local x=a+b"),
                 ("if (a or b) then f() end", "if a or b then f()end"),
@@ -252,12 +172,13 @@ mod tests {
                 ("return {(a + b), k = (c), [(d)] = (e)}", "return{a+b,k=c,[d]=e}"),
                 ("return t[(a + b)]", "return t[a+b]"),
                 ("return ((a + b))", "return a+b"),
-                // A call or `...` keeps the parens that truncate its values.
-                ("return (f()), (...)", "return(f()),(...)"),
+                // A call or `...` keeps the parens that truncate its values
+                // where every value would count.
+                ("return (f()), (...)", "return f(),(...)"),
             ],
         );
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("local x = (a :: T)", "local x=a::T"),
                 ("return if (a) then (b) else (c or d)", "return if a then b else c or d"),
@@ -269,14 +190,14 @@ mod tests {
     #[test]
     fn strips_parens_a_chain_prefix_stands_without() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 ("return (x).y", "return x.y"),
                 ("(f)()", "f()"),
                 ("return (a.b).c", "return a.b.c"),
                 ("return (f()).x", "return f().x"),
                 ("return ((x)):m()", "return x:m()"),
-                ("f(); (g)()", "f();g()"),
+                ("f(); (g)()", "f()g()"),
             ],
         );
     }
@@ -284,20 +205,25 @@ mod tests {
     #[test]
     fn keeps_what_grouping_and_value_counts_need() {
         assert_outputs(
-            LuaVersion::Lua54,
+            apply,
             &[
                 // Parens around a call truncate its values.
-                ("local x = (foo())", "local x=(foo())"),
+                ("local x, y = (foo())", "local x,y=(foo())"),
                 ("return (f())", "return(f())"),
-                ("return (f()) + 1", "return(f())+1"),
                 ("return a * (b + c)", "return a*(b+c)"),
                 ("return (1 + 2) * 3", "return(1+2)*3"),
                 ("return (-a) ^ b", "return(-a)^b"),
+                ("return a - (b - c)", "return a-(b-c)"),
                 // Concat is right-associative, so (a .. b) .. c isn't a .. b .. c.
                 ("return (a .. b) .. c", "return(a..b)..c"),
                 ("return -(a + b)", "return-(a+b)"),
                 ("return (\"s\"):rep(2)", "return(\"s\"):rep(2)"),
             ],
+        );
+        // `-(1i)` negates an integer, which raises, and `-1i` is a literal.
+        assert_outputs(
+            apply_luau,
+            &[("return -(1i), not (1i), (1i) + x, (1i) :: T", "return-(1i),not 1i,1i+x,1i::T")],
         );
     }
 
@@ -305,8 +231,8 @@ mod tests {
     fn a_run_freed_of_its_parens_joins_the_run_around_it() {
         let allocator = Allocator::new();
         let source = "return (a + b) - c, x .. (y .. z), (a * b) + c";
-        let block = compressed(&allocator, source, PARENS);
-        let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
+        let chunk = compressed(&allocator, source, PARENS);
+        let [Statement::Return(return_stmt)] = &*chunk.block.stmts else {
             panic!("expected a return");
         };
         let depths: Vec<usize> = return_stmt.exprs.iter().map(expr_nesting_depth).collect();
@@ -317,7 +243,7 @@ mod tests {
     #[test]
     fn keeps_parens_on_an_instantiated_literal_in_every_position() {
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("return ({})<<T>>\n", "return({})<<T>>"),
                 ("return (\"s\")<<T>>\n", "return(\"s\")<<T>>"),
@@ -352,7 +278,7 @@ mod tests {
     #[test]
     fn strips_parens_on_an_instantiated_var() {
         assert_outputs(
-            LuaVersion::Luau,
+            apply_luau,
             &[
                 ("return (x)<<T>>\n", "return x<<T>>"),
                 ("return (x.y)<<T>>\n", "return x.y<<T>>"),

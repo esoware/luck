@@ -1,29 +1,32 @@
-use luck_ast::{Expression, Statement, Var};
+use luck_ast::{AstKind, AstType, Expression, Statement, Var};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::nodes::adjacent_stmts;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AlmostSwapped;
 
-impl_rule!(
+declare_lint_rule!(
     AlmostSwapped,
-    "almost_swapped",
     Correctness,
     Error,
     "looks like a failed variable swap; use `a, b = b, a`"
 );
 
-impl WholeRule for AlmostSwapped {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        context
-            .nodes
-            .blocks()
-            .iter()
-            .flat_map(|block| adjacent_stmts(block))
-            .filter_map(|(first, second)| failed_swap(first, second))
-            .collect()
+impl Rule for AlmostSwapped {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        for (first, second) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
+            if let Some(finding) = failed_swap(first, second) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 
@@ -32,93 +35,63 @@ fn failed_swap(first_stmt: &Statement<'_>, second_stmt: &Statement<'_>) -> Optio
     else {
         return None;
     };
-    let ([first_target], [first_value], [second_target], [second_value]) =
-        (&*first.targets, &*first.values, &*second.targets, &*second.values)
+    let (
+        [Var::Name(target_a)],
+        [Expression::Name(value_a)],
+        [Var::Name(target_b)],
+        [Expression::Name(value_b)],
+    ) = (&*first.targets, &*first.values, &*second.targets, &*second.values)
     else {
         return None;
     };
-    let target_a = var_name(first_target)?;
-    let value_a = expr_var_name(first_value)?;
-    let target_b = var_name(second_target)?;
-    let value_b = expr_var_name(second_value)?;
     // After `a = b`, `b = a` copies `b` back and the old `a` is lost.
-    (target_a == value_b && target_b == value_a).then(|| {
+    (target_a.text == value_b.text && target_b.text == value_a.text).then(|| {
         Finding::new(
-            format!("`{target_a} = {value_a}; {target_b} = {value_b}` doesn't swap"),
+            format!(
+                "`{} = {}; {} = {}` doesn't swap",
+                target_a.text, value_a.text, target_b.text, value_b.text
+            ),
             first.span.merge(second.span),
         )
         .with_help(format!(
-            "use `{target_a}, {target_b} = {target_b}, {target_a}` to swap both at once"
+            "use `{0}, {1} = {1}, {0}` to swap both at once",
+            target_a.text, target_b.text
         ))
     })
 }
 
-fn var_name<'ast>(var: &Var<'ast>) -> Option<&'ast str> {
-    let Var::Name(name) = var else {
-        return None;
-    };
-    Some(name.text.as_str())
-}
-
-fn expr_var_name<'ast>(expr: &Expression<'ast>) -> Option<&'ast str> {
-    let Expression::Name(name) = expr else {
-        return None;
-    };
-    Some(name.text.as_str())
-}
-
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&AlmostSwapped, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_failed_swap() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
+local a, b = 1, 2
+a, b = b, a",
+        "\
 local a, b = 1, 2
 a = b
-b = a");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
+b = 3",
+    ];
 
-    #[test]
-    fn flags_failed_swap_in_nested_function() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "\
+local a, b = 1, 2
+a = b
+b = a",
+        "\
 local f = function() local a, b = 1, 2
 a = b
-b = a end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
+b = a end",
+        // A `;` doesn't change the failed swap.
+        "\
+local a, b = 1, 2
+a = b; b = a",
+    ];
 
     #[test]
-    fn ignores_correct_swap() {
-        let diags = run("\
-local a, b = 1, 2
-a, b = b, a");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_unrelated_assignments() {
-        let diags = run("\
-local a, b = 1, 2
-a = b
-b = 3");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_failed_swap_separated_by_semicolon() {
-        let diags = run("\
-local a, b = 1, 2
-a = b; b = a");
-        assert_eq!(diags.len(), 1, "a `;` doesn't change the failed swap: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::AlmostSwapped, PASS, FAIL).test_and_snapshot();
     }
 }

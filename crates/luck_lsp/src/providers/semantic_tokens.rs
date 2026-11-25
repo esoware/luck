@@ -1,24 +1,28 @@
-//! Identifier highlighting layered over the `TextMate` grammar. Scope
-//! resolution handles values; the cached AST distinguishes types and table
-//! keys from superficially identical value expressions.
+//! Identifier highlighting layered over the `TextMate` grammar.
+//!
+//! One walk classifies each name where the tree holds it, so types and table
+//! keys read apart from value expressions that look the same, and a name
+//! finds what it declares or refers to by its symbol and reference.
 
-use alloc::collections::BTreeMap;
-use core::iter;
-
-use luck_ast::{
-    Call, ChainHead, Expression, Field, GenericTypeList, Statement, Suffix, TableConstructor, Type,
-    TypeDeclarationValue, TypeField, Visitor,
-};
-use luck_semantic::{SemanticAnalysis, StdlibEntry, SymbolKind};
-use luck_token::{Span, Token, TokenKind, index_to_offset, offset_to_index};
-use tower_lsp_server::ls_types::{
+use ls_types::{
     Position, Range, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
     SemanticTokensLegend, SemanticTokensRangeResult, SemanticTokensResult,
 };
+use luck_ast::{
+    Assignment, ChainHead, Expression, Field, FunctionDecl, FunctionName, FunctionTypeParam,
+    GenericPackType, GenericTypeParam, GlobalDeclaration, GlobalFunction, LocalAssignment,
+    LocalFunction, Name, NamedType, NumericFor, Parameter, Suffix, SuffixedExpression,
+    TableConstructor, Type, TypeDeclaration, TypeDeclarationValue, TypeField, Var, VarArgParam,
+    Visit,
+};
+use luck_semantic::SymbolKind;
+use luck_stdlib::{SemanticAnalysis, StdlibEntry};
+use luck_token::Span;
+use rustc_hash::FxHashMap;
 
 use crate::document::DocumentState;
-use crate::providers::cursor::identifier;
 
+/// In the order of [`TokenType`], whose discriminant is the index here.
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
     SemanticTokenType::FUNCTION,
@@ -29,14 +33,17 @@ const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::TYPE,
 ];
 
-// Indexes into `TOKEN_TYPES`.
-const TYPE_NAMESPACE: u32 = 0;
-const TYPE_FUNCTION: u32 = 1;
-const TYPE_PROPERTY: u32 = 2;
-const TYPE_VARIABLE: u32 = 3;
-const TYPE_PARAMETER: u32 = 4;
-const TYPE_METHOD: u32 = 5;
-const TYPE_TYPE: u32 = 6;
+/// What a name is, which a token carries as its index in [`TOKEN_TYPES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenType {
+    Namespace,
+    Function,
+    Property,
+    Variable,
+    Parameter,
+    Method,
+    Type,
+}
 
 const TOKEN_MODIFIERS: &[SemanticTokenModifier] = &[
     SemanticTokenModifier::DEPRECATED,
@@ -51,17 +58,25 @@ const MODIFIER_DEFAULT_LIBRARY: u32 = 1 << 2;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Classification {
-    token_type: u32,
+    token_type: TokenType,
     modifiers: u32,
 }
 
 impl Classification {
-    const fn plain(token_type: u32) -> Self {
+    const fn plain(token_type: TokenType) -> Self {
         Self { token_type, modifiers: 0 }
+    }
+
+    /// A value's name that isn't a function, which reads as read-only where
+    /// it's spelled like a constant.
+    fn value(token_type: TokenType, name: &str) -> Self {
+        let modifiers = if is_screaming_case(name) { MODIFIER_READONLY } else { 0 };
+        Self { token_type, modifiers }
     }
 }
 
-/// A document's classified names, by where they start, none empty.
+/// A document's classified names, in source order, none empty and none
+/// overlapping another.
 pub(crate) type Highlights = Vec<(Span, Classification)>;
 
 pub(crate) fn legend() -> SemanticTokensLegend {
@@ -82,33 +97,6 @@ pub(crate) fn in_range(document: &DocumentState, range: Range) -> SemanticTokens
     SemanticTokensRangeResult::Tokens(encode_tokens(document, Some(byte_range)))
 }
 
-enum ValueShape {
-    Called,
-    AssignedFunction,
-    Plain,
-}
-
-const fn is_call_opener(kind: TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::LeftParen
-            | TokenKind::LeftBrace
-            | TokenKind::StringLiteral
-            | TokenKind::InterpolatedStringBegin
-            | TokenKind::InterpolatedStringSimple
-    )
-}
-
-fn value_shape(tokens: &[Token], index: usize) -> ValueShape {
-    match tokens.get(index..) {
-        Some([_, next, ..]) if is_call_opener(next.kind) => ValueShape::Called,
-        Some(
-            [_, Token { kind: TokenKind::Equal, .. }, Token { kind: TokenKind::Function, .. }, ..],
-        ) => ValueShape::AssignedFunction,
-        _ => ValueShape::Plain,
-    }
-}
-
 /// Matches the grammar's all-caps constant pattern: `[A-Z][A-Z0-9_]*`.
 fn is_screaming_case(name: &str) -> bool {
     let mut chars = name.chars();
@@ -116,25 +104,27 @@ fn is_screaming_case(name: &str) -> bool {
         && chars.all(|rest| rest.is_ascii_uppercase() || rest.is_ascii_digit() || rest == '_')
 }
 
-/// Runs the classification passes over `document`, in order, each later one
-/// overwriting what an earlier one gave the same start.
 pub(crate) fn classify(document: &DocumentState) -> Highlights {
-    let tokens = document.tokens();
+    let semantic = document.semantic();
+    let (tree, stdlib) = (semantic.scoping(), semantic.stdlib());
+    let globals = tree
+        .names()
+        .map(|(_, name)| {
+            stdlib
+                .globals
+                .get(name)
+                .map_or(Classification::plain(TokenType::Variable), stdlib_classify)
+        })
+        .collect();
     let mut classifier = Classifier {
-        source: document.text(),
-        tokens,
-        semantic: document.semantic(),
-        slots: vec![None; tokens.len()],
-        strays: BTreeMap::new(),
-        symbol_keys: Vec::new(),
-        reference_keys: Vec::new(),
-        last_found: 0,
+        semantic,
+        globals,
+        declared: vec![None; tree.symbols().len()],
+        shapes: FxHashMap::default(),
+        highlights: Vec::new(),
     };
-    classifier.classify_scope_names();
-    classifier.classify_members();
-    classifier.visit_block(&document.parse().block);
-    classifier.propagate_to_references();
-    classifier.finish()
+    classifier.visit_chunk(&document.parse().chunk);
+    classifier.highlights
 }
 
 fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> SemanticTokens {
@@ -149,14 +139,13 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
             continue;
         }
         let Position { line, character } = positions.position(span.start);
-        let delta_line = line.saturating_sub(previous.line);
-        let delta_start =
-            if delta_line == 0 { character.saturating_sub(previous.character) } else { character };
+        let delta_line = line - previous.line;
+        let delta_start = if delta_line == 0 { character - previous.character } else { character };
         data.push(SemanticToken {
             delta_line,
             delta_start,
-            length: utf16_length(document.text(), span),
-            token_type: classification.token_type,
+            length: document.length(span),
+            token_type: classification.token_type as u32,
             token_modifiers_bitset: classification.modifiers,
         });
         previous = Position { line, character };
@@ -164,298 +153,170 @@ fn encode_tokens(document: &DocumentState, byte_range: Option<Span>) -> Semantic
     SemanticTokens { result_id: None, data }
 }
 
-/// How many tokens past the last one found a lookup tries before it
-/// searches.
-const NEARBY_TOKENS: usize = 8;
-
-/// Where a classification is kept: the slot of the token that starts there,
-/// or, where none does, which only a name parse recovery made up can reach,
-/// the strays.
-#[derive(Debug, Clone, Copy)]
-enum Key {
-    Token(usize),
-    Stray(u32),
+/// What a name's value is where it's written, which makes a variable a
+/// function and a field a method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueShape {
+    Called,
+    AssignedFunction,
 }
 
-/// Where a name stands in the `Name(.Name)*` chain it ends.
+/// Where a `Name(.Name)*` path stands before its next member: at its root,
+/// or past a member, with the stdlib entry the path reaches there, if any.
 #[derive(Clone, Copy)]
-enum ChainLink {
-    Root,
-    /// What the chain resolves to in the stdlib, if anything.
-    Member(Option<&'static StdlibEntry>),
+enum PathAt<'ast> {
+    Root(&'ast Name<'ast>),
+    Member(Option<&'ast StdlibEntry<'ast>>),
 }
 
-/// The classification passes, run in order over one table of
-/// classifications.
 struct Classifier<'document> {
-    source: &'document str,
-    tokens: &'document [Token],
     semantic: &'document SemanticAnalysis<'document>,
-    /// Each token's classification, by token index, with the span it was
-    /// given.
-    slots: Vec<Option<(Span, Classification)>>,
-    strays: BTreeMap<u32, (Span, Classification)>,
-    /// Where each symbol's declaration and each reference is kept, found
-    /// once in the first pass for the last.
-    symbol_keys: Vec<Key>,
-    reference_keys: Vec<Key>,
-    /// The token the last lookup found. The passes mostly walk the source
-    /// forward, so the tokens after it are tried before a search.
-    last_found: usize,
+    /// Each name's classification as a global, by name index, so a name read
+    /// many times is looked up once.
+    globals: Vec<Classification>,
+    /// Each symbol's classification where it's declared, by symbol index,
+    /// which its references take on. A declaration comes before every
+    /// reference to it.
+    declared: Vec<Option<Classification>>,
+    /// The shape of each name, by where it starts, that a call calls or an
+    /// assignment gives a function, which the walk meets after the call or
+    /// the assignment.
+    shapes: FxHashMap<u32, ValueShape>,
+    highlights: Highlights,
 }
 
-impl Classifier<'_> {
-    fn key(&mut self, start: u32) -> Key {
-        let ahead = self.tokens.get(self.last_found..).unwrap_or_default();
-        let nearby = ahead.iter().take(NEARBY_TOKENS).position(|token| token.span.start == start);
-        let found = nearby.map(|i| self.last_found.saturating_add(i)).map_or_else(
-            || self.tokens.binary_search_by_key(&start, |token| token.span.start).ok(),
-            Some,
-        );
-        let Some(index) = found else {
-            return Key::Stray(start);
-        };
-        self.last_found = index;
-        Key::Token(index)
-    }
-
-    fn get(&self, key: Key) -> Option<&(Span, Classification)> {
-        match key {
-            Key::Token(index) => self.slots.get(index)?.as_ref(),
-            Key::Stray(start) => self.strays.get(&start),
-        }
-    }
-
-    fn get_mut(&mut self, key: Key) -> Option<&mut (Span, Classification)> {
-        match key {
-            Key::Token(index) => self.slots.get_mut(index)?.as_mut(),
-            Key::Stray(start) => self.strays.get_mut(&start),
-        }
-    }
-
-    fn set(&mut self, key: Key, span: Span, classification: Classification) {
-        match key {
-            Key::Token(index) => {
-                if let Some(slot) = self.slots.get_mut(index) {
-                    *slot = Some((span, classification));
-                }
-            }
-            Key::Stray(start) => {
-                self.strays.insert(start, (span, classification));
-            }
-        }
-    }
-
-    fn remove(&mut self, span: Span) {
-        match self.key(span.start) {
-            Key::Token(index) => {
-                if let Some(slot) = self.slots.get_mut(index) {
-                    *slot = None;
-                }
-            }
-            Key::Stray(start) => {
-                self.strays.remove(&start);
-            }
-        }
-    }
-
-    fn insert(&mut self, span: Span, token_type: u32) {
-        let key = self.key(span.start);
-        self.set(key, span, Classification::plain(token_type));
-    }
-
-    fn retype(&mut self, span: Span, token_type: u32) {
-        let key = self.key(span.start);
-        if let Some((_, classification)) = self.get_mut(key) {
-            classification.token_type = token_type;
-        }
-    }
-
-    /// A plain variable becomes a function where it's called or assigned
-    /// one, and reads as read-only where it's spelled like a constant.
-    fn classify_bare(&self, name: &str, key: Key, base: Classification) -> Classification {
-        let mut classification = base;
-        if classification.token_type == TYPE_VARIABLE
-            && let Key::Token(index) = key
-            && self.tokens.get(index).is_some_and(|token| token.kind == TokenKind::Identifier)
+impl<'document> Classifier<'document> {
+    /// Keeps the highlights in order and apart, so a name recovery gave
+    /// another's span can't break the encoding.
+    fn push(&mut self, span: Span, classification: Classification) {
+        if !span.is_empty() && self.highlights.last().is_none_or(|(last, _)| last.end <= span.start)
         {
-            match value_shape(self.tokens, index) {
-                ValueShape::Called | ValueShape::AssignedFunction => {
-                    classification.token_type = TYPE_FUNCTION;
-                }
-                ValueShape::Plain => {
-                    if is_screaming_case(name) {
-                        classification.modifiers |= MODIFIER_READONLY;
-                    }
-                }
-            }
-        }
-        classification
-    }
-
-    fn classify_scope_names(&mut self) {
-        let semantic = self.semantic;
-        let tree = semantic.scope_tree();
-        let stdlib = semantic.stdlib();
-
-        self.symbol_keys.reserve_exact(tree.symbols().len());
-        for symbol in tree.symbols() {
-            let span = symbol.definition_span;
-            let key = self.key(span.start);
-            self.symbol_keys.push(key);
-            let name = tree.name(symbol.name);
-            if name == "self" || !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
-                continue;
-            }
-            let classification = self.classify_bare(name, key, symbol_classify(symbol.kind));
-            self.set(key, span, classification);
-        }
-
-        let self_name = tree.name_id("self");
-        // Each name's classification as a global, so a name read many times
-        // is looked up once.
-        let globals: Vec<Classification> = tree
-            .names()
-            .map(|(_, name)| {
-                stdlib
-                    .globals
-                    .get(name)
-                    .map_or(Classification::plain(TYPE_VARIABLE), stdlib_classify)
-            })
-            .collect();
-        self.reference_keys.reserve_exact(tree.references().len());
-        for reference in tree.references() {
-            let key = self.key(reference.span.start);
-            self.reference_keys.push(key);
-            if Some(reference.name) == self_name {
-                continue;
-            }
-            let name = tree.name(reference.name);
-            let base = reference.resolved.map_or_else(
-                || {
-                    let global = globals.get(reference.name.index()).copied();
-                    global.unwrap_or(Classification::plain(TYPE_VARIABLE))
-                },
-                |symbol_id| symbol_classify(tree.symbol(symbol_id).kind),
-            );
-            let classification = self.classify_bare(name, key, base);
-            self.set(key, reference.span, classification);
+            self.highlights.push((span, classification));
         }
     }
 
-    /// Classifies names after a `.` or `:`, resolving each one's whole chain
-    /// back to its root, so nested paths classify too: `Enum.Material.Grass`,
-    /// `game:GetService`, and `f:read` on a shaped local, not only
-    /// `math.floor`. A path resolves one member at a time, so each name
-    /// resolves from the one before it rather than walking its chain again.
-    fn classify_members(&mut self) {
-        let Self { source, tokens, semantic, .. } = *self;
-        let library = semantic.stdlib();
-        let tree = semantic.scope_tree();
-        // By where they start, so a root's is found by walking on in step
-        // with the tokens.
-        let whole_source = Span::new(0, index_to_offset(source.len()));
-        let mut references =
-            tree.references_within(whole_source).map(|id| tree.reference(id)).peekable();
-        // A name's path continues the one two tokens back, past the separator.
-        let (mut link_two_back, mut link_one_back): (Option<ChainLink>, Option<ChainLink>) =
-            (None, None);
-        for (index, token) in tokens.iter().enumerate() {
-            let link_before = link_two_back;
-            link_two_back = link_one_back;
-            if token.kind != TokenKind::Identifier {
-                link_one_back = None;
-                continue;
-            }
-            let name = token.text(source);
-            let separator = index.checked_sub(1).and_then(|before| tokens.get(before));
-            let is_after_dot = separator.is_some_and(|before| before.kind == TokenKind::Dot);
-            let is_member =
-                is_after_dot || separator.is_some_and(|before| before.kind == TokenKind::Colon);
-            if !is_member {
-                link_one_back = Some(ChainLink::Root);
-                continue;
-            }
-            let chain_before =
-                link_before.and_then(|link| Some((tokens.get(index.checked_sub(2)?)?, link)));
-            let entry = chain_before.and_then(|(before, link)| match link {
-                ChainLink::Root => {
-                    let root = before.text(source);
-                    let start = before.span.start;
-                    let reference = iter::from_fn(|| {
-                        references.next_if(|reference| reference.span.start <= start)
-                    })
-                    .find(|reference| {
-                        reference.span == before.span && tree.name(reference.name) == root
-                    })?;
-                    semantic.resolve_stdlib_path(&[root, name], reference)
-                }
-                ChainLink::Member(entry) => library.child(entry?, name),
-            });
-            link_one_back = if is_after_dot {
-                chain_before.map(|_| ChainLink::Member(entry))
+    fn plain(&mut self, name: &Name<'_>, token_type: TokenType) {
+        if name.written().is_some() {
+            self.push(name.span, Classification::plain(token_type));
+        }
+    }
+
+    /// A name that declares a local, given the value it's declared with, if
+    /// any. A local is a function where its value is one, read-only where
+    /// writing it is an error, and read-only too where it's spelled like a
+    /// constant and isn't a function.
+    fn declaration(&mut self, name: &Name<'_>, value: Option<&Expression<'_>>) {
+        let tree = self.semantic.scoping();
+        let Some(symbol_id) = tree.symbol_of(name) else {
+            return;
+        };
+        if name.written().is_none_or(|text| text == "self") {
+            return;
+        }
+        let symbol = tree.symbol(symbol_id);
+        let mut classification = symbol_classify(symbol.kind);
+        if classification.token_type == TokenType::Variable {
+            classification = if matches!(value, Some(Expression::FunctionDef(_))) {
+                Classification::plain(TokenType::Function)
             } else {
-                Some(ChainLink::Root)
+                Classification::value(TokenType::Variable, name.text.as_str())
             };
-            let classification = entry.map_or_else(
-                || match value_shape(tokens, index) {
-                    ValueShape::Called | ValueShape::AssignedFunction => {
-                        Classification::plain(TYPE_METHOD)
-                    }
-                    ValueShape::Plain => Classification {
-                        token_type: TYPE_PROPERTY,
-                        modifiers: if is_screaming_case(name) { MODIFIER_READONLY } else { 0 },
-                    },
-                },
-                member_classify,
-            );
-            self.set(Key::Token(index), token.span, classification);
         }
+        if symbol.is_read_only {
+            classification.modifiers |= MODIFIER_READONLY;
+        }
+        self.declared[symbol_id.index()] = Some(classification);
+        self.push(name.span, classification);
     }
 
-    fn propagate_to_references(&mut self) {
-        let tree = self.semantic.scope_tree();
-        for symbol in tree.symbols() {
-            let declared_key = self.symbol_keys.get(symbol.id.index()).copied();
-            let Some(&(_, declared)) = declared_key.and_then(|key| self.get(key)) else {
-                continue;
+    /// A name that reads or writes a local or a global. A variable is a
+    /// function where it's called or given one, anything called is, and a
+    /// local's reference takes on that it's a function, unless it's ever
+    /// reassigned, and that it's read-only.
+    fn reference(&mut self, name: &Name<'_>) {
+        let shape = self.shapes.remove(&name.span.start);
+        let tree = self.semantic.scoping();
+        let Some(reference) = tree.reference_of(name).map(|id| tree.reference(id)) else {
+            return;
+        };
+        if name.written().is_none_or(|text| text == "self") {
+            return;
+        }
+        let mut classification = match reference.resolved {
+            Some(symbol_id) => symbol_classify(tree.symbol(symbol_id).kind),
+            None if tree.is_host_global(reference) => self.globals[reference.name.index()],
+            None => Classification::plain(TokenType::Variable),
+        };
+        if classification.token_type == TokenType::Variable {
+            classification = if shape.is_some() {
+                Classification::plain(TokenType::Function)
+            } else {
+                Classification::value(TokenType::Variable, name.text.as_str())
             };
-            for reference_id in tree.resolved_references(symbol.id) {
-                let Some(&key) = self.reference_keys.get(reference_id.index()) else {
-                    continue;
-                };
-                if let Some((_, classification)) = self.get_mut(key) {
-                    if !symbol.is_modified && declared.token_type == TYPE_FUNCTION {
-                        classification.token_type = TYPE_FUNCTION;
-                    }
-                    classification.modifiers |= declared.modifiers & MODIFIER_READONLY;
-                }
+        }
+        if shape == Some(ValueShape::Called) {
+            classification.token_type = TokenType::Function;
+        }
+        if let Some(symbol_id) = reference.resolved
+            && let Some(declared) = self.declared[symbol_id.index()]
+        {
+            if !tree.symbol(symbol_id).is_modified && declared.token_type == TokenType::Function {
+                classification.token_type = TokenType::Function;
             }
+            classification.modifiers |= declared.modifiers & MODIFIER_READONLY;
+        }
+        self.push(name.span, classification);
+    }
+
+    /// A field or a method's name, given the stdlib entry its path reaches,
+    /// if any. A member that's called, or given a function, is a method.
+    fn member(
+        &mut self,
+        name: &Name<'_>,
+        entry: Option<&StdlibEntry<'_>>,
+        shape: Option<ValueShape>,
+    ) {
+        let Some(text) = name.written() else {
+            return;
+        };
+        let mut classification = match entry {
+            Some(entry) => member_classify(entry),
+            None if shape.is_some() => Classification::plain(TokenType::Method),
+            None => Classification::value(TokenType::Property, text),
+        };
+        if shape == Some(ValueShape::Called) {
+            classification.token_type = TokenType::Method;
+        }
+        self.push(name.span, classification);
+    }
+
+    /// The stdlib entry `member` names after `at`, which is `None` past
+    /// anything but a name or a field. A root that reaches the host's global
+    /// looks up the library, a local of known shape its shape, and any other
+    /// root nothing.
+    fn step(
+        &self,
+        at: Option<PathAt<'document>>,
+        member: &str,
+    ) -> Option<&'document StdlibEntry<'document>> {
+        match at? {
+            PathAt::Root(root) => {
+                let tree = self.semantic.scoping();
+                let reference = tree.reference(tree.reference_of(root)?);
+                self.semantic.resolve_stdlib_path(&[root.text.as_str(), member], reference)
+            }
+            PathAt::Member(entry) => self.semantic.stdlib().child(entry?, member),
         }
     }
 
-    /// Every classification by where it starts, those with no text dropped.
-    fn finish(self) -> Highlights {
-        let mut highlights = Vec::with_capacity(self.slots.len().div_ceil(2));
-        let mut strays = self.strays.into_values().filter(|(span, _)| !span.is_empty()).peekable();
-        for slot in self.slots.into_iter().flatten().filter(|(span, _)| !span.is_empty()) {
-            while let Some(stray) = strays.next_if(|(span, _)| span.start < slot.0.start) {
-                highlights.push(stray);
-            }
-            highlights.push(slot);
-        }
-        highlights.extend(strays);
-        highlights
-    }
-
-    /// The name a call calls, through parentheses, casts, and Luau type
-    /// instantiations.
-    fn callee(&mut self, callee: ChainHead<'_>) {
+    /// Marks the name `callee` calls, through parentheses, casts, and Luau
+    /// type instantiations.
+    fn mark_callee(&mut self, callee: ChainHead<'_>) {
         let mut current = callee;
         loop {
             current = match current.split_last() {
                 Some((_, Suffix::Field(name))) => {
-                    self.retype(name.span, TYPE_METHOD);
+                    self.shapes.insert(name.span.start, ValueShape::Called);
                     return;
                 }
                 Some((before, Suffix::TypeInstantiation { .. })) => before, // Luau
@@ -464,7 +325,7 @@ impl Classifier<'_> {
                 }
                 None => match current.prefix {
                     Expression::Name(name) => {
-                        self.retype(name.span, TYPE_FUNCTION);
+                        self.shapes.insert(name.span.start, ValueShape::Called);
                         return;
                     }
                     Expression::Parenthesized(parenthesized) => {
@@ -492,81 +353,198 @@ impl Classifier<'_> {
     }
 }
 
-impl<'ast> Visitor<'ast> for Classifier<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        match stmt {
-            // Luau
-            Statement::TypeDeclaration(declaration) => {
-                let token_type = match &declaration.value {
-                    TypeDeclarationValue::Alias(_) => TYPE_TYPE,
-                    TypeDeclarationValue::TypeFunction(_) => TYPE_FUNCTION,
-                };
-                self.insert(declaration.name.span, token_type);
-            }
-            Statement::FunctionDecl(declaration) => {
-                let name = &declaration.name;
-                if let Some(last) = name.method.as_ref().or_else(|| name.names.last()) {
-                    let is_method = name.method.is_some() || name.names.len() > 1;
-                    self.insert(last.span, if is_method { TYPE_METHOD } else { TYPE_FUNCTION });
-                }
-            }
-            Statement::LocalAssignment(assignment) => {
-                for (index, attributed) in assignment.names.iter().enumerate() {
-                    if matches!(assignment.exprs.get(index), Some(Expression::FunctionDef(_))) {
-                        self.insert(attributed.name.span, TYPE_FUNCTION);
-                    }
-                    // Lua 5.4+: a to-be-closed local can't be assigned either.
-                    let is_read_only = assignment.kind.is_const()
-                        || attributed.attribute.as_ref().is_some_and(|attribute| {
-                            matches!(identifier(&attribute.name), Some("const" | "close"))
-                        });
-                    let key = self.key(attributed.name.span.start);
-                    if is_read_only && let Some((_, classification)) = self.get_mut(key) {
-                        classification.modifiers |= MODIFIER_READONLY;
-                    }
-                }
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                if identifier(&global_function.name).is_some() {
-                    self.insert(global_function.name.span, TYPE_FUNCTION);
-                }
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalFunction(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Break(_)
-            | Statement::Error(_) => {}
+impl<'ast> Visit<'ast> for Classifier<'ast> {
+    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
+        if let Expression::Name(name) = expr {
+            self.reference(name);
+        } else {
+            self.walk_expr(expr);
         }
-        self.walk_stmt(stmt);
     }
 
-    fn visit_call(&mut self, call: Call<'ast>) {
-        match call.method {
-            Some(method) => self.retype(method.span, TYPE_METHOD),
-            None => self.callee(call.callee),
+    fn visit_var(&mut self, var: &'ast Var<'ast>) {
+        match var {
+            Var::Name(name) => self.reference(name),
+            Var::Suffixed(chain) => self.visit_suffixed_expr(chain),
         }
-        self.walk_call(call);
     }
 
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
-        for field in &table.fields {
+    /// Each member resolves from the one before it, so a path resolves one
+    /// member at a time rather than walking back to its root each time.
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
+        for (i, suffix) in suffixed_expr.suffixes.iter().enumerate() {
+            if matches!(suffix, Suffix::Call(_)) {
+                self.mark_callee(suffixed_expr.head(i));
+            }
+        }
+        self.visit_expr(&suffixed_expr.prefix);
+        let mut at = if let Expression::Name(root) = &suffixed_expr.prefix {
+            Some(PathAt::Root(root))
+        } else {
+            None
+        };
+        for suffix in &suffixed_expr.suffixes {
+            match suffix {
+                Suffix::Field(name) => {
+                    let entry = self.step(at, name.text.as_str());
+                    at = at.map(|_| PathAt::Member(entry));
+                    let shape = self.shapes.remove(&name.span.start);
+                    self.member(name, entry, shape);
+                }
+                Suffix::MethodCall(call) => {
+                    let entry = self.step(at, call.name.text.as_str());
+                    at = None;
+                    self.member(&call.name, entry, Some(ValueShape::Called));
+                    if let Some(type_args) = &call.type_args {
+                        self.visit_type_args(type_args);
+                    }
+                    self.visit_function_args(&call.args);
+                }
+                Suffix::Index { .. } | Suffix::Call(_) | Suffix::TypeInstantiation { .. } => {
+                    at = None;
+                    self.visit_suffix(suffix);
+                }
+            }
+        }
+    }
+
+    fn visit_assignment(&mut self, assignment: &'ast Assignment<'ast>) {
+        for (target, value) in assignment.targets.iter().zip(&assignment.values) {
+            if !matches!(value, Expression::FunctionDef(_)) {
+                continue;
+            }
+            let assigned = match target {
+                Var::Name(name) => Some(&**name),
+                Var::Suffixed(chain) => {
+                    if let Suffix::Field(name) = chain.suffixes.last() {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(name) = assigned {
+                self.shapes.insert(name.span.start, ValueShape::AssignedFunction);
+            }
+        }
+        self.walk_assignment(assignment);
+    }
+
+    fn visit_local_assignment(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
+        for (i, attributed) in local_assignment.names.iter().enumerate() {
+            self.declaration(&attributed.name, local_assignment.exprs.get(i));
+            if let Some(annotation) = &attributed.type_annotation {
+                self.visit_type(annotation);
+            }
+        }
+        for expr in &local_assignment.exprs {
+            self.visit_expr(expr);
+        }
+    }
+
+    // Lua 5.5
+    fn visit_global_declaration(&mut self, global_declaration: &'ast GlobalDeclaration<'ast>) {
+        let leading = global_declaration.attribute.as_deref();
+        for attributed in &global_declaration.names {
+            if let Some(text) = attributed.name.written() {
+                let mut classification = Classification::value(TokenType::Variable, text);
+                if attributed
+                    .attribute_or(leading)
+                    .is_some_and(|attribute| attribute.name.text == "const")
+                {
+                    classification.modifiers |= MODIFIER_READONLY;
+                }
+                self.push(attributed.name.span, classification);
+            }
+        }
+        for expr in &global_declaration.exprs {
+            self.visit_expr(expr);
+        }
+    }
+
+    fn visit_local_function(&mut self, local_function: &'ast LocalFunction<'ast>) {
+        for attribute in &local_function.attributes {
+            self.visit_function_attribute(attribute);
+        }
+        self.declaration(&local_function.name, None);
+        self.visit_function_body(&local_function.body);
+    }
+
+    // Lua 5.5
+    fn visit_global_function(&mut self, global_function: &'ast GlobalFunction<'ast>) {
+        self.plain(&global_function.name, TokenType::Function);
+        self.visit_function_body(&global_function.body);
+    }
+
+    /// `function f()` declares a function, and `function a.b.c()` and
+    /// `function a.b:c()` a method on the table `a.b` reads.
+    fn visit_function_decl(&mut self, function_decl: &'ast FunctionDecl<'ast>) {
+        for attribute in &function_decl.attributes {
+            self.visit_function_attribute(attribute);
+        }
+        let FunctionName { names, method, .. } = &function_decl.name;
+        let is_method = method.is_some() || names.len() > 1;
+        let mut at = None;
+        for (i, name) in names.iter().enumerate() {
+            if i == 0 {
+                if !is_method {
+                    self.shapes.insert(name.span.start, ValueShape::Called);
+                }
+                self.reference(name);
+                at = Some(PathAt::Root(name));
+            } else if method.is_none() && i + 1 == names.len() {
+                self.plain(name, TokenType::Method);
+            } else {
+                let entry = self.step(at, name.text.as_str());
+                at = at.map(|_| PathAt::Member(entry));
+                self.member(name, entry, None);
+            }
+        }
+        if let Some(method_name) = method {
+            self.plain(method_name, TokenType::Method);
+        }
+        self.visit_function_body(&function_decl.body);
+    }
+
+    fn visit_param(&mut self, param: &'ast Parameter<'ast>) {
+        self.declaration(&param.name, None);
+        if let Some(annotation) = &param.type_annotation {
+            self.visit_type(annotation);
+        }
+    }
+
+    // Lua 5.5 names a vararg, and Luau types one.
+    fn visit_var_arg_param(&mut self, var_arg_param: &'ast VarArgParam<'ast>) {
+        if let Some(name) = &var_arg_param.name {
+            self.declaration(name, None);
+        }
+        if let Some(annotation) = &var_arg_param.type_annotation {
+            self.visit_type(annotation);
+        }
+    }
+
+    fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
+        self.declaration(&numeric_for.name, None);
+        if let Some(annotation) = &numeric_for.type_annotation {
+            self.visit_type(annotation);
+        }
+        self.visit_expr(&numeric_for.start);
+        self.visit_expr(&numeric_for.limit);
+        if let Some(step) = &numeric_for.step {
+            self.visit_expr(step);
+        }
+        self.visit_block(&numeric_for.block);
+    }
+
+    fn visit_table_constructor(&mut self, table_constructor: &'ast TableConstructor<'ast>) {
+        for field in &table_constructor.fields {
             match field {
                 Field::Named { name, value } => {
                     let is_method = matches!(value, Expression::FunctionDef(_));
-                    self.insert(name.span, if is_method { TYPE_METHOD } else { TYPE_PROPERTY });
+                    self.plain(
+                        name,
+                        if is_method { TokenType::Method } else { TokenType::Property },
+                    );
                     self.visit_expr(value);
                 }
                 Field::Bracketed { key, value, .. } => {
@@ -578,92 +556,94 @@ impl<'ast> Visitor<'ast> for Classifier<'_> {
         }
     }
 
-    fn visit_generic_type_list(&mut self, generics: &'ast GenericTypeList<'ast>) {
-        for param in &generics.params {
-            self.insert(param.name.span, TYPE_TYPE);
-            if let Some(default) = &param.default {
-                self.visit_type(default);
+    // Luau
+    fn visit_type_declaration(&mut self, type_declaration: &'ast TypeDeclaration<'ast>) {
+        let token_type = match &type_declaration.value {
+            TypeDeclarationValue::Alias(_) => TokenType::Type,
+            TypeDeclarationValue::TypeFunction(_) => TokenType::Function,
+        };
+        self.plain(&type_declaration.name, token_type);
+        self.walk_type_declaration(type_declaration);
+    }
+
+    // Luau
+    fn visit_generic_type_param(&mut self, generic_type_param: &'ast GenericTypeParam<'ast>) {
+        self.plain(&generic_type_param.name, TokenType::Type);
+        self.walk_generic_type_param(generic_type_param);
+    }
+
+    // Luau: a primitive keeps its grammar scope.
+    fn visit_type(&mut self, ty: &'ast Type<'ast>) {
+        if let Type::Name(name) = ty {
+            if !matches!(
+                name.text.as_str(),
+                "any"
+                    | "unknown"
+                    | "never"
+                    | "boolean"
+                    | "number"
+                    | "integer"
+                    | "string"
+                    | "thread"
+                    | "userdata"
+                    | "buffer"
+                    | "vector"
+            ) {
+                self.plain(name, TokenType::Type);
             }
+        } else {
+            self.walk_type(ty);
         }
     }
 
-    fn visit_type(&mut self, ty: &'ast Type<'ast>) {
-        match ty {
-            Type::Name(name) => {
-                if matches!(
-                    name.text.as_str(),
-                    "any"
-                        | "unknown"
-                        | "never"
-                        | "boolean"
-                        | "number"
-                        | "integer"
-                        | "string"
-                        | "thread"
-                        | "userdata"
-                        | "buffer"
-                        | "vector"
-                ) {
-                    self.remove(name.span);
-                } else {
-                    self.insert(name.span, TYPE_TYPE);
-                }
-            }
-            Type::Typeof(query) => self.remove(query.span),
-            Type::Named(named) => {
-                if let Some(prefix) = &named.prefix {
-                    self.insert(prefix.span, TYPE_VARIABLE);
-                }
-                self.insert(named.name.span, TYPE_TYPE);
-            }
-            Type::GenericPack(pack) => self.insert(pack.name.span, TYPE_TYPE),
-            Type::Table(table) => {
-                for field in &table.fields {
-                    match field {
-                        TypeField::Named { name, .. } => self.insert(name.span, TYPE_PROPERTY),
-                        TypeField::Indexer { .. } | TypeField::Array { .. } => {}
-                    }
-                }
-            }
-            Type::Function(function_type) => {
-                for param in &function_type.params {
-                    if let Some(name) = &param.name {
-                        self.insert(name.span, TYPE_PARAMETER);
-                    }
-                }
-            }
-            Type::Optional(_)
-            | Type::Union(_)
-            | Type::Intersection(_)
-            | Type::Parenthesized(_)
-            | Type::Pack(_)
-            | Type::Variadic(_)
-            | Type::Nil(_)
-            | Type::True(_)
-            | Type::False(_)
-            | Type::StringLiteral(_)
-            | Type::Number(_)
-            | Type::Error(_) => {}
+    // Luau
+    fn visit_named_type(&mut self, named_type: &'ast NamedType<'ast>) {
+        if let Some(prefix) = &named_type.prefix {
+            self.plain(prefix, TokenType::Variable);
         }
-        self.walk_type(ty);
+        self.plain(&named_type.name, TokenType::Type);
+        self.walk_named_type(named_type);
+    }
+
+    // Luau
+    fn visit_generic_pack_type(&mut self, generic_pack_type: &'ast GenericPackType<'ast>) {
+        self.plain(&generic_pack_type.name, TokenType::Type);
+    }
+
+    // Luau
+    fn visit_type_field(&mut self, type_field: &'ast TypeField<'ast>) {
+        if let TypeField::Named { name, .. } = type_field {
+            self.plain(name, TokenType::Property);
+        }
+        self.walk_type_field(type_field);
+    }
+
+    // Luau
+    fn visit_function_type_param(&mut self, function_type_param: &'ast FunctionTypeParam<'ast>) {
+        if let Some(name) = &function_type_param.name {
+            self.plain(name, TokenType::Parameter);
+        }
+        self.walk_function_type_param(function_type_param);
     }
 }
 
 const fn symbol_classify(kind: SymbolKind) -> Classification {
     match kind {
-        SymbolKind::Parameter | SymbolKind::ImplicitSelf => Classification::plain(TYPE_PARAMETER),
-        SymbolKind::FunctionName => Classification::plain(TYPE_FUNCTION),
+        SymbolKind::Parameter | SymbolKind::ImplicitSelf | SymbolKind::ImplicitArg => {
+            Classification::plain(TokenType::Parameter)
+        }
+        SymbolKind::FunctionName => Classification::plain(TokenType::Function),
         SymbolKind::Local | SymbolKind::IteratorVariable | SymbolKind::NumericForVariable => {
-            Classification::plain(TYPE_VARIABLE)
+            Classification::plain(TokenType::Variable)
         }
     }
 }
 
-const fn stdlib_classify(entry: &StdlibEntry) -> Classification {
+const fn stdlib_classify(entry: &StdlibEntry<'_>) -> Classification {
     let token_type = match entry {
-        StdlibEntry::Function(_) => TYPE_FUNCTION,
-        StdlibEntry::Namespace(_) => TYPE_NAMESPACE,
-        StdlibEntry::Constant(_) | StdlibEntry::Property(_) => TYPE_PROPERTY,
+        StdlibEntry::Function(_) => TokenType::Function,
+        StdlibEntry::Namespace(_) => TokenType::Namespace,
+        StdlibEntry::Constant(_) | StdlibEntry::Property(_) => TokenType::Property,
     };
     let mut modifiers = MODIFIER_DEFAULT_LIBRARY;
     if entry.deprecation().is_some() {
@@ -677,30 +657,20 @@ const fn stdlib_classify(entry: &StdlibEntry) -> Classification {
 
 /// Stdlib namespace members: same modifiers as bare globals, but member
 /// functions read as methods so call sites match the accessor grammar.
-const fn member_classify(entry: &StdlibEntry) -> Classification {
+const fn member_classify(entry: &StdlibEntry<'_>) -> Classification {
     let mut classification = stdlib_classify(entry);
-    if classification.token_type == TYPE_FUNCTION {
-        classification.token_type = TYPE_METHOD;
+    if matches!(classification.token_type, TokenType::Function) {
+        classification.token_type = TokenType::Method;
     }
     classification
 }
 
-fn utf16_length(source: &str, span: Span) -> u32 {
-    let end = offset_to_index(span.end).min(source.len());
-    source.get(offset_to_index(span.start)..end).map_or(0, |text| {
-        if text.is_ascii() {
-            index_to_offset(text.len())
-        } else {
-            index_to_offset(text.encode_utf16().count())
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
+    use luck_token::{LuaTarget, index_to_offset};
 
     use super::*;
+    use crate::document::span_text;
     use crate::fixtures::document;
 
     fn parse_document(source: &str, target: LuaTarget) -> DocumentState {
@@ -738,23 +708,19 @@ mod tests {
         let mut previous_end = Position::default();
         data.iter()
             .map(|token| {
-                position.line = position.line.saturating_add(token.delta_line);
+                position.line += token.delta_line;
                 position.character = if token.delta_line == 0 {
-                    position.character.saturating_add(token.delta_start)
+                    position.character + token.delta_start
                 } else {
                     token.delta_start
                 };
                 assert!(position >= previous_end, "overlapping tokens: {data:?}");
                 assert!(token.length > 0, "zero-length token: {data:?}");
-                previous_end =
-                    Position::new(position.line, position.character.saturating_add(token.length));
+                previous_end = Position::new(position.line, position.character + token.length);
                 let span = Span::new(document.offset(position), document.offset(previous_end));
                 Highlight {
-                    text: span.text(document.text()).to_owned(),
-                    kind: legend
-                        .token_types
-                        .get(offset_to_index(token.token_type))
-                        .map_or_else(String::new, |kind| kind.as_str().to_owned()),
+                    text: span_text(document.text(), span).to_owned(),
+                    kind: legend.token_types[token.token_type as usize].as_str().to_owned(),
                     modifiers: legend
                         .token_modifiers
                         .iter()
@@ -1056,6 +1022,51 @@ end
         ));
         let name = tokens.iter().find(|token| token.text == "setup").expect("setup");
         assert_eq!(name.kind, "function", "{tokens:?}");
+    }
+
+    #[test]
+    fn a_binding_that_can_t_be_written_is_readonly_everywhere() {
+        for (source, target, name) in [
+            ("const function f() end f()", LuaTarget::Luau, "f"),
+            ("for i = 1, 2 do print(i) end", LuaTarget::Lua55, "i"),
+            ("local <const> a, b = 1, 2 print(a, b)", LuaTarget::Lua55, "b"),
+            ("global <const> limit = 1", LuaTarget::Lua55, "limit"),
+        ] {
+            let tokens = highlights(&parse_document(source, target));
+            let named: Vec<&Highlight> = tokens.iter().filter(|token| token.text == name).collect();
+            assert!(!named.is_empty(), "{source}: {tokens:?}");
+            for token in named {
+                assert!(token.modifiers.iter().any(|modifier| modifier == "readonly"), "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_member_called_or_given_a_function_is_a_method() {
+        let tokens = highlights(&parse_document(
+            "\
+t.run = function() end
+t.go(t.x, (t.cast :: any)(), t.later)
+",
+            LuaTarget::Luau,
+        ));
+        let kinds: Vec<(&str, &str)> =
+            tokens.iter().map(|token| (token.text.as_str(), token.kind.as_str())).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("t", "variable"),
+                ("run", "method"),
+                ("t", "variable"),
+                ("go", "method"),
+                ("t", "variable"),
+                ("x", "property"),
+                ("t", "variable"),
+                ("cast", "method"),
+                ("t", "variable"),
+                ("later", "property"),
+            ]
+        );
     }
 
     #[test]

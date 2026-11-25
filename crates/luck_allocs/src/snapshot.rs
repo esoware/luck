@@ -1,6 +1,6 @@
-use core::fmt::{self, Write as _};
+use std::fmt::{self, Write as _};
 use std::path::Path;
-use std::{fs, io};
+use std::{fs, io, iter};
 
 use humansize::{DECIMAL, format_size};
 use luck_benchmark_files::TestFile;
@@ -13,10 +13,6 @@ use crate::stats::{Metric, MetricKind, StageStats};
 /// It's YAML so the committed values can be read back for
 /// [`Metric::snapshot_value`], and written by hand to keep the layout's git
 /// diffs small.
-///
-/// # Errors
-///
-/// Fails when the snapshot can't be written.
 pub(crate) fn write_snapshot(path: &Path, entries: &[(&TestFile, StageStats)]) -> io::Result<()> {
     let committed = fs::read_to_string(path).unwrap_or_default();
     let committed_documents = Yaml::load_from_str(&committed).unwrap_or_default();
@@ -27,39 +23,36 @@ pub(crate) fn write_snapshot(path: &Path, entries: &[(&TestFile, StageStats)]) -
             snapshot.push('\n');
         }
         let committed_file = committed_document.get(file.file_name);
-        let metrics = stats.metrics(file.source_text.len());
-        render_entry(&mut snapshot, file.file_name, &metrics, committed_file)
+        let metrics = iter::once(Metric::file_size(file.source_text.len())).chain(stats.metrics());
+        render_entry(&mut snapshot, "", file.file_name, metrics, committed_file)
             .map_err(io::Error::other)?;
     }
     fs::write(path, snapshot)
 }
 
-/// Writes one entry's metrics under its name.
+/// Writes one entry's metrics under its name, each line after `indent`.
 ///
 /// One metric per line and no alignment, so a changed value is a one-line
-/// diff and a new metric reformats nothing. The name sits at column 0, so it
-/// heads git's hunks. A byte count is the exact number, which is what diffs,
-/// with its readable size in a comment.
-///
-/// # Errors
-///
-/// Fails when `snapshot` can't be written to.
+/// diff and a new metric reformats nothing. A stage's snapshot writes the
+/// name at column 0, so it heads git's hunks. A byte count is the exact
+/// number, which is what diffs, with its readable size in a comment.
 pub(crate) fn render_entry(
     snapshot: &mut String,
+    indent: &str,
     name: &str,
-    metrics: &[Metric],
+    metrics: impl IntoIterator<Item = Metric>,
     committed: Option<&Yaml<'_>>,
 ) -> fmt::Result {
-    writeln!(snapshot, "{name}:")?;
+    writeln!(snapshot, "{indent}{name}:")?;
     for metric in metrics {
         let committed_value = committed.get(metric.label).and_then(Yaml::as_integer);
         let value = metric.snapshot_value(committed_value);
         match metric.kind {
-            MetricKind::Count => writeln!(snapshot, "  {}: {value}", metric.label)?,
+            MetricKind::Count => writeln!(snapshot, "{indent}  {}: {value}", metric.label)?,
             MetricKind::Bytes { .. } => {
                 writeln!(
                     snapshot,
-                    "  {}: {value} # {}",
+                    "{indent}  {}: {value} # {}",
                     metric.label,
                     format_size(value, DECIMAL)
                 )?;

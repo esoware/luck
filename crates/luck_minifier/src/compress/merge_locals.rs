@@ -1,108 +1,92 @@
 //! Merging neighboring `local`s, and neighboring assignments to proven
 //! locals, into one statement.
 
-use core::mem;
+use std::mem;
 
 use luck_allocator::List;
 use luck_ast::{
-    Assignment, AttributedName, Expression, LocalAssignment, LocalAssignmentKind, Name, Statement,
-    Var, Visitor,
+    Assignment, AttributedName, Expression, LocalAssignmentKind, Name, Statement, Var, Visit,
 };
+use luck_semantic::{Scoping, SymbolId};
 use luck_token::LuaVersion;
+use luck_value::{MayHaveSideEffects as _, ValueContext};
 
 use super::Compressor;
-use crate::binding::{Bindings, has_fixed_binding, is_env_binding, local_of};
-use crate::expr::{is_pure_modulo_name_reads, is_single_register_value};
+use crate::binding::has_fixed_binding;
 use crate::limits::assignment_target_limit;
 
-/// The binding of a lone `local name = value` whose value a group may
-/// evaluate beside its neighbors, the only kind of `local` an initialized
-/// group merges.
-fn single_local(stmt: &Statement<'_>, version: LuaVersion) -> Option<usize> {
-    let Statement::LocalAssignment(local) = stmt else {
-        return None;
-    };
-    // Fixed bindings stay unmerged. Merging a `const` with plain locals, for
-    // one, would extend or drop its const-ness.
-    if has_fixed_binding(local, version) {
-        return None;
+/// A dialect in which no name's read counts as an effect, since a group
+/// evaluates its values in the order its statements did, so a global's
+/// `__index` sees the same reads in the same order.
+struct ReadsInOrder(LuaVersion);
+
+impl ValueContext for ReadsInOrder {
+    fn version(&self) -> LuaVersion {
+        self.0
     }
-    if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
-        && is_pure_modulo_name_reads(expr)
-    {
-        return local_of(&attributed.name);
+
+    fn is_global_reference(&self, _name: &Name<'_>) -> bool {
+        false
     }
-    None
 }
 
-pub(super) fn is_bare_local(stmt: &Statement<'_>, version: LuaVersion) -> bool {
-    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local, version))
+pub(super) fn is_bare_local(stmt: &Statement<'_>, scoping: &Scoping) -> bool {
+    matches!(stmt, Statement::LocalAssignment(local) if local.exprs.is_empty() && !has_fixed_binding(local, scoping))
 }
 
-/// Finds a read or write of any of a group's bindings, closure bodies
-/// included.
+/// Whether `expr` evaluates into exactly one register with no temporaries.
+const fn is_single_register_value(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::StringLiteral(_)
+        | Expression::Nil(_)
+        | Expression::True(_)
+        | Expression::False(_)
+        | Expression::VarArg(_)
+        | Expression::FunctionDef(_) => true,
+        Expression::Name(_)
+        | Expression::Suffixed(_)
+        | Expression::Parenthesized(_)
+        | Expression::BinaryOp(_)
+        | Expression::UnaryOp(_)
+        | Expression::TableConstructor(_)
+        | Expression::IfExpression(_)
+        | Expression::InterpolatedString(_)
+        | Expression::TypeCast(_)
+        | Expression::Error(_) => false,
+    }
+}
+
+/// Finds a reference to any of a group's bindings, closure bodies and Luau
+/// annotations included.
 struct ReferenceFinder<'group> {
-    group: &'group [usize],
-    bindings: &'group Bindings,
+    group: &'group [SymbolId],
+    scoping: &'group Scoping,
     has_reference: bool,
 }
 
-impl ReferenceFinder<'_> {
-    fn check(&mut self, name: &Name<'_>) {
-        if let Some(id) = local_of(name) {
-            let resolved = self.bindings.resolve(id);
-            self.has_reference |=
-                self.group.iter().any(|&member| self.bindings.resolve(member) == resolved);
+impl<'tree> Visit<'tree> for ReferenceFinder<'_> {
+    fn visit_stmt(&mut self, stmt: &'tree Statement<'tree>) {
+        if !self.has_reference {
+            self.walk_stmt(stmt);
         }
-    }
-}
-
-impl<'tree> Visitor<'tree> for ReferenceFinder<'_> {
-    fn visit_assignment_target(&mut self, target: &'tree Var<'tree>) {
-        if self.has_reference {
-            return;
-        }
-        if let Var::Name(name) = target {
-            self.check(name);
-            return;
-        }
-        self.walk_assignment_target(target);
     }
 
     fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
-        if self.has_reference {
-            return;
+        if !self.has_reference {
+            self.walk_expr(expr);
         }
-        if let Expression::Name(name) = expr {
-            self.check(name);
-            return;
-        }
-        self.walk_expr(expr);
     }
 
-    fn visit_stmt(&mut self, stmt: &'tree Statement<'tree>) {
-        if self.has_reference {
-            return;
-        }
-        if let Statement::FunctionDecl(function_decl) = stmt
-            && let Some(root) = function_decl.name.names.first()
-        {
-            self.check(root);
-        }
-        self.walk_stmt(stmt);
+    fn visit_name(&mut self, name: &'tree Name<'tree>) {
+        self.has_reference |= self
+            .scoping
+            .resolved_symbol_of(name)
+            .is_some_and(|symbol| self.group.contains(&symbol));
     }
 }
 
-fn references_any(expr: &Expression<'_>, group: &[usize], bindings: &Bindings) -> bool {
-    let mut finder = ReferenceFinder { group, bindings, has_reference: false };
-    finder.visit_expr(expr);
-    finder.has_reference
-}
-
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
 impl<'ast> Compressor<'_, 'ast> {
     /// `local a = 1 local b = 2` becomes `local a, b = 1, 2`, `a = 1 b = 2`
     /// becomes `a, b = 1, 2` where both are locals, `local a local b`
@@ -119,24 +103,49 @@ impl<'ast> Compressor<'_, 'ast> {
     }
 
     fn merge_groups(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
-        let mut kept = 0usize;
-        let mut index = 0usize;
+        let mut kept = 0;
+        let mut index = 0;
         let mut group = mem::take(&mut self.group);
         while index < stmts.len() {
             let group_end = self.merge_group_end(stmts, index, &mut group);
-            if group_end > index.saturating_add(1) {
+            if group_end > index + 1 {
                 self.merge_group(stmts, index, group_end);
                 self.has_changed = true;
             }
             stmts.swap(kept, index);
-            if let Some(stmt) = stmts.get(kept) {
-                self.live_registers = self.live_registers.saturating_add(declared_count(stmt));
-            }
-            kept = kept.saturating_add(1);
+            self.live_registers += declared_count(&stmts[kept]);
+            kept += 1;
             index = group_end;
         }
         self.group = group;
         stmts.truncate(kept);
+    }
+
+    const fn reference_finder<'group>(
+        &'group self,
+        group: &'group [SymbolId],
+    ) -> ReferenceFinder<'group> {
+        ReferenceFinder { group, scoping: self.scoping, has_reference: false }
+    }
+
+    /// The symbol of a lone `local name = value` whose value a group may
+    /// evaluate beside its neighbors, the only kind of `local` an initialized
+    /// group merges.
+    fn single_local(&self, stmt: &Statement<'_>) -> Option<SymbolId> {
+        let Statement::LocalAssignment(local) = stmt else {
+            return None;
+        };
+        // Fixed bindings stay unmerged. Merging a `const` with plain locals,
+        // for one, would extend or drop its const-ness.
+        if has_fixed_binding(local, self.scoping) {
+            return None;
+        }
+        if let ([attributed], [expr]) = (&*local.names, &*local.exprs)
+            && !expr.may_have_side_effects(&ReadsInOrder(self.version))
+        {
+            return self.scoping.symbol_of(&attributed.name);
+        }
+        None
     }
 
     /// The end of the run of statements from `start` that merge into it.
@@ -144,27 +153,20 @@ impl<'ast> Compressor<'_, 'ast> {
         &self,
         stmts: &[Statement<'ast>],
         start: usize,
-        group: &mut Vec<usize>,
+        group: &mut Vec<SymbolId>,
     ) -> usize {
-        let Some(first) = stmts.get(start) else {
-            return start;
-        };
-        let followers = stmts.get(start.saturating_add(1)..).unwrap_or_default();
+        let first = &stmts[start];
+        let followers = &stmts[start + 1..];
         group.clear();
-        let bindings = &*self.bindings;
-        let follower_count = if let Some(id) = single_local(first, self.version) {
-            group.push(id);
+        let follower_count = if let Some(symbol) = self.single_local(first) {
+            group.push(symbol);
             followers
                 .iter()
                 .take_while(|stmt| {
-                    single_local(stmt, self.version).is_some_and(|follower| {
+                    self.single_local(stmt).is_some_and(|follower| {
                         // A Luau annotation binds before the name, as the
                         // value does.
-                        let mut finder = ReferenceFinder {
-                            group: group.as_slice(),
-                            bindings,
-                            has_reference: false,
-                        };
+                        let mut finder = self.reference_finder(group);
                         finder.visit_stmt(stmt);
                         let can_join = !finder.has_reference;
                         if can_join {
@@ -174,13 +176,13 @@ impl<'ast> Compressor<'_, 'ast> {
                     })
                 })
                 .count()
-        } else if is_bare_local(first, self.version) {
-            followers.iter().take_while(|stmt| is_bare_local(stmt, self.version)).count()
+        } else if is_bare_local(first, self.scoping) {
+            followers.iter().take_while(|stmt| is_bare_local(stmt, self.scoping)).count()
         } else if let Statement::Assignment(assignment) = first
-            && let Some((id, _)) = self.single_assignment(assignment)
+            && let Some((symbol, _)) = self.single_assignment(assignment)
         {
             let follower_limit = assignment_target_limit(self.live_registers).saturating_sub(1);
-            group.push(id);
+            group.push(symbol);
             followers
                 .iter()
                 .take(follower_limit)
@@ -188,13 +190,11 @@ impl<'ast> Compressor<'_, 'ast> {
                     let Statement::Assignment(follower) = stmt else {
                         return false;
                     };
-                    self.single_assignment(follower).is_some_and(|(follower_id, value)| {
+                    self.single_assignment(follower).is_some_and(|(target, value)| {
                         // PUC Lua stores a multiple assignment right to left,
                         // so a repeated target would keep its first value.
-                        let target = bindings.resolve(follower_id);
                         let can_join =
-                            !group.iter().any(|&member| bindings.resolve(member) == target)
-                                && !references_any(value, group, bindings);
+                            !group.contains(&target) && !self.references_any(value, group);
                         if can_join {
                             group.push(target);
                         }
@@ -205,46 +205,40 @@ impl<'ast> Compressor<'_, 'ast> {
         } else {
             0
         };
-        start.saturating_add(1).saturating_add(follower_count)
+        start + 1 + follower_count
     }
 
     /// Moves the names and values of `stmts[start + 1..end]` into
     /// `stmts[start]`, all of one kind, and leaves the followers empty.
     fn merge_group(&self, stmts: &mut List<'ast, Statement<'ast>>, start: usize, end: usize) {
         let allocator = self.allocator;
-        let Some((first, followers)) = stmts.get_mut(start..end).and_then(<[_]>::split_first_mut)
-        else {
-            return;
-        };
+        let (first, followers) =
+            stmts[start..end].split_first_mut().expect("a group holds at least two statements");
         match first {
             Statement::LocalAssignment(local) => {
-                let mut names: Vec<AttributedName<'ast>> =
-                    mem::take(&mut local.names).into_iter().collect();
-                let mut exprs: Vec<Expression<'ast>> =
-                    mem::take(&mut local.exprs).into_iter().collect();
                 for follower in followers {
                     if let Statement::LocalAssignment(next) = follower {
-                        names.extend(mem::take(&mut next.names));
-                        exprs.extend(mem::take(&mut next.exprs));
+                        for name in mem::take(&mut next.names) {
+                            local.names.push(name, allocator);
+                        }
+                        for expr in mem::take(&mut next.exprs) {
+                            local.exprs.push(expr, allocator);
+                        }
                     }
                 }
-                local.names = List::from_iter_in(names, allocator);
-                local.exprs = List::from_iter_in(exprs, allocator);
                 local.kind = LocalAssignmentKind::Local;
             }
             Statement::Assignment(assignment) => {
-                let mut targets: Vec<Var<'ast>> =
-                    mem::take(&mut assignment.targets).into_iter().collect();
-                let mut values: Vec<Expression<'ast>> =
-                    mem::take(&mut assignment.values).into_iter().collect();
                 for follower in followers {
                     if let Statement::Assignment(next) = follower {
-                        targets.extend(mem::take(&mut next.targets));
-                        values.extend(mem::take(&mut next.values));
+                        for target in mem::take(&mut next.targets) {
+                            assignment.targets.push(target, allocator);
+                        }
+                        for value in mem::take(&mut next.values) {
+                            assignment.values.push(value, allocator);
+                        }
                     }
                 }
-                assignment.targets = List::from_iter_in(targets, allocator);
-                assignment.values = List::from_iter_in(values, allocator);
             }
             Statement::FunctionCall(_)
             | Statement::DoBlock(_)
@@ -255,13 +249,14 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
@@ -274,59 +269,100 @@ impl<'ast> Compressor<'_, 'ast> {
     fn single_assignment<'tree>(
         &self,
         assignment: &'tree Assignment<'ast>,
-    ) -> Option<(usize, &'tree Expression<'ast>)> {
+    ) -> Option<(SymbolId, &'tree Expression<'ast>)> {
         if let ([Var::Name(name)], [expr]) = (&*assignment.targets, &*assignment.values)
             && is_single_register_value(expr)
-            && !is_env_binding(name.text.as_str(), self.version)
         {
-            return local_of(name).map(|id| (id, expr));
+            let symbol = self.scoping.resolved_symbol_of(name)?;
+            return (!self.scoping.is_env_binding(symbol)).then_some((symbol, expr));
         }
         None
+    }
+
+    /// Whether `expr` references any of `group`.
+    fn references_any(&self, expr: &Expression<'_>, group: &[SymbolId]) -> bool {
+        let mut finder = self.reference_finder(group);
+        finder.visit_expr(expr);
+        finder.has_reference
     }
 
     /// Fuses `local a, b` plus `a, b = X, Y` into `local a, b = X, Y`, and
     /// says whether it fused any.
     fn fuse_bare_locals(&mut self, stmts: &mut List<'ast, Statement<'ast>>) -> bool {
         let mut has_fused = false;
-        let mut kept = 0usize;
-        let mut index = 0usize;
+        let mut kept = 0;
+        let mut index = 0;
+        let mut declared = mem::take(&mut self.group);
         while index < stmts.len() {
-            let can_fuse = if let (Some(stmt), Some(Statement::Assignment(assignment))) =
-                (stmts.get(index), stmts.get(index.saturating_add(1)))
-                && let Statement::LocalAssignment(local) = stmt
+            let stmt = &stmts[index];
+            let can_fuse = if let Statement::LocalAssignment(local) = stmt
+                && let Some(Statement::Assignment(assignment)) = stmts.get(index + 1)
             {
-                is_bare_local(stmt, self.version)
-                    && can_fuse_assignment(local, assignment, self.bindings)
+                is_bare_local(stmt, self.scoping)
+                    && self.can_fuse(&local.names, assignment, &mut declared)
             } else {
                 false
             };
             if can_fuse
                 && let Some([Statement::LocalAssignment(local), Statement::Assignment(assignment)]) =
-                    stmts.get_mut(index..index.saturating_add(2))
+                    stmts.get_mut(index..index + 2)
             {
                 // A bare local is never const or exported, so fusing only adds
-                // the values.
+                // the values, and the writes go.
                 local.exprs = mem::take(&mut assignment.values);
-                // The walk is past the initialized local this makes, which
-                // goes or inlines if it's read once or never.
-                self.needs_revisit |= local.names.iter().any(|attributed| {
-                    local_of(&attributed.name)
-                        .and_then(|id| self.bindings.get(id))
-                        .is_some_and(|binding| binding.reads <= 1)
-                });
+                for target in &assignment.targets {
+                    self.dropper().visit_var(target);
+                }
                 has_fused = true;
                 stmts.swap(kept, index);
-                kept = kept.saturating_add(1);
-                index = index.saturating_add(2);
+                kept += 1;
+                index += 2;
                 continue;
             }
             stmts.swap(kept, index);
-            kept = kept.saturating_add(1);
-            index = index.saturating_add(1);
+            kept += 1;
+            index += 1;
         }
+        self.group = declared;
         stmts.truncate(kept);
         self.has_changed |= has_fused;
         has_fused
+    }
+
+    /// Whether `assignment` assigns exactly the locals `names` declares, each
+    /// once, so the two can fuse into one initialized declaration. Those
+    /// locals go in `declared`.
+    fn can_fuse(
+        &self,
+        names: &[AttributedName<'_>],
+        assignment: &Assignment<'_>,
+        declared: &mut Vec<SymbolId>,
+    ) -> bool {
+        // Every target must be the matching declared local, or a field store
+        // like the `t.x` in `a, t.x = 1, 2` would be lost in the fused
+        // `local`.
+        if names.len() != assignment.targets.len() {
+            return false;
+        }
+        declared.clear();
+        for (attributed, target) in names.iter().zip(assignment.targets.iter()) {
+            let (Some(symbol), Var::Name(name)) =
+                (self.scoping.symbol_of(&attributed.name), target)
+            else {
+                return false;
+            };
+            // `local a, a; a, a = 1, 2` stores both values in the second `a`,
+            // right to left, but `local a, a = 1, 2` gives it the last.
+            if self.scoping.resolved_symbol_of(name) != Some(symbol) || declared.contains(&symbol) {
+                return false;
+            }
+            declared.push(symbol);
+        }
+        // The values must not reference the declared locals: in
+        // `local f; f = function() f() end` the body's `f` is the new local,
+        // but fused into `local f = function() ... end` it would resolve to
+        // an outer `f`.
+        !assignment.values.iter().any(|value| self.references_any(value, declared))
     }
 }
 
@@ -344,52 +380,18 @@ pub(super) fn declared_count(stmt: &Statement<'_>) -> usize {
         | Statement::NumericFor(_)
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
         | Statement::GlobalFunction(_)
         | Statement::GlobalStar(_)
-        | Statement::Break(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => 0,
     }
-}
-
-/// Whether `assignment` assigns exactly the bindings a bare `local`
-/// declares, each once, so the two can fuse into one initialized
-/// declaration.
-fn can_fuse_assignment(
-    local: &LocalAssignment<'_>,
-    assignment: &Assignment<'_>,
-    bindings: &Bindings,
-) -> bool {
-    // Every target must be the matching declared local, or a field store like
-    // the `t.x` in `a, t.x = 1, 2` would be lost in the fused `local`.
-    if local.names.len() != assignment.targets.len() {
-        return false;
-    }
-    let mut declared = Vec::with_capacity(local.names.len());
-    for (attributed, target) in local.names.iter().zip(assignment.targets.iter()) {
-        let (Some(id), Var::Name(name)) = (local_of(&attributed.name), target) else {
-            return false;
-        };
-        let resolved = bindings.resolve(id);
-        // `local a, a; a, a = 1, 2` stores both values in the second `a`,
-        // right to left, but `local a, a = 1, 2` gives it the last.
-        if local_of(name).map(|assigned| bindings.resolve(assigned)) != Some(resolved)
-            || declared.contains(&resolved)
-        {
-            return false;
-        }
-        declared.push(resolved);
-    }
-    // The values must not reference the declared locals: in
-    // `local f; f = function() f() end` the body's `f` is the new local, but
-    // fused into `local f = function() ... end` it would resolve to an outer
-    // `f`.
-    !assignment.values.iter().any(|value| references_any(value, &declared, bindings))
 }
 
 #[cfg(test)]
@@ -469,22 +471,21 @@ mod tests {
         assert_outputs(
             every_pass,
             &[
-                ("local u = tive local util util = require", "local l,u=tive,require"),
-                ("local q = f local b b = g print(b, b)", "local u,l=f,g print(l,l)"),
+                ("local u = tive local util util = require", "local e,t=tive,require"),
+                ("local q = f local b b = g print(b, b)", "local t,e=f,g print(e,e)"),
                 ("local a a = 1 print(a)", "print(1)"),
                 ("local a local b a, b = 1, 2 print(a, b)", "print(1,2)"),
                 ("local a local z = 1 a = 2 print(a)", "print(2)"),
                 ("local a a = 1", ""),
-                ("local a a = {} a.x = 1 return a", "local l={}l.x=1 return l"),
+                ("local a a = {} a.x = 1 return a", "local e={}e.x=1 return e"),
             ],
         );
     }
 
     #[test]
     fn tracks_scopes_under_more_locals_than_a_lookup_scans() {
-        let names = |prefix: char| {
-            (0..100u32).map(|i| format!("{prefix}{i}")).collect::<Vec<_>>().join(",")
-        };
+        let names =
+            |prefix: char| (0..100).map(|i| format!("{prefix}{i}")).collect::<Vec<_>>().join(",");
         let (outer, inner) = (names('v'), names('w'));
         let source = format!(
             "local {outer}=f()v0=1 v1=2 local c,d=g()c=1 d=2 do local {inner}=h()w0=1 end w0=1 v2=2"
@@ -500,6 +501,7 @@ mod tests {
     fn largest_assignment_target_count(output: &str) -> usize {
         let allocator = Allocator::new();
         parse(&allocator, output, LuaVersion::Lua54)
+            .block
             .stmts
             .iter()
             .filter_map(|stmt| {
@@ -515,15 +517,14 @@ mod tests {
 
     #[test]
     fn merged_assignments_stay_within_the_registers_the_targets_need() {
-        let names = (0..100u32).map(|i| format!("g{i}")).collect::<Vec<_>>().join(",");
-        let assignments = (0..100u32).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let names = (0..100).map(|i| format!("g{i}")).collect::<Vec<_>>().join(",");
+        let assignments = (0..100).map(|i| format!("g{i} = {i}\n")).collect::<Vec<_>>().concat();
         let global_count =
             largest_assignment_target_count(&merge(&format!("local {names} = f()\n{assignments}")));
         assert!((2..=195).contains(&global_count), "{global_count} targets");
 
-        let locals =
-            (0..190u32).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
-        let stores = (0..70u32).map(|i| format!("v{i} = {i}\n")).collect::<Vec<_>>().concat();
+        let locals = (0..190).map(|i| format!("local v{i} = x{i}\n")).collect::<Vec<_>>().concat();
+        let stores = (0..70).map(|i| format!("v{i} = {i}\n")).collect::<Vec<_>>().concat();
         let local_count = largest_assignment_target_count(&merge(&format!("{locals}{stores}")));
         assert!((2..=60).contains(&local_count), "{local_count} targets");
     }

@@ -30,6 +30,10 @@ export function setting<Key extends SettingKey>(key: Key): Settings[Key] {
 	return vscode.workspace.getConfiguration(SECTION).get(key, DEFAULTS[key]);
 }
 
+export function settingId(key: SettingKey): string {
+	return `${SECTION}.${key}`;
+}
+
 export function affectsSetting(event: vscode.ConfigurationChangeEvent, key: SettingKey): boolean {
-	return event.affectsConfiguration(`${SECTION}.${key}`);
+	return event.affectsConfiguration(settingId(key));
 }

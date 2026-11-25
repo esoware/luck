@@ -1,326 +1,292 @@
 //! Hoisting the declarations of a function body to one `local` at its top.
 //!
 //! `do local a = 1 end` becomes `local a do a = 1 end`, and declarations
-//! that are never in scope together share one hoisted local. The walk lifts
-//! each body as it leaves it, once nothing else changes it.
+//! that are never in scope together share one hoisted local. It runs once
+//! the compressor's passes settle, since a lifted declaration is an
+//! assignment, which no other rewrite reads as a declaration, and it lifts
+//! each body as the walk leaves it. Lifting reshapes the bindings, so the
+//! compressor then builds the scoping again and runs its passes on what
+//! lifting leaves, where a `do` block left scoping nothing unwraps and the
+//! hoisted `local` merges with its neighbors.
 //!
 //! A binding a closure references keeps its declaration, since each run of
 //! that declaration gives the closure a fresh local. With renaming on, any
-//! two bindings whose scopes never overlap share a hoisted local, which the
-//! renamer then names. With it off, only same-named ones do, and a name the
-//! file reads as a global or from a closure anywhere stays declared where it
-//! is, since the hoisted local could capture that read.
+//! two bindings whose scopes never overlap share a hoisted local, which
+//! takes a name the chunk uses nowhere, so the tree reads every one of them
+//! as it, however they were named, and the renamer then names it. With
+//! renaming off, only same-named ones do, and a name the file reads as a
+//! global or from a closure anywhere stays declared where it is, since the
+//! hoisted local could capture that read.
 //!
 //! A body lifts every declaration it can or none, and only when that's
 //! shorter, so lifting a body it already lifted finds nothing more.
 
-use core::mem;
+use std::fmt::Write as _;
 
-use luck_allocator::{Box, List};
+use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
-    Assignment, AttributedName, Block, Expression, FunctionBody, FunctionDef, LastStatement,
-    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, Name, Statement, Type,
-    Var, Visitor,
+    AttributedName, Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, Name, Statement, Type, Var, Visit, VisitMut,
 };
+use luck_data_structures::BitSet;
+use luck_semantic::{NameId, Scoping, SymbolId};
 use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
 use rustc_hash::FxHashMap;
 
 use super::Compressor;
-use super::merge_locals::is_bare_local;
+use super::merge_locals::{declared_count, is_bare_local};
+use super::simplify_statements::ends_in_block_end;
 use crate::binding::{
-    Bindings, RECEIVER_NAME_ID, VARARG_TABLE_NAME_ID, has_fixed_binding, local_index, local_of,
+    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, NameIndexes, declares_env, has_fixed_binding,
 };
 use crate::limits::{
-    GENERIC_FOR_STATE_LOCALS, MAX_REGISTERS, NUMERIC_FOR_STATE_LOCALS, parameter_locals,
+    GENERIC_FOR_STATE_REGISTERS, MAX_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals,
 };
+use crate::transform_config::TransformConfig;
 
 /// Bytes a lifted declaration saves, its `local `, and what a `do` block
 /// left scoping nothing saves once unwrapped.
 const LIFTED_DECLARATION_BYTES: usize = 6;
 const UNWRAPPED_DO_BYTES: usize = 6;
 
-/// A local hoisted to the top of a body, standing for every binding lifted
-/// into it.
-struct Hoisted<'ast> {
-    binding: usize,
-    text: &'ast str,
+/// A symbol's place among the hoisted locals while it joins none.
+const NOT_HOISTED: u32 = u32::MAX;
+
+impl<'ast> Compressor<'_, 'ast> {
+    /// Lifts each function body of `block`, indexing the names of the locals
+    /// it hoists from `name_indexes`, and says whether it lifted any.
+    pub(super) fn lift(&self, block: &mut Block<'ast>, name_indexes: &mut NameIndexes) -> bool {
+        let mut lifter = Lifter::new(self.allocator, self.config, self.scoping, name_indexes);
+        lifter.read_references(&self.dropped);
+        lifter.visit_block(block);
+        lifter.has_lifted
+    }
 }
 
-/// The scratch a lift keeps from one body to the next.
-#[derive(Default)]
-pub(super) struct Lifter<'ast> {
+/// The lift of every function body of a tree.
+struct Lifter<'walk, 'ast> {
+    allocator: &'ast Allocator,
+    version: LuaVersion,
+    config: TransformConfig,
+    scoping: &'walk Scoping,
+    name_indexes: &'walk mut NameIndexes,
+    /// The symbols a closure references.
+    captured: BitSet,
+    /// With names kept, the references to each name as a global outside
+    /// types, and the captured bindings of each name.
+    global_uses: Vec<u32>,
+    name_captures: Vec<u32>,
     /// Each `local` and `local function` of the body being lifted, in walk
     /// order, and whether it lifts.
     declarations: Vec<bool>,
-    /// The hoisted local each lifted name joins, in walk order.
-    joins: Vec<usize>,
-    hoisted: Vec<Hoisted<'ast>>,
+    /// The name of each local hoisted to the top of the body, which stands
+    /// for every binding lifted into it.
+    hoisted: Vec<&'ast str>,
+    /// With renaming on, each symbol's hoisted local, or [`NOT_HOISTED`],
+    /// and the symbols that have one.
+    hoisted_of: Vec<u32>,
+    joined: Vec<SymbolId>,
     /// Hoisted locals no binding in scope holds, and those held by the
     /// bindings of the open blocks, innermost last.
     free: Vec<usize>,
     held: Vec<usize>,
     /// With names kept: each name's hoisted local, and how many bindings of
     /// each name are in scope, with the names declared in the open blocks.
-    by_name: FxHashMap<usize, usize>,
+    by_name: FxHashMap<NameId, usize>,
     open_counts: Vec<u32>,
-    open_names: Vec<usize>,
+    open_names: Vec<NameId>,
     /// `do` blocks that lifting leaves scoping nothing.
     unwrapped_blocks: usize,
-    /// With names kept, each name whose reads as a global or captures kept
-    /// one of the walk's lifts from a declaration.
-    blocked_names: Vec<usize>,
+    /// The last of the names `_1`, `_2`, ... the lift tried for a hoisted
+    /// local, and its text.
+    last_fresh_name: u32,
+    fresh_text: String,
+    has_lifted: bool,
 }
 
-/// The most locals and registers a body can hold at once.
-///
-/// Registers are the locals active where the body evaluates something, and
-/// at most one for each expression evaluated together, outside closures,
-/// types, and parentheses.
-#[derive(Clone, Copy)]
-struct Pressure {
-    locals: usize,
-    registers: usize,
-}
-
-impl Pressure {
-    /// Whether `hoisted` more locals fit: each adds at most one local and one
-    /// register anywhere in the body.
-    const fn fits(self, hoisted: usize) -> bool {
-        self.locals.saturating_add(hoisted) <= MAX_ACTIVE_LOCALS
-            && self.registers.saturating_add(hoisted) <= MAX_REGISTERS
-    }
-
-    fn evaluate(&mut self, active: usize, exprs: &[&Expression<'_>]) {
-        let mut counter = ExprCounter(0);
-        for expr in exprs {
-            counter.visit_expr(expr);
+impl<'walk, 'ast> Lifter<'walk, 'ast> {
+    fn new(
+        allocator: &'ast Allocator,
+        config: TransformConfig,
+        scoping: &'walk Scoping,
+        name_indexes: &'walk mut NameIndexes,
+    ) -> Self {
+        let (name_count, symbol_count) = if config.rename_locals {
+            (0, scoping.symbols().len())
+        } else {
+            (scoping.names().len(), 0)
+        };
+        Self {
+            allocator,
+            version: scoping.version(),
+            config,
+            scoping,
+            name_indexes,
+            captured: BitSet::new(scoping.symbols().len()),
+            global_uses: vec![0; name_count],
+            name_captures: vec![0; name_count],
+            declarations: Vec::new(),
+            hoisted: Vec::new(),
+            hoisted_of: vec![NOT_HOISTED; symbol_count],
+            joined: Vec::new(),
+            free: Vec::new(),
+            held: Vec::new(),
+            by_name: FxHashMap::default(),
+            open_counts: vec![0; name_count],
+            open_names: Vec::new(),
+            unwrapped_blocks: 0,
+            last_fresh_name: 0,
+            fresh_text: String::new(),
+            has_lifted: false,
         }
-        self.registers = self.registers.max(active.saturating_add(counter.0));
     }
 
-    /// Measures `block` with `active` locals around it, and returns how many
-    /// are active at its end.
-    fn measure(&mut self, block: &Block<'_>, mut active: usize) -> usize {
-        for stmt in &block.stmts {
-            match stmt {
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::LocalAssignment(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::FunctionDecl(_)
-                | Statement::LocalFunction(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_) => {
-                    let mut counter = ExprCounter(0);
-                    counter.visit_stmt(stmt);
-                    self.registers = self.registers.max(active.saturating_add(counter.0));
-                }
-                Statement::DoBlock(do_block) => {
-                    self.measure(&do_block.block, active);
-                }
-                Statement::WhileLoop(while_loop) => {
-                    self.evaluate(active, &[&while_loop.condition]);
-                    self.measure(&while_loop.block, active);
-                }
-                Statement::RepeatLoop(repeat_loop) => {
-                    let inner = self.measure(&repeat_loop.block, active);
-                    self.evaluate(inner, &[&repeat_loop.condition]);
-                }
-                Statement::IfStatement(if_stmt) => {
-                    self.evaluate(active, &[&if_stmt.condition]);
-                    self.measure(&if_stmt.block, active);
-                    for clause in &if_stmt.elseif_clauses {
-                        self.evaluate(active, &[&clause.condition]);
-                        self.measure(&clause.block, active);
-                    }
-                    if let Some(else_clause) = &if_stmt.else_clause {
-                        self.measure(&else_clause.block, active);
-                    }
-                }
-                Statement::NumericFor(numeric_for) => {
-                    let mut bounds = vec![&numeric_for.start, &numeric_for.limit];
-                    bounds.extend(&numeric_for.step);
-                    self.evaluate(active, &bounds);
-                    let loop_active =
-                        active.saturating_add(NUMERIC_FOR_STATE_LOCALS.saturating_add(1));
-                    self.locals = self.locals.max(loop_active);
-                    self.measure(&numeric_for.block, loop_active);
-                }
-                Statement::GenericFor(generic_for) => {
-                    let exprs: Vec<&Expression<'_>> = generic_for.exprs.iter().collect();
-                    self.evaluate(active, &exprs);
-                    let loop_active = active
-                        .saturating_add(GENERIC_FOR_STATE_LOCALS)
-                        .saturating_add(generic_for.names.len());
-                    self.locals = self.locals.max(loop_active);
-                    self.measure(&generic_for.block, loop_active);
-                }
-                Statement::EmptyStatement(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
+    const fn keeps_names(&self) -> bool {
+        !self.config.rename_locals
+    }
+
+    /// Reads what each live reference outside a type tells: whether a
+    /// closure captures its symbol, or with names kept, whether it reads a
+    /// global.
+    fn read_references(&mut self, dropped: &BitSet) {
+        let scoping = self.scoping;
+        for (index, reference) in scoping.references().iter().enumerate() {
+            if dropped.contains(index) || reference.is_in_type {
+                continue;
             }
-            active = active.saturating_add(super::merge_locals::declared_count(stmt));
-            self.locals = self.locals.max(active);
+            let Some(symbol) = reference.resolved else {
+                if let Some(uses) = self.global_uses.get_mut(reference.name.index()) {
+                    *uses += 1;
+                }
+                continue;
+            };
+            let declared = scoping.symbol(symbol);
+            if scoping.crosses_function_boundary(reference.scope, declared.scope)
+                && !self.captured.contains(symbol.index())
+            {
+                self.captured.insert(symbol.index());
+                if let Some(captures) = self.name_captures.get_mut(declared.name.index()) {
+                    *captures += 1;
+                }
+            }
         }
-        if let Some(LastStatement::Return(return_stmt)) = &block.last_stmt {
-            let exprs: Vec<&Expression<'_>> = return_stmt.exprs.iter().collect();
-            self.evaluate(active, &exprs);
-        }
-        active
-    }
-}
-
-/// Counts expressions outside closures, types, and parentheses.
-struct ExprCounter(usize);
-
-impl<'tree> Visitor<'tree> for ExprCounter {
-    fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
-        if !matches!(expr, Expression::Parenthesized(_)) {
-            self.0 = self.0.saturating_add(1);
-        }
-        self.walk_expr(expr);
     }
 
-    fn visit_function_body(&mut self, _body: &'tree FunctionBody<'tree>) {}
-
-    fn visit_type(&mut self, _ty: &'tree Type<'tree>) {}
-}
-
-/// Whether a `local` is a shape a lift can take: initialized names with no
-/// attribute or annotation, all distinct where names are kept.
-fn can_lift_assignment(
-    local: &LocalAssignment<'_>,
-    version: LuaVersion,
-    keeps_names: bool,
-) -> bool {
-    // A bare `local x` resets x to nil, which a lifted one wouldn't once a
-    // sibling has used the shared slot. A type annotation would be lost,
-    // since the hoisted declaration is a bare `local x`.
-    !local.exprs.is_empty()
-        && !has_fixed_binding(local, version)
-        && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
-        && (!keeps_names || has_distinct_names(&local.names))
-}
-
-/// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none count
-/// as distinct.
-fn has_distinct_names(names: &[AttributedName<'_>]) -> bool {
-    names.len() <= MAX_ACTIVE_LOCALS
-        && names.iter().enumerate().all(|(i, attributed)| {
-            names.iter().take(i).all(|earlier| earlier.name.text != attributed.name.text)
-        })
-}
-
-/// The first pass of a lift, which finds what lifts and into which hoisted
-/// local.
-struct Collector<'lift, 'ast> {
-    lifter: &'lift mut Lifter<'ast>,
-    bindings: &'lift Bindings,
-    version: LuaVersion,
-    keeps_names: bool,
-    can_unwrap: bool,
-}
-
-impl<'ast> Collector<'_, 'ast> {
-    fn name_of(&self, name: &Name<'_>) -> Option<usize> {
-        let binding = self.bindings.get(local_of(name)?)?;
-        usize::try_from(binding.name).ok()
+    /// The name of the symbol `name` declares.
+    fn name_of(&self, name: &Name<'_>) -> Option<NameId> {
+        self.scoping.symbol_of(name).map(|symbol| self.scoping.symbol(symbol).name)
     }
 
     /// Whether the binding `name` declares can join a hoisted local: no
     /// closure references it, and with names kept, nothing else in the
     /// file reads its name where the hoisted local would be in scope.
-    fn can_lift_name(&mut self, name: &Name<'_>) -> bool {
-        let Some(binding) = local_of(name).and_then(|id| self.bindings.get(id)) else {
+    fn can_lift_name(&self, name: &Name<'_>) -> bool {
+        let Some(symbol) = self.scoping.symbol_of(name) else {
             return false;
         };
-        if binding.captures != 0 {
+        if self.captured.contains(symbol.index()) {
             return false;
         }
-        if !self.keeps_names {
+        if !self.keeps_names() {
             return true;
         }
-        let Ok(name_id) = usize::try_from(binding.name) else {
-            return false;
-        };
-        if self.lifter.open_counts.get(name_id).is_some_and(|&count| count > 0) {
-            return false;
+        let name_id = self.scoping.symbol(symbol).name.index();
+        self.open_counts[name_id] == 0
+            && self.global_uses[name_id] == 0
+            && self.name_captures[name_id] == 0
+    }
+
+    /// Whether a `local` is a shape a lift can take: initialized names with
+    /// no attribute or annotation, all distinct where names are kept.
+    fn can_lift_assignment(&self, local: &LocalAssignment<'_>) -> bool {
+        // A bare `local x` resets x to nil, which a lifted one wouldn't once a
+        // sibling has used the shared slot. A type annotation would be lost,
+        // since the hoisted declaration is a bare `local x`.
+        !local.exprs.is_empty()
+            && !has_fixed_binding(local, self.scoping)
+            && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
+            && (!self.keeps_names() || self.has_distinct_names(&local.names))
+    }
+
+    /// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none
+    /// count as distinct.
+    fn has_distinct_names(&self, names: &[AttributedName<'_>]) -> bool {
+        names.len() <= MAX_ACTIVE_LOCALS
+            && names.iter().enumerate().all(|(i, attributed)| {
+                let name = self.name_of(&attributed.name);
+                names.iter().take(i).all(|earlier| self.name_of(&earlier.name) != name)
+            })
+    }
+
+    /// A name no binding or global of the chunk wears, and no hoisted local
+    /// the lift named before.
+    fn fresh_name(&mut self) -> &'ast str {
+        loop {
+            self.last_fresh_name += 1;
+            self.fresh_text.clear();
+            let _ = write!(self.fresh_text, "_{}", self.last_fresh_name);
+            if self.scoping.name_id(&self.fresh_text).is_none() {
+                return self.allocator.alloc_str(&self.fresh_text);
+            }
         }
-        let is_used_elsewhere =
-            self.bindings.global_uses.get(name_id).is_some_and(|&uses| uses > 0)
-                || self.bindings.name_captures.get(name_id).is_some_and(|&captures| captures > 0);
-        if is_used_elsewhere {
-            self.lifter.blocked_names.push(name_id);
-        }
-        !is_used_elsewhere
     }
 
     /// Hands the binding `name` declares the hoisted local it joins.
     fn join(&mut self, name: &Name<'ast>) {
-        let Some(id) = local_of(name) else {
+        let Some(symbol) = self.scoping.symbol_of(name) else {
             return;
         };
-        let name_id = self.name_of(name).filter(|_| self.keeps_names);
-        let lifter = &mut *self.lifter;
-        let existing = match name_id {
-            Some(text_id) => lifter.by_name.get(&text_id).copied(),
-            None => lifter.free.pop(),
+        let kept_name = self.keeps_names().then(|| self.scoping.symbol(symbol).name);
+        let existing = if let Some(name_id) = kept_name {
+            self.by_name.get(&name_id).copied()
+        } else {
+            self.free.pop()
         };
         let hoisted = existing.unwrap_or_else(|| {
-            let index = lifter.hoisted.len();
-            lifter.hoisted.push(Hoisted { binding: id, text: name.text.as_str() });
-            index
+            let text = if kept_name.is_some() { name.text.as_str() } else { self.fresh_name() };
+            self.hoisted.push(text);
+            self.hoisted.len() - 1
         });
-        match name_id {
-            Some(text_id) => {
-                lifter.by_name.insert(text_id, hoisted);
-            }
-            None => lifter.held.push(hoisted),
+        if let Some(name_id) = kept_name {
+            self.by_name.insert(name_id, hoisted);
+        } else {
+            self.held.push(hoisted);
+            self.hoisted_of[symbol.index()] =
+                u32::try_from(hoisted).expect("a chunk hoists fewer locals than `u32::MAX`");
+            self.joined.push(symbol);
         }
-        lifter.joins.push(hoisted);
     }
 
     /// With names kept, opens a binding of `name` where it's declared.
     fn open(&mut self, name: &Name<'_>) {
-        if !self.keeps_names {
-            return;
-        }
-        if let Some(name_id) = self.name_of(name) {
+        if self.keeps_names()
+            && let Some(name_id) = self.name_of(name)
+        {
             self.open_name(name_id);
         }
     }
 
-    fn open_name(&mut self, name_id: usize) {
-        let counts = &mut self.lifter.open_counts;
-        if counts.len() <= name_id {
-            counts.resize(name_id.saturating_add(1), 0);
-        }
-        if let Some(count) = counts.get_mut(name_id) {
-            *count = count.saturating_add(1);
-        }
-        self.lifter.open_names.push(name_id);
+    fn open_name(&mut self, name_id: NameId) {
+        self.open_counts[name_id.index()] += 1;
+        self.open_names.push(name_id);
     }
 
     /// Finds what of `block` lifts, and says whether it keeps a declaration
     /// its block scopes and whether it lifts any.
     fn collect_block(&mut self, block: &Block<'ast>) -> (bool, bool) {
-        let held_start = self.lifter.held.len();
-        let open_start = self.lifter.open_names.len();
+        let held_start = self.held.len();
+        let open_start = self.open_names.len();
         let mut keeps_declaration = false;
         let mut lifts = false;
         for stmt in &block.stmts {
             match stmt {
                 Statement::LocalAssignment(local) => {
-                    let can_lift = can_lift_assignment(local, self.version, self.keeps_names)
+                    let can_lift = self.can_lift_assignment(local)
                         && local
                             .names
                             .iter()
                             .all(|attributed| self.can_lift_name(&attributed.name));
-                    self.lifter.declarations.push(can_lift);
+                    self.declarations.push(can_lift);
                     for attributed in &local.names {
                         if can_lift {
                             self.join(&attributed.name);
@@ -331,9 +297,12 @@ impl<'ast> Collector<'_, 'ast> {
                     keeps_declaration |= !can_lift;
                 }
                 Statement::LocalFunction(local_function) => {
+                    // A 5.2+ `_ENV` hoisted to the top would redirect every
+                    // global read before it.
                     let can_lift = local_function.kind == LocalFunctionKind::Local
+                        && !declares_env(&local_function.name, self.scoping)
                         && self.can_lift_name(&local_function.name);
-                    self.lifter.declarations.push(can_lift);
+                    self.declarations.push(can_lift);
                     if can_lift {
                         self.join(&local_function.name);
                     }
@@ -345,11 +314,10 @@ impl<'ast> Collector<'_, 'ast> {
                     let (keeps, lifts_inner) = self.collect_block(&do_block.block);
                     if lifts_inner
                         && !keeps
-                        && self.can_unwrap
-                        && do_block.block.last_stmt.is_none()
+                        && self.config.simplify_statements
+                        && !ends_in_block_end(&do_block.block, self.version)
                     {
-                        self.lifter.unwrapped_blocks =
-                            self.lifter.unwrapped_blocks.saturating_add(1);
+                        self.unwrapped_blocks += 1;
                     }
                 }
                 Statement::WhileLoop(while_loop) => {
@@ -368,13 +336,13 @@ impl<'ast> Collector<'_, 'ast> {
                     }
                 }
                 Statement::NumericFor(numeric_for) => {
-                    let open_loop = self.lifter.open_names.len();
+                    let open_loop = self.open_names.len();
                     self.open(&numeric_for.name);
                     self.collect_block(&numeric_for.block);
                     self.close_names(open_loop);
                 }
                 Statement::GenericFor(generic_for) => {
-                    let open_loop = self.lifter.open_names.len();
+                    let open_loop = self.open_names.len();
                     for param in &generic_for.names {
                         self.open(&param.name);
                     }
@@ -389,231 +357,182 @@ impl<'ast> Collector<'_, 'ast> {
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
                 | Statement::FunctionDecl(_)
-                | Statement::EmptyStatement(_)
-                | Statement::Goto(_)
+                | Statement::Return(_)
                 | Statement::Break(_)
+                | Statement::Continue(_)
+                | Statement::Goto(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::Error(_) => {}
             }
         }
-        let lifter = &mut *self.lifter;
-        lifter.free.extend(lifter.held.drain(held_start..).rev());
+        let Self { free, held, .. } = self;
+        free.extend(held.drain(held_start..).rev());
         self.close_names(open_start);
         (keeps_declaration, lifts)
     }
 
     fn close_names(&mut self, start: usize) {
-        let lifter = &mut *self.lifter;
-        for name_id in lifter.open_names.drain(start..) {
-            if let Some(count) = lifter.open_counts.get_mut(name_id) {
-                *count = count.saturating_sub(1);
-            }
+        for name_id in self.open_names.drain(start..) {
+            self.open_counts[name_id.index()] -= 1;
         }
-    }
-}
-
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
-impl<'ast> Compressor<'_, 'ast> {
-    /// Whether a name that kept a lift from a declaration lost the last of
-    /// its reads as a global and captures later in the walk, which leaves
-    /// the lift to another walk. Forgets the names, for the next walk.
-    pub(super) fn take_freed_names(&mut self) -> bool {
-        let bindings = &*self.bindings;
-        let is_freed = self.lifter.blocked_names.iter().any(|&name_id| {
-            bindings.global_uses.get(name_id).is_none_or(|&uses| uses == 0)
-                && bindings.name_captures.get(name_id).is_none_or(|&captures| captures == 0)
-        });
-        self.lifter.blocked_names.clear();
-        is_freed
-    }
-
-    /// Lifts `body` as the walk leaves it, which leaves nothing else to
-    /// change in it.
-    pub(super) fn lift(&mut self, body: &mut FunctionBody<'ast>) {
-        let Some(hoisted_count) = self.collect(body) else {
-            return;
-        };
-        let parameters = parameter_locals(body);
-        let mut pressure = Pressure { locals: parameters, registers: parameters };
-        pressure.measure(&body.block, parameters);
-        if !pressure.fits(hoisted_count) {
-            return;
-        }
-        let registers = parameter_locals(body).saturating_add(hoisted_count);
-        let mut cursor = (0usize, 0usize);
-        self.rewrite_block(&mut body.block, &mut cursor, registers);
-        let allocator = self.allocator;
-        let names = self.lifter.hoisted.iter().map(|hoisted| {
-            let name = Name {
-                text: hoisted.text.into(),
-                index: Some(local_index(hoisted.binding)),
-                span: body.span,
-            };
-            AttributedName { name, type_annotation: None, attribute: None }
-        });
-        let local = LocalAssignment {
-            span: body.span,
-            names: List::from_iter_in(names, allocator),
-            exprs: List::new(),
-            kind: LocalAssignmentKind::Local,
-        };
-        let declaration = Statement::LocalAssignment(Box::new_in(local, allocator));
-        body.block.stmts.insert(0, declaration, allocator);
-        if self.config.merge_locals {
-            self.live_registers = parameter_locals(body);
-            self.merge_stmts(&mut body.block.stmts);
-        }
-        self.has_changed = true;
     }
 
     /// Finds what of `body` lifts, and returns how many locals it hoists,
     /// if lifting it is shorter.
     fn collect(&mut self, body: &FunctionBody<'ast>) -> Option<usize> {
-        let keeps_names = !self.config.rename_locals;
-        let lifter = &mut self.lifter;
-        lifter.declarations.clear();
-        lifter.joins.clear();
-        lifter.hoisted.clear();
-        lifter.free.clear();
-        lifter.held.clear();
-        lifter.by_name.clear();
-        lifter.open_names.clear();
-        lifter.unwrapped_blocks = 0;
-        let mut collector = Collector {
-            lifter,
-            bindings: &*self.bindings,
-            version: self.version,
-            keeps_names,
-            can_unwrap: self.config.simplify_statements,
-        };
-        if keeps_names {
+        self.declarations.clear();
+        self.hoisted.clear();
+        self.free.clear();
+        self.held.clear();
+        self.by_name.clear();
+        self.unwrapped_blocks = 0;
+        if self.keeps_names() {
             // A method's `self` and a 5.1 vararg function's `arg` are in
             // scope everywhere in its body, and no body says whether it has
             // them.
-            collector.open_name(RECEIVER_NAME_ID);
-            collector.open_name(VARARG_TABLE_NAME_ID);
+            for implicit in [METHOD_RECEIVER_NAME, IMPLICIT_VARARG_TABLE_NAME] {
+                if let Some(name_id) = self.scoping.name_id(implicit) {
+                    self.open_name(name_id);
+                }
+            }
             for param in &body.params {
-                collector.open(&param.name);
+                self.open(&param.name);
             }
             if let Some(name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
-                collector.open(name);
+                self.open(name);
             }
         }
-        collector.collect_block(&body.block);
-        collector.close_names(0);
-        let lifted_count = self.lifter.declarations.iter().filter(|&&lifts| lifts).count();
-        let hoisted = self.lifter.hoisted.len();
-        let saved = lifted_count
-            .saturating_mul(LIFTED_DECLARATION_BYTES)
-            .saturating_add(self.lifter.unwrapped_blocks.saturating_mul(UNWRAPPED_DO_BYTES));
+        self.collect_block(&body.block);
+        self.close_names(0);
+        let lifted_count = self.declarations.iter().filter(|&&lifts| lifts).count();
+        let hoisted = self.hoisted.len();
+        let saved =
+            lifted_count * LIFTED_DECLARATION_BYTES + self.unwrapped_blocks * UNWRAPPED_DO_BYTES;
         // Each name and its comma, and `local ` and a separator unless the
         // names join a bare `local` that opens the body.
         let joins_first = self.config.merge_locals
-            && body.block.stmts.first().is_some_and(|first| is_bare_local(first, self.version));
+            && body.block.stmts.first().is_some_and(|first| is_bare_local(first, self.scoping));
         let header = if joins_first { 0 } else { LIFTED_DECLARATION_BYTES };
-        let cost = hoisted.saturating_mul(2).saturating_add(header);
+        let cost = hoisted * 2 + header;
         (lifted_count > 0 && saved > cost).then_some(hoisted)
     }
 
+    /// Lifts `body` if that's shorter and its locals and registers fit.
+    fn lift(&mut self, body: &mut FunctionBody<'ast>) {
+        if let Some(hoisted_count) = self.collect(body) {
+            let parameters = parameter_locals(body);
+            let mut pressure =
+                Pressure { version: self.version, locals: parameters, registers: parameters };
+            pressure.measure(&body.block, Active { locals: parameters, registers: parameters });
+            if pressure.fits(hoisted_count) {
+                self.rewrite(body);
+            }
+        }
+        for symbol in self.joined.drain(..) {
+            self.hoisted_of[symbol.index()] = NOT_HOISTED;
+        }
+    }
+
+    /// Turns the lifted declarations of `body` into assignments to their
+    /// hoisted locals and declares those at its top.
+    fn rewrite(&mut self, body: &mut FunctionBody<'ast>) {
+        let mut cursor = 0;
+        self.rewrite_block(&mut body.block, &mut cursor);
+        if !self.keeps_names() {
+            Retexter {
+                scoping: self.scoping,
+                hoisted_of: &self.hoisted_of,
+                hoisted: &self.hoisted,
+            }
+            .visit_function_body(body);
+        }
+        let allocator = self.allocator;
+        let span = body.span;
+        let mut names = List::with_capacity_in(self.hoisted.len(), allocator);
+        for &hoisted in &self.hoisted {
+            let name = Name::new(hoisted.into(), Some(self.name_indexes.next()), span);
+            names.push(AttributedName::new(name, None, None), allocator);
+        }
+        let declaration = Statement::new_local_assignment(
+            span,
+            None,
+            names,
+            List::new(),
+            LocalAssignmentKind::Local,
+            allocator,
+        );
+        body.block.stmts.insert(0, declaration, allocator);
+        self.has_lifted = true;
+    }
+
     /// Turns the lifted declarations of `block` into assignments to their
-    /// hoisted locals, and unwraps and merges what that leaves, with
-    /// `cursor` at the next declaration and lifted name. Says whether it
-    /// lifted any.
-    fn rewrite_block(
-        &mut self,
-        block: &mut Block<'ast>,
-        cursor: &mut (usize, usize),
-        outer_registers: usize,
-    ) -> bool {
-        let mut has_lifted = false;
-        let mut registers = outer_registers;
+    /// hoisted locals, with `cursor` at the next declaration.
+    fn rewrite_block(&self, block: &mut Block<'ast>, cursor: &mut usize) {
         for stmt in &mut block.stmts {
             match stmt {
                 Statement::LocalAssignment(_) | Statement::LocalFunction(_) => {
-                    let lifts = self.lifter.declarations.get(cursor.0).copied().unwrap_or(false);
-                    cursor.0 = cursor.0.saturating_add(1);
+                    let lifts = self.declarations[*cursor];
+                    *cursor += 1;
                     if lifts {
-                        self.rewrite_declaration(stmt, cursor);
-                        has_lifted = true;
+                        self.rewrite_declaration(stmt);
                     }
                 }
-                Statement::DoBlock(do_block) => {
-                    has_lifted |= self.rewrite_block(&mut do_block.block, cursor, registers);
-                }
+                Statement::DoBlock(do_block) => self.rewrite_block(&mut do_block.block, cursor),
                 Statement::WhileLoop(while_loop) => {
-                    has_lifted |= self.rewrite_block(&mut while_loop.block, cursor, registers);
+                    self.rewrite_block(&mut while_loop.block, cursor);
                 }
                 Statement::RepeatLoop(repeat_loop) => {
-                    has_lifted |= self.rewrite_block(&mut repeat_loop.block, cursor, registers);
+                    self.rewrite_block(&mut repeat_loop.block, cursor);
                 }
                 Statement::IfStatement(if_stmt) => {
-                    has_lifted |= self.rewrite_block(&mut if_stmt.block, cursor, registers);
+                    self.rewrite_block(&mut if_stmt.block, cursor);
                     for clause in &mut if_stmt.elseif_clauses {
-                        has_lifted |= self.rewrite_block(&mut clause.block, cursor, registers);
+                        self.rewrite_block(&mut clause.block, cursor);
                     }
                     if let Some(else_clause) = &mut if_stmt.else_clause {
-                        has_lifted |= self.rewrite_block(&mut else_clause.block, cursor, registers);
+                        self.rewrite_block(&mut else_clause.block, cursor);
                     }
                 }
                 Statement::NumericFor(numeric_for) => {
-                    let loop_registers =
-                        registers.saturating_add(NUMERIC_FOR_STATE_LOCALS.saturating_add(1));
-                    has_lifted |=
-                        self.rewrite_block(&mut numeric_for.block, cursor, loop_registers);
+                    self.rewrite_block(&mut numeric_for.block, cursor);
                 }
                 Statement::GenericFor(generic_for) => {
-                    let loop_registers = registers
-                        .saturating_add(GENERIC_FOR_STATE_LOCALS)
-                        .saturating_add(generic_for.names.len());
-                    has_lifted |=
-                        self.rewrite_block(&mut generic_for.block, cursor, loop_registers);
+                    self.rewrite_block(&mut generic_for.block, cursor);
                 }
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
                 | Statement::FunctionDecl(_)
-                | Statement::EmptyStatement(_)
+                | Statement::Return(_)
+                | Statement::Break(_)
+                | Statement::Continue(_)
                 | Statement::Goto(_)
                 | Statement::Label(_)
                 | Statement::GlobalDeclaration(_)
                 | Statement::GlobalFunction(_)
                 | Statement::GlobalStar(_)
-                | Statement::Break(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => {}
             }
-            registers = registers.saturating_add(super::merge_locals::declared_count(stmt));
         }
-        if has_lifted {
-            if self.config.simplify_statements {
-                self.unwrap_do_blocks(block);
-            }
-            if self.config.merge_locals {
-                self.live_registers = outer_registers;
-                self.merge_stmts(&mut block.stmts);
-            }
-        }
-        has_lifted
     }
 
     /// `local a, b = X, Y` becomes `a, b = X, Y`, and `local function f()`
-    /// becomes `f = function()`, each name now its hoisted local's, which
-    /// takes the name's counts and the assignment's write.
-    fn rewrite_declaration(&mut self, stmt: &mut Statement<'ast>, cursor: &mut (usize, usize)) {
+    /// becomes `f = function()`, each name its hoisted local's.
+    fn rewrite_declaration(&self, stmt: &mut Statement<'ast>) {
         let allocator = self.allocator;
-        let (names, values, span): (Vec<Name<'ast>>, _, _) = match stmt.take() {
+        let target = |name| Var::Name(Box::new_in(name, allocator));
+        let (span, targets, values) = match stmt.take() {
             Statement::LocalAssignment(local) => {
                 let LocalAssignment { span, names, exprs, .. } = local.unbox();
-                (names.into_iter().map(|attributed| attributed.name).collect(), exprs, span)
+                let names = names.into_iter().map(|attributed| target(attributed.name));
+                (span, List::from_iter_in(names, allocator), exprs)
             }
             Statement::LocalFunction(local_function) => {
                 let LocalFunction { span, attributes, body, name, .. } = local_function.unbox();
-                let function = FunctionDef { span, attributes, body };
-                let value = Expression::FunctionDef(Box::new_in(function, allocator));
-                (vec![name], List::from_array_in([value], allocator), span)
+                let value = Expression::new_function_def(span, attributes, body, allocator);
+                let values = List::from_array_in([value], allocator);
+                (span, List::from_array_in([target(name)], allocator), values)
             }
             kept @ (Statement::Assignment(_)
             | Statement::FunctionCall(_)
@@ -624,13 +543,14 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_)) => {
@@ -638,35 +558,169 @@ impl<'ast> Compressor<'_, 'ast> {
                 return;
             }
         };
-        for name in &names {
-            let joined = self.lifter.joins.get(cursor.1).copied();
-            cursor.1 = cursor.1.saturating_add(1);
-            let hoisted_binding = joined
-                .and_then(|index| self.lifter.hoisted.get(index))
-                .map(|hoisted| hoisted.binding);
-            let Some(id) = local_of(name) else {
-                continue;
-            };
-            if let Some(merged_into) = hoisted_binding.filter(|&hoisted| hoisted != id)
-                && let Some(binding) = self.bindings.entries.get_mut(id)
-            {
-                binding.merged_into = u32::try_from(merged_into).unwrap_or(binding.merged_into);
-                let (reads, writes) =
-                    (mem::take(&mut binding.reads), mem::take(&mut binding.writes));
-                if let Some(hoisted) = self.bindings.entries.get_mut(merged_into) {
-                    hoisted.reads = hoisted.reads.saturating_add(reads);
-                    hoisted.writes = hoisted.writes.saturating_add(writes);
-                }
-            }
-            if let Some(binding) = self.bindings.get_mut(id) {
-                binding.writes = binding.writes.saturating_add(1);
-            }
-        }
-        let targets = names.into_iter().map(|name| Var::Name(Box::new_in(name, allocator)));
-        let assignment =
-            Assignment { span, targets: List::from_iter_in(targets, allocator), values };
-        *stmt = Statement::Assignment(Box::new_in(assignment, allocator));
+        *stmt = Statement::new_assignment(span, targets, values, allocator);
     }
+}
+
+impl<'ast> VisitMut<'ast> for Lifter<'_, 'ast> {
+    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
+        self.walk_function_body(function_body);
+        self.lift(function_body);
+    }
+}
+
+/// Gives each name of a lifted binding its hoisted local's.
+struct Retexter<'lift, 'ast> {
+    scoping: &'lift Scoping,
+    hoisted_of: &'lift [u32],
+    hoisted: &'lift [&'ast str],
+}
+
+impl<'ast> VisitMut<'ast> for Retexter<'_, 'ast> {
+    fn visit_name(&mut self, name: &mut Name<'ast>) {
+        let scoping = self.scoping;
+        if let Some(&hoisted) = scoping
+            .symbol_of(name)
+            .or_else(|| scoping.resolved_symbol_of(name))
+            .and_then(|symbol| self.hoisted.get(self.hoisted_of[symbol.index()] as usize))
+        {
+            name.text = hoisted.into();
+        }
+    }
+}
+
+/// The most locals and registers a body can hold at once.
+///
+/// Registers are the ones active locals and `for` loops' state take where
+/// the body evaluates something, and at most one for each expression
+/// evaluated together, outside closures, types, and parentheses.
+#[derive(Clone, Copy)]
+struct Pressure {
+    version: LuaVersion,
+    locals: usize,
+    registers: usize,
+}
+
+/// The locals active at a point of a body, and the registers they and the
+/// state of the `for` loops around it take.
+#[derive(Clone, Copy)]
+struct Active {
+    locals: usize,
+    registers: usize,
+}
+
+impl Pressure {
+    /// Whether `hoisted` more locals fit: each adds at most one local and one
+    /// register anywhere in the body.
+    const fn fits(self, hoisted: usize) -> bool {
+        self.locals + hoisted <= MAX_ACTIVE_LOCALS && self.registers + hoisted <= MAX_REGISTERS
+    }
+
+    fn evaluate<'tree>(
+        &mut self,
+        active: Active,
+        exprs: impl IntoIterator<Item = &'tree Expression<'tree>>,
+    ) {
+        let mut counter = ExprCounter(0);
+        for expr in exprs {
+            counter.visit_expr(expr);
+        }
+        self.registers = self.registers.max(active.registers + counter.0);
+    }
+
+    /// Measures `block` with `active` around it, and returns what's active
+    /// at its end.
+    fn measure(&mut self, block: &Block<'_>, mut active: Active) -> Active {
+        for stmt in &block.stmts {
+            match stmt {
+                Statement::Assignment(_)
+                | Statement::FunctionCall(_)
+                | Statement::LocalAssignment(_)
+                | Statement::CompoundAssignment(_)
+                | Statement::FunctionDecl(_)
+                | Statement::LocalFunction(_)
+                | Statement::Return(_)
+                | Statement::GlobalDeclaration(_)
+                | Statement::GlobalFunction(_) => {
+                    let mut counter = ExprCounter(0);
+                    counter.visit_stmt(stmt);
+                    self.registers = self.registers.max(active.registers + counter.0);
+                }
+                Statement::DoBlock(do_block) => {
+                    self.measure(&do_block.block, active);
+                }
+                Statement::WhileLoop(while_loop) => {
+                    self.evaluate(active, [&while_loop.condition]);
+                    self.measure(&while_loop.block, active);
+                }
+                Statement::RepeatLoop(repeat_loop) => {
+                    let inner = self.measure(&repeat_loop.block, active);
+                    self.evaluate(inner, [&repeat_loop.condition]);
+                }
+                Statement::IfStatement(if_stmt) => {
+                    self.evaluate(active, [&if_stmt.condition]);
+                    self.measure(&if_stmt.block, active);
+                    for clause in &if_stmt.elseif_clauses {
+                        self.evaluate(active, [&clause.condition]);
+                        self.measure(&clause.block, active);
+                    }
+                    if let Some(else_clause) = &if_stmt.else_clause {
+                        self.measure(&else_clause.block, active);
+                    }
+                }
+                Statement::NumericFor(numeric_for) => {
+                    let bounds = [&numeric_for.start, &numeric_for.limit];
+                    self.evaluate(active, bounds.into_iter().chain(&numeric_for.step));
+                    let state_locals = self.version.numeric_for_state_locals();
+                    let loop_active = Active {
+                        locals: active.locals + state_locals + 1,
+                        registers: active.registers + NUMERIC_FOR_STATE_REGISTERS + 1,
+                    };
+                    self.locals = self.locals.max(loop_active.locals);
+                    self.measure(&numeric_for.block, loop_active);
+                }
+                Statement::GenericFor(generic_for) => {
+                    self.evaluate(active, &generic_for.exprs);
+                    let names = generic_for.names.len();
+                    let state_locals = self.version.generic_for_state_locals();
+                    let loop_active = Active {
+                        locals: active.locals + state_locals + names,
+                        registers: active.registers + GENERIC_FOR_STATE_REGISTERS + names,
+                    };
+                    self.locals = self.locals.max(loop_active.locals);
+                    self.measure(&generic_for.block, loop_active);
+                }
+                Statement::Break(_)
+                | Statement::Continue(_)
+                | Statement::Goto(_)
+                | Statement::Label(_)
+                | Statement::GlobalStar(_)
+                | Statement::TypeDeclaration(_)
+                | Statement::Error(_) => {}
+            }
+            let declared = declared_count(stmt);
+            active =
+                Active { locals: active.locals + declared, registers: active.registers + declared };
+            self.locals = self.locals.max(active.locals);
+        }
+        active
+    }
+}
+
+/// Counts expressions outside closures, types, and parentheses.
+struct ExprCounter(usize);
+
+impl<'tree> Visit<'tree> for ExprCounter {
+    fn visit_expr(&mut self, expr: &'tree Expression<'tree>) {
+        if !matches!(expr, Expression::Parenthesized(_)) {
+            self.0 += 1;
+        }
+        self.walk_expr(expr);
+    }
+
+    fn visit_function_body(&mut self, _body: &'tree FunctionBody<'tree>) {}
+
+    fn visit_type(&mut self, _ty: &'tree Type<'tree>) {}
 }
 
 #[cfg(test)]
@@ -801,7 +855,7 @@ return f
         );
         assert_eq!(
             rename_and_lift(source),
-            "local function u(u)local l if u then l=g()print(l)end if u then l=h()print(l)end end return u"
+            "local function e(e)local t if e then t=g()print(t)end if e then t=h()print(t)end end return e"
         );
     }
 
@@ -877,7 +931,7 @@ return f
 ";
         assert_eq!(
             rename_and_lift(shadowing),
-            "local function l()local l,u l=1 do u=2 print(u)end return l end return l"
+            "local function e()local e,t e=1 do t=2 print(t)end return e end return e"
         );
         // The declaration under the `for` variable is a binding of its own,
         // so its assignment never writes the variable.
@@ -892,8 +946,8 @@ function W.new(c)
 end
 "
             ),
-            "function W.new(u)local l for c=1,3 do if u then l=f()print(l)end end while u do \
-             l=g()print(l)end end"
+            "function W.new(t)local e for n=1,3 do if t then e=f()print(e)end end while t do \
+             e=g()print(e)end end"
         );
     }
 
@@ -968,11 +1022,11 @@ return f
 
     #[test]
     fn hoisted_declaration_leaves_registers_for_a_wide_statement() {
-        let body = (0..190u32)
+        let body = (0..190)
             .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
             .collect::<Vec<_>>()
             .concat();
-        let args = (0..100u32).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let args = (0..100).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
         let result = apply(&format!(
             "\
 local function w()
@@ -992,7 +1046,7 @@ return w
 
     #[test]
     fn hoisted_declaration_stays_within_the_local_limit() {
-        let body = (0..205u32)
+        let body = (0..205)
             .map(|i| format!("do local v{i} = g() print(v{i}) end\n"))
             .collect::<Vec<_>>()
             .concat();
@@ -1101,8 +1155,10 @@ end
         );
     }
 
+    /// A closure in a type never runs either, so nothing it reads is
+    /// captured.
     #[test]
-    fn a_function_in_a_type_has_closures_of_its_own() {
+    fn a_function_in_a_type_lifts_what_its_closures_read() {
         let result = apply_luau(
             "\
 local function f()
@@ -1120,7 +1176,7 @@ end
         );
         assert_eq!(
             result,
-            "local function f()local x,w do x=1 print(x::typeof(function()local m,o do local n=1 \
+            "local function f()local x,w do x=1 print(x::typeof(function()local n,m,o do n=1 \
              h=function()return n end end do m=2 print(m)end do o=3 print(o)end end))end do w=2 \
              print(w)end end"
         );

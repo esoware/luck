@@ -1,35 +1,30 @@
-use luck_ast::Expression;
+use luck_ast::{AstKind, AstType, Expression};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::BinOp;
+use luck_value::ToBoolean as _;
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags the `(cond and a) or b` ternary idiom when `a` is a literal `false`
 /// or `nil`, which makes it always evaluate to `b`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MisleadingAndOr;
 
-impl_rule!(
+declare_lint_rule!(
     MisleadingAndOr,
-    "misleading_and_or",
     Correctness,
     Warning,
     "`and`/`or` ternary with a falsy middle operand always returns the right-hand value"
 );
 
-impl NodeRule for MisleadingAndOr {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+impl Rule for MisleadingAndOr {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if run.links.first().op != BinOp::Or {
@@ -38,80 +33,45 @@ impl NodeRule for MisleadingAndOr {
         for pair in operator_pairs(run) {
             if pair.op == BinOp::Or
                 && let Some(lhs) = pair.lhs
-                && let Expression::BinaryOp(inner) = unparenthesize(lhs)
+                && let Expression::BinaryOp(inner) = lhs
                 && inner.links.first().op == BinOp::And
-                && is_falsy_literal(&inner.links.last().operand)
+                && inner.links.last().operand.to_boolean(context) == Some(false)
             {
-                findings.push(
-                    Finding::new("`(x and FALSY) or y` always evaluates to `y`", pair.span())
-                        .with_help("use an `if` statement, or an if-then-else expression in Luau"),
+                context.diagnostic(
+                    Finding::new(
+                        "`(x and FALSY) or y` always evaluates to `y`",
+                        pair.span(context),
+                    )
+                    .with_help("use an `if` statement, or an if-then-else expression in Luau"),
                 );
             }
         }
     }
 }
 
-/// Strips one layer of parentheses, since people write the idiom both with
-/// and without them.
-fn unparenthesize<'ast>(expr: &'ast Expression<'ast>) -> &'ast Expression<'ast> {
-    if let Expression::Parenthesized(parenthesized) = expr {
-        return &parenthesized.expr;
-    }
-    expr
-}
-
-fn is_falsy_literal(expr: &Expression<'_>) -> bool {
-    matches!(unparenthesize(expr), Expression::Nil(_) | Expression::False(_))
-}
-
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&MisleadingAndOr, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_nil_middle() {
-        let diags = run("local r = (x and nil) or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_false_middle() {
-        let diags = run("local r = (x and false) or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_unparenthesized_form() {
-        // Lua precedence: `and` binds tighter than `or`, so this is the
-        // same shape with no parens.
-        let diags = run("local r = x and nil or y");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_zero_middle() {
+    const PASS: &[&str] = &[
         // `0` is truthy in Lua, so the ternary works as intended.
-        let diags = run("local r = (x and 0) or y");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+        "local r = (x and 0) or y",
+        "local r = (x and y) or z",
+        "local r = x or y",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local r = (x and nil) or y",
+        "local r = (x and false) or y",
+        "local r = (x and not 1) or y",
+        // Lua precedence: `and` binds tighter than `or`, so this is the same shape
+        // with no parens.
+        "local r = x and nil or y",
+    ];
 
     #[test]
-    fn ignores_normal_ternary() {
-        let diags = run("local r = (x and y) or z");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_or_without_and() {
-        let diags = run("local r = x or y");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::MisleadingAndOr, PASS, FAIL).test_and_snapshot();
     }
 }

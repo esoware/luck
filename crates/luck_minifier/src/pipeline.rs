@@ -1,28 +1,31 @@
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_token::{
-    Comment, CommentKind, LuaVersion, SourceError, chunk_header, leading_hot_comments,
-};
+use luck_ast::{Chunk, MAX_NESTING_DEPTH, Name, NameIndex, TreeCounts, VisitMut};
+use luck_codegen::LiteralSpelling;
+use luck_diagnostics::Diagnostic;
+use luck_token::{CommentKind, LuaVersion, chunk_header, leading_hot_comments};
 
-use crate::bind::bind;
-use crate::binding::Bindings;
+use crate::binding::NameIndexes;
 use crate::compress::compress;
-use crate::name_table::NameTable;
-use crate::rename_locals::rename;
+use crate::rename::rename;
+use crate::strip_types::strip_types;
 use crate::transform_config::TransformConfig;
 
 /// Parses `source` into `allocator` and minifies it, returning the compact
 /// output or the parse errors.
 ///
+/// The source and the output are bytes, as Lua reads them. A string spelled
+/// as written keeps its bytes, and the output is UTF-8 whenever the source
+/// is.
+///
 /// # Errors
 ///
-/// Returns the parse errors when `source` doesn't parse.
+/// Returns the parse errors, each an E008, when `source` doesn't parse.
 pub fn minify<'ast>(
     allocator: &'ast Allocator,
-    source: &'ast str,
+    source: &'ast [u8],
     version: LuaVersion,
     config: &TransformConfig,
-) -> Result<String, Vec<SourceError>> {
+) -> Result<Vec<u8>, Vec<Diagnostic>> {
     let mut result = luck_parser::parse(allocator, source, version);
     if !result.errors.is_empty() {
         return Err(result.errors);
@@ -32,98 +35,96 @@ pub fn minify<'ast>(
         .first()
         .filter(|comment| comment.kind == CommentKind::Shebang)
         .map(|comment| comment.span);
-    let hot_comments: &[Comment] = if version.is_luau() { &result.comments } else { &[] };
     let mut output = chunk_header(
         source,
         shebang,
-        leading_hot_comments(hot_comments, source).map(|comment| comment.span),
+        leading_hot_comments(&result.comments, result.chunk.block.span.start)
+            .map(|comment| comment.span),
     );
-    if !minify_tree(allocator, &mut result.block, version, config, false) {
-        return Err(vec![nesting_error(&result.block)]);
-    }
-    let code = luck_codegen::compact(&result.block);
-    if output.is_empty() {
-        return Ok(code);
-    }
-    output.push_str(&code);
-    Ok(output)
+    let comment_bytes: usize =
+        result.comments.iter().map(|comment| comment.span.text(source).len()).sum();
+    let _ = output.try_reserve_exact(source.len() - comment_bytes);
+    minify_tree(allocator, &mut result.chunk, result.counts, config);
+    Ok(luck_codegen::compact_into(&result.chunk, LiteralSpelling::Shortest, output))
 }
 
 /// Minifies a tree in place, as [`minify`] does the one it parses, and
-/// returns its compact output.
+/// writes its compact output after the bytes `output` holds.
 ///
 /// New nodes go in `allocator`. A tree holds no comments, so a shebang or
-/// Luau hot comments the output needs on top are the caller's to write.
+/// Luau hot comments the output needs on top are the caller's to write into
+/// `output` first.
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// Returns an E008 for a tree nested deeper than [`MAX_NESTING_DEPTH`],
 /// which `luck_parser` never builds, and leaves the tree as it was but for
 /// its names' indexes.
-pub fn minify_block<'ast>(
+pub fn minify_chunk<'ast>(
     allocator: &'ast Allocator,
-    block: &mut Block<'ast>,
-    version: LuaVersion,
+    chunk: &mut Chunk<'ast>,
     config: &TransformConfig,
-) -> Result<String, SourceError> {
-    if !minify_tree(allocator, block, version, config, true) {
-        return Err(nesting_error(block));
+    output: Vec<u8>,
+) -> Result<Vec<u8>, Diagnostic> {
+    let mut numbering = NameNumbering { names: 0, depth: 0, deepest: 0 };
+    numbering.visit_block(&mut chunk.block);
+    if numbering.deepest > MAX_NESTING_DEPTH {
+        return Err(Diagnostic::e008(
+            chunk.block.span,
+            format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
+        ));
     }
-    Ok(luck_codegen::compact(block))
+    let counts = TreeCounts { names: numbering.names, ..TreeCounts::default() };
+    minify_tree(allocator, chunk, counts, config);
+    Ok(luck_codegen::compact_into(chunk, LiteralSpelling::Shortest, output))
 }
 
-fn nesting_error(block: &Block<'_>) -> SourceError {
-    SourceError {
-        span: block.span,
-        message: format!(
-            "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-        ),
-    }
-}
-
-/// Binds the tree once, compresses it to its fixpoint, and names its locals
-/// once, as each phase is on, or leaves a tree nested deeper than
-/// [`MAX_NESTING_DEPTH`] as [`minify_block`] does and says so.
-///
-/// Without `can_nest_too_deep`, for a tree `luck_parser` built, which never
-/// nests that deep, it spares measuring a tree it doesn't bind.
+/// Strips a Luau tree's types, compresses it, and names its locals, as each
+/// phase is on. Every name of the tree holds an index of its own, below
+/// `counts.names`.
 fn minify_tree<'ast>(
     allocator: &'ast Allocator,
-    block: &mut Block<'ast>,
-    version: LuaVersion,
+    chunk: &mut Chunk<'ast>,
+    counts: TreeCounts,
     config: &TransformConfig,
-    can_nest_too_deep: bool,
-) -> bool {
-    let should_compress = config.remove_dead_code
-        || config.simplify_statements
-        || config.fold_constants
-        || config.inline_locals
-        || config.merge_locals
-        || config.simplify_indexes
-        || config.shorten_strings
-        || config.shorten_numbers
-        || config.simplify_parens
-        || config.lift_locals;
-    let needs_bindings = config.remove_dead_code
-        || config.inline_locals
-        || config.merge_locals
-        || config.lift_locals
-        || config.rename_locals;
-    let mut bindings = Bindings::default();
-    let mut names = NameTable::default();
-    let fits = if needs_bindings {
-        bind(block, version, &mut bindings, &mut names)
-    } else {
-        !can_nest_too_deep || block_nesting_depth(block) <= MAX_NESTING_DEPTH
-    };
-    if !fits {
-        return false;
+) {
+    if config.strip_types && chunk.version.has_type_syntax() {
+        strip_types(allocator, &mut chunk.block);
     }
-    if should_compress {
-        compress(allocator, version, *config, &mut bindings, block);
-    }
+    let mut name_indexes = NameIndexes::new(counts.names);
+    let compressed =
+        config.compresses().then(|| compress(allocator, chunk, counts, *config, &mut name_indexes));
     if config.rename_locals {
-        rename(allocator, version, block, &mut bindings, &names, config.rename_globals);
+        rename(allocator, chunk, counts, config.rename_globals, &mut name_indexes, compressed);
     }
-    true
+}
+
+/// Gives every name of a tree an index of its own, as the parser does, for
+/// a tree that joins nodes from several parses or builds some in code, and
+/// measures how deep it nests.
+struct NameNumbering {
+    names: u32,
+    /// Levels of nesting open where the walk is, and the most there have
+    /// been.
+    depth: usize,
+    deepest: usize,
+}
+
+impl<'ast> VisitMut<'ast> for NameNumbering {
+    /// The walk goes no deeper than one level past the cap, so it's safe on a
+    /// tree of any depth.
+    fn descend(&mut self) -> bool {
+        self.depth += 1;
+        self.deepest = self.deepest.max(self.depth);
+        self.depth <= MAX_NESTING_DEPTH
+    }
+
+    fn ascend(&mut self) {
+        self.depth -= 1;
+    }
+
+    fn visit_name(&mut self, name: &mut Name<'ast>) {
+        name.index = Some(NameIndex::new(self.names));
+        self.names += 1;
+    }
 }

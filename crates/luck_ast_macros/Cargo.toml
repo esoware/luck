@@ -1,0 +1,19 @@
+[package]
+name                   = "luck_ast_macros"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "The `Ast` marker derive for the luck toolchain's syntax tree"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+doctest    = false

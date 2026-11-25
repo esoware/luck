@@ -7,13 +7,16 @@
 //! The parse core is always present. Every other stage sits behind its own
 //! feature, and `full` enables all of them:
 //!
-//! - `allocator` - The arena syntax trees live in, and a pool of arenas for
-//!   threads (always on)
-//! - `token` - Spans, `LuaVersion`, tokens, literal value semantics (always on)
+//! - `allocator` - The arena syntax trees live in, and arenas for threads
+//!   (always on)
+//! - `token` - Spans, `LuaVersion` and `LuaTarget`, tokens, literal value
+//!   semantics (always on)
 //! - `lexer` - Tokenizer (always on)
-//! - `ast` - AST nodes, `Visitor`, `VisitorMut`, `span()` accessors (always on)
+//! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
+//!   `GetSpan`, `ContentEq` (always on)
 //! - `parser` - Pratt + recursive-descent parser (always on)
-//! - `core` - Dialect targets, diagnostics (always on)
+//! - `diagnostics` - The diagnostic every stage reports problems with, and
+//!   its numbered constructors (always on)
 //! - `codegen` - Compact printer (feature `codegen`)
 //! - `resolver` - Module resolution, source loading, path form (feature
 //!   `resolver`)
@@ -21,22 +24,27 @@
 //!   enables `resolver` and `minifier`)
 //! - `minifier` - AST transform pipeline (feature `minifier`)
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
-//! - `semantic` - Scope tree + stdlib model (feature `semantic`)
+//! - `semantic` - Scoping, compile-time checks, the node table, and `require`
+//!   sites, in one pass (feature `semantic`)
+//! - `stdlib` - Each target's standard library, the std definitions that
+//!   layer a host's library over one, and what a chunk reaches in it
+//!   (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
-//!   `semantic`)
+//!   `stdlib`)
 //! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
 //!   enables the stages it configures)
 //!
 //! # Arenas
 //!
 //! A tree lives in an [`allocator::Allocator`] the caller owns, and borrows
-//! the source it was parsed from, so both outlive it. Every stage takes the
-//! arena first and builds what it needs there. Nothing in an arena is dropped
-//! on its own: [`reset`](allocator::Allocator::reset) frees it all at once
-//! and keeps the memory, so one arena serves file after file. Threads take
-//! arenas from an [`allocator::AllocatorPool`], whose guard resets each one
-//! and hands it back when it drops. The bundler takes a slice of arenas and
-//! reads modules on one thread per arena.
+//! the source it was parsed from, so both outlive it. Every stage that builds
+//! nodes takes the arena first and builds them there. Nothing in an arena is
+//! dropped on its own: [`reset`](allocator::Allocator::reset) frees it all at
+//! once and keeps the memory, so one arena serves file after file. Threads
+//! take arenas from an [`allocator::AllocatorPool`], whose guard resets each
+//! one and hands it back when it drops. The bundler reads modules on rayon's
+//! pool, each into the arena its thread gets from an
+//! [`allocator::ThreadAllocators`].
 //!
 //! # Usage
 //!
@@ -47,7 +55,7 @@
 //! use luck::token::LuaVersion;
 //!
 //! let mut allocator = Allocator::new();
-//! for source in ["local x = 1", "return x"] {
+//! for source in [&b"local x = 1"[..], b"return x"] {
 //!     let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
 //!     assert!(parsed.errors.is_empty());
 //!     // The parse borrows the arena, so it goes first.
@@ -66,7 +74,7 @@
 //!
 //! let pool = AllocatorPool::new(2);
 //! thread::scope(|scope| {
-//!     for source in ["local x = 1", "return 2"] {
+//!     for source in [&b"local x = 1"[..], b"return 2"] {
 //!         let pool = &pool;
 //!         scope.spawn(move || {
 //!             let allocator = pool.get();
@@ -78,7 +86,8 @@
 //! ```
 //!
 //! Format, with feature `formatter`. `formatter::format_parsed` and
-//! `formatter::format_range` take a parse a caller already holds:
+//! `formatter::format_range` take a parse a caller already holds, made with
+//! `parser::parse_with_tokens`:
 //!
 //! ```
 //! # #[cfg(feature = "formatter")] {
@@ -88,8 +97,8 @@
 //!
 //! let allocator = Allocator::new();
 //! let formatted =
-//!     luck::formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
-//! assert_eq!(formatted.output, "local x = 1\n");
+//!     luck::formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+//! assert_eq!(formatted.output, b"local x = 1\n");
 //! # }
 //! ```
 //!
@@ -104,29 +113,34 @@
 //! let allocator = Allocator::new();
 //! let minified = luck::minifier::minify(
 //!     &allocator,
-//!     "return 1 + 2",
+//!     b"return 1 + 2",
 //!     LuaVersion::Lua54,
 //!     &TransformConfig::default(),
 //! );
-//! assert_eq!(minified.as_deref(), Ok("return 3"));
+//! assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 //! # }
 //! ```
 //!
-//! Lint, with feature `linter`. `linter::lint_parsed` lints a parse a caller
-//! already holds, and `linter::apply_fixes` returns the fixed source's parse,
-//! ready to lint again:
+//! Lint, with feature `linter`, against a target's standard library. A
+//! `linter::Linter` compiles its settings once and lints parse after parse,
+//! and its `fix` applies the fixes of the kinds asked for until none is left,
+//! returning the fixed source's parse and diagnostics:
 //!
 //! ```
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
-//! use luck::core::LuaTarget;
-//! use luck::linter::LintConfig;
+//! use luck::linter::{FixKind, LintConfig, Linter};
+//! use luck::token::LuaTarget;
 //!
 //! let allocator = Allocator::new();
-//! let config = LintConfig::default();
-//! let source = "print(undefined_name)";
-//! let diags = luck::linter::lint(&allocator, source, LuaTarget::Lua54, &config);
-//! assert_eq!(diags[0].rule, "undefined_variable");
+//! let linter = Linter::new(LintConfig::default());
+//! let stdlib = luck::stdlib::library_for(LuaTarget::Lua54);
+//! let parse = luck::parser::parse(&allocator, b"print(undefined_name)", LuaTarget::Lua54.version());
+//! let diags = linter.run(&parse, stdlib, FixKind::empty(), None);
+//! assert_eq!(diags[0].code, "undefined_variable");
+//!
+//! let fixed = linter.fix(&allocator, b"unpack(t)", stdlib, FixKind::Fix, None);
+//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"table.unpack(t)"[..]));
 //! # }
 //! ```
 //!
@@ -135,35 +149,37 @@
 //! ```
 //! # #[cfg(feature = "codegen")] {
 //! use luck::allocator::Allocator;
+//! use luck::codegen::LiteralSpelling;
 //! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let parsed = luck::parser::parse(&allocator, "local x = ( 1 )", LuaVersion::Lua54);
-//! assert_eq!(luck::codegen::compact(&parsed.block), "local x=(1)");
+//! let parsed = luck::parser::parse(&allocator, b"local x = ( a + b ) * ( c )", LuaVersion::Lua54);
+//! let output = luck::codegen::compact(&parsed.chunk, LiteralSpelling::AsWritten);
+//! assert_eq!(output, b"local x=(a+b)*c");
 //! # }
 //! ```
 //!
-//! Bundle, with feature `bundler`. The result borrows no arena, so they can
-//! be reset or dropped right after:
+//! Bundle, with feature `bundler`. Modules are read on rayon's pool, so give
+//! its threads [`ast::MIN_STACK_BYTES`] of stack. The result borrows no arena,
+//! so they can be reset or dropped right after:
 //!
 //! ```no_run
 //! # #[cfg(feature = "bundler")] {
-//! use std::iter;
 //! use std::path::Path;
 //!
-//! use luck::allocator::Allocator;
+//! use luck::allocator::ThreadAllocators;
 //! use luck::bundler::{BundleOptions, DynamicRequire};
 //! use luck::token::LuaVersion;
 //!
-//! let mut arenas: Vec<Allocator> = iter::repeat_with(Allocator::new).take(8).collect();
 //! let options = BundleOptions {
 //!     version: LuaVersion::Lua54,
 //!     search_paths: &[],
 //!     project_root: Path::new("src"),
 //!     dynamic_require: DynamicRequire::default(),
 //! };
-//! let bundle = luck::bundler::bundle(&mut arenas, Path::new("src/main.lua"), &options).unwrap();
-//! println!("{}", bundle.output);
+//! let arenas = ThreadAllocators::new();
+//! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.lua"), &options).unwrap();
+//! std::io::Write::write_all(&mut std::io::stdout(), &bundle.output).unwrap();
 //! # }
 //! ```
 
@@ -177,7 +193,7 @@ pub use luck_bundler as bundler;
 pub use luck_codegen as codegen;
 #[cfg(feature = "config")]
 pub use luck_config as config;
-pub use luck_core as core;
+pub use luck_diagnostics as diagnostics;
 #[cfg(feature = "formatter")]
 pub use luck_formatter as formatter;
 pub use luck_lexer as lexer;
@@ -190,6 +206,8 @@ pub use luck_parser as parser;
 pub use luck_resolver as resolver;
 #[cfg(feature = "semantic")]
 pub use luck_semantic as semantic;
+#[cfg(feature = "stdlib")]
+pub use luck_stdlib as stdlib;
 pub use luck_token as token;
 
 pub use version::VERSION;

@@ -1,10 +1,11 @@
-use core::fmt::Display;
+use std::fmt::Display;
 use std::process::ExitCode;
+use std::slice;
 
-use luck_core::Diagnostic;
-use luck_token::{LuaVersion, SourceError};
+use luck_diagnostics::FileDiagnostics;
+use luck_token::LuaVersion;
 
-use crate::render::{print_diags, print_source_errors};
+use crate::reporter::print_files;
 
 /// How a command failed, once it has reported why. A command that ran and
 /// found no problems returns `Ok` and exits 0.
@@ -22,8 +23,8 @@ pub(crate) enum Exit {
 impl From<Exit> for ExitCode {
     fn from(exit: Exit) -> Self {
         match exit {
-            Exit::Failure => Self::from(1u8),
-            Exit::Usage => Self::from(2u8),
+            Exit::Failure => Self::from(1),
+            Exit::Usage => Self::from(2),
         }
     }
 }
@@ -41,19 +42,14 @@ pub(crate) fn operation_error(message: impl Display) -> Exit {
     report_error(message, Exit::Failure)
 }
 
-pub(crate) fn fail_with_diags(diags: &[Diagnostic], version: LuaVersion) -> Exit {
-    print_diags(diags, version);
+pub(crate) fn fail_with_diags(files: &[FileDiagnostics], version: LuaVersion) -> Exit {
+    print_files(files, version);
     Exit::Failure
 }
 
-/// `source` is a document that isn't on disk, such as a bundle being minified
-/// or stdin.
-pub(crate) fn fail_with_source_errors(
-    path: String,
-    source: &str,
-    errors: &[SourceError],
-    version: LuaVersion,
-) -> Exit {
-    print_source_errors(path, source, errors, version);
-    Exit::Failure
+/// A `luck.json` that doesn't load is a usage error.
+pub(crate) fn config_error(file: &FileDiagnostics) -> Exit {
+    // Lua 5.4 ends a line where JSON5 does, but at the rare LS and PS.
+    print_files(slice::from_ref(file), LuaVersion::Lua54);
+    Exit::Usage
 }

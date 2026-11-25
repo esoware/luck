@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use luck_resolver::normalize_path;
+use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 /// `unused_variable` is a warning by default and `undefined_variable` an
 /// error.
@@ -24,7 +24,7 @@ fn quiet_prints_errors_only() {
     luck_in(project.path())
         .args(["lint", "main.lua", "--quiet"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("undefined_variable"))
         .stderr(predicate::str::contains("unused_variable").not());
 }
@@ -34,16 +34,16 @@ fn quiet_still_counts_warnings_toward_the_exit_code() {
     let project = TempDir::new().expect("project");
     write_file(project.path(), "main.lua", WARNING_ONLY);
 
-    luck_in(project.path()).args(["lint", "main.lua", "--quiet"]).assert().code(0i32).stderr("");
+    luck_in(project.path()).args(["lint", "main.lua", "--quiet"]).assert().code(0).stderr("");
     luck_in(project.path())
         .args(["lint", "main.lua", "--quiet", "--deny-warnings"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr("error: 1 warning(s) exceed the limit of 0\n");
     luck_in(project.path())
         .args(["lint", "main.lua", "--quiet", "--max-warnings", "1"])
         .assert()
-        .code(0i32)
+        .code(0)
         .stderr("");
 }
 
@@ -53,16 +53,16 @@ fn deny_makes_a_category_s_rules_errors_and_warn_makes_them_warnings() {
     write_file(project.path(), "main.lua", WARNING_AND_ERROR);
     write_file(project.path(), "warning.lua", WARNING_ONLY);
 
-    luck_in(project.path()).args(["lint", "warning.lua"]).assert().code(0i32);
+    luck_in(project.path()).args(["lint", "warning.lua"]).assert().code(0);
     luck_in(project.path())
         .args(["lint", "warning.lua", "-D", "correctness"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("1 error(s), 0 warning(s)"));
     luck_in(project.path())
         .args(["lint", "main.lua", "-W", "correctness"])
         .assert()
-        .code(0i32)
+        .code(0)
         .stderr(predicate::str::contains("0 error(s), 2 warning(s)"));
 }
 
@@ -74,12 +74,12 @@ fn level_flags_apply_in_the_order_given() {
     luck_in(project.path())
         .args(["lint", "main.lua", "-D", "unused_variable", "-A", "unused_variable"])
         .assert()
-        .code(0i32)
+        .code(0)
         .stderr("");
     luck_in(project.path())
         .args(["lint", "main.lua", "-A", "unused_variable", "-D", "unused_variable"])
         .assert()
-        .code(1i32);
+        .code(1);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn rule_level_wins_over_a_category_flag() {
     luck_in(project.path())
         .args(["lint", "main.lua", "-D", "correctness"])
         .assert()
-        .code(0i32)
+        .code(0)
         .stderr("");
 }
 
@@ -101,12 +101,13 @@ fn rule_level_wins_over_a_category_flag() {
 fn github_format_prints_annotations_on_stdout() {
     let project = TempDir::new().expect("project");
     let main_path = write_file(project.path(), "src/main.lua", WARNING_AND_ERROR);
-    let file = normalize_path(&main_path).replace(':', "%3A");
+    let canonical = FileSystemOs.canonicalize(&main_path).expect("canonicalize");
+    let file = to_slash_lossy(&canonical).replace(':', "%3A");
 
     luck_in(&project.path().join("src"))
         .args(["lint", "--format", "github"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stdout(predicate::str::contains(format!(
             "::warning file={file},line=1,endLine=1,col=7,endColumn=13,\
              title=unused_variable::unused variable `unused`",
@@ -118,6 +119,47 @@ fn github_format_prints_annotations_on_stdout() {
 }
 
 #[test]
+fn lint_renders_a_span_ending_inside_a_multibyte_char() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "print(string.format(\"%\u{e9}\", 1))\n");
+
+    let output = run(directory.path(), &["lint", "main.lua"]);
+    let stderr = stderr_text(&output);
+
+    assert!(
+        !stderr.contains("panicked"),
+        "a finding that ends inside a multibyte character must render, not panic:\n{stderr}"
+    );
+    assert_eq!(output.status.code(), Some(0), "one warning exits 0:\n{stderr}");
+}
+
+#[test]
+fn lint_line_numbers_do_not_count_a_form_feed_as_a_newline() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "-- a\u{c}\nreturn missingglobal\n");
+
+    let stderr = stderr_text(&run(directory.path(), &["lint", "main.lua"]));
+
+    assert!(
+        stderr.contains("main.lua:2:8"),
+        "Lua counts only CR and LF as line breaks, so the finding is on line 2:\n{stderr}"
+    );
+}
+
+#[test]
+fn lint_column_does_not_count_a_bom() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "\u{feff}return missingglobal\n");
+
+    let stderr = stderr_text(&run(directory.path(), &["lint", "main.lua"]));
+
+    assert!(
+        stderr.contains("main.lua:1:8"),
+        "a BOM is not a column, so the finding is at 1:8:\n{stderr}"
+    );
+}
+
+#[test]
 fn json_format_carries_lines_and_columns() {
     let project = TempDir::new().expect("project");
     write_file(project.path(), "main.lua", WARNING_ONLY);
@@ -125,11 +167,31 @@ fn json_format_carries_lines_and_columns() {
     luck_in(project.path())
         .args(["lint", "main.lua", "--format", "json"])
         .assert()
-        .code(0i32)
+        .code(0)
         .stdout(predicate::str::contains(r#""line":1"#))
         .stdout(predicate::str::contains(r#""column":7"#))
         .stdout(predicate::str::contains(r#""end_line":1"#))
         .stdout(predicate::str::contains(r#""end_column":13"#));
+}
+
+#[test]
+fn timings_go_to_stderr_with_a_row_per_rule_that_ran() {
+    let project = TempDir::new().expect("project");
+    write_file(project.path(), "main.lua", WARNING_ONLY);
+
+    luck_in(project.path())
+        .args(["lint", "main.lua", "--format", "json", "--timings"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("Rule timings").not())
+        .stderr(predicate::str::contains("Rule timings:"))
+        .stderr(predicate::function(|stderr: &str| has_row(stderr, "unused_variable")))
+        .stderr(predicate::function(|stderr: &str| !has_row(stderr, "shadowing")));
+}
+
+/// Whether a line of `table` starts with `rule`'s name.
+fn has_row(table: &str, rule: &str) -> bool {
+    table.lines().any(|line| line.split_whitespace().next() == Some(rule))
 }
 
 /// The printed config is a `lint` section, so feeding it back changes nothing.
@@ -171,7 +233,7 @@ fn print_config_shows_the_config_of_the_path_given() {
     luck_in(project.path())
         .args(["lint", "--print-config", "pkg", "pkg/a.lua"])
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr("error: `--print-config` takes at most one path\n");
 }
 

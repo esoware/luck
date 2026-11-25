@@ -198,7 +198,7 @@ print(1)
         ),
         (
             "for _, _ENV in ipairs({{print = print}}) do print(1) end\n",
-            "for l,_ENV in ipairs{{print=print}}do print(1)end",
+            "for e,_ENV in ipairs{{print=print}}do print(1)end",
         ),
     ] {
         let result = minify_renaming_globals(source, LuaVersion::Lua54);
@@ -263,7 +263,7 @@ function g() end
 function g() end
 print(g)
 ",
-            "function l()end print(l)",
+            "function e()end print(e)",
         ),
         // The first round gives the local and the function the same name,
         // and the later rounds must still tell them apart.
@@ -275,7 +275,7 @@ end
 function y() end
 print(y)
 ",
-            "do local l=f()print(l)end function l()end print(l)",
+            "do local e=f()print(e)end function e()end print(e)",
         ),
     ] {
         let result = minify_renaming_globals(source, LuaVersion::Lua54);

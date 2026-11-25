@@ -1,0 +1,16 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: field/index assignment on uninitialized `x` (value is `nil`)
+ --> Lua54:2:1
+1 | local x
+2 | x.foo = 1
+  | ^
+help: initialize the local before mutating its fields
+
+warning: field/index assignment on uninitialized `x` (value is `nil`)
+ --> Lua54:2:1
+1 | local x
+2 | x[1] = 2
+  | ^
+help: initialize the local before mutating its fields

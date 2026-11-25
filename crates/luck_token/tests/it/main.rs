@@ -1,12 +1,7 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
-extern crate alloc;
-
-mod code_buffer;
-mod comment;
+mod chunk;
+mod directive;
+mod line_index;
+mod lua_target;
 mod number;
 mod op;
 mod span;

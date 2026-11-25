@@ -1,78 +1,58 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Outside Roblox, `shared` is an ordinary name.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GlobalUsage;
 
-impl_rule!(
+declare_lint_rule!(
     GlobalUsage,
-    "global_usage",
     Style,
     Warning,
     "use of the global environment tables `_G` or `shared`"
 );
 
-impl WholeRule for GlobalUsage {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let is_roblox = context.semantic.environment().is_roblox();
-        let tree = context.semantic.scope_tree();
-        tree.global_references()
-            .filter(|reference| match tree.name(reference.name) {
-                "_G" => true,
-                // Roblox.
-                "shared" => is_roblox,
-                _ => false,
-            })
-            .map(|reference| {
-                Finding::new(
-                    format!("global environment `{}` used", tree.name(reference.name)),
-                    reference.span,
-                )
-                .with_help("prefer a module or an explicitly passed dependency")
-            })
-            .collect()
+impl Rule for GlobalUsage {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
+        let is_roblox = context.semantic.target().is_roblox();
+        let environments = [tree.name_id("_G"), tree.name_id("shared").filter(|_| is_roblox)];
+        for reference in tree.global_references() {
+            if environments.contains(&Some(reference.name)) {
+                let name = tree.name(reference.name);
+                context.diagnostic(
+                    Finding::new(format!("global environment `{name}` used"), reference.span)
+                        .with_help("prefer a module or an explicitly passed dependency"),
+                );
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::fixtures::{run_rule, run_rule_roblox};
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    #[test]
-    fn flags_global_environment_reads_and_writes() {
-        let diags = run_rule_roblox(&GlobalUsage, "_G.value = shared.value; shared = {}");
-        assert_eq!(diags.len(), 3, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_global_environment_table_outside_roblox() {
-        let diags = run_rule(&GlobalUsage, "_G.value = 1", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shared_outside_roblox() {
-        let diags =
-            run_rule(&GlobalUsage, "local function init() shared = {} end", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_ordinary_globals() {
-        let diags = run_rule(&GlobalUsage, "print(pairs(items)); custom = 1", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_shadowing_and_fields() {
-        let diags = run_rule_roblox(
-            &GlobalUsage,
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local function init() shared = {} end", LuaTarget::Lua54),
+        ("print(pairs(items)); custom = 1", LuaTarget::Lua54),
+        (
             "local _G, shared = {}, {}; _G.x = shared.x; object._G = object.shared",
-        );
-        assert!(diags.is_empty(), "{diags:?}");
+            LuaTarget::LuauRoblox,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("_G.value = shared.value; shared = {}", LuaTarget::LuauRoblox),
+        ("_G.value = 1", LuaTarget::Lua54),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::GlobalUsage, PASS, FAIL).test_and_snapshot();
     }
 }

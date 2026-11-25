@@ -1,4 +1,4 @@
-use luck_token::{Associativity, BinOp, CompoundOp, OperandSide, TokenKind, UnOp};
+use luck_token::{Associativity, BinOp, CompoundOp, TokenKind, UnOp};
 
 #[test]
 fn bin_op_from_token_kind_maps_every_binary_operator_token() {
@@ -56,22 +56,6 @@ fn bin_op_and_un_op_precedence_follow_the_lua_manual() {
 }
 
 #[test]
-fn bin_op_can_nest_bare_when_tighter_or_on_the_associative_side() {
-    for side in [OperandSide::Left, OperandSide::Right] {
-        assert!(BinOp::Mul.can_nest_bare(BinOp::Add, side), "{side:?}");
-        assert!(!BinOp::Add.can_nest_bare(BinOp::Mul, side), "{side:?}");
-    }
-    // `a - b + c` is `(a - b) + c`, so only the left side nests bare.
-    assert!(BinOp::Sub.can_nest_bare(BinOp::Add, OperandSide::Left));
-    assert!(!BinOp::Sub.can_nest_bare(BinOp::Add, OperandSide::Right));
-    // `..` and `^` group right.
-    for op in [BinOp::Concat, BinOp::Pow] {
-        assert!(op.can_nest_bare(op, OperandSide::Right), "{op:?}");
-        assert!(!op.can_nest_bare(op, OperandSide::Left), "{op:?}");
-    }
-}
-
-#[test]
 fn un_op_and_compound_op_spell_their_tokens() {
     for (kind, expected) in [
         (TokenKind::Not, "not"),
@@ -96,6 +80,23 @@ fn un_op_and_compound_op_spell_their_tokens() {
         let op = CompoundOp::from_token_kind(kind).expect("compound operator kind");
         assert_eq!(op.static_text(), expected);
         assert_eq!(kind.static_text(), Some(expected));
+    }
+}
+
+#[test]
+fn compound_op_applies_the_binary_operator_it_spells() {
+    for op in [
+        CompoundOp::Add,
+        CompoundOp::Sub,
+        CompoundOp::Mul,
+        CompoundOp::Div,
+        CompoundOp::FloorDiv,
+        CompoundOp::Mod,
+        CompoundOp::Pow,
+        CompoundOp::Concat,
+    ] {
+        let spelled = op.static_text().strip_suffix('=').expect("a compound operator ends in `=`");
+        assert_eq!(op.binary_op().static_text(), spelled, "{op:?}");
     }
 }
 

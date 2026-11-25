@@ -1,0 +1,44 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: call arguments start on a new line, but Lua joins this with the previous expression
+ --> Lua54:3:1
+2 | local x = f
+3 | (3)
+  | ^
+help: keep `(` on the same line as the callee, or add a semicolon if a new statement was intended
+
+warning: call arguments start on a new line, but Lua joins this with the previous expression
+ --> Lua54:3:1
+2 | f
+3 | (3)
+  | ^
+help: keep `(` on the same line as the callee, or add a semicolon if a new statement was intended
+
+warning: call arguments start on a new line, but Lua joins this with the previous expression
+ --> Lua54:3:1
+2 | local x = f(1)
+3 | (2)
+  | ^
+help: keep `(` on the same line as the callee, or add a semicolon if a new statement was intended
+
+warning: call arguments start on a new line, but Lua joins this with the previous expression
+ --> Lua54:3:1
+2 | local x = t:m
+3 | (1)
+  | ^
+help: keep `(` on the same line as the callee, or add a semicolon if a new statement was intended
+
+warning: call arguments start on a new line, but Lua joins this with the previous expression
+ --> Lua54:3:1
+2 | local x = f -- note
+3 | (3)
+  | ^
+help: keep `(` on the same line as the callee, or add a semicolon if a new statement was intended
+
+warning: call arguments start on a new line, but Lua joins this with the previous expression
+ --> Lua54:3:1
+2 | f
+3 | (3)
+  | ^
+help: keep `(` on the same line as the callee, or add a semicolon if a new statement was intended

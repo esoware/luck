@@ -11,6 +11,14 @@
 //! is one error that ends the parse, as input over 4 GiB is. Error recovery
 //! reports multiple parse errors in a single pass.
 //!
+//! A source is bytes, as Lua reads it, so a string or a comment may hold any
+//! byte.
+//!
+//! The tree keeps the parentheses that change what they hold, and the parse
+//! records every other pair in its [`Groupings`], as it keeps comments beside
+//! the tree. A node spans the tokens it was read from, so one around an
+//! operand the source grouped spans the operand's parentheses too.
+//!
 //! # Usage
 //!
 //! ```
@@ -18,20 +26,15 @@
 //! use luck_token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let result = luck_parser::parse(&allocator, "local x = 1 + 2", LuaVersion::Lua54);
+//! let result = luck_parser::parse(&allocator, b"local x = 1 + 2", LuaVersion::Lua54);
 //! assert!(result.errors.is_empty());
-//! assert_eq!(result.block.stmts.len(), 1);
+//! assert_eq!(result.chunk.block.stmts.len(), 1);
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(clippy::missing_panics_doc, reason = "a Panics section says nothing about a test")
-)]
-
+mod groupings;
 mod parse_result;
 mod parser;
-mod validate;
 
-pub use parse_result::{ParseError, ParseResult};
+pub use groupings::Groupings;
+pub use parse_result::ParseResult;
 pub use parser::{parse, parse_with_tokens};
-pub use validate::validate;

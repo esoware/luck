@@ -1,146 +1,109 @@
-use luck_ast::{Block, LastStatement};
+use luck_ast::{AstKind, AstType, Statement};
+use luck_diagnostics::Tag;
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::fix::FixKind;
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RedundantReturn;
 
-impl_rule!(
+declare_lint_rule!(
     RedundantReturn,
-    "redundant_return",
     Style,
     Warning,
-    "trailing bare `return` has no effect"
+    "trailing bare `return` has no effect",
+    fix = Fix
 );
 
 /// Only the chunk and function bodies are checked, since in a nested block a
 /// bare `return` is an early exit.
-impl WholeRule for RedundantReturn {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        context.nodes.function_blocks().iter().filter_map(|block| check_tail(block)).collect()
-    }
-}
+impl Rule for RedundantReturn {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
 
-fn check_tail(block: &Block<'_>) -> Option<Finding> {
-    let Some(LastStatement::Return(return_stmt)) = &block.last_stmt else {
-        return None;
-    };
-    if !return_stmt.exprs.is_empty() {
-        return None;
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
+        if !matches!(
+            context.nodes.parent_kind(node.id()),
+            Some(AstKind::FunctionBody(_) | AstKind::Chunk(_))
+        ) {
+            return;
+        }
+        let Some(Statement::Return(return_stmt)) = block.stmts.last() else {
+            return;
+        };
+        if !return_stmt.exprs.is_empty() {
+            return;
+        }
+        let span = return_stmt.span;
+        context.diagnostic(
+            Finding::new("bare `return` at the end of the function has no effect", span)
+                .with_tag(Tag::Unnecessary)
+                .with_fix(context, FixKind::Fix, |fixer| {
+                    fixer.delete("remove the redundant `return`", span)
+                }),
+        );
     }
-    Some(
-        Finding::new("bare `return` at the end of the function has no effect", return_stmt.span)
-            .with_fix(Fix {
-                description: "remove the redundant `return`".to_owned(),
-                edits: vec![TextEdit { span: return_stmt.span, replacement: String::new() }],
-            }),
-    )
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::{fix_and_reparse, run_rule};
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&RedundantReturn, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_trailing_bare_return_in_function() {
-        let diags = run("\
-local function f()
-    print(1)
-    return
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_trailing_bare_return_in_chunk() {
-        let diags = run("\
-print(1)
-return");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_return_only_body() {
-        let diags = run("\
-local function f()
-    return
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_and_fixes_trailing_return() {
-        let source = "\
-local function f()
-    print(1)
-    return
-end
-f()";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(!fixed.contains("return"), "{fixed}");
-    }
-
-    #[test]
-    fn flags_and_fixes_trailing_return_with_semicolon() {
-        let source = "\
-local function f()
-    print(1)
-    return;
-end
-f()";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(!fixed.contains("return"), "{fixed}");
-    }
-
-    #[test]
-    fn ignores_return_with_values() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local function f()
     return 1
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_early_return_in_nested_block() {
-        let diags = run("\
+f()",
+        "\
 local function f(x)
     if x then
         return
     end
     print(x)
 end
-f(1)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+f(1)",
+    ];
 
-    #[test]
-    fn flags_nested_function_tail_return() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "\
+local function f()
+    print(1)
+    return
+end
+f()",
+        "\
+print(1)
+return",
+        "\
+local function f()
+    return
+end
+f()",
+        "\
+local function f()
+    print(1)
+    return;
+end
+f()",
+        "\
 local f = function()
     local g = function()
         return
     end
     return g
 end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
+f()",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::RedundantReturn, PASS, FAIL).test_and_snapshot();
     }
 }

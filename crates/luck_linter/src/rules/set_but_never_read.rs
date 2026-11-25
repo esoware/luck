@@ -1,7 +1,9 @@
+use luck_diagnostics::Tag;
 use luck_semantic::SymbolKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a local that's assigned after its declaration but never read
 /// (Luacheck 231).
@@ -9,21 +11,19 @@ use crate::rule::{LintContext, WholeRule, impl_rule};
 /// A lone `local x = 1` with no other references is left to
 /// `unused_variable`; this rule needs at least one later write, such as
 /// `x = 1`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SetButNeverRead;
 
-impl_rule!(
+declare_lint_rule!(
     SetButNeverRead,
-    "set_but_never_read",
     Style,
     Warning,
     "local is written to but its value is never read"
 );
 
-impl WholeRule for SetButNeverRead {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
-        let mut findings = Vec::new();
+impl Rule for SetButNeverRead {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
 
         for symbol in tree.symbols() {
             if symbol.kind != SymbolKind::Local {
@@ -51,82 +51,67 @@ impl WholeRule for SetButNeverRead {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!("value assigned to `{name}` is never read"),
                     symbol.definition_span,
                 )
+                .with_tag(Tag::Unnecessary)
                 .with_help("remove the assignment or use the value somewhere"),
             );
         }
-
-        findings
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&SetButNeverRead, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_write_without_read() {
-        let diags = run("\
-local x
-x = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn ignores_write_with_subsequent_read() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local x
 x = 1
-return x");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_pure_unused_declaration() {
+return x",
+            LuaTarget::Lua54,
+        ),
         // No post-declaration write; that's `unused_variable`'s job.
-        let diags = run("local x = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_prefixed() {
-        let diags = run("\
+        ("local x = 1", LuaTarget::Lua54),
+        (
+            "\
 local _x
-_x = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_multiple_writes_no_reads() {
-        let diags = run("\
-local x
-x = 1
-x = 2");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_exported_local_only_written() {
-        let diags = run_rule(
-            &SetButNeverRead,
+_x = 1",
+            LuaTarget::Lua54,
+        ),
+        (
             "\
 export local counter = 0
 counter = 1",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "got: {diags:?}");
+            LuaTarget::Luau,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
+local x
+x = 1",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local x
+x = 1
+x = 2",
+            LuaTarget::Lua54,
+        ),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::SetButNeverRead, PASS, FAIL).test_and_snapshot();
     }
 }

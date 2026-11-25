@@ -1,61 +1,45 @@
-use luck_ast::{Call, Expression};
-use luck_semantic::SemanticAnalysis;
+use luck_ast::{AstKind, AstType, Call, GetSpan as _};
+use luck_diagnostics::Tag;
+use luck_semantic::{AstNode, AstTypesBitset};
 
-use crate::call::{CallArg, CallArgs, is_global_call};
+use crate::call::{CallArgs, is_global_call};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnnecessaryAssert;
 
-impl_rule!(
+declare_lint_rule!(
     UnnecessaryAssert,
-    "unnecessary_assert",
     Suspicious,
     Warning,
     "`assert` on a constant value always passes or always errors"
 );
 
-impl NodeRule for UnnecessaryAssert {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
-    }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        findings.extend(check_call(call, context.semantic));
+impl Rule for UnnecessaryAssert {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in chain.calls() {
+            if let Some(finding) = check_call(call, context) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 
-fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
-    if !is_global_call(call, "assert", semantic) {
+fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
+    if !is_global_call(call, "assert", context.scoping()) {
         return None;
     }
-    let is_truthy = match CallArgs::new(call.args).next()? {
-        CallArg::String(_) | CallArg::Table(_) => true,
-        CallArg::Expr(expr) => match expr {
-            // 0 and "" are truthy in Lua, so every number and string passes.
-            Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TableConstructor(_)
-            | Expression::FunctionDef(_) => true,
-            Expression::False(_) | Expression::Nil(_) => false,
-            Expression::VarArg(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::BinaryOp(_)
-            | Expression::UnaryOp(_)
-            | Expression::IfExpression(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => return None,
-        },
-    };
+    let is_truthy = CallArgs::new(call.args).next()?.to_boolean(context)?;
     let finding = if is_truthy {
         Finding::new("`assert` on a constant value always passes", call.span())
+            .with_tag(Tag::Unnecessary)
             .with_help("remove the `assert` or check a real condition")
     } else {
         Finding::new("`assert` on a constant falsy value always errors", call.span())
@@ -66,95 +50,50 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&UnnecessaryAssert, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_assert_true() {
-        let diags = run("assert(true)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("always passes"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_zero() {
-        // 0 is truthy in Lua.
-        let diags = run("assert(0)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_string() {
-        let diags = run("assert(\"always\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_table() {
-        let diags = run("assert({})");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_false() {
-        let diags = run("assert(false, \"unreachable\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("always errors"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_assert_nil() {
-        let diags = run("assert(nil)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_string_and_table_arguments_without_parentheses() {
-        for source in ["assert\"\"", "assert'x'", "assert[[x]]", "assert{}", "assert{ false }"] {
-            let diags = run(source);
-            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
-            assert!(diags[0].message.contains("always passes"), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn flags_assert_in_expr_position() {
-        let diags = run("local ok = assert(true)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_variable_condition() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        // Its `format` comes through the string metatable, which a program can
+        // change.
+        ("assert(`a{x}`)", LuaTarget::Luau),
+        (
+            "\
 local x = 1
-assert(x)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_call_condition() {
-        let diags = run("assert(next({}))");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_assert() {
-        let diags = run("\
+assert(x)",
+            LuaTarget::Lua54,
+        ),
+        ("assert(next({}))", LuaTarget::Lua54),
+        (
+            "\
 local assert = function() end
-assert(true)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+assert(true)",
+            LuaTarget::Lua54,
+        ),
+        ("assert()", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("assert(true)", LuaTarget::Lua54),
+        // 0 is truthy in Lua.
+        ("assert(0)", LuaTarget::Lua54),
+        (r#"assert("always")"#, LuaTarget::Lua54),
+        ("assert({})", LuaTarget::Lua54),
+        (r#"assert(false, "unreachable")"#, LuaTarget::Lua54),
+        ("assert(nil)", LuaTarget::Lua54),
+        ("assert(1 + 1 == 2)", LuaTarget::Lua54),
+        ("assert(x or true)", LuaTarget::Lua54),
+        ("assert(not 1)", LuaTarget::Lua54),
+        (r#"assert"""#, LuaTarget::Lua54),
+        ("assert{}", LuaTarget::Lua54),
+        ("assert{ false }", LuaTarget::Lua54),
+        ("local ok = assert(true)", LuaTarget::Lua54),
+    ];
 
     #[test]
-    fn ignores_empty_assert() {
-        let diags = run("assert()");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::UnnecessaryAssert, PASS, FAIL).test_and_snapshot();
     }
 }

@@ -15,13 +15,17 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-luck_bundler   = { workspace = true, features = ["serde"] }
-luck_core      = { workspace = true }
-luck_formatter = { workspace = true, features = ["serde"] }
-luck_linter    = { workspace = true, features = ["serde"] }
-luck_minifier  = { workspace = true, features = ["serde"] }
+luck_bundler     = { workspace = true, features = ["serde"] }
+luck_diagnostics = { workspace = true }
+luck_formatter   = { workspace = true, features = ["serde"] }
+luck_linter      = { workspace = true, features = ["serde"] }
+luck_minifier    = { workspace = true, features = ["serde"] }
+luck_resolver    = { workspace = true }
+luck_stdlib      = { workspace = true }
+luck_token       = { workspace = true, features = ["serde"] }
 
 globset     = { workspace = true }
+ignore      = { workspace = true }
 json5       = { workspace = true }
 parking_lot = { workspace = true }
 rustc-hash  = { workspace = true }
@@ -33,6 +37,7 @@ luck_bundler   = { workspace = true, features = ["schemars"] }
 luck_formatter = { workspace = true, features = ["schemars"] }
 luck_linter    = { workspace = true, features = ["schemars"] }
 luck_minifier  = { workspace = true, features = ["schemars"] }
+luck_token     = { workspace = true, features = ["schemars"] }
 
 schemars   = { workspace = true }
 serde_json = { workspace = true }

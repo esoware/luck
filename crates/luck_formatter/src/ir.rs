@@ -3,18 +3,22 @@
 //!
 //! Printing and measuring walk plain slices, and rolling back to a checkpoint
 //! is a truncation. An element borrows its text from the tree, the source, the
-//! arena, or the binary, so building the stream copies none.
+//! arena, or the binary, so building the stream copies none. Text is bytes, as
+//! the source is, so a comment or a string that isn't UTF-8 prints as written.
 //!
 //! Emitters write through `Formatter`'s methods. Only this module pushes raw
 //! elements, and each region takes its content as a closure, which is what
 //! keeps every start paired with its end.
 
-use core::mem;
-use core::ops::Range;
+use std::cell::Cell;
+use std::mem;
+use std::ops::Range;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
-use luck_token::{index_to_offset, offset_to_index};
+use luck_parser::Groupings;
+use luck_token::{LuaVersion, Span};
+use memchr::memchr2;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::FormatOptions;
@@ -29,11 +33,11 @@ pub(crate) struct GroupId(u32);
 
 impl GroupId {
     pub(crate) fn new(index: usize) -> Self {
-        Self(index_to_offset(index))
+        Self(u32::try_from(index).expect("a document opens fewer groups than `u32::MAX`"))
     }
 
-    pub(crate) fn index(self) -> usize {
-        offset_to_index(self.0)
+    pub(crate) const fn index(self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -54,20 +58,25 @@ pub(crate) enum LineMode {
 pub(crate) enum FormatElement<'ast> {
     /// May contain newlines (long strings); the printer measures from the
     /// last line.
-    Text(&'ast str, TextWidth),
+    Text(&'ast [u8], TextWidth),
     /// Source copied as written. Text ending in a line break leaves the next
     /// line to the printer's indent, and any other starts at its own column.
-    Verbatim(&'ast str, TextWidth),
-    /// A space and the text, held back until just before the next line
-    /// break, which is how a trailing comment stays at its line's end.
-    LineSuffix(&'ast str, TextWidth),
+    Verbatim(&'ast [u8], TextWidth),
+    /// A space and the text, held back to the end of its line, which is how a
+    /// comment that ended its line in the source ends it in the output. The
+    /// line ends at the next line break, or before the next text other than
+    /// a separator the comment was written after, as in `a, -- c`.
+    ///
+    /// The flag says whether the text counts toward the line's width. A block
+    /// comment's does, as it does with code after it, so a line break that
+    /// comes to follow it changes no layout on the next format. A line
+    /// comment's doesn't, since it always ends its line and may run past the
+    /// width, as in Prettier.
+    LineSuffix(&'ast [u8], TextWidth, bool),
     Space,
     Line(LineMode),
     /// Force every enclosing group to expand without printing anything.
     ExpandParent,
-    /// Break the line here if a line suffix is pending, so a trailing comment
-    /// can't swallow what follows.
-    LineSuffixBoundary,
     /// Content that prints flat if it fits the remaining line width.
     StartGroup(GroupId),
     /// A group that may break while the group right around it stays flat, as
@@ -102,49 +111,46 @@ pub(crate) enum FormatElement<'ast> {
 /// text again for every layout it tries.
 ///
 /// The top bit says a space follows the text, which saves the stream a
-/// `Space` after one text in five, and the rest are its columns.
+/// `Space` after one text in five. The next says the text spans lines, and
+/// the rest are the columns of its first line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TextWidth(u32);
 
 impl TextWidth {
     const SPACE_AFTER: u32 = 1 << 31;
-    const COLUMNS: u32 = Self::SPACE_AFTER - 1;
-    const MULTILINE: Self = Self(Self::COLUMNS);
+    const MULTILINE: u32 = 1 << 30;
+    const COLUMNS: u32 = Self::MULTILINE - 1;
 
-    fn of(text: &str) -> Self {
-        // Without a line break, `width` counts every ASCII character as one
-        // column. A short text, the usual kind, takes one pass to tell, and a
-        // long one goes to the vectorized scans. A lone CR breaks the line
-        // too, as it does in Lua 5.x and in most editors.
+    fn of(text: &[u8]) -> Self {
+        // Without a line break, every ASCII character is one column. A short
+        // text, the usual kind, takes one pass to tell, and a long one goes
+        // to the vectorized scans. A lone CR breaks the line too, as it does
+        // in Lua 5.x and in most editors.
         let is_one_ascii_line = if text.len() <= 64 {
-            text.bytes().all(|b| b.is_ascii() && b != b'\n' && b != b'\r')
+            text.iter().all(|&b| b.is_ascii() && b != b'\n' && b != b'\r')
         } else {
-            text.is_ascii() && !text.contains('\n') && !text.contains('\r')
+            text.is_ascii() && memchr2(b'\n', b'\r', text).is_none()
         };
         if is_one_ascii_line {
             return Self::of_columns(text.len());
         }
-        if text.contains('\n') || text.contains('\r') {
-            return Self::MULTILINE;
-        }
-        Self::of_columns(text.width())
+        let first_line_length = memchr2(b'\n', b'\r', text).unwrap_or(text.len());
+        let width = Self::of_columns(columns(&text[..first_line_length]));
+        if first_line_length == text.len() { width } else { Self(width.0 | Self::MULTILINE) }
     }
 
-    /// Any width past the line's compares the same, and `MULTILINE` takes
-    /// the widest.
+    /// Any width past the line's compares the same.
     fn of_columns(columns: usize) -> Self {
-        let widest = Self::COLUMNS - 1;
-        Self(u32::try_from(columns).unwrap_or(widest).min(widest))
+        Self(u32::try_from(columns).unwrap_or(Self::COLUMNS).min(Self::COLUMNS))
     }
 
-    /// `None` for text that spans lines.
-    pub(crate) fn columns(self) -> Option<usize> {
-        let columns = self.0 & Self::COLUMNS;
-        (columns != Self::COLUMNS).then(|| offset_to_index(columns))
+    /// The columns of the text's first line.
+    pub(crate) const fn columns(self) -> usize {
+        (self.0 & Self::COLUMNS) as usize
     }
 
-    const fn is_multiline(self) -> bool {
-        self.0 & Self::COLUMNS == Self::COLUMNS
+    pub(crate) const fn is_multiline(self) -> bool {
+        self.0 & Self::MULTILINE != 0
     }
 
     /// Whether a space follows the text, which then prints as a `Space`
@@ -155,6 +161,20 @@ impl TextWidth {
 
     const fn with_space_after(self) -> Self {
         Self(self.0 | Self::SPACE_AFTER)
+    }
+}
+
+/// How many columns an editor shows `line` in: a character of UTF-8 as wide
+/// as Unicode says, and any other byte as one, as a one-byte encoding such as
+/// Latin-1 shows it.
+pub(crate) fn columns(line: &[u8]) -> usize {
+    // Checking for UTF-8 is word-at-a-time, but walking chunks is a byte at a
+    // time, and nearly every line is UTF-8.
+    match str::from_utf8(line) {
+        Ok(text) => text.width(),
+        Err(_) => {
+            line.utf8_chunks().map(|chunk| chunk.valid().width() + chunk.invalid().len()).sum()
+        }
     }
 }
 
@@ -177,49 +197,75 @@ pub(crate) struct Formatter<'ast> {
     /// No space joins an element before this one, which starts a run of
     /// elements an emitter moves or takes back as a unit.
     space_fence: usize,
+    /// The chunk's dialect, which spells a literal the tree doesn't, and reads
+    /// the source's line breaks.
+    version: LuaVersion,
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
-    /// Whether a block printed here sorts its runs of requires. Only
-    /// [`crate::format()`] starts with it on, and a block inherits it from
-    /// the one around it.
+    /// The parentheses a parse leaves out of its tree, which a tree built in
+    /// code has none of.
+    groupings: Option<&'ast Groupings>,
+    /// Where the last search of `groupings` stopped, which the next starts
+    /// from.
+    grouping_cursor: Cell<usize>,
+    /// Where the node being written ends, past which no node inside it may
+    /// take a comment as its trailing one: a comment after the last child
+    /// trails the node itself, or one around it.
+    enclosing_end: u32,
+    /// Whether a block printed here sorts its runs of requires. It starts as
+    /// the `sort_requires` option has it, and a block inherits it from the
+    /// one around it.
     sorts_requires: bool,
     /// Where text the formatter rewrites is built before it moves to the
     /// arena, so every rewrite shares one heap buffer.
-    scratch: String,
+    scratch: Vec<u8>,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
+    /// `groupings` are the parentheses the user of a parse wrote.
     pub(crate) fn new(
         allocator: &'ast Allocator,
+        version: LuaVersion,
         options: FormatOptions,
         comments: Comments<'ast>,
+        groupings: Option<&'ast Groupings>,
     ) -> Self {
-        // Code runs about one element to two source bytes, so this room
-        // seldom has to grow. Synthetic ASTs have no source and start empty.
-        let capacity =
-            comments.source_text().map_or(0, |source| source.len().div_ceil(5).saturating_mul(3));
+        // A token or a comment comes to about two elements, and seldom to
+        // more than two and a half, however long its text, so this room
+        // seldom has to grow. A tree built in code has neither and starts
+        // empty.
+        let capacity = (comments.token_and_comment_count() * 5).div_ceil(2);
         Self {
             elements: List::with_capacity_in(capacity, allocator),
             // About one element in eleven starts a group.
             layout: Layout::with_capacity_in(capacity.div_ceil(8), allocator),
             text_bytes: 0,
             space_fence: 0,
+            version,
             options,
             allocator,
             comments,
-            sorts_requires: false,
-            scratch: String::new(),
+            groupings,
+            grouping_cursor: Cell::new(0),
+            enclosing_end: u32::MAX,
+            sorts_requires: options.sort_requires,
+            scratch: Vec::new(),
         }
     }
 
-    pub(crate) const fn sorting_requires(mut self) -> Self {
-        self.sorts_requires = true;
-        self
+    /// The parentheses the source grouped the expression at `expr` in,
+    /// which the formatter asks about in source order.
+    pub(crate) fn grouping_around(&self, expr: Span) -> Option<Span> {
+        let mut cursor = self.grouping_cursor.get();
+        let parens = self.groupings?.around_from(expr, &mut cursor);
+        self.grouping_cursor.set(cursor);
+        parens
+    }
+
+    /// Where the node being written ends.
+    pub(crate) const fn enclosing_end(&self) -> u32 {
+        self.enclosing_end
     }
 
     pub(crate) const fn sorts_requires(&self) -> bool {
@@ -235,8 +281,9 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// Where the next element goes, which an emitter notes to find what it
-    /// writes from here.
-    pub(crate) fn element_count(&mut self) -> usize {
+    /// writes from here. No space written later joins an element before it,
+    /// so that run can move or be taken back as a unit.
+    pub(crate) fn mark(&mut self) -> usize {
         self.space_fence = self.elements.len();
         self.space_fence
     }
@@ -248,21 +295,16 @@ impl<'ast> Formatter<'ast> {
         let (Some(first), Some(last)) = (slices.first(), slices.last()) else {
             return;
         };
-        let written = self.elements.get(first.start..last.end).unwrap_or_default().to_vec();
+        let written = self.elements[first.start..last.end].to_vec();
         let mut target = first.start;
         let mut gap_start = first.start;
         for (slice, &i) in slices.iter().zip(order) {
             let gap = gap_start..slice.start;
             gap_start = slice.end;
-            let piece = slices.get(i).cloned().unwrap_or_default();
-            for range in [gap, piece] {
-                let shifted =
-                    range.start.saturating_sub(first.start)..range.end.saturating_sub(first.start);
-                let source = written.get(shifted).unwrap_or_default();
-                let end = target.saturating_add(source.len());
-                if let Some(destination) = self.elements.get_mut(target..end) {
-                    destination.copy_from_slice(source);
-                }
+            for range in [gap, slices[i].clone()] {
+                let source = &written[range.start - first.start..range.end - first.start];
+                let end = target + source.len();
+                self.elements[target..end].copy_from_slice(source);
                 target = end;
             }
         }
@@ -270,6 +312,10 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) const fn options(&self) -> &FormatOptions {
         &self.options
+    }
+
+    pub(crate) const fn version(&self) -> LuaVersion {
+        self.version
     }
 
     pub(crate) const fn allocator(&self) -> &'ast Allocator {
@@ -284,8 +330,65 @@ impl<'ast> Formatter<'ast> {
         &mut self.comments
     }
 
+    /// Writes a node at `span`: its leading comments, `content`, and its
+    /// trailing comments. Any comment inside it that no node inside takes is
+    /// `content`'s to place.
+    ///
+    /// When the next comment starts past the node around this one, the node
+    /// has none, nothing inside takes one either, and the cursor doesn't move
+    /// while it's written, so the bound it would set for them can't matter.
+    /// That's nearly every node, which then needs no span, so `span` is only
+    /// worked out otherwise.
+    #[inline]
+    pub(crate) fn node(&mut self, span: impl FnOnce() -> Span, content: impl FnOnce(&mut Self)) {
+        self.write_node(span, true, content);
+    }
+
+    /// [`Formatter::node`] for a node whose `content` writes its leading
+    /// comments itself, after the line break it may open with.
+    #[inline]
+    pub(crate) fn node_placing_leading_comments(
+        &mut self,
+        span: impl FnOnce() -> Span,
+        content: impl FnOnce(&mut Self),
+    ) {
+        self.write_node(span, false, content);
+    }
+
+    /// `content` is written in one place only, since it's inlined into every
+    /// node's emitter.
+    #[inline]
+    fn write_node(
+        &mut self,
+        span_of: impl FnOnce() -> Span,
+        should_lead: bool,
+        content: impl FnOnce(&mut Self),
+    ) {
+        let bounds = self.comments.has_pending_before(self.enclosing_end).then(|| {
+            let span = span_of();
+            if should_lead {
+                self.write_leading_comments(span.start);
+            }
+            (span.end, mem::replace(&mut self.enclosing_end, span.end))
+        });
+        content(self);
+        if let Some((end, enclosing_end)) = bounds {
+            self.enclosing_end = enclosing_end;
+            self.write_trailing_comments(end, enclosing_end);
+        }
+    }
+
+    /// Writes `content`, the inside of a node ending at `end` that places its
+    /// own comments, as a statement does.
+    #[inline]
+    pub(crate) fn inside(&mut self, end: u32, content: impl FnOnce(&mut Self)) {
+        let enclosing_end = mem::replace(&mut self.enclosing_end, end);
+        content(self);
+        self.enclosing_end = enclosing_end;
+    }
+
     /// The scratch buffer, emptied, and the arena its text moves to.
-    pub(crate) fn scratch(&mut self) -> (&mut String, &'ast Allocator) {
+    pub(crate) fn scratch(&mut self) -> (&mut Vec<u8>, &'ast Allocator) {
         self.scratch.clear();
         (&mut self.scratch, self.allocator)
     }
@@ -300,8 +403,8 @@ impl<'ast> Formatter<'ast> {
     }
 
     #[inline]
-    fn push_text(&mut self, text: &'ast str, width: TextWidth) {
-        self.text_bytes = self.text_bytes.wrapping_add(text.len());
+    fn push_text(&mut self, text: &'ast [u8], width: TextWidth) {
+        self.text_bytes += text.len();
         if width.is_multiline() {
             self.layout.force_break(self.elements.len());
         }
@@ -312,29 +415,30 @@ impl<'ast> Formatter<'ast> {
     #[inline]
     pub(crate) fn token(&mut self, text: &'static str) {
         debug_assert!(text.is_ascii() && !text.contains('\n'), "a token is measured by its length");
-        self.push_text(text, TextWidth::of_columns(text.len()));
+        self.push_text(text.as_bytes(), TextWidth::of_columns(text.len()));
     }
 
     #[inline]
-    pub(crate) fn text(&mut self, text: &'ast str) {
+    pub(crate) fn text(&mut self, text: &'ast [u8]) {
         self.push_text(text, TextWidth::of(text));
     }
 
     /// An identifier or a numeral, which the lexer and `Synth` only ever make
     /// of ASCII on one line, so it's measured by its length too.
     #[inline]
-    pub(crate) fn ascii(&mut self, text: &'ast str) {
+    pub(crate) fn ascii(&mut self, text: &'ast [u8]) {
         self.push_text(text, TextWidth::of_columns(text.len()));
     }
 
+    /// A name is a node of its own, which comments can lead and trail.
     #[inline]
     pub(crate) fn name(&mut self, name: Name<'ast>) {
-        self.ascii(name.text.as_str());
+        self.node(|| name.span, |f| f.ascii(name.text.as_bytes()));
     }
 
-    pub(crate) fn verbatim(&mut self, text: &'ast str) {
+    pub(crate) fn verbatim(&mut self, text: &'ast [u8]) {
         let width = TextWidth::of(text);
-        self.text_bytes = self.text_bytes.wrapping_add(text.len());
+        self.text_bytes += text.len();
         if width.is_multiline() {
             self.layout.force_break(self.elements.len());
         }
@@ -342,14 +446,14 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// See [`FormatElement::LineSuffix`]. A break in one forces nothing.
-    pub(crate) fn line_suffix(&mut self, text: &'ast str) {
-        self.text_bytes = self.text_bytes.wrapping_add(text.len()).wrapping_add(1);
-        self.push(FormatElement::LineSuffix(text, TextWidth::of(text)));
+    pub(crate) fn line_suffix(&mut self, text: &'ast [u8], is_measured: bool) {
+        self.text_bytes += text.len() + 1;
+        self.push(FormatElement::LineSuffix(text, TextWidth::of(text), is_measured));
     }
 
     #[inline]
     pub(crate) fn space(&mut self) {
-        self.text_bytes = self.text_bytes.wrapping_add(1);
+        self.text_bytes += 1;
         if self.elements.len() > self.space_fence
             && let Some(FormatElement::Text(_, width)) = self.elements.last_mut()
         {
@@ -361,7 +465,7 @@ impl<'ast> Formatter<'ast> {
 
     #[inline]
     pub(crate) fn line(&mut self, mode: LineMode) {
-        self.text_bytes = self.text_bytes.wrapping_add(1);
+        self.text_bytes += 1;
         self.layout.line(self.elements.len(), mode);
         self.push(FormatElement::Line(mode));
     }
@@ -395,11 +499,6 @@ impl<'ast> Formatter<'ast> {
     pub(crate) fn expand_parent(&mut self) {
         self.layout.force_break(self.elements.len());
         self.push(FormatElement::ExpandParent);
-    }
-
-    #[inline]
-    pub(crate) fn line_suffix_boundary(&mut self) {
-        self.push(FormatElement::LineSuffixBoundary);
     }
 
     #[inline]
@@ -503,7 +602,7 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn checkpoint(&mut self) -> Checkpoint {
-        let element_count = self.element_count();
+        let element_count = self.mark();
         Checkpoint {
             element_count,
             layout: self.layout.checkpoint(element_count),
@@ -517,10 +616,10 @@ impl<'ast> Formatter<'ast> {
         self.comments.restore(checkpoint.comments);
     }
 
-    pub(crate) fn print(self, base_indent: &str) -> String {
+    pub(crate) fn print(self, base_indent: &[u8]) -> Vec<u8> {
         // Indentation comes on top of the text, and seldom reaches a quarter
         // of it.
-        let capacity = self.text_bytes.saturating_add(self.text_bytes.div_ceil(4));
+        let capacity = self.text_bytes + self.text_bytes.div_ceil(4);
         printer::print(&self.elements, self.layout, &self.options, base_indent, capacity)
     }
 }

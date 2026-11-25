@@ -11,94 +11,16 @@ license.workspace      = true
 repository.workspace   = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [features]
-# Exposes the internal arena to this crate's own tests and doctests. Not public API.
-testing = []
-# Counts the arena's allocations for luck_allocs. Not public API.
+# Counts the arena's allocations and marks its chunks for luck_allocs.
 track_allocations = []
 
+[dependencies]
+parking_lot  = { workspace = true }
+thread_local = { workspace = true }
+
 [dev-dependencies]
-luck_allocator = { path = ".", features = ["testing"] }
-
-oxc_data_structures = { workspace = true }
-quickcheck          = { workspace = true }
-
-# The ported code is held to the lint levels and clippy.toml it was written against, oxc's at the
-# commit lib.rs names, instead of luck's.
-[lints.rust]
-absolute_paths_not_starting_with_crate = "warn"
-non_ascii_idents = "warn"
-unit_bindings = "warn"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(coverage_nightly)'] }
-tail_expr_drop_order = "warn"
-unsafe_op_in_unsafe_fn = "warn"
-unused_unsafe = "warn"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-dbg_macro = "warn"
-todo = "warn"
-unimplemented = "warn"
-print_stdout = "warn"
-print_stderr = "warn"
-allow_attributes = "warn"
-clone_on_ref_ptr = "warn"
-self_named_module_files = "warn"
-empty_drop = "warn"
-empty_structs_with_brackets = "warn"
-empty_enum_variants_with_brackets = "warn"
-exit = "warn"
-format_push_string = "warn"
-fn_to_numeric_cast_any = "warn"
-unnecessary_self_imports = "warn"
-try_err = "warn"
-error_impl_error = "warn"
-filetype_is_file = "warn"
-get_unwrap = "warn"
-rc_buffer = "warn"
-rc_mutex = "warn"
-rest_pat_in_fully_bound_structs = "warn"
-unnecessary_safety_comment = "warn"
-undocumented_unsafe_blocks = "warn"
-infinite_loop = "warn"
-map_with_unused_argument_over_ranges = "warn"
-unused_result_ok = "warn"
-pathbuf_init_then_push = "warn"
-pub_underscore_fields = "warn"
-non_zero_suggestions = "warn"
-precedence_bits = "warn"
-pedantic = { level = "warn", priority = -1 }
-struct_excessive_bools = "allow"
-too_many_lines = "allow"
-must_use_candidate = "allow"
-wildcard_imports = "allow"
-doc_markdown = "allow"
-similar_names = "allow"
-fn_params_excessive_bools = "allow"
-complexity = { level = "warn", priority = -1 }
-too_many_arguments = "allow"
-non_std_lazy_statics = "allow"
-result_large_err = "allow"
-nursery = { level = "warn", priority = -1 }
-missing_const_for_fn = "allow"
-option_if_let_else = "allow"
-or_fun_call = "allow"
-cognitive_complexity = "allow"
-non_send_fields_in_send_ty = "allow"
-use_self = "allow"
-significant_drop_tightening = "allow"
-branches_sharing_code = "allow"
-fallible_impl_from = "allow"
-empty_enums = "allow"
-useless_let_if_seq = "allow"
-impl_trait_in_params = "allow"
-significant_drop_in_scrutinee = "warn"
-iter_on_single_items = "warn"
-unused_peekable = "warn"
-too_long_first_doc_paragraph = "warn"
-suspicious_operation_groupings = "warn"
-redundant_clone = "warn"
-byte_char_slices = "allow"
-question_mark = "allow"
-cargo = { level = "warn", priority = -1 }
-multiple_crate_versions = "allow"
+quickcheck = { workspace = true }

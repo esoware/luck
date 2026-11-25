@@ -3,7 +3,8 @@ use std::{fs, io};
 
 use luck_allocator::Allocator;
 use luck_benchmark_files::TestFile;
-use luck_linter::{CategoryLevels, LintConfig, RuleLevel};
+use luck_linter::{CategoryLevels, FixKind, LintConfig, Linter, RuleId, RuleLevel};
+use luck_stdlib::library_for;
 
 use crate::every_rule;
 use crate::snapshot::render_entry;
@@ -13,33 +14,31 @@ use crate::stats::{StageStats, record_stats_in};
 /// heaviest first by heap bytes, then heap allocations, then name.
 ///
 /// Each rule runs alone over one analysis per file, which parsing, analysis,
-/// and configuration happen outside of, so its numbers are its own. Its
-/// `arena size` is how far the arena grew while it ran.
-///
-/// # Errors
-///
-/// Fails when the report can't be written.
-pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<()> {
+/// and compiling its linter happen outside of, so its numbers are its own.
+/// Its `arena size` is how far the arena grew while it ran.
+pub(crate) fn write_report(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<()> {
     let every_rule = every_rule();
+    let linters: Vec<(RuleId, Linter)> =
+        RuleId::ALL.into_iter().map(|rule| (rule, only(rule))).collect();
     let mut report = String::new();
     for file in files {
         allocator.reset();
-        let version = file.target.lua_version();
+        let version = file.target.version();
         let parse = luck_parser::parse(allocator, &file.source_text, version);
-        let analysis = luck_linter::analyze(&parse, file.target, &every_rule);
-        let mut entries: Vec<(&str, StageStats)> = luck_linter::rules()
-            .map(|rule| {
-                let config = only(rule.name());
+        let analysis = every_rule.analyze(&parse, library_for(file.target));
+        let mut entries: Vec<(&str, StageStats)> = linters
+            .iter()
+            .map(|(rule, linter)| {
                 let arena_bytes_before = allocator.used_bytes();
                 let ((), mut stats) = record_stats_in(allocator, || {
-                    drop(luck_linter::lint_analyzed(&parse, &analysis, &config));
+                    drop(linter.run_analyzed(&analysis, FixKind::empty(), None, &|| false));
                 });
-                stats.arena_used_bytes = allocator.used_bytes().saturating_sub(arena_bytes_before);
+                stats.arena_used_bytes -= arena_bytes_before;
                 (rule.name(), stats)
             })
             .collect();
         entries.sort_unstable_by(|(left_name, left), (right_name, right)| {
-            let (left_heap, right_heap) = (&left.counters.heap, &right.counters.heap);
+            let (left_heap, right_heap) = (&left.heap, &right.heap);
             right_heap
                 .alloc_bytes
                 .cmp(&left_heap.alloc_bytes)
@@ -50,31 +49,17 @@ pub(crate) fn run(allocator: &mut Allocator, files: &[TestFile]) -> io::Result<(
         report.push_str(file.file_name);
         report.push_str(":\n");
         for (name, stats) in entries {
-            let mut metrics = stats.metrics(file.source_text.len());
-            metrics.retain(|metric| metric.label != "file size");
-            let mut entry = String::new();
-            render_entry(&mut entry, name, &metrics, None).map_err(io::Error::other)?;
-            for line in entry.lines() {
-                report.push_str("  ");
-                report.push_str(line);
-                report.push('\n');
-            }
+            render_entry(&mut report, "  ", name, stats.metrics(), None)
+                .map_err(io::Error::other)?;
         }
         report.push('\n');
     }
     fs::write(Path::new(env!("CARGO_MANIFEST_DIR")).join("allocs_linter_rules.yaml"), report)
 }
 
-fn only(rule: &str) -> LintConfig {
-    let mut config = LintConfig {
-        categories: CategoryLevels {
-            correctness: Some(RuleLevel::Off),
-            suspicious: Some(RuleLevel::Off),
-            style: Some(RuleLevel::Off),
-            performance: Some(RuleLevel::Off),
-        },
-        ..LintConfig::default()
-    };
+fn only(rule: RuleId) -> Linter {
+    let mut config =
+        LintConfig { categories: CategoryLevels::all(RuleLevel::Off), ..LintConfig::default() };
     config.rules.set_level(rule, RuleLevel::Warn);
-    config
+    Linter::new(config)
 }

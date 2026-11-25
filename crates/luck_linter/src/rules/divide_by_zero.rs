@@ -1,37 +1,37 @@
-use luck_ast::{Expression, Statement};
-use luck_token::{BinOp, CompoundOp, Span};
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::{BinOp, Span};
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::number::is_number_literal;
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::number::has_number_value;
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Float division by zero gives `inf` or `nan`, and from Lua 5.3 integer
-/// `%` and `//` by zero raise an error. Either way a literal zero divisor is
-/// a mistake.
-#[derive(Debug, Clone, Copy)]
+/// `%` and `//` by zero raise an error. Either way a divisor that's always
+/// zero is a mistake.
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DivideByZero;
 
-impl_rule!(
-    DivideByZero,
-    "divide_by_zero",
-    Correctness,
-    Warning,
-    "literal division or modulo by zero"
-);
+declare_lint_rule!(DivideByZero, Correctness, Warning, "division or modulo by a constant zero");
 
-impl NodeRule for DivideByZero {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp, NodeType::CompoundAssignment])
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+impl Rule for DivideByZero {
+    const NODE_TYPES: AstTypesBitset =
+        AstTypesBitset::from_types(&[AstType::BinaryOp, AstType::CompoundAssignment]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let kind = node.kind();
+        // Luau
+        if let AstKind::CompoundAssignment(compound) = kind {
+            if let Some(op_name) = divisive_op_name(compound.op.binary_op())
+                && has_number_value(&compound.expr, context, 0.0)
+            {
+                context.diagnostic(zero_divisor_finding(op_name, compound.span));
+            }
+            return;
+        }
+        let AstKind::BinaryOp(run) = kind else {
             return;
         };
         if run.precedence() != BinOp::Div.precedence() {
@@ -40,30 +40,16 @@ impl NodeRule for DivideByZero {
         for pair in operator_pairs(run) {
             if let Some(op_name) = divisive_op_name(pair.op)
                 && let Some(divisor) = pair.rhs
-                && is_number_literal(divisor, 0.0, context.semantic.version())
+                && has_number_value(divisor, context, 0.0)
             {
-                findings.push(zero_divisor_finding(op_name, pair.span()));
+                context.diagnostic(zero_divisor_finding(op_name, pair.span(context)));
             }
-        }
-    }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        // Luau
-        if let Statement::CompoundAssignment(compound) = stmt
-            && let Some(op_name) = compound_divisive_op_name(compound.op)
-            && is_number_literal(&compound.expr, 0.0, context.semantic.version())
-        {
-            findings.push(zero_divisor_finding(op_name, compound.span));
         }
     }
 }
 
 fn zero_divisor_finding(op_name: &str, span: Span) -> Finding {
-    Finding::new(format!("{op_name} by literal zero"), span)
+    Finding::new(format!("{op_name} by zero"), span)
         .with_help("guard with an `if divisor ~= 0 then` check or use a nonzero constant")
 }
 
@@ -94,122 +80,56 @@ const fn divisive_op_name(op: BinOp) -> Option<&'static str> {
     }
 }
 
-const fn compound_divisive_op_name(op: CompoundOp) -> Option<&'static str> {
-    match op {
-        CompoundOp::Div => Some("division"),
-        CompoundOp::Mod => Some("modulo"),
-        CompoundOp::FloorDiv => Some("floor division"),
-        CompoundOp::Add
-        | CompoundOp::Sub
-        | CompoundOp::Mul
-        | CompoundOp::Pow
-        | CompoundOp::Concat => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        run_rule(&DivideByZero, source, version)
-    }
-
-    #[test]
-    fn flags_division_by_zero() {
-        let diags = run("local r = x / 0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_modulo_by_zero() {
-        let diags = run("local r = x % 0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_floor_division_by_zero() {
-        let diags = run("local r = x // 0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_float_zero() {
-        // Dividing by 0.0 gives `inf` or `nan`, which is still a bug.
-        let diags = run("local r = x / 0.0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_nonzero_divisor() {
-        let diags = run("local r = x / y", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_division_by_constant() {
-        let diags = run("local r = x / 2", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_hex_zero() {
-        let diags = run("local r = x / 0x0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_compound_division_by_zero_on_luau() {
-        let diags = run(
-            "\
-local x = 1
-x /= 0",
-            LuaVersion::Luau,
-        );
-        assert_eq!(diags.len(), 1, "`x /= 0` divides by a literal zero: {diags:?}");
-    }
-
-    #[test]
-    fn flags_binary_zero_divisor_on_luau() {
-        let diags = run("local r = x / 0b0", LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "`0b0` is a literal zero: {diags:?}");
-    }
-
-    #[test]
-    fn flags_zero_hex_float() {
-        let diags = run("local r = x / 0x0p0", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_nonzero_hex_float() {
-        let diags = run("local r = x / 0x1p4", LuaVersion::Lua54);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_compound_modulo_by_underscored_zero_on_luau() {
-        let diags = run(
-            "\
-local x = 1
-x %= 0_0",
-            LuaVersion::Luau,
-        );
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_compound_multiplication_by_zero_on_luau() {
-        let diags = run(
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("local r = x / y", LuaTarget::Lua54),
+        ("local r = x / 2", LuaTarget::Lua54),
+        ("local r = x / 0x1p4", LuaTarget::Lua54),
+        (
             "\
 local x = 1
 x *= 0",
-            LuaVersion::Luau,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
+            LuaTarget::Luau,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("local r = x / 0", LuaTarget::Lua54),
+        ("local r = x % 0", LuaTarget::Lua54),
+        ("local r = x // 0", LuaTarget::Lua54),
+        // Dividing by 0.0 gives `inf` or `nan`, which is still a bug.
+        ("local r = x / 0.0", LuaTarget::Lua54),
+        ("local r = x / -0", LuaTarget::Lua54),
+        ("local r = x / -0.0", LuaTarget::Lua54),
+        ("local r = x / (1 - 1)", LuaTarget::Lua54),
+        ("local r = x / (0 * 5)", LuaTarget::Lua54),
+        ("local r = x / 0x0", LuaTarget::Lua54),
+        // `x /= 0` divides by zero.
+        (
+            "\
+local x = 1
+x /= 0",
+            LuaTarget::Luau,
+        ),
+        // `0b0` is a literal zero.
+        ("local r = x / 0b0", LuaTarget::Luau),
+        ("local r = x / 0x0p0", LuaTarget::Lua54),
+        (
+            "\
+local x = 1
+x %= 0_0",
+            LuaTarget::Luau,
+        ),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::DivideByZero, PASS, FAIL).test_and_snapshot();
     }
 }

@@ -1,0 +1,8 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: undefined variable `missing`
+ --> Lua54:1:7
+1 | print(missing)
+  |       ^^^^^^^
+help: declare it with `local`, or add it to `extra_globals` or a `std` definition

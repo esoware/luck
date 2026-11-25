@@ -1,181 +1,183 @@
-use std::sync::OnceLock;
+use luck_diagnostics::Severity;
+use luck_semantic::{AstNode, AstTypesBitset};
 
-use luck_ast::{Block, Call, Expression, Statement, SuffixedExpression, TableConstructor};
-use luck_parser::ParseResult;
-use luck_semantic::{ResolvedCallee, SemanticAnalysis};
-use luck_token::{Comment, LineIndex};
+use crate::context::{ContextHost, LintContext};
+use crate::fix::FixKind;
 
-use crate::config::LintConfig;
-use crate::diagnostic::{Category, Finding, Severity};
-use crate::local_flow::LocalFlow;
-use crate::node_type::NodeTypeSet;
-use crate::nodes::Nodes;
-
-/// What every rule reads of one document. The lazily built parts are shared,
-/// so the first rule to ask builds them for all.
-#[derive(Debug)]
-pub(crate) struct LintContext<'ast> {
-    pub block: &'ast Block<'ast>,
-    pub nodes: &'ast Nodes<'ast>,
-    pub semantic: &'ast SemanticAnalysis<'ast>,
-    pub source: &'ast str,
-    pub comments: &'ast [Comment],
-    pub config: &'ast LintConfig,
-    pub local_flow: OnceLock<LocalFlow>,
-    pub line_index: OnceLock<LineIndex>,
+/// A group of lint rules, which `categories` sets the level of together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    /// Outright wrong or useless code.
+    Correctness,
+    /// Most likely wrong or useless.
+    Suspicious,
+    /// Idiomatic code style.
+    Style,
+    /// Performance improvements.
+    Performance,
 }
 
-impl<'ast> LintContext<'ast> {
-    pub(crate) fn new(
-        parse: &'ast ParseResult<'_>,
-        semantic: &'ast SemanticAnalysis<'ast>,
-        nodes: &'ast Nodes<'ast>,
-        config: &'ast LintConfig,
-    ) -> Self {
-        Self {
-            block: &parse.block,
-            nodes,
-            semantic,
-            source: parse.source,
-            comments: &parse.comments,
-            config,
-            local_flow: OnceLock::new(),
-            line_index: OnceLock::new(),
+impl Category {
+    /// The name `luck.json`, `--rules`, and `--print-config` spell it with.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Correctness => "correctness",
+            Self::Suspicious => "suspicious",
+            Self::Style => "style",
+            Self::Performance => "performance",
         }
     }
 
-    pub(crate) fn local_flow(&self) -> &LocalFlow {
-        self.local_flow.get_or_init(|| LocalFlow::compute(self))
-    }
-
-    pub(crate) fn line_index(&self) -> &LineIndex {
-        self.line_index.get_or_init(|| LineIndex::new(self.source, self.semantic.version()))
+    /// Parses a `-A`/`-W`/`-D` flag value, case-insensitively, or `None` when
+    /// it names no category.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "correctness" => Some(Self::Correctness),
+            "suspicious" => Some(Self::Suspicious),
+            "style" => Some(Self::Style),
+            "performance" | "perf" => Some(Self::Performance),
+            _ => None,
+        }
     }
 }
 
-/// A rule's identity and defaults. Its `WholeRule` or `NodeRule` impl does
-/// the checking.
-pub trait Rule: Send + Sync {
-    /// Unique name, such as `unused_variable`, used in config and directives.
-    fn name(&self) -> &'static str;
+/// A rule's identity and defaults, which [`declare_lint_rule!`] gives it, as
+/// oxlint's `declare_oxc_lint!` gives its `RuleMeta`.
+pub(crate) trait RuleMeta {
+    const CATEGORY: Category;
 
-    fn category(&self) -> Category;
+    /// What the rule reports at while config sets no level for it or its
+    /// category, which only a correctness rule runs under.
+    const DEFAULT_SEVERITY: Severity;
 
-    fn default_severity(&self) -> Severity;
+    const DESCRIPTION: &'static str;
 
-    fn description(&self) -> &'static str;
+    /// The kinds the rule's fixes come in, empty when it offers none. Some
+    /// of its diagnostics may still have no fix.
+    const FIX: FixKind;
+
+    /// What `[level, options]` gives the rule in `luck.json`, [`NoOptions`]
+    /// for a rule that takes none.
+    type Options: RuleOptions;
+
+    /// The rule as `options` configure it. A rule no options configure is
+    /// its `Default`.
+    fn from_options(options: Self::Options) -> Self;
 }
 
-macro_rules! impl_rule {
-    ($rule:ident, $name:literal, $category:ident, $severity:ident, $description:literal) => {
-        impl $crate::rule::Rule for $rule {
-            fn name(&self) -> &'static str {
-                $name
-            }
-            fn category(&self) -> $crate::diagnostic::Category {
-                $crate::diagnostic::Category::$category
-            }
-            fn default_severity(&self) -> $crate::diagnostic::Severity {
-                $crate::diagnostic::Severity::$severity
-            }
-            fn description(&self) -> &'static str {
-                $description
-            }
+/// How a rule checks a file, as oxlint's `Rule` does.
+///
+/// A rule implements one of two hooks: [`Self::run`], on each node of the
+/// types [`Self::NODE_TYPES`] lists, all rules in one pass over the node
+/// table, or [`Self::run_once`], once per file.
+pub(crate) trait Rule: RuleMeta + Default {
+    /// The types of node [`Self::run`] acts on. A file that holds none of
+    /// them skips the rule. Listing an extra type is harmless, and leaving
+    /// one out skips those nodes, which the linter's debug check catches.
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::new();
+
+    /// Whether the rule can report anything in this file, as a Roblox rule
+    /// can't in a file of any other target.
+    fn should_run(&self, _host: &ContextHost<'_>) -> bool {
+        true
+    }
+
+    /// Checks `node`, which it matches by kind itself, since the linter's
+    /// debug check hands it every node of the tree.
+    fn run<'ast>(&self, _node: &AstNode<'ast>, _context: &LintContext<'_, 'ast>) {}
+
+    fn run_once(&self, _context: &LintContext<'_, '_>) {}
+}
+
+/// What `[level, options]` gives one rule.
+pub(crate) trait RuleOptions {
+    /// Whether these are [`NoOptions`], so the rule takes only a level.
+    #[cfg(feature = "serde")]
+    const IS_NONE: bool = false;
+
+    /// `self` layered on `base`, as a `lint` section that `extends` another
+    /// takes the options both give a rule.
+    fn merge_onto(self, base: Self) -> Self;
+}
+
+/// The options of a rule that takes none, which no value is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub(crate) enum NoOptions {}
+
+impl RuleOptions for NoOptions {
+    #[cfg(feature = "serde")]
+    const IS_NONE: bool = true;
+
+    fn merge_onto(self, _base: Self) -> Self {
+        match self {}
+    }
+}
+
+/// Gives a rule its [`RuleMeta`], its name aside, which is its module's.
+///
+/// It takes the rule's category, default severity, and description, then,
+/// when it has them, the kinds its fixes come in, as in
+/// `fix = Fix | Suggestion`, and the type of its options, which build it
+/// through `From`.
+macro_rules! declare_lint_rule {
+    (
+        $rule:ident,
+        $category:ident,
+        $severity:ident,
+        $description:literal
+        $(, fix = $($fix_kind:ident)|+)?
+        $(, options = $options:ty)?
+        $(,)?
+    ) => {
+        impl $crate::rule::RuleMeta for $rule {
+            const CATEGORY: $crate::rule::Category = $crate::rule::Category::$category;
+            const DEFAULT_SEVERITY: luck_diagnostics::Severity =
+                luck_diagnostics::Severity::$severity;
+            const DESCRIPTION: &'static str = $description;
+            const FIX: $crate::fix::FixKind =
+                $crate::fix::FixKind::empty() $($(.union($crate::fix::FixKind::$fix_kind))+)?;
+
+            $crate::rule::declare_lint_rule!(@options $($options)?);
+        }
+    };
+    (@options) => {
+        type Options = $crate::rule::NoOptions;
+
+        fn from_options(options: Self::Options) -> Self {
+            match options {}
+        }
+    };
+    (@options $options:ty) => {
+        type Options = $options;
+
+        fn from_options(options: Self::Options) -> Self {
+            Self::from(options)
         }
     };
 }
 
-pub(crate) use impl_rule;
+pub(crate) use declare_lint_rule;
 
-/// A rule that checks the whole document in one call, because it needs
-/// state that spans nodes, such as scope stacks, statement sequences, or the
-/// scope tree.
-pub(crate) trait WholeRule: Rule {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding>;
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::CATEGORIES;
 
-/// An assignment target's chain reads everything but what its last suffix
-/// stores to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChainPosition {
-    Value,
-    AssignmentTarget,
-}
-
-/// A fix's replacement must parse as a statement in statement position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CallPosition {
-    Statement,
-    Expression,
-}
-
-/// A call the bus dispatches, where it stands, and what it calls.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CallSite<'ast> {
-    pub call: Call<'ast>,
-    pub position: CallPosition,
-    /// As [`SemanticAnalysis::resolve_callee`] gives it. The bus resolves a
-    /// chain's calls in one pass, once for every rule.
-    pub callee: Option<ResolvedCallee<'ast>>,
-}
-
-/// A rule that gets one callback per node from the bus's shared walk
-/// instead of walking the tree itself.
-pub(crate) trait NodeRule: Rule {
-    /// Listing an extra type is harmless. Leaving one out silently skips
-    /// those nodes, which the driver's debug check catches.
-    fn node_types(&self) -> NodeTypeSet;
-
-    /// Never gets a `Statement::FunctionCall`, which goes to [`Self::on_call`].
-    fn on_stmt(
-        &self,
-        _stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        _findings: &mut Vec<Finding>,
-    ) {
+    /// `name` is what `--rules` and `--print-config` print, so a `name` that
+    /// `from_name` doesn't take back would break scripts feeding them to `-A`.
+    #[test]
+    fn category_names_round_trip_through_from_name() {
+        for category in CATEGORIES {
+            assert_eq!(Category::from_name(category.name()), Some(category));
+        }
     }
 
-    /// Never gets an `Expression::Suffixed`, which goes to
-    /// [`Self::on_chain`], or an `Expression::TableConstructor`, which goes
-    /// to [`Self::on_table`].
-    fn on_expr(
-        &self,
-        _expr: &Expression<'_>,
-        _context: &LintContext<'_>,
-        _findings: &mut Vec<Finding>,
-    ) {
-    }
-
-    /// Runs for every table constructor, as an expression or a `f{...}`
-    /// argument.
-    fn on_table(
-        &self,
-        _table: &TableConstructor<'_>,
-        _context: &LintContext<'_>,
-        _findings: &mut Vec<Finding>,
-    ) {
-    }
-
-    /// Runs for every chain, in an expression, a call statement, or an
-    /// assignment target.
-    fn on_chain(
-        &self,
-        _chain: &SuffixedExpression<'_>,
-        _position: ChainPosition,
-        _context: &LintContext<'_>,
-        _findings: &mut Vec<Finding>,
-    ) {
-    }
-
-    /// Runs for every call in every chain, the one a call statement makes
-    /// included. A rule that subscribes to only one of `FunctionCallStmt`
-    /// and `FunctionCallExpr` must check the site's `position`, because the
-    /// driver's debug check calls this for both.
-    fn on_call(
-        &self,
-        _site: &CallSite<'_>,
-        _context: &LintContext<'_>,
-        _findings: &mut Vec<Finding>,
-    ) {
+    #[test]
+    fn category_from_name_recognizes_categories_and_the_perf_alias() {
+        assert_eq!(Category::from_name("style"), Some(Category::Style));
+        assert_eq!(Category::from_name("perf"), Some(Category::Performance));
+        assert_eq!(Category::from_name("undefined_variable"), None);
     }
 }

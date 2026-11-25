@@ -1,119 +1,84 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a field or index write on a local declared without a value, before
 /// any assignment can have reached it (Luacheck 341). `local x; x.foo = 1`
 /// indexes `nil`.
 ///
-/// The scope tree records the `x` in `x.foo = ...` as a plain read, so
-/// `UninitializedLocals` records the write prefixes to tell them apart from
-/// `print(x)`.
-#[derive(Debug, Clone, Copy)]
+/// The scope tree records the `x` in `x.foo = ...` as a plain read, and its
+/// parents tell it apart from the `x` of `print(x)`.
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MutatingUninitialized;
 
-impl_rule!(
+declare_lint_rule!(
     MutatingUninitialized,
-    "mutating_uninitialized",
     Correctness,
     Warning,
     "field or index assignment on an uninitialized local"
 );
 
-impl WholeRule for MutatingUninitialized {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
-        context
-            .local_flow()
-            .first_unassigned_uses
-            .iter()
-            .filter_map(|&(symbol_id, reference_id)| {
-                let first = tree.reference(reference_id);
-                context.nodes.uninitialized_locals().is_field_write_prefix(first).then(|| {
-                    Finding::new(
-                        format!(
-                            "field/index assignment on uninitialized `{}` (value is `nil`)",
-                            tree.name(tree.symbol(symbol_id).name)
-                        ),
-                        first.span,
-                    )
-                    .with_help("initialize the local before mutating its fields")
-                })
-            })
-            .collect()
+impl Rule for MutatingUninitialized {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
+        for &(symbol_id, reference_id) in &context.local_flow().first_unassigned_uses {
+            let first = tree.reference(reference_id);
+            if !context.is_field_write_prefix(first) {
+                continue;
+            }
+            context.diagnostic(
+                Finding::new(
+                    format!(
+                        "field/index assignment on uninitialized `{}` (value is `nil`)",
+                        tree.name(tree.symbol(symbol_id).name)
+                    ),
+                    first.span,
+                )
+                .with_help("initialize the local before mutating its fields"),
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&MutatingUninitialized, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_field_write_on_uninitialized() {
-        let diags = run("\
-local x
-x.foo = 1");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn flags_index_write_on_uninitialized() {
-        let diags = run("\
-local x
-x[1] = 2");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn ignores_when_initialized() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local x = {}
-x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_when_assigned_first() {
-        let diags = run("\
+x.foo = 1",
+        "\
 local x
 x = {}
-x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_read_before_field_write() {
-        let diags = run("\
+x.foo = 1",
+        "\
 local x
 print(x)
-x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_prefixed() {
-        let diags = run("\
+x.foo = 1",
+        "\
 local _x
-_x.foo = 1");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_forward_declaration_field_write_in_closure() {
-        let diags = run("\
+_x.foo = 1",
+        // The closure runs after the assignment.
+        "\
 local M
 local function init() M.x = 1 end
 M = {}
-init()");
-        assert!(diags.is_empty(), "the closure runs after the assignment: {diags:?}");
+init()",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+local x
+x.foo = 1",
+        "\
+local x
+x[1] = 2",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::MutatingUninitialized, PASS, FAIL).test_and_snapshot();
     }
 }

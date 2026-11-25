@@ -1,4 +1,5 @@
-//! A run of requires prints sorted by the name each binds.
+//! With `sort_requires` on, a run of requires prints sorted by the name each
+//! binds.
 //!
 //! A run is two or more sortable statements a block prints one after another, outside any
 //! `-- luck: format off` region, with no blank line or comment line between them. A statement is
@@ -10,8 +11,8 @@
 //! second format reads, so it keeps the order the first one chose. It then moves each member's
 //! printed lines, so comments and trivia on a line move with it.
 
-use core::mem;
-use core::ops::Range;
+use std::mem;
+use std::ops::Range;
 
 use luck_ast::{Expression, FunctionArgs, Statement, Suffix};
 use rustc_hash::FxHashSet;
@@ -40,7 +41,8 @@ pub(crate) fn sortable_require<'ast>(stmt: &Statement<'ast>) -> Option<Require<'
     let [binding] = &*local.names else {
         return None;
     };
-    if binding.attribute.as_ref().is_some_and(|attribute| attribute.name.text == "close") {
+    let attribute = binding.attribute_or(local.attribute.as_deref());
+    if attribute.is_some_and(|given| given.name.text == "close") {
         return None;
     }
     let [value] = &*local.exprs else {
@@ -85,7 +87,7 @@ impl<'ast> RequireRun<'ast> {
             return;
         }
         let mut order: Vec<usize> = (0..members.len()).collect();
-        order.sort_by_key(|&i| members.get(i).map(|member| member.require.key));
+        order.sort_by_key(|&i| members[i].require.key);
         if order.iter().enumerate().all(|(position, &i)| position == i) {
             return;
         }

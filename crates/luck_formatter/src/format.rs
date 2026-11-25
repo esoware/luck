@@ -1,9 +1,10 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, block_nesting_depth};
-use luck_parser::ParseResult;
-use luck_token::{LuaVersion, index_to_offset, offset_to_index};
+use luck_ast::{Chunk, MAX_NESTING_DEPTH, block_nesting_depth};
+use luck_diagnostics::Diagnostic;
+use luck_parser::{Groupings, ParseResult};
+use luck_token::{LuaVersion, Span, is_lua_whitespace};
 
 use crate::comments::Comments;
 use crate::format_block::{first_item_start, format_selection};
@@ -12,44 +13,40 @@ use crate::{FormatOptions, LineEndings};
 
 #[derive(Debug, Clone)]
 pub struct FormatResult {
-    pub output: String,
-    pub errors: Vec<FormatError>,
+    /// Bytes, as the source is, which are UTF-8 when the source is.
+    pub output: Vec<u8>,
+    /// The parse's errors, each an E008. Formatting itself reports none.
+    pub errors: Vec<Diagnostic>,
 }
 
-/// A parse error, or the refusal of a tree nested past the cap. Formatting
-/// itself reports no others.
-pub type FormatError = luck_token::SourceError;
-
-fn print_block<'ast>(
+fn print_chunk<'ast>(
     allocator: &'ast Allocator,
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
+    groupings: Option<&'ast Groupings>,
     options: &FormatOptions,
-    should_sort_requires: bool,
-) -> String {
-    let mut f = Formatter::new(allocator, *options, comments);
-    if should_sort_requires {
-        f = f.sorting_requires();
-    }
+) -> Vec<u8> {
+    let mut f = Formatter::new(allocator, chunk.version, *options, comments, groupings);
     f.write_shebang();
-    f.write_block(block);
+    f.write_block(&chunk.block);
     // Empty and error statements print nothing, so a block holding only
     // those must not open a line before the trailing comment flush.
-    let has_stmts = first_item_start(block).is_some();
+    let has_stmts = first_item_start(&chunk.block).is_some();
     f.write_remaining_comments(has_stmts);
-    let mut output = f.print("");
+    let mut output = f.print(b"");
 
-    let trimmed = output.trim_end();
-    output.truncate(trimmed.len());
-    output.push_str(match options.line_endings {
-        LineEndings::Unix => "\n",
-        LineEndings::Windows => "\r\n",
+    let trimmed_length =
+        output.iter().rposition(|&b| !is_lua_whitespace(b)).map_or(0, |last| last + 1);
+    output.truncate(trimmed_length);
+    output.extend_from_slice(match options.line_endings {
+        LineEndings::Unix => b"\n",
+        LineEndings::Windows => b"\r\n",
     });
     output
 }
 
 /// Formats a tree, including one built in code with no source text, such as
-/// with `luck_ast::Synth`.
+/// with `luck_ast::Synth`, whose literals it spells for the chunk's version.
 ///
 /// Pass [`Comments::synthetic`] to attach generated comments (chain
 /// [`Comments::with_blank_before`] for blank lines between statements), or
@@ -58,55 +55,60 @@ fn print_block<'ast>(
 ///
 /// # Errors
 ///
-/// Returns an error for a tree nested deeper than [`MAX_NESTING_DEPTH`],
+/// Returns an E008 for a tree nested deeper than [`MAX_NESTING_DEPTH`],
 /// which `luck_parser` never builds and would refuse to read back.
-pub fn format_block<'ast>(
+pub fn format_chunk<'ast>(
     allocator: &'ast Allocator,
-    block: &'ast Block<'ast>,
+    chunk: &'ast Chunk<'ast>,
     comments: Comments<'ast>,
     options: &FormatOptions,
-) -> Result<String, FormatError> {
-    if block_nesting_depth(block) > MAX_NESTING_DEPTH {
-        return Err(FormatError {
-            span: block.span,
-            message: format!(
-                "maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"
-            ),
-        });
+) -> Result<Vec<u8>, Diagnostic> {
+    if block_nesting_depth(&chunk.block) > MAX_NESTING_DEPTH {
+        return Err(Diagnostic::e008(
+            chunk.block.span,
+            format!("maximum nesting depth exceeded (luck resource limit: {MAX_NESTING_DEPTH})"),
+        ));
     }
-    Ok(print_block(allocator, block, comments, options, false))
+    Ok(print_chunk(allocator, chunk, comments, None, options))
 }
 
 /// Parses `source` into `allocator` and formats it. Input that fails to parse
 /// returns empty output with its parse errors in `FormatResult::errors`.
-#[must_use]
+///
+/// `source` is bytes, as Lua reads it, and the formatter copies a comment or
+/// a string that isn't UTF-8 as written.
 pub fn format(
     allocator: &Allocator,
-    source: &str,
+    source: &[u8],
     version: LuaVersion,
     options: &FormatOptions,
 ) -> FormatResult {
-    let parse = luck_parser::parse(allocator, source, version);
-    format_parsed(allocator, &parse, version, options)
+    let parse = luck_parser::parse_with_tokens(allocator, source, version);
+    format_parsed(allocator, &parse, options)
 }
 
-/// [`format()`] without the parse, for a host that already holds one.
+/// [`format()`] without the parse, for a host that already holds one, made
+/// with `luck_parser::parse_with_tokens`: the formatter finds the tokens the
+/// tree keeps no span for among its tokens.
 ///
-/// `parse` must come from `luck_parser` at `version`. One with errors returns
-/// empty output and those errors. Text the formatter rewrites goes in
-/// `allocator`, which may be the one the tree lives in.
-#[must_use]
+/// A parse with errors returns empty output and those errors. Text the
+/// formatter rewrites goes in `allocator`, which may be the one the tree
+/// lives in.
+///
+/// # Panics
+///
+/// In debug builds, when `parse` kept no tokens, as `luck_parser::parse`
+/// keeps none.
 pub fn format_parsed<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-    version: LuaVersion,
     options: &FormatOptions,
 ) -> FormatResult {
     if !parse.errors.is_empty() {
-        return FormatResult { output: String::new(), errors: parse.errors.clone() };
+        return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
     }
-    let comments = Comments::from_source(&parse.comments, parse.source, version);
-    let output = print_block(allocator, &parse.block, comments, options, options.sort_requires);
+    let comments = Comments::from_parse(parse);
+    let output = print_chunk(allocator, &parse.chunk, comments, Some(&parse.groupings), options);
     FormatResult { output, errors: Vec::new() }
 }
 
@@ -115,34 +117,31 @@ pub fn format_parsed<'ast>(
 ///
 /// Every byte outside them is copied as it was, including line endings and
 /// the end of the file, which is what an editor's "format selection" wants.
-/// `sort_requires` doesn't run in this mode. `parse` is as for
-/// [`format_parsed`].
-#[must_use]
+/// It never sorts requires, since a selection can split a run of them.
+/// `parse` is as for [`format_parsed`].
+///
+/// # Panics
+///
+/// As [`format_parsed`] does.
 pub fn format_range<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
-    version: LuaVersion,
     options: &FormatOptions,
     range: Range<usize>,
 ) -> FormatResult {
     if !parse.errors.is_empty() {
-        return FormatResult { output: String::new(), errors: parse.errors.clone() };
+        return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
     }
     let source = parse.source;
-    let offsets = index_to_offset(range.start)..index_to_offset(range.end);
-    let comments = Comments::from_source(&parse.comments, source, version);
-    let output = format_selection(allocator, &parse.block, comments, options, &offsets)
-        .map_or_else(
-            || source.to_owned(),
-            |(span, selected)| {
-                let before = source.get(..offset_to_index(span.start)).unwrap_or_default();
-                let after = source.get(offset_to_index(span.end)..).unwrap_or_default();
-                let mut spliced = String::with_capacity(source.len());
-                spliced.push_str(before);
-                spliced.push_str(&selected);
-                spliced.push_str(after);
-                spliced
-            },
-        );
+    let selection = Span::from_indices(range.start, range.end);
+    let options = FormatOptions { sort_requires: false, ..*options };
+    let output = match format_selection(allocator, parse, &options, selection) {
+        Some((span, selected)) => {
+            let before = &source[..span.start as usize];
+            let after = &source[span.end as usize..];
+            [before, &selected, after].concat()
+        }
+        None => source.to_owned(),
+    };
     FormatResult { output, errors: Vec::new() }
 }

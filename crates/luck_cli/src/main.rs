@@ -3,23 +3,15 @@
 //! The `luck` command-line interface: `init`, `build`, `bundle`, `minify`,
 //! `graph`, `lint`, `fmt`, `check`, and `lsp`.
 //!
-//! `cli` holds the [`clap`] model and dispatch, and each command's arguments
-//! and handler live in its own module under `commands`.
+//! `cli` holds the [`clap`] model's global flags, and `commands` the
+//! subcommands and their dispatch, with each command's arguments and handler
+//! in a module of its own.
 
 #![expect(
     clippy::print_stderr,
     clippy::print_stdout,
     reason = "a CLI prints, and println! panicking on a closed pipe is accepted"
 )]
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
 
 mod cli;
 mod commands;
@@ -27,7 +19,8 @@ mod exit;
 mod minify_flags;
 mod output;
 mod project;
-mod render;
+mod reporter;
+mod thread_pool;
 mod verbosity;
 
 use std::process::ExitCode;

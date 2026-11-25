@@ -1,23 +1,25 @@
 # luck_lexer
 
-The single-pass lexer for Lua 5.1 to 5.5 and Luau.
+The single-pass lexer for Lua 5.1 to 5.5 and Luau, with SIMD on x86_64 CPUs with AVX2 and on aarch64.
 
 ## Overview
 
-Source text goes in and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. A token holds no text, only its kind, span, and flags, so `Token::text` slices it from the source. The lexer recognizes a token that only some versions have, such as floor division, a hex float, or Luau's interpolated strings, only for those versions. It records each error and keeps going, so one pass reports them all.
+A source goes in, as bytes, which Lua reads it as, so a string or a comment may hold any byte, and two streams come out: the tokens, and the comments between them, which stay out of the syntax tree. Each comment carries what it tells a tool, read once from its text: prose, a Luau hot comment, or a `luck:` directive. A token holds no text, only its kind, span, and flags, so `Token::text` slices its bytes from the source. The lexer recognizes a token that only some versions have, such as floor division, a hex float, Luau's interpolated strings, or a contextual keyword like Luau's `type`, only for those versions. A contextual keyword has a kind of its own, which the parser reads as a name wherever its keyword reading doesn't apply. It checks every escape with the one escape reader in `luck_token`, the parser's too, records each error and keeps going, so one pass reports them all, and notes each escape only Lua 5.1 and Luau take, which they read as the character it escapes.
+
+On a CPU with AVX2 or Neon, which `luck_simd` detects at runtime, the lexer classifies 64 bytes at a time into a bit per byte for each class it cares about, such as whitespace, name bytes, and punctuation, and reads the names, keywords, plain integers, and lone punctuation among them off those bits, with no branch per token. Any other token, such as a string, a comment, an operator of two or more bytes, or a malformed one, it lexes a byte at a time, as it lexes every token on any other CPU, so both paths read every source alike, which a test checks over every fixture and thousands of generated sources.
 
 ## Usage
 
-- `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of strings and comments left unterminated.
-- `Lexer` hands out one token at a time with `next_token`, as the parser pulls them, and `finish` returns the comments and errors once the source is drained.
-- `LexError` is `luck_token::SourceError`. The lexer refuses a source over 4 GiB with one.
+- `lex(source, version)` lexes a whole source into a `LexResult`: every token, ending in `Eof`, the comments, the errors, and the spans of the lenient escapes. A string token left unterminated says so, and so does the `Eof` after a block comment left unterminated. A string token says too whether it holds an escape, or in long brackets a CR, so the parser decodes only the strings that need it.
+- `Lexer` hands out one token at a time with `next_token`, as the parser pulls them, from a batch it lexes ahead into a buffer that stays in the cache, and once the source is drained, `finish` takes back the tokens the caller kept and returns them in a `LexResult` with the rest.
+- Each error is an E008 `luck_diagnostics::Diagnostic`. The lexer refuses a source over 4 GiB with one.
 
 ```rust
 use luck_token::{LuaVersion, TokenKind};
 
-let source = "local x = 42";
+let source = b"local x = 42";
 let result = luck_lexer::lex(source, LuaVersion::Lua54);
 assert!(result.errors.is_empty());
 let name = result.tokens[1];
-assert_eq!((name.kind, name.text(source)), (TokenKind::Identifier, "x"));
+assert_eq!((name.kind, name.text(source)), (TokenKind::Identifier, &b"x"[..]));
 ```

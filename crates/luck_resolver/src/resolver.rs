@@ -1,102 +1,114 @@
-use alloc::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use luck_core::Diagnostic;
+use luck_diagnostics::Diagnostic;
 use luck_token::{LuaVersion, Span};
 
-use crate::file_system::FileSystem;
-use crate::luau::ModuleProbes;
-use crate::luaurc::AliasCache;
-use crate::shared_cache::SharedCache;
-use crate::{lua, luau};
+use crate::error::ResolveError;
+use crate::file_system::{FileSystem, FileSystemOs};
+use crate::fs_cache::FsCache;
+use crate::lua::Lua;
+use crate::luau::Luau;
+use crate::shared_cache::Generation;
 
-const DEFAULT_SEARCH_PATHS: &[&str] = &["?.lua", "?/init.lua"];
-
-#[derive(Debug)]
-pub struct ResolvedModule {
-    /// In the [`normalize_path`](crate::normalize_path) form.
-    pub path: String,
-    pub warnings: Vec<Diagnostic>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveOptions {
+    /// Luau resolves from the requiring file, and every other version
+    /// searches `search_paths`.
+    pub version: LuaVersion,
+    /// Lua's templates, such as `?.lua`, where a relative one starts at
+    /// `root`. Empty means `?.lua` and `?/init.lua`.
+    pub search_paths: Vec<String>,
+    pub root: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ResolveRequest<'request> {
-    /// The require string, e.g. `"foo.bar"`, `"./sibling"`, or `"@alias/mod"`.
-    pub module: &'request str,
-    /// In the [`normalize_path`](crate::normalize_path) form.
-    pub from_file: &'request str,
-    pub span: Span,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolution {
+    /// From [`FileSystem::canonicalize`], so two requires of one module
+    /// resolve alike.
+    pub path: PathBuf,
+    /// Luau: `@self` named the requiring module although a `.luaurc` in
+    /// effect declares an alias named `self`, which can't override it.
+    pub is_self_alias_shadowed: bool,
 }
 
-/// Caches what it finds and never rereads it, so make a fresh resolver per
-/// build. Threads share one, and each thing it finds is looked up once for
-/// all of them.
+impl Resolution {
+    /// The W004 that warns at `span`, the require string, that `@self`
+    /// shadowed a `.luaurc` alias named `self`, or `None` when it didn't.
+    pub fn to_diagnostic(&self, span: Span) -> Option<Diagnostic> {
+        self.is_self_alias_shadowed.then(|| Diagnostic::w004(span))
+    }
+}
+
+/// A [`ResolverGeneric`] on the OS's own file system.
+pub type Resolver = ResolverGeneric<FileSystemOs>;
+
+/// Resolves requires through `Fs`, and keeps what it reads until
+/// [`Self::clear_cache`], so threads that share one read each thing once.
 ///
 /// It lists each directory a require looks in once, and answers from that
-/// listing which files exist and their canonical paths. Lua caches what each
+/// listing which files exist and their canonical paths. Lua keeps what each
 /// require string resolved to, and Luau the `.luaurc` alias tables it
-/// discovers and what each module path holds on disk. A missing or malformed
-/// file is cached too.
+/// discovers and what each module path holds. A missing or malformed file is
+/// kept too.
 #[derive(Debug)]
-pub struct Resolver<'config> {
-    scheme: Scheme<'config>,
+pub struct ResolverGeneric<Fs> {
+    fs_cache: FsCache<Fs>,
+    scheme: Scheme,
+    generation: Arc<Generation>,
 }
 
 #[derive(Debug)]
-enum Scheme<'config> {
-    Lua {
-        search_paths: Cow<'config, [String]>,
-        project_root: &'config Path,
-        files: FileSystem,
-        /// What each require string that resolved names, which only it
-        /// decides.
-        resolved: SharedCache<String, String>,
-    },
-    Luau(AliasCache, ModuleProbes),
+enum Scheme {
+    Lua(Lua),
+    Luau(Luau),
 }
 
-impl<'config> Resolver<'config> {
-    /// Lua 5.x tries each of `search_paths`, or `?.lua` and `?/init.lua`
-    /// when it's empty, against `project_root`. Luau ignores both and
-    /// resolves from the requiring file.
-    #[must_use]
-    pub fn new(
-        version: LuaVersion,
-        search_paths: &'config [String],
-        project_root: &'config Path,
-    ) -> Self {
+impl Resolver {
+    pub fn new(options: ResolveOptions) -> Self {
+        Self::new_with_file_system(FileSystemOs, options)
+    }
+}
+
+impl<Fs: FileSystem> ResolverGeneric<Fs> {
+    pub fn new_with_file_system(file_system: Fs, options: ResolveOptions) -> Self {
+        let ResolveOptions { version, search_paths, root } = options;
+        let generation = Arc::default();
         let scheme = if version.is_luau() {
-            Scheme::Luau(AliasCache::default(), ModuleProbes::default())
+            Scheme::Luau(Luau::new(&generation))
         } else {
-            Scheme::Lua {
-                search_paths: if search_paths.is_empty() {
-                    Cow::Owned(DEFAULT_SEARCH_PATHS.iter().map(ToString::to_string).collect())
-                } else {
-                    Cow::Borrowed(search_paths)
-                },
-                project_root,
-                files: FileSystem::default(),
-                resolved: SharedCache::default(),
-            }
+            Scheme::Lua(Lua::new(search_paths, root, &generation))
         };
-        Self { scheme }
+        Self { fs_cache: FsCache::new(file_system, &generation), scheme, generation }
     }
 
+    /// Forgets everything read so far, so the next resolution sees the file
+    /// system as it is then. A resolution already running may still answer
+    /// from what it read before, but keeps none of it.
+    pub fn clear_cache(&self) {
+        self.generation.clear(|| {
+            self.fs_cache.clear();
+            match &self.scheme {
+                Scheme::Lua(lua) => lua.clear(),
+                Scheme::Luau(luau) => luau.clear(),
+            }
+        });
+    }
+
+    /// The module `module`, a require's string such as `"foo.bar"`,
+    /// `"./sibling"`, or `"@alias/module"`, names from `from_file`, the file
+    /// requiring it, which only Luau reads.
+    ///
     /// # Errors
     ///
-    /// Returns the diagnostic explaining why `request` names no module, or more
-    /// than one.
-    pub fn resolve(&self, request: &ResolveRequest<'_>) -> Result<ResolvedModule, Diagnostic> {
+    /// Returns why `module` names no module, or more than one.
+    pub fn resolve(&self, from_file: &Path, module: &str) -> Result<Resolution, ResolveError> {
         match &self.scheme {
-            Scheme::Lua { search_paths, project_root, files, resolved } => {
-                if let Some(path) = resolved.get(request.module) {
-                    return Ok(ResolvedModule { path, warnings: Vec::new() });
-                }
-                let module = lua::resolve(files, search_paths, project_root, request)?;
-                resolved.insert(request.module.to_owned(), module.path.clone());
-                Ok(module)
+            Scheme::Lua(lua) => {
+                let path = lua.resolve(&self.fs_cache, module)?;
+                Ok(Resolution { path, is_self_alias_shadowed: false })
             }
-            Scheme::Luau(aliases, probes) => luau::resolve(aliases, probes, request),
+            Scheme::Luau(luau) => luau.resolve(&self.fs_cache, from_file, module),
         }
     }
 }

@@ -3,13 +3,13 @@
     reason = "the scans move a raw pointer without the bounds checks its invariant makes redundant"
 )]
 
-use core::{slice, str};
+use std::slice;
 
 use luck_token::{LuaVersion, Span, strip_line_break};
 
 use crate::search::{name_length, short_string_length};
 
-/// Measured 5-10% faster per token than a `&str` and an index with checked
+/// Measured 5-10% faster per token than a slice and an index with checked
 /// slicing.
 ///
 /// INVARIANT: `ptr` lies in `source` or at its end, which `end` marks, so the
@@ -18,26 +18,26 @@ use crate::search::{name_length, short_string_length};
 /// [`Self::advance_by`], which takes any count, clamps it.
 #[derive(Debug)]
 pub(crate) struct Cursor<'source> {
-    source: &'source str,
+    source: &'source [u8],
     ptr: *const u8,
     end: *const u8,
 }
 
-// SAFETY: A cursor only reads the `&'source str` it borrows, which is `Send`.
+// SAFETY: A cursor only reads the `&'source [u8]` it borrows, which is `Send`.
 unsafe impl Send for Cursor<'_> {}
 
-// SAFETY: A cursor only reads the `&'source str` it borrows, which is `Sync`.
+// SAFETY: A cursor only reads the `&'source [u8]` it borrows, which is `Sync`.
 unsafe impl Sync for Cursor<'_> {}
 
 impl<'source> Cursor<'source> {
-    pub(crate) const fn new(source: &'source str) -> Self {
-        let range = source.as_bytes().as_ptr_range();
+    pub(crate) const fn new(source: &'source [u8]) -> Self {
+        let range = source.as_ptr_range();
         Self { source, ptr: range.start, end: range.end }
     }
 
     #[inline]
     pub(crate) fn position(&self) -> usize {
-        self.ptr.addr().wrapping_sub(self.source.as_ptr().addr())
+        self.ptr.addr() - self.source.as_ptr().addr()
     }
 
     #[inline]
@@ -76,20 +76,19 @@ impl<'source> Cursor<'source> {
 
     #[inline]
     pub(crate) fn rest(&self) -> &'source [u8] {
-        let length = self.end.addr().wrapping_sub(self.ptr.addr());
+        let length = self.end.addr() - self.ptr.addr();
         // SAFETY: The bytes from `ptr` to `end` are the end of the source.
         unsafe { slice::from_raw_parts(self.ptr, length) }
     }
 
     #[inline]
-    pub(crate) fn text_since(&self, start: usize) -> &'source str {
-        self.source.get(start..self.position()).unwrap_or_default()
+    pub(crate) fn text_since(&self, start: usize) -> &'source [u8] {
+        &self.source[start..self.position()]
     }
 
     /// A plain cast, measured 2-3% faster per token than a checked one.
     #[inline]
     #[expect(
-        clippy::as_conversions,
         clippy::cast_possible_truncation,
         reason = "`Lexer::new` refuses a source over `u32::MAX` bytes, so a position fits a `u32`"
     )]
@@ -131,20 +130,17 @@ impl<'source> Cursor<'source> {
         unsafe { self.advance_unchecked(length) }
     }
 
-    /// Pass the name at the cursor and return it, or `""` if no name byte is
-    /// next.
+    /// Pass the name at the cursor and return it, or nothing if no name byte
+    /// is next.
     #[inline]
-    pub(crate) fn eat_name(&mut self) -> &'source str {
+    pub(crate) fn eat_name(&mut self) -> &'source [u8] {
         let rest = self.rest();
         let length = name_length(rest);
         // SAFETY: `name_length` counts bytes of `rest`.
         let bytes = unsafe { rest.get_unchecked(..length) };
-        debug_assert!(bytes.is_ascii(), "a name holds only ASCII bytes");
-        // SAFETY: `name_length` passes only ASCII bytes, which are UTF-8.
-        let name = unsafe { str::from_utf8_unchecked(bytes) };
         // SAFETY: `name_length` counts bytes of `rest`.
         unsafe { self.advance_unchecked(length) }
-        name
+        bytes
     }
 
     /// Pass the bytes of a short string's body that `quote` opened, up to the
@@ -156,13 +152,17 @@ impl<'source> Cursor<'source> {
         unsafe { self.advance_unchecked(length) }
     }
 
-    /// Consume the rest of the UTF-8 sequence that begins at `start` and
-    /// return its char, so a multi-byte char yields one error that names it
-    /// and lexing resumes on a char boundary.
+    /// Consume the rest of the UTF-8 character that begins at `start`, one
+    /// byte before the cursor, and return it, so a multi-byte character
+    /// yields one error that names it. `None` for a byte that begins no
+    /// character, which the cursor is past.
     pub(crate) fn eat_rest_of_char(&mut self, start: usize) -> Option<char> {
-        // Continuation bytes are 0b10xxxxxx.
-        self.eat_while(|b| (b & 0xC0) == 0x80);
-        self.text_since(start).chars().next()
+        let rest = &self.source[start..];
+        // No character takes more than 4 bytes.
+        let window = rest.get(..4).unwrap_or(rest);
+        let character = window.utf8_chunks().next()?.valid().chars().next()?;
+        self.advance_by(character.len_utf8() - 1);
+        Some(character)
     }
 
     /// Whether only spaces and tabs stand between the cursor and a line break
@@ -170,7 +170,7 @@ impl<'source> Cursor<'source> {
     pub(crate) fn is_at_line_end(&self, version: LuaVersion) -> bool {
         let rest = self.rest();
         let blank_length = rest.iter().take_while(|b| matches!(b, b' ' | b'\t')).count();
-        let after_blanks = rest.get(blank_length..).unwrap_or_default();
+        let after_blanks = &rest[blank_length..];
         after_blanks.is_empty() || strip_line_break(after_blanks, version).is_some()
     }
 }

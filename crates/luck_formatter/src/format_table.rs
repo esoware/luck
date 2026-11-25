@@ -1,15 +1,22 @@
-//! A table of simple positional values packs with `fill`, as many per line as
-//! fit.
+//! A table of simple positional values and no comments packs with `fill`, as
+//! many per line as fit.
 //!
-//! Any other table stays flat if it fits and otherwise breaks one field
-//! per line. A table whose comments all sit between fields claims them and
-//! breaks one field per line; any other comments are left to the block level.
+//! Any other table stays flat if it fits and otherwise breaks one field per
+//! line, keeping each comment with the field it leads or trails.
 
-use luck_ast::{Expression, Field, TableConstructor};
-use luck_token::{Span, has_line_break};
+use luck_ast::{Expression, Field, GetSpan as _, TableConstructor};
+use luck_token::{Span, TokenKind, has_line_break};
 
-use crate::comments::ListKind;
 use crate::ir::{Formatter, LineMode};
+
+/// Where a table stands, which decides the group it breaks in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TablePlacement {
+    /// A call's argument hugged by its parentheses, which breaks in the
+    /// argument list's place.
+    Hugged,
+    Standalone,
+}
 
 fn is_fillable(table: &TableConstructor<'_>) -> bool {
     table.fields.iter().all(|field| match field {
@@ -28,18 +35,15 @@ fn is_fillable(table: &TableConstructor<'_>) -> bool {
     })
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
     /// Whether the source spreads the table over several lines with two
     /// fields sharing one of them. A synthetic table has no source and never
     /// does.
     fn is_packed_in_source(&self, table: &TableConstructor<'_>) -> bool {
-        let Some((source, version)) = self.comments().source() else {
+        let Some(source) = self.comments().source_text() else {
             return false;
         };
+        let version = self.version();
         let fields = &table.fields;
         let (Some(first), Some(last)) = (fields.first(), fields.last()) else {
             return false;
@@ -60,40 +64,23 @@ impl<'ast> Formatter<'ast> {
         has_shared_line && is_multi_line
     }
 
-    /// A hugged table breaks in its call's argument list's place.
-    pub(crate) fn write_table(&mut self, table: &TableConstructor<'ast>, is_hugged: bool) {
-        if self.comments().has_claimable_comments(table.span, table.fields.iter().map(Field::span))
-        {
-            let list = |f: &mut Self| {
-                f.write_commented_list(
-                    ("{", "}"),
-                    table.span,
-                    &table.fields,
-                    ListKind::TableFields,
-                    Field::span,
-                    Self::write_field,
-                );
-            };
-            if is_hugged {
-                let group_id = self.group_id();
-                self.hugged_group_with_id(group_id, list);
-            } else {
-                list(self);
-            }
-            return;
-        }
-
+    pub(crate) fn write_table(
+        &mut self,
+        table: &TableConstructor<'ast>,
+        placement: TablePlacement,
+    ) {
         if table.fields.is_empty() {
-            self.token("{}");
+            self.write_dangling_list(("{", "}"), table.span.end, LineMode::SoftOrSpace);
             return;
         }
 
         // A trailing `,` or `;` after the last field keeps the table broken, one
         // field per line unless its values were packed.
         let has_magic_comma = self.options().magic_trailing_comma && table.has_trailing_separator;
-        let should_fill =
-            is_fillable(table) && (!has_magic_comma || self.is_packed_in_source(table));
-        let last_index = table.fields.len().saturating_sub(1);
+        let should_fill = is_fillable(table)
+            && (!has_magic_comma || self.is_packed_in_source(table))
+            && !self.comments().has_comment_in(table.span.start, table.span.end);
+        let last_index = table.fields.len() - 1;
 
         let group_id = self.group_id();
         let content = |grouped: &mut Self| {
@@ -101,14 +88,15 @@ impl<'ast> Formatter<'ast> {
             grouped.indent(|indented| {
                 indented.soft_line_or_space();
 
-                // A blank line the source has above a field is kept.
+                // A blank line the source has above a field, or above the
+                // comments leading it, is kept.
                 if should_fill {
                     // Every entry but the last carries its own comma, so
                     // the fill measures widths with the comma included.
                     indented.fill(|f| {
                         for (i, field) in table.fields.iter().enumerate() {
                             let separator = (i > 0).then(|| {
-                                if f.has_blank_line_above(field.span().start) {
+                                if f.has_blank_line_before(field.span().start) {
                                     LineMode::Empty
                                 } else {
                                     LineMode::SoftOrSpace
@@ -126,7 +114,7 @@ impl<'ast> Formatter<'ast> {
                     for (i, field) in table.fields.iter().enumerate() {
                         if i > 0 {
                             indented.token(",");
-                            let is_blank = indented.has_blank_line_above(field.span().start);
+                            let is_blank = indented.has_blank_line_before(field.span().start);
                             indented.line(if is_blank {
                                 LineMode::Empty
                             } else {
@@ -141,36 +129,47 @@ impl<'ast> Formatter<'ast> {
                     indented.expand_parent();
                 }
                 indented.if_group_breaks(group_id, |f| f.token(","));
+                indented.write_closing_comments_keeping_blank_lines(table.span.end);
             });
             grouped.soft_line_or_space();
-            grouped.line_suffix_boundary();
             grouped.token("}");
         };
-        if is_hugged {
-            self.hugged_group_with_id(group_id, content);
-        } else {
-            self.group_with_id(group_id, content);
+        match placement {
+            TablePlacement::Hugged => self.hugged_group_with_id(group_id, content),
+            TablePlacement::Standalone => self.group_with_id(group_id, content),
         }
     }
 
+    /// A named or positional field spans from its name or value, and the
+    /// parentheses the source grouped its value in.
     fn write_field(&mut self, field: &Field<'ast>) {
-        match field {
-            Field::Named { name, value } => {
-                self.name(*name);
-                self.space();
-                self.token("=");
-                self.space();
-                self.write_expr(value);
-            }
-            Field::Bracketed { key, value, .. } => {
-                self.write_bracketed_key(key);
-                self.space();
-                self.token("=");
-                self.space();
-                self.write_expr(value);
-            }
-            Field::Positional(value) => self.write_expr(value),
-        }
+        let span = match field {
+            Field::Named { name, value } => Span::new(name.span.start, self.extent(value).end),
+            Field::Positional(value) => self.extent(value),
+            Field::Bracketed { span, .. } => *span,
+        };
+        self.node(
+            || span,
+            |f| match field {
+                Field::Named { name, value } => {
+                    f.name(*name);
+                    f.space();
+                    f.token("=");
+                    f.space();
+                    f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
+                }
+                Field::Bracketed { key, value, .. } => {
+                    let closer =
+                        f.comments().closer_offset(f.extent(key).end, TokenKind::RightBracket);
+                    f.write_bracketed_key(key, closer);
+                    f.space();
+                    f.token("=");
+                    f.space();
+                    f.write_after_operator(f.extent(value).start, |inner| inner.write_expr(value));
+                }
+                Field::Positional(value) => f.write_expr(value),
+            },
+        );
     }
 }
 

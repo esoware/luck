@@ -1,10 +1,17 @@
 import * as vscode from "vscode";
-import path from "node:path";
-import * as fs from "node:fs";
-import type { WorkspaceEdit } from "vscode-languageclient/node";
+import { RequestType } from "vscode-languageclient/node";
+import type { TextDocumentIdentifier, WorkspaceEdit } from "vscode-languageclient/node";
 import { version as extensionVersion } from "../package.json";
 import type { LuckClient } from "./client";
 import { outputChannel } from "./output";
+
+const SYNTAX_TREE_REQUEST = new RequestType<{ textDocument: TextDocumentIdentifier }, string, void>(
+	"luck/syntaxTree",
+);
+
+const FIX_ALL_WORKSPACE_REQUEST = new RequestType<Record<string, never>, WorkspaceEdit, void>(
+	"luck/fixAllWorkspace",
+);
 
 export function registerCommands(client: LuckClient): vscode.Disposable[] {
 	const handlers = {
@@ -44,7 +51,7 @@ export function registerCommands(client: LuckClient): vscode.Disposable[] {
 }
 
 function showServerVersion(client: LuckClient): void {
-	const serverInfo = client.languageClient?.initializeResult?.serverInfo;
+	const { serverInfo } = client;
 	void vscode.window.showInformationMessage(
 		`${serverInfo?.name ?? "luck"} ${serverInfo?.version ?? "unknown"}`,
 	);
@@ -67,7 +74,7 @@ async function applyAllFixesWorkspace(client: LuckClient): Promise<void> {
 		return;
 	}
 	try {
-		const fixes = await languageClient.sendRequest<WorkspaceEdit>("luck/fixAllWorkspace", {});
+		const fixes = await languageClient.sendRequest(FIX_ALL_WORKSPACE_REQUEST, {});
 		const edit = await languageClient.protocol2CodeConverter.asWorkspaceEdit(fixes);
 		if (edit.size === 0) {
 			void vscode.window.showInformationMessage("Luck: no workspace fixes to apply.");
@@ -87,8 +94,12 @@ async function createConfig(): Promise<void> {
 		void vscode.window.showErrorMessage("Luck: open a folder before creating a config.");
 		return;
 	}
-	const configPath = path.join(folder.uri.fsPath, "luck.json");
-	if (fs.existsSync(configPath)) {
+	const configUri = vscode.Uri.joinPath(folder.uri, "luck.json");
+	const isExisting = await vscode.workspace.fs.stat(configUri).then(
+		() => true,
+		() => false,
+	);
+	if (isExisting) {
 		void vscode.window.showWarningMessage("Luck: luck.json already exists.");
 	} else {
 		const skeleton = {
@@ -98,9 +109,15 @@ async function createConfig(): Promise<void> {
 				extra_globals: [],
 			},
 		};
-		await fs.promises.writeFile(configPath, `${JSON.stringify(skeleton, null, 2)}\n`, "utf8");
+		const text = `${JSON.stringify(skeleton, null, 2)}\n`;
+		try {
+			await vscode.workspace.fs.writeFile(configUri, new TextEncoder().encode(text));
+		} catch (error) {
+			void vscode.window.showErrorMessage(`Luck: ${error}`);
+			return;
+		}
 	}
-	await vscode.window.showTextDocument(vscode.Uri.file(configPath));
+	await vscode.window.showTextDocument(configUri);
 }
 
 async function viewSyntaxTree(client: LuckClient): Promise<void> {
@@ -111,8 +128,8 @@ async function viewSyntaxTree(client: LuckClient): Promise<void> {
 		return;
 	}
 	try {
-		const tree = await languageClient.sendRequest<string>("luck/syntaxTree", {
-			textDocument: { uri: editor.document.uri.toString() },
+		const tree = await languageClient.sendRequest(SYNTAX_TREE_REQUEST, {
+			textDocument: languageClient.code2ProtocolConverter.asTextDocumentIdentifier(editor.document),
 		});
 		const document = await vscode.workspace.openTextDocument({
 			content: tree,
@@ -125,7 +142,7 @@ async function viewSyntaxTree(client: LuckClient): Promise<void> {
 }
 
 async function copyDebugInfo(client: LuckClient): Promise<void> {
-	const serverVersion = client.languageClient?.initializeResult?.serverInfo?.version;
+	const serverVersion = client.serverInfo?.version;
 	const lines = [
 		`Luck extension: ${extensionVersion}`,
 		`Luck server:    ${serverVersion ?? "unknown"}`,

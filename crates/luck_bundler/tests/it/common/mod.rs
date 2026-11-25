@@ -1,47 +1,79 @@
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
-use core::iter;
+use std::fs;
 use std::path::Path;
 
-use luck_allocator::Allocator;
-use luck_bundler::{BundleOptions, BundleResult, bundle, bundle_minified};
-use luck_core::Diagnostic;
+use luck_allocator::{Allocator, ThreadAllocators};
+use luck_ast::MIN_STACK_BYTES;
+use luck_bundler::{Bundle, BundleOptions, DynamicRequire, bundle, bundle_minified};
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_minifier::TransformConfig;
+use luck_resolver::to_slash_lossy;
+use luck_token::LuaVersion;
+use rayon::ThreadPoolBuilder;
+use tempfile::TempDir;
 
-/// `count` fresh arenas, one for each thread a bundle may read modules on.
-pub(crate) fn arenas(count: usize) -> Vec<Allocator> {
-    iter::repeat_with(Allocator::new).take(count).collect()
+pub(crate) const LUA_REQUIRE_UTIL: &str = "\
+local util = require(\"util\")
+print(util)
+";
+pub(crate) const LUAU_REQUIRE_UTIL: &str = "\
+local util = require(\"./util\")
+print(util)
+";
+pub(crate) const RETURN_ONE: &[u8] = b"return 1\n";
+
+/// A bundle of sources that are UTF-8, which is UTF-8 too.
+pub(crate) fn text(output: &[u8]) -> &str {
+    str::from_utf8(output).expect("a bundle of UTF-8 sources is UTF-8")
 }
 
-/// Bundles `entry` as text on one thread and on several, which have to agree,
-/// and minified, which has to be what minifying the text gives, and returns
-/// the text's result.
+/// What `work` returns on a pool of `thread_count` threads, each with the
+/// stack every stage needs, which it runs on as a caller inside a pool does.
+pub(crate) fn on_pool<T, Work>(thread_count: usize, work: Work) -> T
+where
+    T: Send,
+    Work: FnOnce() -> T + Send,
+{
+    ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .stack_size(MIN_STACK_BYTES)
+        .build()
+        .expect("the pool starts")
+        .install(work)
+}
+
+/// What `work` returns on this thread, outside any pool.
 ///
-/// # Errors
-///
-/// Returns the diagnostics that stopped the bundle, which every form reports
-/// alike.
-#[expect(clippy::panic_in_result_fn, reason = "a form that disagrees fails the calling test")]
+/// The bundler then reads modules on rayon's global pool, which this builds
+/// first with the stack every stage needs, since every test here that
+/// reaches that pool comes through this.
+pub(crate) fn off_pool<T>(work: impl FnOnce() -> T) -> T {
+    let _ = ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global();
+    work()
+}
+
+/// Bundles `entry` as text on one thread, and from outside the pool on many,
+/// which have to agree, and minified on a few, which has to be what minifying
+/// the text gives, and returns the text's result.
 pub(crate) fn bundle_both(
     entry: &Path,
     options: &BundleOptions<'_>,
-) -> Result<BundleResult, Vec<Diagnostic>> {
+) -> Result<Bundle, Vec<FileDiagnostics>> {
     let transforms = TransformConfig::default();
-    let text_result = bundle(&mut arenas(1), entry, options);
-    let threaded_result = bundle(&mut arenas(4), entry, options);
+    let text_result = on_pool(1, || bundle(&ThreadAllocators::new(), entry, options));
+    let threaded_result = off_pool(|| bundle(&ThreadAllocators::new(), entry, options));
     assert_eq!(
         format!("{text_result:?}"),
         format!("{threaded_result:?}"),
         "bundling on threads changes the bundle"
     );
-    match (&text_result, bundle_minified(&mut arenas(3), entry, options, &transforms)) {
-        (Ok(text), Ok(minified)) => {
-            let output = &text.output;
+    let minified_result =
+        on_pool(3, || bundle_minified(&ThreadAllocators::new(), entry, options, &transforms));
+    match (&text_result, minified_result) {
+        (Ok(text_bundle), Ok(minified)) => {
+            let bytes = &text_bundle.output;
+            let output = String::from_utf8_lossy(bytes);
             let allocator = Allocator::new();
-            let expected = luck_minifier::minify(&allocator, output, options.version, &transforms)
+            let expected = luck_minifier::minify(&allocator, bytes, options.version, &transforms)
                 .unwrap_or_else(|errors| panic!("the bundle must parse: {errors:?}\n{output}"));
             assert_eq!(
                 minified.output, expected,
@@ -58,4 +90,64 @@ pub(crate) fn bundle_both(
         }
     }
     text_result
+}
+
+pub(crate) fn write_project(files: &[(&str, &[u8])]) -> TempDir {
+    let directory = tempfile::tempdir().expect("tempdir");
+    for (name, contents) in files {
+        fs::write(directory.path().join(name), contents).expect("write project file");
+    }
+    directory
+}
+
+pub(crate) fn bundle_project(
+    directory: &Path,
+    entry: &str,
+    version: LuaVersion,
+) -> Result<Bundle, Vec<FileDiagnostics>> {
+    let search_paths = if version.is_luau() { vec![] } else { vec!["?.lua".to_owned()] };
+    bundle_both(
+        &directory.join(entry),
+        &BundleOptions {
+            version,
+            search_paths: &search_paths,
+            project_root: directory,
+            dynamic_require: DynamicRequire::default(),
+        },
+    )
+}
+
+pub(crate) fn bundle_files(
+    files: &[(&str, &[u8])],
+    entry: &str,
+    version: LuaVersion,
+) -> Result<Bundle, Vec<FileDiagnostics>> {
+    bundle_project(write_project(files).path(), entry, version)
+}
+
+pub(crate) fn assert_reparses(output: &[u8], version: LuaVersion) {
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, output, version);
+    assert!(
+        parsed.errors.is_empty(),
+        "bundle must reparse: {:?}\n{}",
+        parsed.errors,
+        String::from_utf8_lossy(output)
+    );
+}
+
+/// Each diagnostic in `files`, with the slash form of its file's path.
+pub(crate) fn located(files: &[FileDiagnostics]) -> Vec<(String, &Diagnostic)> {
+    files
+        .iter()
+        .flat_map(|file| {
+            let path = to_slash_lossy(&file.path).into_owned();
+            file.diags.iter().map(move |diag| (path.clone(), diag))
+        })
+        .collect()
+}
+
+/// Each diagnostic's code, in order.
+pub(crate) fn codes(files: &[FileDiagnostics]) -> Vec<&str> {
+    files.iter().flat_map(|file| &file.diags).map(|diag| diag.code).collect()
 }

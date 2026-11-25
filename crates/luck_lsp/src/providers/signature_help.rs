@@ -1,12 +1,15 @@
-use luck_semantic::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
-use luck_token::index_to_offset;
-use tower_lsp_server::ls_types::{
+use std::iter;
+
+use ls_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, Position,
     SignatureHelp, SignatureInformation,
 };
+use luck_ast::{FunctionArgs, GetSpan as _};
+use luck_stdlib::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
+use luck_token::TokenKind;
 
 use crate::document::DocumentState;
-use crate::providers::cursor::{TextKind, find_call_site_at, text_kind_at};
+use crate::providers::cursor::{TextKind, text_kind_at};
 use crate::providers::stdlib_render::{constant_preview, param_label};
 
 pub(crate) fn signature_help(
@@ -17,12 +20,45 @@ pub(crate) fn signature_help(
     if text_kind_at(document, offset) == TextKind::Comment {
         return None;
     }
-    let site = find_call_site_at(document, offset)?;
+    // The innermost call whose parentheses hold the cursor, found on the way
+    // up from the node there. An unclosed list ends where the parser
+    // stopped, so its end still counts as inside it, but past a real `)` the
+    // cursor has left the call. `f"..."` and `f{...}` have no parentheses to
+    // be inside.
+    let source = document.text().as_bytes();
+    let nodes = document.nodes();
+    let innermost = nodes.node_at(offset)?;
+    let (call, args) =
+        iter::once(innermost).chain(nodes.ancestor_ids(innermost)).find_map(|id| {
+            nodes.kind(id).as_suffixed_expr()?.calls().find_map(|(_, call)| {
+                let FunctionArgs::Parenthesized { span: parens, args } = call.args else {
+                    return None;
+                };
+                let is_closed = source[(parens.end - 1) as usize] == b')';
+                let is_inside = parens.start < offset
+                    && offset <= parens.end
+                    && !(is_closed && offset == parens.end);
+                is_inside.then_some((call, args))
+            })
+        })?;
+    // Reading the token after each argument, rather than counting commas,
+    // can't mistake one inside a nested argument for a separator of this
+    // list.
+    let tokens = document.tokens();
+    let active_param = args
+        .iter()
+        .filter(|arg| {
+            let next = tokens.partition_point(|token| token.span.start < arg.span().end);
+            tokens
+                .get(next)
+                .is_some_and(|token| token.kind == TokenKind::Comma && token.span.end <= offset)
+        })
+        .count();
     // Semantic resolution handles shaped locals (`f:read(` after
     // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
     // gives a shadowed base no help. Method params exclude `self`, matching
     // the argument count inside the parens.
-    let callee = document.semantic().resolve_callee(site.call)?;
+    let callee = document.semantic().resolve_callee(call)?;
     let StdlibEntry::Function(function) = callee.entry() else {
         return None;
     };
@@ -36,20 +72,25 @@ pub(crate) fn signature_help(
         })
         .collect();
 
-    let active_signature = function.signature_index_for_active_param(site.active_param);
-    let active_param_count = function.signatures.get(active_signature)?.params.len();
-    let active_param = site.active_param.min(active_param_count.saturating_sub(1));
+    let active_signature = function.signature_index_for_active_param(active_param);
+    let active_param_count = function.signatures[active_signature].params.len();
 
     Some(SignatureHelp {
         signatures,
-        active_signature: Some(index_to_offset(active_signature)),
-        active_parameter: Some(index_to_offset(active_param)),
+        active_signature: Some(
+            u32::try_from(active_signature)
+                .expect("a function has fewer signatures than `u32::MAX`"),
+        ),
+        active_parameter: Some(
+            u32::try_from(active_param.min(active_param_count.saturating_sub(1)))
+                .expect("a signature has fewer parameters than `u32::MAX`"),
+        ),
     })
 }
 
 fn build_signature(
     name: &str,
-    signature: &StdlibSignature,
+    signature: &StdlibSignature<'_>,
     deprecated_message: Option<&str>,
     is_must_use: bool,
 ) -> SignatureInformation {
@@ -59,9 +100,11 @@ fn build_signature(
         if i > 0 {
             label.push_str(", ");
         }
-        let start = index_to_offset(label.chars().count());
+        let start = u32::try_from(label.chars().count())
+            .expect("a signature label is shorter than `u32::MAX` characters");
         label.push_str(&param_label(param));
-        let end = index_to_offset(label.chars().count());
+        let end = u32::try_from(label.chars().count())
+            .expect("a signature label is shorter than `u32::MAX` characters");
         params.push(ParameterInformation {
             label: ParameterLabel::LabelOffsets([start, end]),
             documentation: param_documentation(param),
@@ -90,7 +133,7 @@ fn build_signature(
     }
 }
 
-fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
+fn param_documentation(param: &StdlibParam<'_>) -> Option<Documentation> {
     if let StdlibArgKind::Constant(values) = &param.kind {
         let preview =
             constant_preview(values, ", ", |constant| format!("`\"{}\"`", constant.value));
@@ -113,14 +156,13 @@ fn param_documentation(param: &StdlibParam) -> Option<Documentation> {
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
-    use luck_token::offset_to_index;
+    use luck_token::{LuaTarget, index_to_offset};
 
     use super::*;
     use crate::fixtures::document;
 
     fn active_signature(help: &SignatureHelp) -> &SignatureInformation {
-        &help.signatures[offset_to_index(help.active_signature.unwrap_or(0))]
+        &help.signatures[help.active_signature.unwrap_or(0) as usize]
     }
 
     #[test]
@@ -166,8 +208,6 @@ string.format('x')";
 
     #[test]
     fn signature_help_finds_a_call_at_stmt_position() {
-        // Statement-position calls never pass through visit_expr;
-        // the call hook must find them.
         let text = "collectgarbage('collect')";
         let document = document(text, LuaTarget::Lua54);
         let help =
@@ -195,6 +235,21 @@ string.format('x')";
         let before_paren =
             signature_help(&document, Position::new(0, 19)).expect("inside the call");
         assert_eq!(before_paren.active_parameter, Some(1), "one comma before the cursor");
+    }
+
+    #[test]
+    fn signature_help_reads_the_innermost_call_around_the_cursor() {
+        let document = document("print(string.rep(\"a\", 2), 3)", LuaTarget::Lua54);
+        let label_at = |utf16_column| {
+            let help = signature_help(&document, Position::new(0, utf16_column))?;
+            Some((active_signature(&help).label.clone(), help.active_parameter))
+        };
+        let (inner, inner_param) = label_at(23).expect("inside `string.rep`");
+        assert!(inner.starts_with("string.rep("), "{inner}");
+        assert_eq!(inner_param, Some(1));
+        let (outer, outer_param) = label_at(27).expect("after `string.rep(...)`");
+        assert!(outer.starts_with("print("), "{outer}");
+        assert_eq!(outer_param, Some(0), "`print` takes its arguments as one vararg");
     }
 
     #[test]

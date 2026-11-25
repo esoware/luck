@@ -46,9 +46,11 @@ fmt:
   cargo fmt --all
   npm run --prefix editors/vscode fmt
 
-# Run clippy and fail on any warning
+# Run clippy and fail on any warning, with luck_conformance on its own under Lua 5.4 and Luau, since its dialect features exclude each other
 lint *args:
-  cargo clippy --workspace --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}} -- --cap-lints warn
+  cargo clippy --workspace --exclude luck_conformance --all-targets --all-features --keep-going --config "build.warnings='deny'" {{args}}
+  cargo clippy -p luck_conformance --all-targets --keep-going --config "build.warnings='deny'" {{args}}
+  cargo clippy -p luck_conformance --all-targets --no-default-features --features luau --keep-going --config "build.warnings='deny'" {{args}}
 
 # Accept pending insta snapshots, since cargo insta review is interactive
 accept:
@@ -70,17 +72,21 @@ advisories:
 bench *args:
   cargo bench -p luck_benchmark {{args}}
 
+# Regenerate luck_ast/src/generated after a type that derives `Ast` changes
+ast:
+  cargo run -p luck_ast_tools
+
 # Regenerate editors/vscode/schemas/luckrc.schema.json after a config type changes
 schema:
   cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
-# Regenerate luck_semantic's static stdlib catalog after a stdlib_data file changes
+# Regenerate luck_stdlib's static stdlib catalog after a stdlib_data file changes
 stdlib:
-  cargo test -p luck_semantic regenerate_stdlib_catalog -- --ignored
+  cargo test -p luck_stdlib regenerate_stdlib_catalog -- --ignored
 
 # Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump, then the stdlib catalog
 roblox-api:
-  cargo test -p luck_semantic regenerate_roblox_api -- --ignored
+  cargo test -p luck_stdlib regenerate_roblox_api -- --ignored
   just stdlib
 
 # Regenerate the committed minsize.snap after the minifier or the benchmark files change
@@ -90,3 +96,12 @@ minsize:
 # Rewrite the committed allocs_*.yaml snapshots after a stage changes, or with `rules`, write the gitignored per-rule linter report
 allocs *args:
   cargo run -p luck_allocs --profile allocs -- {{args}}
+
+# Run each dialect's official test suite through every stage and its reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose path holds it
+conformance *args:
+  cargo run -p luck_conformance --profile conformance --no-default-features --features lua51 -- {{args}}
+  cargo run -p luck_conformance --profile conformance --no-default-features --features lua52 -- {{args}}
+  cargo run -p luck_conformance --profile conformance --no-default-features --features lua53 -- {{args}}
+  cargo run -p luck_conformance --profile conformance --no-default-features --features lua54 -- {{args}}
+  cargo run -p luck_conformance --profile conformance --no-default-features --features lua55 -- {{args}}
+  cargo run -p luck_conformance --profile conformance --no-default-features --features luau -- {{args}}

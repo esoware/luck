@@ -1,26 +1,25 @@
 use luck_semantic::SymbolKind;
 
-use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
-use crate::underscore_fix::UnderscoreFixes;
+use crate::context::LintContext;
+use crate::rule::{Rule, declare_lint_rule};
+use crate::underscore_fix::unused_binding;
 
-#[derive(Debug, Clone, Copy)]
+/// The `_` prefix is a suggestion, because it silences the warning rather
+/// than answering it, and an unused variable is often a misspelled use.
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedVariable;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedVariable,
-    "unused_variable",
     Correctness,
     Warning,
-    "variable is declared but never read"
+    "variable is declared but never read",
+    fix = Suggestion
 );
 
-impl WholeRule for UnusedVariable {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let semantic = context.semantic;
-        let tree = semantic.scope_tree();
-        let fixes = UnderscoreFixes::new(semantic);
-        let mut findings = Vec::new();
+impl Rule for UnusedVariable {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
 
         for symbol in tree.symbols() {
             let name = tree.name(symbol.name);
@@ -42,6 +41,7 @@ impl WholeRule for UnusedVariable {
                 SymbolKind::FunctionName => "function",
                 SymbolKind::Parameter
                 | SymbolKind::ImplicitSelf
+                | SymbolKind::ImplicitArg
                 | SymbolKind::IteratorVariable
                 | SymbolKind::NumericForVariable => continue,
             };
@@ -55,119 +55,93 @@ impl WholeRule for UnusedVariable {
                 continue;
             }
 
-            findings.push(
-                Finding::new(format!("unused {kind_name} `{name}`"), symbol.definition_span)
-                    .with_help("prefix with `_` to suppress this warning")
-                    .with_optional_fix(fixes.fix_for(symbol)),
-            );
+            context.diagnostic(unused_binding(
+                context,
+                format!("unused {kind_name} `{name}`"),
+                symbol,
+            ));
         }
-
-        findings
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fix::apply_one_pass;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&UnusedVariable, source, LuaVersion::Luau)
-    }
-
-    #[test]
-    fn ignores_exported_bindings() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 export local answer = 42
 export const LIMIT = 1i
 export function helper()
 return 1
-end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_plain_local_next_to_exports() {
-        let diags = run("\
-export local answer = 42
-local dead = 1");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`dead`"));
-    }
-
-    #[test]
-    fn ignores_variable_read_by_typeof() {
-        // typeof(expr) inside a type position references the runtime
-        // binding; it must count as a use.
-        let diags = run("\
+end",
+            LuaTarget::Luau,
+        ),
+        // `typeof(expr)` in a type reads the runtime binding, so it counts as a
+        // use.
+        (
+            "\
 local n = 1
 type T = typeof(n)
-export type U = T");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_variable_read_by_typeof_in_cast() {
-        let diags = run("\
+export type U = T",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local n = 1
 local m = (nil :: typeof(n))
-print(m)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+print(m)",
+            LuaTarget::Luau,
+        ),
+        // A `<close>` local is used by its scope exit.
+        (
+            "\
+local lock <close> = acquire()
+print(1)",
+            LuaTarget::Lua54,
+        ),
+        ("local _unused = 1", LuaTarget::Lua54),
+    ];
 
-    #[test]
-    fn flags_variable_unused_despite_type_alias() {
-        let diags = run("\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
+export local answer = 42
+local dead = 1",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local n = 1
 type T = number
-export type U = T");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_that_captures_existing_underscore_name() {
-        let source = "\
-local _x = 1
-local x = 2
-print(_x)";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_ne!(
-            apply_one_pass(source, &diags),
+export type U = T",
+            LuaTarget::Luau,
+        ),
+        // The rename shouldn't make `print(_x)` read the second local.
+        (
             "\
 local _x = 1
-local _x = 2
-print(_x)",
-            "the rename shouldn't make `print(_x)` read the second local"
-        );
-    }
-
-    #[test]
-    fn ignores_close_variable() {
-        let source = "\
-local lock <close> = acquire()
-print(1)";
-        let diags = run_rule(&UnusedVariable, source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "a `<close>` local is used by its scope exit: {diags:?}");
-    }
-
-    #[test]
-    fn flags_without_fix_that_would_bind_env() {
-        let diags = run_rule(&UnusedVariable, "local ENV = 1", LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_none(), "a local `_ENV` redirects every global: {diags:?}");
-    }
-
-    #[test]
-    fn flags_with_fix_when_prefixed_name_is_free() {
-        let diags = run("\
 local x = 2
-print(_y)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].fix.is_some(), "{diags:?}");
+print(_x)",
+            LuaTarget::Luau,
+        ),
+        // No suggestion, since a local `_ENV` would redirect every global.
+        ("local ENV = 1", LuaTarget::Lua54),
+        (
+            "\
+local x = 2
+print(_y)",
+            LuaTarget::Luau,
+        ),
+        ("local unused = 1", LuaTarget::Lua54),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::UnusedVariable, PASS, FAIL).test_and_snapshot();
     }
 }

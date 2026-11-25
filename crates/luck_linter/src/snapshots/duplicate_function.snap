@@ -1,0 +1,75 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: duplicate function definition `f`
+ --> Lua54:2:10
+1 | function f() end
+  |          - first defined here
+2 | function f() end
+  |          ^
+
+warning: duplicate function definition `t.m`
+ --> Lua54:3:10
+1 | local t = {}
+2 | function t.m() end
+  |          --- first defined here
+3 | function t.m() end
+  |          ^^^
+
+warning: duplicate function definition `t:m`
+ --> Lua54:3:10
+1 | local t = {}
+2 | function t:m() end
+  |          --- first defined here
+3 | function t:m() end
+  |          ^^^
+
+warning: duplicate function definition `f`
+ --> Lua54:3:10
+1 | do
+2 | function f() end
+  |          - first defined here
+3 | function f() end
+  |          ^
+4 | end
+
+warning: duplicate function definition `f`
+ --> Lua54:2:10
+1 | function f() end
+  |          - first defined here
+2 | function f() end
+  |          ^
+3 | function f() end
+
+warning: duplicate function definition `f`
+ --> Lua54:3:10
+1 | function f() end
+  |          - first defined here
+2 | function f() end
+3 | function f() end
+  |          ^
+
+warning: duplicate function definition `f`
+ --> Lua55:2:17
+1 | global function f() end
+  |                 - first defined here
+2 | global function f() end
+  |                 ^
+
+warning: duplicate function definition `m.f0`
+ --> Lua54:3:10
+1 | function m.f0() end
+  |          ---- first defined here
+2 | function m.f1() end
+3 | function m.f0() end
+  |          ^^^^
+4 | function m.f1() end
+
+warning: duplicate function definition `m.f1`
+ --> Lua54:4:10
+1 | function m.f0() end
+2 | function m.f1() end
+  |          ---- first defined here
+3 | function m.f0() end
+4 | function m.f1() end
+  |          ^^^^

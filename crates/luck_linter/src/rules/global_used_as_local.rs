@@ -1,32 +1,34 @@
-use luck_semantic::{Reference, ScopeId, ScopeKind, ScopeTree};
+use luck_semantic::{Reference, ScopeId, ScopeKind, Scoping};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GlobalUsedAsLocal;
 
-impl_rule!(
+declare_lint_rule!(
     GlobalUsedAsLocal,
-    "global_used_as_local",
     Style,
     Warning,
     "global variable is only used inside one function; use a local"
 );
 
-impl WholeRule for GlobalUsedAsLocal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
+impl Rule for GlobalUsedAsLocal {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
+        let placeholder = tree.name_id("_");
         let mut global_references: Vec<&Reference> = tree.global_references().collect();
         global_references.sort_by_key(|reference| reference.name);
 
-        let mut findings = Vec::new();
+        let mut firsts: Vec<&Reference> = Vec::new();
         for references in global_references.chunk_by(|left, right| left.name == right.name) {
-            let Some(first) = references.iter().min_by_key(|reference| reference.span.start) else {
+            let Some(&first) = references.iter().min_by_key(|reference| reference.span.start)
+            else {
                 continue;
             };
-            let name = tree.name(first.name);
-            if name == "_" || context.semantic.is_known_global_name(first.name) {
+            if Some(first.name) == placeholder || context.semantic.is_known_global_name(first.name)
+            {
                 continue;
             }
             let is_assigned = references.iter().any(|reference| reference.kind.is_write());
@@ -42,62 +44,33 @@ impl WholeRule for GlobalUsedAsLocal {
             if !functions.all(|other| other == Some(function)) {
                 continue;
             }
-            findings.push(
+            firsts.push(first);
+        }
+        firsts.sort_by_key(|first| first.span.start);
+        for first in firsts {
+            context.diagnostic(
                 Finding::new(
-                    format!("global `{name}` is only used inside one function"),
+                    format!("global `{}` is only used inside one function", tree.name(first.name)),
                     first.span,
                 )
                 .with_help("declare it `local` inside that function"),
             );
         }
-        findings.sort_by_key(|finding| finding.span.start);
-        findings
     }
 }
 
-fn enclosing_function(tree: &ScopeTree<'_>, scope: ScopeId) -> Option<ScopeId> {
+fn enclosing_function(tree: &Scoping, scope: ScopeId) -> Option<ScopeId> {
     let function = tree.scope(scope).function;
     (tree.scope(function).kind == ScopeKind::Function).then_some(function)
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&GlobalUsedAsLocal, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_global_confined_to_one_function() {
-        let diags = run("\
-local function f()
-    counter = 0
-    counter = counter + 1
-    return counter
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("counter"), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_write_only_global_in_one_function() {
-        let diags = run("\
-local function f()
-    cache = {}
-end
-f()");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_global_used_in_two_functions() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "\
 local function f()
     shared_state = 1
 end
@@ -105,54 +78,29 @@ local function g()
     return shared_state
 end
 f()
-g()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_global_also_used_at_top_level() {
-        let diags = run("\
+g()",
+        "\
 local function f()
     counter = 1
 end
 f()
-print(counter)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_module_level_global() {
+print(counter)",
         // Top-level globals may be the module's exports.
-        let diags = run("\
+        "\
 counter = 0
-counter = counter + 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_read_only_global() {
-        let diags = run("\
+counter = counter + 1",
+        "\
 local function f()
     return config
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_stdlib_globals() {
-        let diags = run("\
+f()",
+        "\
 local function f()
     print(1)
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_nested_function_split_usage() {
+f()",
         // `g` is a separate function, so `state` is used in two.
-        let diags = run("\
+        "\
 local function f()
     state = 1
     local function g()
@@ -160,7 +108,26 @@ local function f()
     end
     return g
 end
-f()");
-        assert!(diags.is_empty(), "{diags:?}");
+f()",
+    ];
+
+    const FAIL: &[&str] = &[
+        "\
+local function f()
+    counter = 0
+    counter = counter + 1
+    return counter
+end
+f()",
+        "\
+local function f()
+    cache = {}
+end
+f()",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::GlobalUsedAsLocal, PASS, FAIL).test_and_snapshot();
     }
 }

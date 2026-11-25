@@ -1,0 +1,46 @@
+[package]
+name                   = "luck_conformance"
+version.workspace      = true
+publish                = false
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description            = "Internal tool: the official Lua and Luau test suites through every stage and the reference interpreter, with committed results"
+
+[lints]
+workspace = true
+
+[[bin]]
+name    = "luck_conformance"
+test    = false
+doctest = false
+
+# mlua links one interpreter per build, so exactly one of these is on.
+[features]
+default = ["lua54"]
+lua51   = ["mlua/lua51"]
+lua52   = ["mlua/lua52"]
+lua53   = ["mlua/lua53"]
+lua54   = ["mlua/lua54"]
+lua55   = ["mlua/lua55"]
+luau    = ["mlua/luau"]
+
+[dependencies]
+luck_allocator       = { workspace = true }
+luck_ast             = { workspace = true }
+luck_benchmark_files = { workspace = true }
+luck_codegen         = { workspace = true }
+luck_diagnostics     = { workspace = true }
+luck_formatter       = { workspace = true }
+luck_linter          = { workspace = true }
+luck_minifier        = { workspace = true }
+luck_parser          = { workspace = true }
+luck_semantic        = { workspace = true }
+luck_stdlib          = { workspace = true }
+luck_testgen         = { workspace = true }
+luck_token           = { workspace = true }
+
+mlua     = { workspace = true }
+rayon    = { workspace = true }
+similar  = { workspace = true }
+tempfile = { workspace = true }

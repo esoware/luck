@@ -1,19 +1,15 @@
-// Lets clippy.toml's allow-*-in-tests settings cover the shared helpers, not
-// just the `#[test]` functions.
+// Puts the shared helpers under clippy.toml's `allow-unwrap-in-tests`, which
+// otherwise reaches only the `#[test]` functions of an integration test binary.
 #![cfg(test)]
-#![expect(
-    clippy::missing_panics_doc,
-    reason = "a test panics to fail, so a Panics section says nothing"
-)]
-
-extern crate alloc;
 
 mod common;
 
+mod ast_types_bitset;
+mod checker;
 mod counts;
-mod drift;
-mod names;
-mod roblox_api;
+mod limits;
+mod nodes;
+mod requires;
+mod scoping;
 mod stack;
-mod stdlib;
-mod stdlib_catalog;
+mod tables;

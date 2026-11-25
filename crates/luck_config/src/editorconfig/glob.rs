@@ -2,7 +2,7 @@
 //! costs at most program size times path length, however its alternatives
 //! nest.
 
-use core::mem;
+use std::mem;
 
 /// Each runs and then falls through to the next, unless it says otherwise.
 #[derive(Debug)]
@@ -56,7 +56,7 @@ impl SectionGlob {
         };
         let pattern: Vec<char> = prefix.chars().chain(section_name.chars()).collect();
 
-        let mut steps = Vec::with_capacity(pattern.len().saturating_add(1));
+        let mut steps = Vec::with_capacity(pattern.len() + 1);
         let mut open_braces: Vec<OpenBrace> = Vec::new();
         let mut rest = pattern.as_slice();
         while let Some((&character, after_character)) = rest.split_first() {
@@ -74,10 +74,7 @@ impl SectionGlob {
                     if let Some(after_stars) = rest.strip_prefix(['*', '*', '/'].as_slice()) {
                         rest = after_stars;
                         let branch_step = steps.len();
-                        steps.push(Step::Branch(Box::new([
-                            branch_step.saturating_add(1),
-                            branch_step.saturating_add(3),
-                        ])));
+                        steps.push(Step::Branch(Box::new([branch_step + 1, branch_step + 3])));
                         steps.push(Step::AnySequence { can_cross_separators: true });
                         steps.push(Step::Literal('/'));
                     }
@@ -85,7 +82,7 @@ impl SectionGlob {
                 '*' => {
                     let can_cross_separators = rest.first() == Some(&'*');
                     if can_cross_separators {
-                        rest = rest.get(1..).unwrap_or_default();
+                        rest = &rest[1..];
                     }
                     steps.push(Step::AnySequence { can_cross_separators });
                 }
@@ -119,16 +116,13 @@ impl SectionGlob {
                 '}' => match open_braces.pop() {
                     Some(open_brace) if !open_brace.comma_steps.is_empty() => {
                         let end = steps.len();
-                        let mut alternatives = vec![open_brace.brace_step.saturating_add(1)];
+                        let mut alternatives = vec![open_brace.brace_step + 1];
                         for comma_step in open_brace.comma_steps {
-                            alternatives.push(comma_step.saturating_add(1));
-                            if let Some(step) = steps.get_mut(comma_step) {
-                                *step = Step::Jump(end);
-                            }
+                            alternatives.push(comma_step + 1);
+                            steps[comma_step] = Step::Jump(end);
                         }
-                        if let Some(step) = steps.get_mut(open_brace.brace_step) {
-                            *step = Step::Branch(alternatives.into_boxed_slice());
-                        }
+                        steps[open_brace.brace_step] =
+                            Step::Branch(alternatives.into_boxed_slice());
                     }
                     _ => steps.push(Step::Literal('}')),
                 },
@@ -142,21 +136,17 @@ impl SectionGlob {
     /// Whether the whole of `subject`, a `/`-rooted path relative to the
     /// section's `.editorconfig`, matches.
     pub(super) fn matches(&self, subject: &[char]) -> bool {
-        let position_count = subject.len().saturating_add(1);
-        let mut visited = vec![false; self.steps.len().saturating_mul(position_count)];
-        let mut pending = vec![(0usize, 0usize)];
+        let position_count = subject.len() + 1;
+        let mut visited = vec![false; self.steps.len() * position_count];
+        let mut pending = vec![(0, 0)];
         while let Some((step_index, position)) = pending.pop() {
-            let visit_slot = step_index.saturating_mul(position_count).saturating_add(position);
-            if visited.get_mut(visit_slot).is_none_or(|is_visited| mem::replace(is_visited, true)) {
+            if mem::replace(&mut visited[step_index * position_count + position], true) {
                 continue;
             }
-            let Some(step) = self.steps.get(step_index) else {
-                continue;
-            };
             let current = subject.get(position).copied();
-            let next_step = step_index.saturating_add(1);
-            let advanced = (next_step, position.saturating_add(1));
-            match step {
+            let next_step = step_index + 1;
+            let advanced = (next_step, position + 1);
+            match &self.steps[step_index] {
                 Step::Literal(expected) => {
                     if current == Some(*expected) {
                         pending.push(advanced);
@@ -170,7 +160,7 @@ impl SectionGlob {
                 Step::AnySequence { can_cross_separators } => {
                     pending.push((next_step, position));
                     if current.is_some_and(|c| *can_cross_separators || c != '/') {
-                        pending.push((step_index, position.saturating_add(1)));
+                        pending.push((step_index, position + 1));
                     }
                 }
                 Step::Class { ranges, is_negated } => {
@@ -242,7 +232,7 @@ fn parse_class(rest: &[char]) -> Option<(Step, &[char])> {
 /// The `num1..num2}` after a `{`, in written order, with what follows it.
 fn parse_integer_range(rest: &[char]) -> Option<(i64, i64, &[char])> {
     let body_length = rest.iter().position(|c| !matches!(c, '0'..='9' | '.' | '-'))?;
-    let (body, closer) = rest.split_at_checked(body_length)?;
+    let (body, closer) = rest.split_at(body_length);
     let after_range = closer.strip_prefix(['}'].as_slice())?;
     let body_text: String = body.iter().collect();
     let (first, second) = body_text.split_once("..")?;
@@ -252,10 +242,10 @@ fn parse_integer_range(rest: &[char]) -> Option<(i64, i64, &[char])> {
 /// Where each integer in `low..=high` starting at `position` ends. A leading
 /// zero is only the integer `0` itself.
 fn integer_ends(subject: &[char], position: usize, low: i64, high: i64) -> Vec<usize> {
-    let tail = subject.get(position..).unwrap_or_default();
+    let tail = &subject[position..];
     let (is_negative, digits) =
         tail.strip_prefix(['-'].as_slice()).map_or((false, tail), |after_sign| (true, after_sign));
-    let digits_start = position.saturating_add(usize::from(is_negative));
+    let digits_start = position + usize::from(is_negative);
     let mut ends = Vec::new();
     let mut magnitude: i64 = 0;
     for (digit_index, character) in digits.iter().enumerate() {
@@ -266,9 +256,9 @@ fn integer_ends(subject: &[char], position: usize, low: i64, high: i64) -> Vec<u
             break;
         }
         magnitude = magnitude.saturating_mul(10).saturating_add(i64::from(digit));
-        let value = if is_negative { magnitude.saturating_neg() } else { magnitude };
+        let value = if is_negative { -magnitude } else { magnitude };
         if (low..=high).contains(&value) {
-            ends.push(digits_start.saturating_add(digit_index).saturating_add(1));
+            ends.push(digits_start + digit_index + 1);
         }
     }
     ends

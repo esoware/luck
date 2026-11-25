@@ -1,8 +1,10 @@
-use luck_ast::{Block, Name, Statement};
-use luck_token::{LineIndex, MAX_ACTIVE_LOCALS, Span};
+use luck_ast::{AstKind, AstType, Name, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags a local declared again in the same block (Luacheck 411), which
 /// hides the first one from all the code after it.
@@ -10,187 +12,131 @@ use crate::rule::{LintContext, WholeRule, impl_rule};
 /// `shadowing` reports any redeclaration of a visible name, including ones
 /// from enclosing blocks. Doing it in the same block is most often a
 /// copy-paste bug, so it gets its own toggle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RedefiningLocal;
 
-impl_rule!(
+declare_lint_rule!(
     RedefiningLocal,
-    "redefining_local",
     Style,
     Warning,
     "local redeclared with the same name in the same block"
 );
 
-impl WholeRule for RedefiningLocal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut checker = RedefineChecker {
-            lines: context.line_index(),
-            declarations: Vec::new(),
-            findings: Vec::new(),
+impl Rule for RedefiningLocal {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
         };
-        for block in context.nodes.blocks() {
-            checker.check_block(block);
-        }
-        checker.findings
-    }
-}
-
-struct RedefineChecker<'ast> {
-    lines: &'ast LineIndex,
-    /// Each name the block declares, in order. Every one stays active until
-    /// the block ends, so no Lua compiles a block with more than
-    /// [`MAX_ACTIVE_LOCALS`], and the rest of one isn't checked.
-    declarations: Vec<(&'ast str, Span)>,
-    findings: Vec<Finding>,
-}
-
-impl<'ast> RedefineChecker<'ast> {
-    fn check_block(&mut self, block: &'ast Block<'ast>) {
-        self.declarations.clear();
+        // Each name the block declares, in order. Every one stays active
+        // until the block ends, so no Lua compiles a block with more than
+        // `MAX_ACTIVE_LOCALS`, and the rest of one isn't checked.
+        let mut declarations: Vec<(&str, Span)> = Vec::new();
+        let mut declare = |declared: &'ast Name<'ast>| {
+            let name = declared.text.as_str();
+            // A leading `_` marks a name as deliberately unused.
+            if declarations.len() > MAX_ACTIVE_LOCALS || name.starts_with('_') {
+                return;
+            }
+            if let Some(&(_, first_span)) =
+                declarations.iter().find(|(declared_name, _)| *declared_name == name)
+            {
+                context.diagnostic(
+                    Finding::new(
+                        format!("local `{name}` is redeclared in the same block"),
+                        declared.span,
+                    )
+                    .with_label(first_span, "first declared here"),
+                );
+            }
+            declarations.push((name, declared.span));
+        };
         for stmt in &block.stmts {
-            match stmt {
-                Statement::LocalAssignment(local) => {
-                    for attributed in &local.names {
-                        self.declare(&attributed.name);
-                    }
+            if let Statement::LocalFunction(local_function) = stmt {
+                declare(&local_function.name);
+            } else if let Statement::LocalAssignment(local) = stmt {
+                for attributed in &local.names {
+                    declare(&attributed.name);
                 }
-                Statement::LocalFunction(local_function) => self.declare(&local_function.name),
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::DoBlock(_)
-                | Statement::WhileLoop(_)
-                | Statement::RepeatLoop(_)
-                | Statement::IfStatement(_)
-                | Statement::NumericFor(_)
-                | Statement::GenericFor(_)
-                | Statement::FunctionDecl(_)
-                | Statement::EmptyStatement(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
             }
         }
-    }
-
-    fn declare(&mut self, declared: &Name<'ast>) {
-        let name = declared.text.as_str();
-        if self.declarations.len() > MAX_ACTIVE_LOCALS {
-            return;
-        }
-        // A leading `_` marks a name as deliberately unused.
-        if name.starts_with('_') {
-            return;
-        }
-        if let Some((_, first_span)) =
-            self.declarations.iter().find(|(declared_name, _)| *declared_name == name)
-        {
-            let (line, column) = self.lines.line_column(first_span.start);
-            self.findings.push(
-                Finding::new(
-                    format!("local `{name}` is redeclared in the same block"),
-                    declared.span,
-                )
-                .with_help(format!("first declared at {line}:{column}")),
-            );
-        }
-        self.declarations.push((name, declared.span));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&RedefiningLocal, source, LuaVersion::Lua54)
+    /// `count` locals, then the first declared again.
+    fn locals_then_the_first_again(count: u32) -> String {
+        let mut source = String::new();
+        for i in 0..count {
+            writeln!(source, "local x{i} = 1").unwrap();
+        }
+        source.push_str("local x0 = 1");
+        source
     }
 
-    #[test]
-    fn flags_same_block_redeclaration() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
+do local x = 1 end
+do local x = 2 end",
+            LuaTarget::Lua54,
+        ),
+        // Inner block shadowing is `shadowing`'s job.
+        (
+            "\
+local x = 1
+do local x = 2 end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local _ = 1
+local _ = 2",
+            LuaTarget::Lua54,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
 do local x = 1
 local x = 2
-print(x) end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn ignores_sibling_blocks() {
-        let diags = run("\
-do local x = 1 end
-do local x = 2 end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_nested_block_shadowing() {
-        // Inner block shadowing is `shadowing`'s job.
-        let diags = run("\
-local x = 1
-do local x = 2 end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_multiple_redeclarations() {
-        let diags = run("\
+print(x) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local x = 1
 local x = 2
-local x = 3");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_local_function_redeclaration() {
-        let diags = run("\
+local x = 3",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local function f() end
-local function f() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
+local function f() end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn ignores_underscore_names() {
-        let diags = run("\
-local _ = 1
-local _ = 2");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    fn locals_declared_twice(count: u32) -> String {
-        let mut locals = String::new();
-        for i in 0..count {
-            let _unused = writeln!(locals, "local x{i} = 1");
-        }
-        format!("{locals}{locals}")
-    }
-
-    #[test]
-    fn flags_each_redeclaration_in_a_block_at_the_local_limit() {
-        let diags = run(&locals_declared_twice(100));
-        assert_eq!(diags.len(), 100, "{diags:?}");
-        assert!(
-            diags[0].help.as_deref().is_some_and(|help| help.ends_with("1:7")),
-            "{:?}",
-            diags[0]
-        );
-    }
-
-    #[test]
-    fn ignores_the_rest_of_a_block_past_the_local_limit() {
-        let diags = run(&locals_declared_twice(201));
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        let at_limit = locals_then_the_first_again(199);
+        // Only Luau's compiler, not luck, rejects this many active locals.
+        let past_limit = locals_then_the_first_again(201);
+        let pass: Vec<_> =
+            PASS.iter().copied().chain([(past_limit.as_str(), LuaTarget::Luau)]).collect();
+        let fail: Vec<_> =
+            FAIL.iter().copied().chain([(at_limit.as_str(), LuaTarget::Lua54)]).collect();
+        Tester::new(RuleId::RedefiningLocal, &pass, &fail).test_and_snapshot();
     }
 }

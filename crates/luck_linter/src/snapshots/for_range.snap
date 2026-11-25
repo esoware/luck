@@ -1,0 +1,58 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: numeric `for` loop with step 0 never advances
+ --> Lua54:1:1
+1 | for i = 1, 10, 0 do end
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+help: use a nonzero step or rewrite as `while`
+
+error: numeric `for` from 1 to 10 with a negative step never iterates
+ --> Lua54:1:1
+1 | for i = 1, 10, -1 do end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^
+help: swap start and limit, or use a positive step
+
+error: numeric `for` starts at 0, but Lua sequences are 1-indexed
+ --> Lua54:1:1
+1 | for i = 0, #t do end
+  | ^^^^^^^^^^^^^^^^^^^^
+help: use `for i = 1, #t do` to iterate the whole sequence
+
+error: numeric `for` from 10 to 1 with a positive step never iterates
+ --> Lua54:1:1
+1 | for i = 10, 1, 1 do end
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+help: swap start and limit, or use a negative step
+
+error: numeric `for` from 16 to 1 with a positive step never iterates
+ --> Lua54:1:1
+1 | for i = 0x10, 1, 1 do end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: swap start and limit, or use a negative step
+
+error: numeric `for` from a length to 0 needs a `-1` step, and Lua sequences are 1-indexed
+ --> Lua54:2:1
+1 | local t = {}
+2 | for i = #t, 0 do print(i) end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use `for i = #t, 1, -1 do` to iterate the sequence backwards
+
+error: numeric `for` from a length to 1 should iterate backwards, did you forget a `-1` step?
+ --> Lua54:2:1
+1 | local t = {}
+2 | for i = #t, 1 do print(i) end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: add the step: `for i = #t, 1, -1 do`
+
+error: numeric `for` loop ends at 8 instead of 8.75, did you forget to specify a step?
+ --> Lua54:1:1
+1 | for i = 1, 8.75 do print(i) end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: pick a step that lands on the limit, or adjust the limit
+
+error: numeric `for` from 1000 to 1 with a positive step never iterates
+ --> Luau:1:1
+1 | for i = 1_000, 1, 1 do print(i) end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: swap start and limit, or use a negative step

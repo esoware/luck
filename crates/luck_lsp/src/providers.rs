@@ -1,12 +1,13 @@
 pub(crate) mod code_action;
 pub(crate) mod completion;
-mod cursor;
+pub(crate) mod cursor;
 pub(crate) mod definition;
 pub(crate) mod diagnostics;
 pub(crate) mod document_highlight;
 pub(crate) mod document_link;
 pub(crate) mod document_symbol;
 pub(crate) mod folding_range;
+pub(crate) mod formatting;
 pub(crate) mod hover;
 pub(crate) mod references;
 pub(crate) mod rename;
@@ -24,37 +25,35 @@ pub(crate) mod workspace_symbol;
 /// past it, broken at every level, or holding long runs and lists.
 #[cfg(test)]
 mod tests {
-    use alloc::sync::Arc;
+    use std::path::{Path, PathBuf};
 
-    use luck_core::LuaTarget;
-    use luck_linter::LintConfig;
+    use ls_types::{
+        CodeActionContext, CodeActionParams, PartialResultParams, ReferenceContext,
+        ReferenceParams, RenameParams, TextDocumentIdentifier, TextDocumentPositionParams,
+        WorkDoneProgressParams,
+    };
+    use luck_config::Project;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     };
-    use luck_token::LuaVersion;
-    use tower_lsp_server::ls_types::{
-        CodeActionContext, CodeActionParams, GotoDefinitionParams, PartialResultParams,
-        ReferenceContext, ReferenceParams, RenameParams, TextDocumentIdentifier,
-        TextDocumentPositionParams, Uri, WorkDoneProgressParams,
-    };
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
-    use crate::document::OpenDocument;
-    use crate::fixtures::document_under;
-    use crate::settings::ProjectSettings;
+    use crate::fixtures::{document_at, session, uri};
+    use crate::workspace::WorkspaceView;
 
     fn serve_every_request(source: &str, version: LuaVersion) {
         let target = if version.is_luau() { LuaTarget::LuauRoblox } else { LuaTarget::Lua54 };
-        let uri: Uri = "file:///main.lua".parse().expect("a valid URI");
-        // Every correctness rule, which the server's own default turns off.
-        let project =
-            ProjectSettings { lint_config: LintConfig::default(), ..ProjectSettings::default() };
-        let document = document_under(source, target, project);
-        let lints = document.lint();
-        let diagnostics = diagnostics::to_lsp(&document, &lints);
+        let uri = uri();
+        let project = Project::defaults(PathBuf::from("."));
+        let document = document_at(source, target, project, Path::new("main.lua"));
+        let session = session();
+        let workspace = WorkspaceView::new(&session, &[], &|| false);
+        let lints = document.lint(&|| false).expect("nothing cancels it");
+        let diagnostics = diagnostics::to_lsp(&uri, &document, &lints);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
-        let _actions = code_action::code_action(
+        let _ = code_action::code_action(
             &document,
             &CodeActionParams {
                 text_document: text_document.clone(),
@@ -71,12 +70,14 @@ mod tests {
             .collect();
         for &position in &positions {
             let at = TextDocumentPositionParams { text_document: text_document.clone(), position };
-            let _hover = hover::hover(&document, position);
-            let _completion = completion::completion(&document, position);
-            let _signature = signature_help::signature_help(&document, position);
-            let _highlights = document_highlight::document_highlights(&document, position);
-            let _prepared = rename::prepare(&document, position);
-            let _renamed = rename::rename(
+            let _ = hover::hover(&document, position);
+            let _ = completion::completion(&document, position);
+            let _ = signature_help::signature_help(&document, position);
+            let _ = document_highlight::document_highlights(&document, position);
+            let _ = rename::prepare(&workspace, &uri, &document, position);
+            let _ = rename::rename(
+                &workspace,
+                &uri,
                 &document,
                 &RenameParams {
                     text_document_position: at.clone(),
@@ -84,37 +85,29 @@ mod tests {
                     work_done_progress_params: WorkDoneProgressParams::default(),
                 },
             );
-            let _references = references::references(
+            let _ = references::references(
+                &workspace,
+                &uri,
                 &document,
                 &ReferenceParams {
-                    text_document_position: at.clone(),
+                    text_document_position: at,
                     work_done_progress_params: WorkDoneProgressParams::default(),
                     partial_result_params: PartialResultParams::default(),
                     context: ReferenceContext { include_declaration: true },
                 },
             );
-            let _definition = definition::goto(
-                &document,
-                &GotoDefinitionParams {
-                    text_document_position_params: at,
-                    work_done_progress_params: WorkDoneProgressParams::default(),
-                    partial_result_params: PartialResultParams::default(),
-                },
-            );
+            let _ = definition::goto(&workspace, &uri, &document, position);
         }
-        let _selections = selection_range::selection_ranges(&document, &positions);
-        let _folds = folding_range::folding_ranges(&document);
-        let _symbols = document_symbol::document_symbols(&document);
-        let _tokens = semantic_tokens::semantic_tokens(&document);
-        let _ranged_tokens = semantic_tokens::in_range(&document, full_range);
-        let _links = document_link::document_links(&document, &uri);
-        let _formatted = document.format(None);
-        let _range_formatted = document.format(Some(0..source.len()));
-        let shared = Arc::new(document);
-        let _workspace_symbols =
-            workspace_symbol::workspace_symbols(&[(uri.clone(), Arc::clone(&shared))], "a");
-        let open = OpenDocument { state: shared, published_lints: None };
-        let _fixed = code_action::fix_all_open(&[(uri, open)]);
+        let _ = selection_range::selection_ranges(&document, &positions);
+        let _ = folding_range::folding_ranges(&document);
+        let _ = document_symbol::document_symbols(&document);
+        let _ = semantic_tokens::semantic_tokens(&document);
+        let _ = semantic_tokens::in_range(&document, full_range);
+        let _ = document_link::document_links(&document);
+        let _ = formatting::formatting(&session, &document, None);
+        let _ = formatting::formatting(&session, &document, Some(full_range));
+        let _ = workspace_symbol::workspace_symbols([(&uri, &document)], "a");
+        let _ = code_action::fix_all([(&uri, &document, lints.as_slice())]);
     }
 
     #[test]

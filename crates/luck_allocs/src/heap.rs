@@ -1,8 +1,8 @@
-use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::AtomicUsize;
-use core::sync::atomic::Ordering::SeqCst;
+use std::alloc::{GlobalAlloc, Layout};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::SeqCst;
 
-use luck_allocator::Allocator;
+use luck_allocator::take_pending_chunk_operation;
 use mimalloc_safe::MiMalloc;
 
 /// The global allocator: [`MiMalloc`], the CLI's production allocator, with
@@ -87,7 +87,7 @@ pub(crate) static HEAP: HeapTracker = HeapTracker {
     peak_bytes: AtomicCounter::new(),
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct HeapCounters {
     pub allocs: usize,
     pub reallocs: usize,
@@ -108,9 +108,10 @@ impl HeapTracker {
 
     fn record_realloc(&self, old_size: usize, new_size: usize) {
         self.reallocs.increment();
-        match new_size.checked_sub(old_size) {
-            Some(growth) => self.grow(growth),
-            None => self.live_bytes.sub(old_size.saturating_sub(new_size)),
+        if new_size >= old_size {
+            self.grow(new_size - old_size);
+        } else {
+            self.live_bytes.sub(old_size - new_size);
         }
     }
 
@@ -161,14 +162,14 @@ unsafe impl GlobalAlloc for TrackedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: The caller's `GlobalAlloc::alloc` contract is forwarded.
         let ptr = unsafe { MiMalloc.alloc(layout) };
-        if !Allocator::take_pending_chunk_operation() && !ptr.is_null() {
+        if !take_pending_chunk_operation() && !ptr.is_null() {
             HEAP.record_alloc(layout.size());
         }
         ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if !Allocator::take_pending_chunk_operation() {
+        if !take_pending_chunk_operation() {
             HEAP.record_dealloc(layout.size());
         }
         // SAFETY: `ptr` came from one of this allocator's methods, all of
@@ -182,7 +183,7 @@ unsafe impl GlobalAlloc for TrackedAllocator {
         // SAFETY: The caller's `GlobalAlloc::alloc_zeroed` contract is
         // forwarded.
         let ptr = unsafe { MiMalloc.alloc_zeroed(layout) };
-        if !Allocator::take_pending_chunk_operation() && !ptr.is_null() {
+        if !take_pending_chunk_operation() && !ptr.is_null() {
             HEAP.record_alloc(layout.size());
         }
         ptr
@@ -192,7 +193,7 @@ unsafe impl GlobalAlloc for TrackedAllocator {
         // SAFETY: The caller's `GlobalAlloc::realloc` contract is forwarded,
         // and `ptr` is `MiMalloc`'s memory as in `dealloc`.
         let reallocated = unsafe { MiMalloc.realloc(ptr, layout, new_size) };
-        if !Allocator::take_pending_chunk_operation() && !reallocated.is_null() {
+        if !take_pending_chunk_operation() && !reallocated.is_null() {
             HEAP.record_realloc(layout.size(), new_size);
         }
         reallocated

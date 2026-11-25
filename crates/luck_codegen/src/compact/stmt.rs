@@ -1,39 +1,25 @@
 use luck_ast::{
-    Attribute, AttributedName, Block, Expression, FunctionAttribute, FunctionBody, LastStatement,
-    LocalFunctionKind, Parameter, Statement, TypeDeclarationValue, stmt_starts_with_paren,
+    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, Expression,
+    FunctionAttribute, FunctionBody, FunctionDecl, GenericFor, GlobalDeclaration, GlobalFunction,
+    GlobalStar, IfStatement, LocalAssignment, LocalAssignmentKind, LocalFunction,
+    LocalFunctionKind, NumericFor, Parameter, RepeatLoop, Slot, Statement, TypeDeclaration,
+    TypeDeclarationValue, WhileLoop,
 };
 
 use super::Printer;
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the printer is one type with its node families split by file"
-)]
 impl Printer {
     pub(super) fn print_block(&mut self, block: &Block<'_>) {
         let mut previous = None;
         for stmt in &block.stmts {
-            if stmt_starts_with_paren(stmt) && previous.is_some_and(is_open) {
+            if starts_with_paren(stmt) && previous.is_some_and(is_open) {
                 self.piece(";");
             }
             self.print_stmt(stmt);
             previous = Some(stmt);
         }
-        if let Some(last) = &block.last_stmt {
-            match last {
-                LastStatement::Return(return_stmt) => {
-                    self.piece("return");
-                    self.list(&return_stmt.exprs, ",", Self::print_expr);
-                }
-                LastStatement::Break(_) => self.piece("break"),
-                // Luau
-                LastStatement::Continue(_) => self.piece("continue"),
-                LastStatement::Error(_) => {}
-            }
-        }
     }
 
-    #[expect(clippy::too_many_lines, reason = "one arm per kind of statement")]
     #[expect(
         clippy::inline_always,
         reason = "measured: folded into `print_block`, it prints up to 3% faster"
@@ -41,178 +27,229 @@ impl Printer {
     #[inline(always)]
     fn print_stmt(&mut self, stmt: &Statement<'_>) {
         match stmt {
-            Statement::Assignment(assignment) => {
-                self.list(&assignment.targets, ",", Self::print_var);
-                self.piece("=");
-                self.list(&assignment.values, ",", Self::print_expr);
-            }
+            Statement::Assignment(assignment) => self.print_assignment(assignment),
             Statement::FunctionCall(call) => self.print_suffixed(call),
-            Statement::DoBlock(do_block) => {
-                self.piece("do");
-                self.print_block(&do_block.block);
-                self.piece("end");
-            }
-            Statement::WhileLoop(while_loop) => {
-                self.piece("while");
-                self.print_expr(&while_loop.condition);
-                self.piece("do");
-                self.print_block(&while_loop.block);
-                self.piece("end");
-            }
-            Statement::RepeatLoop(repeat_loop) => {
-                self.piece("repeat");
-                self.print_block(&repeat_loop.block);
-                self.piece("until");
-                self.print_expr(&repeat_loop.condition);
-            }
-            Statement::IfStatement(if_stmt) => {
-                self.piece("if");
-                self.print_expr(&if_stmt.condition);
-                self.piece("then");
-                self.print_block(&if_stmt.block);
-                for clause in &if_stmt.elseif_clauses {
-                    self.piece("elseif");
-                    self.print_expr(&clause.condition);
-                    self.piece("then");
-                    self.print_block(&clause.block);
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    self.piece("else");
-                    self.print_block(&else_clause.block);
-                }
-                self.piece("end");
-            }
-            Statement::NumericFor(numeric_for) => {
-                self.piece("for");
-                self.name(numeric_for.name.text.as_str());
-                if let Some(ty) = &numeric_for.type_annotation {
-                    self.piece(":");
-                    self.print_type(ty);
-                }
-                self.piece("=");
-                self.print_expr(&numeric_for.start);
-                self.piece(",");
-                self.print_expr(&numeric_for.limit);
-                if let Some(step) = &numeric_for.step {
-                    self.piece(",");
-                    self.print_expr(step);
-                }
-                self.piece("do");
-                self.print_block(&numeric_for.block);
-                self.piece("end");
-            }
-            Statement::GenericFor(generic_for) => {
-                self.piece("for");
-                self.list(&generic_for.names, ",", Self::print_param);
-                self.piece("in");
-                self.list(&generic_for.exprs, ",", Self::print_expr);
-                self.piece("do");
-                self.print_block(&generic_for.block);
-                self.piece("end");
-            }
-            Statement::FunctionDecl(declaration) => {
-                self.print_function_attributes(&declaration.attributes);
-                self.piece("function");
-                self.list(&declaration.name.names, ".", |printer, name| {
-                    printer.name(name.text.as_str());
-                });
-                if let Some(method) = &declaration.name.method {
-                    self.piece(":");
-                    self.name(method.text.as_str());
-                }
-                self.print_function_body(&declaration.body);
-            }
-            Statement::LocalFunction(local_function) => {
-                self.print_function_attributes(&local_function.attributes);
-                match local_function.kind {
-                    LocalFunctionKind::Local => self.piece("local function"),
-                    LocalFunctionKind::Const => self.piece("const function"),
-                    LocalFunctionKind::Export => self.piece("export function"),
-                }
-                self.name(local_function.name.text.as_str());
-                self.print_function_body(&local_function.body);
-            }
-            Statement::LocalAssignment(local) => {
-                if local.kind.is_exported() {
-                    self.piece("export");
-                }
-                if local.kind.is_const() {
-                    self.piece("const");
-                } else {
-                    self.piece("local");
-                }
-                self.list(&local.names, ",", Self::print_attributed_name);
-                self.print_values(&local.exprs);
-            }
-            Statement::EmptyStatement(_) => self.piece(";"),
-            // Lua 5.2+
-            Statement::Goto(goto) => {
-                self.piece("goto");
-                self.name(goto.name.text.as_str());
-            }
-            // Lua 5.2+
-            Statement::Label(label) => {
-                self.piece("::");
-                self.name(label.name.text.as_str());
-                self.piece("::");
-            }
-            // Lua 5.5
-            Statement::GlobalDeclaration(declaration) => {
-                self.piece("global");
-                self.list(&declaration.names, ",", Self::print_attributed_name);
-                self.print_values(&declaration.exprs);
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(function) => {
-                self.piece("global function");
-                self.name(function.name.text.as_str());
-                self.print_function_body(&function.body);
-            }
-            // Lua 5.5
-            Statement::GlobalStar(global_star) => {
-                self.piece("global");
-                if let Some(attribute) = &global_star.attribute {
-                    self.print_attribute(attribute);
-                }
-                self.piece("*");
-            }
-            // Lua 5.2+
+            Statement::DoBlock(do_block) => self.print_do_block(do_block),
+            Statement::WhileLoop(while_loop) => self.print_while_loop(while_loop),
+            Statement::RepeatLoop(repeat_loop) => self.print_repeat_loop(repeat_loop),
+            Statement::IfStatement(if_stmt) => self.print_if_stmt(if_stmt),
+            Statement::NumericFor(numeric_for) => self.print_numeric_for(numeric_for),
+            Statement::GenericFor(generic_for) => self.print_generic_for(generic_for),
+            Statement::FunctionDecl(declaration) => self.print_function_decl(declaration),
+            Statement::LocalFunction(local_function) => self.print_local_function(local_function),
+            Statement::LocalAssignment(local) => self.print_local_assignment(local),
+            Statement::Return(return_stmt) => self.print_return(&return_stmt.exprs),
             Statement::Break(_) => self.piece("break"),
             // Luau
-            Statement::CompoundAssignment(compound) => {
-                self.print_var(&compound.var);
-                self.piece(compound.op.static_text());
-                self.print_expr(&compound.expr);
+            Statement::Continue(_) => self.piece("continue"),
+            // Lua 5.2+
+            Statement::Goto(goto) => self.print_goto(goto.name.text.as_str()),
+            // Lua 5.2+
+            Statement::Label(label) => self.print_label(label.name.text.as_str()),
+            // Lua 5.5
+            Statement::GlobalDeclaration(declaration) => {
+                self.print_global_declaration(declaration);
             }
+            // Lua 5.5
+            Statement::GlobalFunction(function) => self.print_global_function(function),
+            // Lua 5.5
+            Statement::GlobalStar(global_star) => self.print_global_star(global_star),
             // Luau
-            Statement::TypeDeclaration(declaration) => {
-                if declaration.is_exported {
-                    self.piece("export");
-                }
-                self.piece("type");
-                if matches!(declaration.value, TypeDeclarationValue::TypeFunction(_)) {
-                    self.piece("function");
-                }
-                self.name(declaration.name.text.as_str());
-                if let Some(generics) = &declaration.generics {
-                    self.print_generic_type_list(generics);
-                }
-                match &declaration.value {
-                    TypeDeclarationValue::Alias(ty) => {
-                        self.piece("=");
-                        self.print_type(ty);
-                    }
-                    TypeDeclarationValue::TypeFunction(body) => self.print_function_body(body),
-                }
-            }
+            Statement::CompoundAssignment(compound) => self.print_compound_assignment(compound),
+            // Luau
+            Statement::TypeDeclaration(declaration) => self.print_type_declaration(declaration),
             Statement::Error(_) => {}
+        }
+    }
+
+    fn print_assignment(&mut self, assignment: &Assignment<'_>) {
+        self.list(&assignment.targets, ",", Self::print_var);
+        self.piece("=");
+        self.list(&assignment.values, ",", Self::print_free_expr);
+    }
+
+    fn print_do_block(&mut self, do_block: &DoBlock<'_>) {
+        self.piece("do");
+        self.print_block(&do_block.block);
+        self.piece("end");
+    }
+
+    fn print_while_loop(&mut self, while_loop: &WhileLoop<'_>) {
+        self.piece("while");
+        self.print_free_expr(&while_loop.condition);
+        self.piece("do");
+        self.print_block(&while_loop.block);
+        self.piece("end");
+    }
+
+    fn print_repeat_loop(&mut self, repeat_loop: &RepeatLoop<'_>) {
+        self.piece("repeat");
+        self.print_block(&repeat_loop.block);
+        self.piece("until");
+        self.print_free_expr(&repeat_loop.condition);
+    }
+
+    fn print_if_stmt(&mut self, if_stmt: &IfStatement<'_>) {
+        self.piece("if");
+        self.print_free_expr(&if_stmt.condition);
+        self.piece("then");
+        self.print_block(&if_stmt.block);
+        for clause in &if_stmt.elseif_clauses {
+            self.piece("elseif");
+            self.print_free_expr(&clause.condition);
+            self.piece("then");
+            self.print_block(&clause.block);
+        }
+        if let Some(else_clause) = &if_stmt.else_clause {
+            self.piece("else");
+            self.print_block(&else_clause.block);
+        }
+        self.piece("end");
+    }
+
+    fn print_numeric_for(&mut self, numeric_for: &NumericFor<'_>) {
+        self.piece("for");
+        self.name(numeric_for.name.text.as_str());
+        if let Some(ty) = &numeric_for.type_annotation {
+            self.piece(":");
+            self.print_type(ty);
+        }
+        self.piece("=");
+        self.print_free_expr(&numeric_for.start);
+        self.piece(",");
+        self.print_free_expr(&numeric_for.limit);
+        if let Some(step) = &numeric_for.step {
+            self.piece(",");
+            self.print_free_expr(step);
+        }
+        self.piece("do");
+        self.print_block(&numeric_for.block);
+        self.piece("end");
+    }
+
+    fn print_generic_for(&mut self, generic_for: &GenericFor<'_>) {
+        self.piece("for");
+        self.list(&generic_for.names, ",", Self::print_param);
+        self.piece("in");
+        self.list(&generic_for.exprs, ",", Self::print_free_expr);
+        self.piece("do");
+        self.print_block(&generic_for.block);
+        self.piece("end");
+    }
+
+    fn print_function_decl(&mut self, declaration: &FunctionDecl<'_>) {
+        self.print_function_attributes(&declaration.attributes);
+        self.piece("function");
+        self.list(&declaration.name.names, ".", |printer, name| {
+            printer.name(name.text.as_str());
+        });
+        if let Some(method) = &declaration.name.method {
+            self.piece(":");
+            self.name(method.text.as_str());
+        }
+        self.print_function_body(&declaration.body);
+    }
+
+    fn print_local_function(&mut self, local_function: &LocalFunction<'_>) {
+        self.print_function_attributes(&local_function.attributes);
+        match local_function.kind {
+            LocalFunctionKind::Local => self.piece("local function"),
+            // Luau
+            LocalFunctionKind::Const => self.piece("const function"),
+            // Luau
+            LocalFunctionKind::Export => self.piece("export function"),
+        }
+        self.name(local_function.name.text.as_str());
+        self.print_function_body(&local_function.body);
+    }
+
+    fn print_local_assignment(&mut self, local: &LocalAssignment<'_>) {
+        match local.kind {
+            LocalAssignmentKind::Local => self.piece("local"),
+            // Luau
+            LocalAssignmentKind::Const => self.piece("const"),
+            // Luau
+            LocalAssignmentKind::ExportLocal => self.piece("export local"),
+            // Luau
+            LocalAssignmentKind::ExportConst => self.piece("export const"),
+        }
+        if let Some(attribute) = &local.attribute {
+            self.print_attribute(attribute);
+        }
+        self.list(&local.names, ",", Self::print_attributed_name);
+        self.print_values(&local.exprs);
+    }
+
+    fn print_return(&mut self, exprs: &[Expression<'_>]) {
+        self.piece("return");
+        self.list(exprs, ",", Self::print_free_expr);
+    }
+
+    fn print_goto(&mut self, label: &str) {
+        self.piece("goto");
+        self.name(label);
+    }
+
+    fn print_label(&mut self, label: &str) {
+        self.piece("::");
+        self.name(label);
+        self.piece("::");
+    }
+
+    fn print_global_declaration(&mut self, declaration: &GlobalDeclaration<'_>) {
+        self.piece("global");
+        if let Some(attribute) = &declaration.attribute {
+            self.print_attribute(attribute);
+        }
+        self.list(&declaration.names, ",", Self::print_attributed_name);
+        self.print_values(&declaration.exprs);
+    }
+
+    fn print_global_function(&mut self, function: &GlobalFunction<'_>) {
+        self.piece("global function");
+        self.name(function.name.text.as_str());
+        self.print_function_body(&function.body);
+    }
+
+    fn print_global_star(&mut self, global_star: &GlobalStar<'_>) {
+        self.piece("global");
+        if let Some(attribute) = &global_star.attribute {
+            self.print_attribute(attribute);
+        }
+        self.piece("*");
+    }
+
+    fn print_compound_assignment(&mut self, compound: &CompoundAssignment<'_>) {
+        self.print_var(&compound.var);
+        self.piece(compound.op.static_text());
+        self.print_free_expr(&compound.expr);
+    }
+
+    fn print_type_declaration(&mut self, declaration: &TypeDeclaration<'_>) {
+        if declaration.is_exported {
+            self.piece("export");
+        }
+        self.piece("type");
+        if matches!(declaration.value, TypeDeclarationValue::TypeFunction(_)) {
+            self.piece("function");
+        }
+        self.name(declaration.name.text.as_str());
+        if let Some(generics) = &declaration.generics {
+            self.print_generic_type_list(generics);
+        }
+        match &declaration.value {
+            TypeDeclarationValue::Alias(ty) => {
+                self.piece("=");
+                self.print_type(ty);
+            }
+            TypeDeclarationValue::TypeFunction(body) => self.print_function_body(body),
         }
     }
 
     fn print_values(&mut self, exprs: &[Expression<'_>]) {
         if !exprs.is_empty() {
             self.piece("=");
-            self.list(exprs, ",", Self::print_expr);
+            self.list(exprs, ",", Self::print_free_expr);
         }
     }
 
@@ -243,10 +280,10 @@ impl Printer {
                 if let [arg @ (Expression::TableConstructor(_) | Expression::StringLiteral(_))] =
                     &**args
                 {
-                    self.print_expr(arg);
+                    self.print_free_expr(arg);
                 } else {
                     self.piece("(");
-                    self.list(args, ",", Self::print_expr);
+                    self.list(args, ",", Self::print_free_expr);
                     self.piece(")");
                 }
                 self.piece("]");
@@ -294,14 +331,21 @@ impl Printer {
     }
 }
 
+fn starts_with_paren(stmt: &Statement<'_>) -> bool {
+    stmt.leading_prefix().is_some_and(|prefix| {
+        matches!(prefix, Expression::Parenthesized(_)) || prefix.needs_parens(Slot::PREFIX)
+    })
+}
+
 /// Whether `stmt` can end in an expression or a type, which a `(` printed
-/// right after it would call.
+/// right after it would call. A bare `return` would take it as its value.
 fn is_open(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::RepeatLoop(_)
         | Statement::LocalAssignment(_)
+        | Statement::Return(_)
         | Statement::GlobalDeclaration(_)
         | Statement::CompoundAssignment(_)
         // Prints nothing, so whatever it follows ends the output.
@@ -317,11 +361,11 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
-        | Statement::Break(_) => false,
+        | Statement::GlobalStar(_) => false,
     }
 }

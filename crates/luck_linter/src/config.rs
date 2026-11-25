@@ -1,20 +1,29 @@
 //! The `lint` section of `luck.json`. The linter owns its shape, since rule
 //! names are its keys and each rule decides the options it takes.
 
-use alloc::collections::BTreeMap;
+#[cfg(feature = "schemars")]
+use std::borrow::Cow;
+#[cfg(feature = "schemars")]
+use std::collections::BTreeMap;
 #[cfg(feature = "serde")]
-use core::fmt;
+use std::fmt;
 #[cfg(feature = "serde")]
-use core::marker::PhantomData;
+use std::marker::PhantomData;
 
-use luck_core::DiagnosticSeverity;
+use luck_diagnostics::Severity;
 use rustc_hash::FxHashSet;
+#[cfg(feature = "schemars")]
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 #[cfg(feature = "serde")]
 use serde::de::{
-    Deserialize, Deserializer, Error, IgnoredAny, IntoDeserializer as _, SeqAccess, Visitor,
+    Deserialize, DeserializeSeed, Deserializer, Error, IgnoredAny, IntoDeserializer as _,
+    MapAccess, SeqAccess, Visitor,
 };
+#[cfg(feature = "serde")]
+use serde::ser::{Serialize, SerializeMap, Serializer};
 
-use crate::diagnostic::Category;
+use crate::rule::{Category, RuleOptions};
+use crate::rules::{OptionSettings, RuleId, RuleTable};
 
 /// Linter settings from luck.json.
 // `Serialize` prints it back in the shape it parses, for `--print-config`.
@@ -55,48 +64,42 @@ impl LintConfig {
             style: self.categories.style.or(base.categories.style),
             performance: self.categories.performance.or(base.categories.performance),
         };
-        let mut levels = base.rules.levels;
-        levels.extend(self.rules.levels);
         let rules = RuleSettings {
-            cyclomatic_complexity: merge_rule_setting(
-                self.rules.cyclomatic_complexity,
-                base.rules.cyclomatic_complexity,
-                |options, _| options,
-            ),
-            restricted_module_paths: merge_rule_setting(
-                self.rules.restricted_module_paths,
-                base.rules.restricted_module_paths,
-                |options, base_options| RestrictedModulePathsOptions {
-                    paths: concat(options.paths, base_options.paths),
-                },
-            ),
-            levels,
+            levels: RuleTable::from_fn(|rule| self.rules.levels[rule].or(base.rules.levels[rule])),
+            options: self.rules.options.merge_onto(base.rules.options),
         };
         Self { categories, rules, extra_globals: concat(self.extra_globals, base.extra_globals) }
     }
+
+    /// The severity `rule` runs at, or `None` when it's off. The rule's own
+    /// level wins, then its category's. With neither set, only correctness
+    /// rules run, each at its own severity.
+    pub(crate) fn severity(&self, rule: RuleId) -> Option<Severity> {
+        let category = rule.category();
+        self.rules.level(rule).or_else(|| self.categories.level(category)).map_or_else(
+            || (category == Category::Correctness).then(|| rule.default_severity()),
+            RuleLevel::severity,
+        )
+    }
 }
 
-fn merge_rule_setting<Options>(
-    child: Option<RuleSetting<Options>>,
-    base: Option<RuleSetting<Options>>,
-    merge_options: impl FnOnce(Options, Options) -> Options,
-) -> Option<RuleSetting<Options>> {
+/// `child` merged onto `base`, the options one rule takes from two layers.
+pub(crate) fn merge_options<Options>(
+    child: Option<Options>,
+    base: Option<Options>,
+) -> Option<Options>
+where
+    Options: RuleOptions,
+{
     match (child, base) {
-        (None, base_setting) => base_setting,
-        (Some(RuleSetting::Level(level)), Some(RuleSetting::WithOptions(_, base_options))) => {
-            Some(RuleSetting::WithOptions(level, base_options))
-        }
-        (
-            Some(RuleSetting::WithOptions(level, options)),
-            Some(RuleSetting::WithOptions(_, base_options)),
-        ) => Some(RuleSetting::WithOptions(level, merge_options(options, base_options))),
-        (child_setting @ Some(_), Some(RuleSetting::Level(_)) | None) => child_setting,
+        (Some(child_options), Some(base_options)) => Some(child_options.merge_onto(base_options)),
+        (child_options, base_options) => child_options.or(base_options),
     }
 }
 
 /// `base` followed by the items of `child` it lacks, so a file layered twice
 /// through `extends` can't double a list.
-fn concat(child: Vec<String>, mut base: Vec<String>) -> Vec<String> {
+pub(crate) fn concat(child: Vec<String>, mut base: Vec<String>) -> Vec<String> {
     let present: FxHashSet<&String> = base.iter().collect();
     let added: Vec<String> = child.into_iter().filter(|item| !present.contains(item)).collect();
     base.extend(added);
@@ -116,12 +119,11 @@ pub enum RuleLevel {
 
 impl RuleLevel {
     /// `None` for [`RuleLevel::Off`].
-    #[must_use]
-    pub const fn severity(self) -> Option<DiagnosticSeverity> {
+    pub const fn severity(self) -> Option<Severity> {
         match self {
             Self::Off => None,
-            Self::Warn => Some(DiagnosticSeverity::Warning),
-            Self::Error => Some(DiagnosticSeverity::Error),
+            Self::Warn => Some(Severity::Warning),
+            Self::Error => Some(Severity::Error),
         }
     }
 }
@@ -148,7 +150,15 @@ pub struct CategoryLevels {
 }
 
 impl CategoryLevels {
-    #[must_use]
+    pub const fn all(level: RuleLevel) -> Self {
+        Self {
+            correctness: Some(level),
+            suspicious: Some(level),
+            style: Some(level),
+            performance: Some(level),
+        }
+    }
+
     pub const fn level(self, category: Category) -> Option<RuleLevel> {
         match category {
             Category::Correctness => self.correctness,
@@ -171,7 +181,7 @@ impl CategoryLevels {
 
 /// schemars drops serde aliases, and the schema denies unknown keys.
 #[cfg(feature = "schemars")]
-fn with_perf_alias(schema: &mut schemars::Schema) {
+fn with_perf_alias(schema: &mut Schema) {
     if let Some(properties) =
         schema.get_mut("properties").and_then(|properties| properties.as_object_mut())
         && let Some(performance) = properties.get("performance").cloned()
@@ -180,128 +190,177 @@ fn with_perf_alias(schema: &mut schemars::Schema) {
     }
 }
 
-/// A level per rule, keyed by rule name. Only the rules listed here take
-/// options.
-// A rule with options has its own field, so options on any other rule, or of
-// the wrong shape, fail to deserialize.
+/// The level each rule's entry in `rules` sets, and the options it gives
+/// one that takes options. A name no rule has is an error.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RuleSettings {
-    /// Reports nothing until its options set `max`.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub cyclomatic_complexity: Option<RuleSetting<CyclomaticComplexityOptions>>,
-    /// Reports nothing until its options list `paths`.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub restricted_module_paths: Option<RuleSetting<RestrictedModulePathsOptions>>,
-    /// Every rule that takes no options, keyed by rule name.
-    #[cfg_attr(feature = "serde", serde(flatten))]
-    pub levels: BTreeMap<String, RuleLevel>,
+    levels: RuleTable<Option<RuleLevel>>,
+    options: OptionSettings,
 }
 
 impl RuleSettings {
-    /// The level set for the rule named `name`, if any.
-    #[must_use]
-    pub fn level(&self, name: &str) -> Option<RuleLevel> {
-        match name {
-            "cyclomatic_complexity" => self.cyclomatic_complexity.as_ref().map(RuleSetting::level),
-            "restricted_module_paths" => {
-                self.restricted_module_paths.as_ref().map(RuleSetting::level)
-            }
-            _ => self.levels.get(name).copied(),
-        }
+    /// The level set for `rule`, if any.
+    pub fn level(&self, rule: RuleId) -> Option<RuleLevel> {
+        self.levels[rule]
     }
 
-    /// Sets the level of the rule named `name` and keeps any options it has.
-    pub fn set_level(&mut self, name: &str, level: RuleLevel) {
-        match name {
-            "cyclomatic_complexity" => set_setting_level(&mut self.cyclomatic_complexity, level),
-            "restricted_module_paths" => {
-                set_setting_level(&mut self.restricted_module_paths, level);
-            }
-            _ => {
-                self.levels.insert(name.to_owned(), level);
-            }
-        }
+    /// Sets the level of `rule` and keeps any options it has.
+    pub fn set_level(&mut self, rule: RuleId, level: RuleLevel) {
+        self.levels[rule] = Some(level);
     }
 
-    /// Every rule name with a setting.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        let cyclomatic_complexity =
-            self.cyclomatic_complexity.as_ref().map(|_| "cyclomatic_complexity");
-        let restricted_module_paths =
-            self.restricted_module_paths.as_ref().map(|_| "restricted_module_paths");
-        cyclomatic_complexity
-            .into_iter()
-            .chain(restricted_module_paths)
-            .chain(self.levels.keys().map(String::as_str))
+    /// Every rule with a setting.
+    pub fn rules(&self) -> impl Iterator<Item = RuleId> {
+        RuleId::ALL.into_iter().filter(|&rule| self.levels[rule].is_some())
+    }
+
+    pub(crate) const fn options(&self) -> &OptionSettings {
+        &self.options
     }
 }
 
-fn set_setting_level<Options>(setting: &mut Option<RuleSetting<Options>>, level: RuleLevel) {
-    *setting = Some(match setting.take() {
-        Some(RuleSetting::WithOptions(_, options)) => RuleSetting::WithOptions(level, options),
-        Some(RuleSetting::Level(_)) | None => RuleSetting::Level(level),
-    });
+/// Each rule by name, as `luck.json` writes it.
+#[cfg(feature = "serde")]
+impl Serialize for RuleSettings {
+    fn serialize<Target>(&self, serializer: Target) -> Result<Target::Ok, Target::Error>
+    where
+        Target: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.rules().count()))?;
+        for rule in RuleId::ALL {
+            if let Some(level) = self.levels[rule] {
+                self.options.serialize_entry(rule, level, &mut map)?;
+            }
+        }
+        map.end()
+    }
+}
+
+// Written by hand to read each entry straight from the source, so a format
+// that tracks positions, as `luck.json`'s does, places an error on the entry
+// at fault, where a derive over a map would place it on the whole map.
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for RuleSettings {
+    fn deserialize<Source>(deserializer: Source) -> Result<Self, Source::Error>
+    where
+        Source: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(RuleSettingsVisitor)
+    }
+}
+
+#[cfg(feature = "serde")]
+struct RuleSettingsVisitor;
+
+#[cfg(feature = "serde")]
+impl<'de> Visitor<'de> for RuleSettingsVisitor {
+    type Value = RuleSettings;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a setting per rule name")
+    }
+
+    fn visit_map<Access>(self, mut map: Access) -> Result<Self::Value, Access::Error>
+    where
+        Access: MapAccess<'de>,
+    {
+        let mut settings = RuleSettings::default();
+        while let Some(rule) = map.next_key::<RuleId>()? {
+            let level = settings.options.next_setting(rule, &mut map)?;
+            if settings.levels[rule].replace(level).is_some() {
+                return Err(Error::custom(format_args!("duplicate rule `{}`", rule.name())));
+            }
+        }
+        Ok(settings)
+    }
+}
+
+/// A rule's entry in `rules`, which keeps `options` for one that takes them,
+/// and returns its level.
+#[cfg(feature = "serde")]
+pub(crate) fn next_setting<'de, Options, Access>(
+    rule: RuleId,
+    options: &mut Option<Options>,
+    map: &mut Access,
+) -> Result<RuleLevel, Access::Error>
+where
+    Options: RuleOptions + Deserialize<'de>,
+    Access: MapAccess<'de>,
+{
+    let setting = map.next_value_seed(SettingSeed(rule, PhantomData))?;
+    Ok(match setting {
+        RuleSetting::Level(level) => level,
+        RuleSetting::WithOptions(level, given) => {
+            *options = Some(given);
+            level
+        }
+    })
+}
+
+#[cfg(feature = "serde")]
+pub(crate) fn serialize_entry<Options, Map>(
+    rule: RuleId,
+    level: RuleLevel,
+    options: Option<&Options>,
+    map: &mut Map,
+) -> Result<(), Map::Error>
+where
+    Options: Serialize,
+    Map: SerializeMap,
+{
+    let setting =
+        options.map_or(RuleSetting::Level(level), |given| RuleSetting::WithOptions(level, given));
+    map.serialize_entry(rule.name(), &setting)
 }
 
 /// One rule's entry in `rules`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg(feature = "serde")]
+#[derive(Debug, serde::Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(rename = "RuleSetting_{Options}"))]
-#[cfg_attr(feature = "serde", serde(untagged))]
-pub enum RuleSetting<Options> {
+#[serde(untagged)]
+pub(crate) enum RuleSetting<Options> {
     /// `"off"`, `"warn"`, or `"error"`.
     Level(RuleLevel),
     /// A level and the rule's options: `[level, options]`.
     WithOptions(RuleLevel, Options),
 }
 
-impl<Options> RuleSetting<Options> {
-    #[must_use]
-    pub const fn level(&self) -> RuleLevel {
-        match self {
-            Self::Level(level) | Self::WithOptions(level, _) => *level,
-        }
-    }
-
-    #[must_use]
-    pub const fn options(&self) -> Option<&Options> {
-        match self {
-            Self::Level(_) => None,
-            Self::WithOptions(_, options) => Some(options),
-        }
-    }
-}
-
-// Written by hand because an untagged derive reports every mistake as "data
-// did not match any variant", without the bad level or option key.
+/// The entry of the rule it names, which takes options only when it has some.
+///
+/// Written by hand because an untagged derive reports every mistake as "data
+/// did not match any variant", without the bad level or option key.
 #[cfg(feature = "serde")]
-impl<'de, Options> Deserialize<'de> for RuleSetting<Options>
+struct SettingSeed<Options>(RuleId, PhantomData<Options>);
+
+#[cfg(feature = "serde")]
+impl<'de, Options> DeserializeSeed<'de> for SettingSeed<Options>
 where
-    Options: Deserialize<'de>,
+    Options: RuleOptions + Deserialize<'de>,
 {
-    fn deserialize<Source>(deserializer: Source) -> Result<Self, Source::Error>
+    type Value = RuleSetting<Options>;
+
+    fn deserialize<Source>(self, deserializer: Source) -> Result<Self::Value, Source::Error>
     where
         Source: Deserializer<'de>,
     {
-        deserializer.deserialize_any(RuleSettingVisitor(PhantomData))
+        deserializer.deserialize_any(self)
     }
 }
 
 #[cfg(feature = "serde")]
-struct RuleSettingVisitor<Options>(PhantomData<Options>);
-
-#[cfg(feature = "serde")]
-impl<'de, Options> Visitor<'de> for RuleSettingVisitor<Options>
+impl<'de, Options> Visitor<'de> for SettingSeed<Options>
 where
-    Options: Deserialize<'de>,
+    Options: RuleOptions + Deserialize<'de>,
 {
     type Value = RuleSetting<Options>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a level or `[level, options]`")
+        formatter.write_str(if Options::IS_NONE {
+            "a level"
+        } else {
+            "a level or `[level, options]`"
+        })
     }
 
     fn visit_str<Failure>(self, v: &str) -> Result<Self::Value, Failure>
@@ -315,6 +374,12 @@ where
     where
         Access: SeqAccess<'de>,
     {
+        if Options::IS_NONE {
+            return Err(Error::custom(format_args!(
+                "`{}` takes no options, so set only its level",
+                self.0.name()
+            )));
+        }
         let level = seq.next_element()?.ok_or_else(|| Error::invalid_length(0, &self))?;
         let options = seq.next_element()?.ok_or_else(|| Error::invalid_length(1, &self))?;
         if seq.next_element::<IgnoredAny>()?.is_some() {
@@ -324,30 +389,49 @@ where
     }
 }
 
-/// Options of the `cyclomatic_complexity` rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-pub struct CyclomaticComplexityOptions {
-    /// Complexity above which a function is flagged.
-    pub max: u32,
+/// Every rule a property, so an editor completes the names and flags one no
+/// rule has.
+#[cfg(feature = "schemars")]
+impl JsonSchema for RuleSettings {
+    fn schema_name() -> Cow<'static, str> {
+        "RuleSettings".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let properties: BTreeMap<&str, Schema> = RuleId::ALL
+            .into_iter()
+            .map(|rule| {
+                let mut schema = OptionSettings::setting_schema(rule, generator);
+                schema.insert("description".to_owned(), rule.description().into());
+                (rule.name(), schema)
+            })
+            .collect();
+        json_schema!({
+            "description": "A setting per rule, keyed by rule name.",
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": false,
+        })
+    }
 }
 
-/// Options of the `restricted_module_paths` rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-pub struct RestrictedModulePathsOptions {
-    /// Modules that can't be required. A trailing `.*` also covers
-    /// submodules: `forbidden.*` matches `forbidden` and `forbidden.sub`.
-    pub paths: Vec<String>,
+/// The schema of an entry in `rules` that takes `Options`.
+#[cfg(feature = "schemars")]
+pub(crate) fn setting_schema<Options>(generator: &mut SchemaGenerator) -> Schema
+where
+    Options: RuleOptions + JsonSchema,
+{
+    if Options::IS_NONE {
+        generator.subschema_for::<RuleLevel>()
+    } else {
+        generator.subschema_for::<RuleSetting<Options>>()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::CATEGORIES;
 
     fn lint_config(lint_json: &str) -> LintConfig {
         serde_json::from_str(lint_json).expect("deserialize")
@@ -357,8 +441,10 @@ mod tests {
         serde_json::from_str::<LintConfig>(lint_json).unwrap_err().to_string()
     }
 
-    const CATEGORIES: [Category; 4] =
-        [Category::Correctness, Category::Suspicious, Category::Style, Category::Performance];
+    /// The JSON of `lint`'s `rules`.
+    fn rules_json(lint: &LintConfig) -> String {
+        serde_json::to_string(&lint.rules).expect("serialize")
+    }
 
     #[test]
     fn parses_every_lint_option() {
@@ -384,21 +470,11 @@ mod tests {
                 performance: None,
             }
         );
-        assert_eq!(lint.rules.level("unused_variable"), Some(RuleLevel::Off));
-        assert_eq!(lint.rules.level("undefined_variable"), Some(RuleLevel::Error));
+        assert_eq!(lint.rules.level(RuleId::UnusedVariable), Some(RuleLevel::Off));
+        assert_eq!(lint.rules.level(RuleId::UndefinedVariable), Some(RuleLevel::Error));
         assert_eq!(
-            lint.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Warn,
-                CyclomaticComplexityOptions { max: 15 }
-            ))
-        );
-        assert_eq!(
-            lint.rules.restricted_module_paths,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                RestrictedModulePathsOptions { paths: vec!["secret.path".to_owned()] }
-            ))
+            rules_json(&lint),
+            r#"{"undefined_variable":"error","unused_variable":"off","restricted_module_paths":["error",{"paths":["secret.path"]}],"cyclomatic_complexity":["warn",{"max":15}]}"#
         );
     }
 
@@ -419,7 +495,7 @@ mod tests {
         let json = serde_json::to_string(&lint).expect("serialize");
         assert_eq!(
             json,
-            r#"{"categories":{"performance":"warn"},"rules":{"cyclomatic_complexity":["warn",{"max":15}],"restricted_module_paths":"error","unused_variable":"off"},"extra_globals":["vim"]}"#
+            r#"{"categories":{"performance":"warn"},"rules":{"unused_variable":"off","restricted_module_paths":"error","cyclomatic_complexity":["warn",{"max":15}]},"extra_globals":["vim"]}"#
         );
         assert_eq!(lint_config(&json), lint);
     }
@@ -435,18 +511,22 @@ mod tests {
     #[test]
     fn a_rule_with_options_also_takes_a_bare_level() {
         let lint = lint_config(r#"{ "rules": { "cyclomatic_complexity": "warn" } }"#);
-        assert_eq!(lint.rules.cyclomatic_complexity, Some(RuleSetting::Level(RuleLevel::Warn)));
-        assert_eq!(lint.rules.level("cyclomatic_complexity"), Some(RuleLevel::Warn));
-        assert!(lint.rules.levels.is_empty(), "{:?}", lint.rules.levels);
+        assert_eq!(lint.rules.level(RuleId::CyclomaticComplexity), Some(RuleLevel::Warn));
+        assert_eq!(rules_json(&lint), r#"{"cyclomatic_complexity":"warn"}"#);
     }
 
     #[test]
     fn merge_onto_concatenates_lists_base_first_without_repeats() {
-        let base = lint_config(r#"{ "extra_globals": ["a", "b"], "rules": { "x": "off" } }"#);
-        let child = lint_config(r#"{ "extra_globals": ["b", "c"], "rules": { "y": "error" } }"#);
+        let base =
+            lint_config(r#"{ "extra_globals": ["a", "b"], "rules": { "shadowing": "off" } }"#);
+        let child =
+            lint_config(r#"{ "extra_globals": ["b", "c"], "rules": { "empty_block": "error" } }"#);
         let merged = child.merge_onto(base);
         assert_eq!(merged.extra_globals, ["a", "b", "c"]);
-        assert_eq!(merged.rules.names().collect::<Vec<_>>(), ["x", "y"]);
+        assert_eq!(
+            merged.rules.rules().collect::<Vec<_>>(),
+            [RuleId::EmptyBlock, RuleId::Shadowing]
+        );
     }
 
     #[test]
@@ -477,11 +557,9 @@ mod tests {
                 performance: Some(RuleLevel::Warn),
             }
         );
-        assert_eq!(lint.rules.level("empty_block"), Some(RuleLevel::Warn));
-        assert_eq!(lint.rules.level("unused_variable"), Some(RuleLevel::Error));
         assert_eq!(
-            lint.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(RuleLevel::Off, CyclomaticComplexityOptions { max: 10 }))
+            rules_json(&lint),
+            r#"{"unused_variable":"error","empty_block":"warn","cyclomatic_complexity":["off",{"max":10}]}"#
         );
     }
 
@@ -498,11 +576,8 @@ mod tests {
         let raised = lint_config(r#"{ "rules": { "cyclomatic_complexity": "error" } }"#)
             .merge_onto(lint_config(base));
         assert_eq!(
-            raised.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                CyclomaticComplexityOptions { max: 10 }
-            ))
+            rules_json(&raised),
+            r#"{"restricted_module_paths":["warn",{"paths":["secret.*"]}],"cyclomatic_complexity":["error",{"max":10}]}"#
         );
 
         let extended = lint_config(
@@ -515,17 +590,8 @@ mod tests {
         )
         .merge_onto(lint_config(base));
         assert_eq!(
-            extended.rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(RuleLevel::Warn, CyclomaticComplexityOptions { max: 4 }))
-        );
-        assert_eq!(
-            extended.rules.restricted_module_paths,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                RestrictedModulePathsOptions {
-                    paths: vec!["secret.*".to_owned(), "legacy".to_owned()]
-                }
-            ))
+            rules_json(&extended),
+            r#"{"restricted_module_paths":["error",{"paths":["secret.*","legacy"]}],"cyclomatic_complexity":["warn",{"max":4}]}"#
         );
     }
 
@@ -545,7 +611,27 @@ mod tests {
     #[test]
     fn rejects_options_on_a_rule_that_takes_none() {
         let error = lint_error(r#"{ "rules": { "unused_variable": ["warn", { "max": 1 }] } }"#);
-        assert!(error.contains("sequence"), "{error}");
+        assert!(error.contains("`unused_variable` takes no options"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_name_no_rule_has_and_suggests_a_close_one() {
+        let typo = lint_error(r#"{ "rules": { "unsued_variable": "warn" } }"#);
+        assert!(
+            typo.contains("unknown lint rule `unsued_variable`, did you mean `unused_variable`?"),
+            "{typo}"
+        );
+        let parse_error_code = lint_error(r#"{ "rules": { "E008": "off" } }"#);
+        assert!(parse_error_code.contains("unknown lint rule `E008`"), "{parse_error_code}");
+    }
+
+    #[test]
+    fn rejects_a_rule_set_twice() {
+        for rule in ["unused_variable", "cyclomatic_complexity"] {
+            let error =
+                lint_error(&format!(r#"{{ "rules": {{ "{rule}": "warn", "{rule}": "off" }} }}"#));
+            assert!(error.contains(&format!("duplicate rule `{rule}`")), "{error}");
+        }
     }
 
     #[test]
@@ -576,22 +662,6 @@ mod tests {
         assert_eq!(lint.categories.level(Category::Performance), Some(RuleLevel::Warn));
     }
 
-    /// `name` is what `--rules` and `--print-config` print, so a `name` that
-    /// `from_name` doesn't take back would break scripts feeding them to `-A`.
-    #[test]
-    fn category_names_round_trip_through_from_name() {
-        for category in CATEGORIES {
-            assert_eq!(Category::from_name(category.name()), Some(category));
-        }
-    }
-
-    #[test]
-    fn category_from_name_recognizes_categories_and_the_perf_alias() {
-        assert_eq!(Category::from_name("style"), Some(Category::Style));
-        assert_eq!(Category::from_name("perf"), Some(Category::Performance));
-        assert_eq!(Category::from_name("undefined_variable"), None);
-    }
-
     /// A category's `luck.json` key is its `name`, so `--print-config` output
     /// pastes back into `categories`.
     #[test]
@@ -611,24 +681,25 @@ mod tests {
 
     #[test]
     fn set_level_keeps_the_options_of_a_rule() {
-        let mut rules =
-            lint_config(r#"{ "rules": { "cyclomatic_complexity": ["warn", { "max": 4 }] } }"#)
-                .rules;
-        rules.set_level("cyclomatic_complexity", RuleLevel::Error);
-        rules.set_level("restricted_module_paths", RuleLevel::Off);
-        rules.set_level("unused_variable", RuleLevel::Warn);
+        let mut lint =
+            lint_config(r#"{ "rules": { "cyclomatic_complexity": ["warn", { "max": 4 }] } }"#);
+        lint.rules.set_level(RuleId::CyclomaticComplexity, RuleLevel::Error);
+        lint.rules.set_level(RuleId::RestrictedModulePaths, RuleLevel::Off);
+        lint.rules.set_level(RuleId::UnusedVariable, RuleLevel::Warn);
         assert_eq!(
-            rules.cyclomatic_complexity,
-            Some(RuleSetting::WithOptions(
-                RuleLevel::Error,
-                CyclomaticComplexityOptions { max: 4 }
-            ))
+            rules_json(&lint),
+            r#"{"unused_variable":"warn","restricted_module_paths":"off","cyclomatic_complexity":["error",{"max":4}]}"#
         );
-        assert_eq!(rules.restricted_module_paths, Some(RuleSetting::Level(RuleLevel::Off)));
-        assert_eq!(rules.level("unused_variable"), Some(RuleLevel::Warn));
-        assert_eq!(
-            rules.names().collect::<Vec<_>>(),
-            ["cyclomatic_complexity", "restricted_module_paths", "unused_variable"]
-        );
+    }
+
+    #[test]
+    fn a_rule_s_own_level_wins_then_its_category_s_then_its_default() {
+        let mut lint = LintConfig::default();
+        assert_eq!(lint.severity(RuleId::UndefinedVariable), Some(Severity::Error));
+        assert_eq!(lint.severity(RuleId::EmptyBlock), None, "only correctness runs by default");
+        lint.categories.set_level(Category::Correctness, RuleLevel::Warn);
+        assert_eq!(lint.severity(RuleId::UndefinedVariable), Some(Severity::Warning));
+        lint.rules.set_level(RuleId::UndefinedVariable, RuleLevel::Off);
+        assert_eq!(lint.severity(RuleId::UndefinedVariable), None);
     }
 }

@@ -23,24 +23,24 @@ luck init          # scaffold a luck.json
 luck build         # bundle the project into a single file
 luck fmt src/      # format
 luck lint src/     # lint (add --fix to auto-fix)
-luck check src/    # report syntax errors
+luck check src/    # report syntax and compile errors
 ```
 
-Configuration lives in `luck.json`. `lint`, `fmt`, and `check` give each file the nearest one above it, and `build` takes the one above the working directory. Build entries, minifier passes, format options, lint rule settings, and per-extension targets all come from it. The `lua` and `luau` keys can each name any dialect, so a Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`. See the schema shipped with the [VS Code extension](editors/vscode).
+Configuration lives in `luck.json`. `lint`, `fmt`, `check`, and the language server give each file the nearest one above it, `build` takes the one above the working directory, and `bundle`, `graph`, and `minify` the one above their input. Build entries, module search paths, minifier passes, format options, lint rule settings, and per-extension targets all come from it, and `overrides` change the lint and format settings of the files their globs match. The `lua` and `luau` keys can each name any dialect, so a Roblox or Rojo tree that keeps Luau in `.lua` files sets `"lua": "roblox"`, and `std` names std definition files, TOML that describes a host's globals, fields, and functions, such as LOVE's or Neovim's, in the [format](crates/luck_stdlib/README.md#std-definitions) of luck's own standard library catalogs, which the linter and the language server read as they read the built-in ones. A mistake in it is reported where it is, at load. See the schema shipped with the [VS Code extension](editors/vscode).
 
 ## Tools
 
 - **Bundler.** Resolves `require` calls across Lua search paths, Luau relative imports, `@aliases`, and `.luaurc` chains, then emits one self-contained file with no external loader or runtime library.
-- **Minifier.** Twelve AST transforms that rewrite the tree in place, in three phases that each run once: binding, compression, and renaming. Dead code removal, constant folding, and local renaming do most of the work. Config flags turn each transform on and off, and every transform assumes metamethods can fire.
+- **Minifier.** Eleven AST transforms that rewrite the tree in place, in three phases: Luau type stripping, compression passes that repeat until one changes nothing, and renaming, each reading the scopes and references semantic analysis finds. Dead code removal, constant folding, and local renaming do most of the work. Config flags turn each transform on and off, and every transform assumes metamethods can fire.
 - **Formatter.** Prettier-style layout that breaks on line width and handles the full Luau type grammar. `format(format(x)) == format(x)` and the output re-parses, both enforced by tests.
-- **Linter.** 65 rules across correctness, suspicious, style, and performance categories, with inline suppressions and `--fix`.
-- **Language server.** Hover, completions, diagnostics, go-to-definition, rename, and semantic tokens, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
+- **Linter.** 66 rules across correctness, suspicious, style, and performance categories, with inline suppressions and `--fix`.
+- **Language server.** Hover, completions, diagnostics, go-to-definition, references, rename, and semantic tokens, with a module's members followed across the workspace, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
 
 Every tool is also a library crate (`luck_parser`, `luck_formatter`, `luck_linter`, ...). The `luck` facade crate, published as `luck_lua`, re-exports all of them except the language server, so you can build on the same pieces the CLI uses.
 
 ## Contribute
 
-Issues and pull requests are welcome. `ARCHITECTURE.md` documents the pipeline, crate layout, and design decisions. `AGENTS.md` lists the conventions and invariants the code follows.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup and pull requests, and `AGENTS.md` lists the conventions and invariants the code follows.
 
 ## License
 

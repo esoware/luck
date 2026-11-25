@@ -1,15 +1,15 @@
-use core::ops::Range;
+use std::ops::Range;
 
 use luck_allocator::{Allocator, Box};
-use luck_ast::{Expression, Statement, Type, TypeDeclarationValue, TypeField};
-use luck_token::LuaVersion;
+use luck_ast::{Expression, GetSpan as _, Statement, Type, TypeDeclarationValue, TypeField};
+use luck_token::{LuaVersion, Span};
 
 use crate::common::{assert_no_errors, parse_luau};
 
 fn alias_type<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Type<'ast> {
     let result = parse_luau(allocator, source);
     assert_no_errors(&result);
-    let stmt = result.block.stmts.into_iter().next().expect("a statement");
+    let stmt = result.chunk.block.stmts.into_iter().next().expect("a statement");
     let Statement::TypeDeclaration(type_declaration) = stmt else {
         panic!("expected TypeDeclaration, got {stmt:?}");
     };
@@ -20,7 +20,7 @@ fn alias_type<'ast>(allocator: &'ast Allocator, source: &'ast str) -> Type<'ast>
 }
 
 #[test]
-fn named_type() {
+fn bare_name_is_a_name_type() {
     let allocator = Allocator::new();
     for expected in ["number", "LongTypeNameThatExceedsInlineStringStorage"] {
         let source = format!("type X = {expected}");
@@ -28,12 +28,12 @@ fn named_type() {
             panic!("expected inline Name");
         };
         assert_eq!(name.text, expected);
-        assert_eq!(source.get(Range::<usize>::from(name.span)), Some(expected));
+        assert_eq!(&source[Range::<usize>::from(name.span)], expected);
     }
 }
 
 #[test]
-fn qualified_named_type() {
+fn module_qualified_type_keeps_its_prefix() {
     let allocator = Allocator::new();
     let Type::Named(named) = alias_type(&allocator, "type X = module.Thing") else {
         panic!("expected Named");
@@ -42,7 +42,7 @@ fn qualified_named_type() {
 }
 
 #[test]
-fn generic_args() {
+fn named_type_keeps_its_generic_arguments() {
     let allocator = Allocator::new();
     let Type::Named(named) = alias_type(&allocator, "type X = Map<string, number>") else {
         panic!("expected Named");
@@ -58,12 +58,12 @@ fn nested_generics_split_the_closing_shift_right() {
     };
     let args = named.generics.as_ref().expect("generics");
     assert_eq!(args.args.len(), 2);
-    let inner = args.args.get(1).expect("second arg");
+    let inner = &args.args[1];
     assert!(matches!(inner, Type::Named(nested) if nested.generics.is_some()));
 }
 
 #[test]
-fn union_type() {
+fn union_keeps_each_member() {
     let allocator = Allocator::new();
     let Type::Union(union) = alias_type(&allocator, "type X = string | number | nil") else {
         panic!("expected Union");
@@ -73,7 +73,7 @@ fn union_type() {
 }
 
 #[test]
-fn union_with_leading_pipe() {
+fn union_keeps_its_leading_pipe() {
     let allocator = Allocator::new();
     let Type::Union(union) = alias_type(&allocator, "type X = | string | number") else {
         panic!("expected Union");
@@ -83,7 +83,7 @@ fn union_with_leading_pipe() {
 }
 
 #[test]
-fn intersection_type() {
+fn intersection_keeps_each_member() {
     let allocator = Allocator::new();
     let Type::Intersection(intersection) = alias_type(&allocator, "type X = A & B") else {
         panic!("expected Intersection");
@@ -106,7 +106,7 @@ fn parenthesized_intersection_is_one_union_member() {
 }
 
 #[test]
-fn optional_type() {
+fn question_mark_makes_an_optional() {
     let allocator = Allocator::new();
     assert!(matches!(alias_type(&allocator, "type X = number?"), Type::Optional(_)));
 }
@@ -118,7 +118,7 @@ fn a_run_of_question_marks_is_one_optional() {
         [("type X = number?", 1), ("type X = number??", 2), ("type X = number? ? ?", 3)]
     {
         let alias = alias_type(&allocator, source);
-        assert_eq!(source.get(Range::<usize>::from(alias.span())), source.get(9..), "{source}");
+        assert_eq!(&source[Range::<usize>::from(alias.span())], &source[9..], "{source}");
         let Type::Optional(optional) = alias else {
             panic!("expected Optional, got {alias:?}");
         };
@@ -133,10 +133,10 @@ fn question_marks_folded_into_a_return_pack_join_its_first_elements_run() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local function f(): (T?, ...U)?? end");
     assert_no_errors(&result);
-    let Statement::LocalFunction(function) = &result.block.stmts[0] else {
+    let Statement::LocalFunction(function) = &result.chunk.block.stmts[0] else {
         panic!("expected a local function");
     };
-    let Some(Type::Pack(pack)) = &function.body.return_type else {
+    let Some(Type::Pack(pack)) = function.body.return_type.as_deref() else {
         panic!("expected a pack");
     };
     let Some(Type::Optional(optional)) = pack.types.first() else {
@@ -165,7 +165,7 @@ fn negation_syntax_is_an_error_in_luau() {
 }
 
 #[test]
-fn optional_in_union() {
+fn optional_is_a_union_member() {
     let allocator = Allocator::new();
     let Type::Union(union) = alias_type(&allocator, "type X = number? | string") else {
         panic!("expected Union");
@@ -174,7 +174,7 @@ fn optional_in_union() {
 }
 
 #[test]
-fn string_singleton() {
+fn string_singleton_is_a_string_literal_type() {
     let allocator = Allocator::new();
     let Type::Union(union) = alias_type(&allocator, r#"type X = "on" | "off""#) else {
         panic!("expected Union");
@@ -183,7 +183,7 @@ fn string_singleton() {
 }
 
 #[test]
-fn boolean_and_nil_singletons() {
+fn true_false_and_nil_are_singleton_types() {
     let allocator = Allocator::new();
     assert!(matches!(alias_type(&allocator, "type X = true"), Type::True(_)));
     assert!(matches!(alias_type(&allocator, "type X = false"), Type::False(_)));
@@ -191,7 +191,7 @@ fn boolean_and_nil_singletons() {
 }
 
 #[test]
-fn table_type_named_fields() {
+fn table_type_keeps_named_fields() {
     let allocator = Allocator::new();
     let Type::Table(table) = alias_type(&allocator, "type X = { name: string, age: number }")
     else {
@@ -202,7 +202,7 @@ fn table_type_named_fields() {
 }
 
 #[test]
-fn table_type_indexer() {
+fn table_type_keeps_its_indexer() {
     let allocator = Allocator::new();
     let Type::Table(table) = alias_type(&allocator, "type X = { [string]: number }") else {
         panic!("expected Table");
@@ -211,7 +211,7 @@ fn table_type_indexer() {
 }
 
 #[test]
-fn table_type_array_shorthand() {
+fn table_type_of_one_type_is_an_array() {
     let allocator = Allocator::new();
     let Type::Table(table) = alias_type(&allocator, "type X = { number }") else {
         panic!("expected Table");
@@ -220,7 +220,7 @@ fn table_type_array_shorthand() {
 }
 
 #[test]
-fn table_type_read_write_access() {
+fn table_type_fields_keep_their_access() {
     let allocator = Allocator::new();
     let Type::Table(table) =
         alias_type(&allocator, "type X = { read name: string, write count: number }")
@@ -233,7 +233,7 @@ fn table_type_read_write_access() {
 }
 
 #[test]
-fn table_field_literally_named_read() {
+fn read_before_a_colon_is_a_field_name() {
     let allocator = Allocator::new();
     let Type::Table(table) = alias_type(&allocator, "type X = { read: number }") else {
         panic!("expected Table");
@@ -242,7 +242,7 @@ fn table_field_literally_named_read() {
 }
 
 #[test]
-fn function_type() {
+fn function_type_keeps_its_params() {
     let allocator = Allocator::new();
     let Type::Function(function_type) =
         alias_type(&allocator, "type F = (number, string) -> boolean")
@@ -253,7 +253,7 @@ fn function_type() {
 }
 
 #[test]
-fn function_type_named_params() {
+fn function_type_keeps_its_param_names() {
     let allocator = Allocator::new();
     let Type::Function(function_type) =
         alias_type(&allocator, "type F = (x: number, y: number) -> number")
@@ -264,7 +264,7 @@ fn function_type_named_params() {
 }
 
 #[test]
-fn function_type_generic() {
+fn function_type_keeps_its_generics() {
     let allocator = Allocator::new();
     let Type::Function(function_type) = alias_type(&allocator, "type F = <T>(T) -> T") else {
         panic!("expected Function");
@@ -273,7 +273,7 @@ fn function_type_generic() {
 }
 
 #[test]
-fn function_type_variadic_param() {
+fn function_type_ends_in_a_variadic_param() {
     let allocator = Allocator::new();
     let Type::Function(function_type) =
         alias_type(&allocator, "type F = (number, ...string) -> ()")
@@ -286,7 +286,7 @@ fn function_type_variadic_param() {
 }
 
 #[test]
-fn function_type_pack_return() {
+fn function_type_returns_a_pack() {
     let allocator = Allocator::new();
     let Type::Function(function_type) = alias_type(&allocator, "type F = () -> (number, string)")
     else {
@@ -334,12 +334,12 @@ fn named_parameter_outside_a_function_type_is_an_error() {
     let allocator = Allocator::new();
     let parsed = parse_luau(&allocator, "type X = (value: number)");
     assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
-    assert_eq!(parsed.errors[0].span, luck_token::Span::new(10, 15));
+    assert_eq!(parsed.errors[0].span, Some(Span::new(10, 15)));
     assert_eq!(parsed.errors[0].message, "named parameters are only valid in function types");
 }
 
 #[test]
-fn typeof_type() {
+fn typeof_type_keeps_its_expression() {
     let allocator = Allocator::new();
     let Type::Typeof(typeof_type) = alias_type(&allocator, "type X = typeof(game.Workspace)")
     else {
@@ -349,7 +349,7 @@ fn typeof_type() {
 }
 
 #[test]
-fn generic_pack_reference() {
+fn generic_pack_is_a_return_type() {
     let allocator = Allocator::new();
     let Type::Function(function_type) = alias_type(&allocator, "type F = <T...>(T...) -> T...")
     else {
@@ -359,11 +359,11 @@ fn generic_pack_reference() {
 }
 
 #[test]
-fn type_declaration_generic_defaults() {
+fn type_alias_generics_keep_their_defaults() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "type Foo<T = string, S... = ...string> = T");
     assert_no_errors(&result);
-    let Statement::TypeDeclaration(type_declaration) = &result.block.stmts[0] else {
+    let Statement::TypeDeclaration(type_declaration) = &result.chunk.block.stmts[0] else {
         panic!("expected TypeDeclaration");
     };
     let generics = type_declaration.generics.as_ref().expect("generics");
@@ -373,11 +373,11 @@ fn type_declaration_generic_defaults() {
 }
 
 #[test]
-fn local_annotation_preserved() {
+fn local_keeps_its_annotation() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x: number = 1");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
     let name = local.names.first().expect("name");
@@ -385,11 +385,11 @@ fn local_annotation_preserved() {
 }
 
 #[test]
-fn multi_local_annotations_preserved() {
+fn each_local_keeps_its_own_annotation() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local a: number, b, c: string? = 1, 2, \"x\"");
     assert_no_errors(&result);
-    let Statement::LocalAssignment(local) = &result.block.stmts[0] else {
+    let Statement::LocalAssignment(local) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalAssignment");
     };
     let annotations: Vec<bool> =
@@ -398,29 +398,29 @@ fn multi_local_annotations_preserved() {
 }
 
 #[test]
-fn numeric_for_annotation_preserved() {
+fn numeric_for_keeps_its_annotation() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "for i: number = 1, 10 do end");
     assert_no_errors(&result);
-    let Statement::NumericFor(numeric_for) = &result.block.stmts[0] else {
+    let Statement::NumericFor(numeric_for) = &result.chunk.block.stmts[0] else {
         panic!("expected NumericFor");
     };
     assert!(numeric_for.type_annotation.is_some());
 }
 
 #[test]
-fn generic_for_annotations_preserved() {
+fn generic_for_keeps_each_annotation() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "for k: string, v: number in pairs(t) do end");
     assert_no_errors(&result);
-    let Statement::GenericFor(generic_for) = &result.block.stmts[0] else {
+    let Statement::GenericFor(generic_for) = &result.chunk.block.stmts[0] else {
         panic!("expected GenericFor");
     };
     assert!(generic_for.names.iter().all(|binding| binding.type_annotation.is_some()));
 }
 
 #[test]
-fn generic_function_declaration() {
+fn generic_function_keeps_its_generics_and_annotations() {
     let allocator = Allocator::new();
     let result = parse_luau(
         &allocator,
@@ -430,7 +430,7 @@ local function map<T, U>(items: {T}, fn: (T) -> U): {U}
 end",
     );
     assert_no_errors(&result);
-    let Statement::LocalFunction(local_function) = &result.block.stmts[0] else {
+    let Statement::LocalFunction(local_function) = &result.chunk.block.stmts[0] else {
         panic!("expected LocalFunction");
     };
     assert!(local_function.body.generics.is_some());
@@ -439,14 +439,14 @@ end",
 }
 
 #[test]
-fn cast_with_complex_type() {
+fn cast_takes_an_optional_table_type() {
     let allocator = Allocator::new();
     let result = parse_luau(&allocator, "local x = (y :: { [string]: number }?)");
     assert_no_errors(&result);
 }
 
 #[test]
-fn annotation_not_confused_with_method_call() {
+fn method_call_colon_starts_no_annotation() {
     let allocator = Allocator::new();
     // The `:` in `obj:method()` must not start a type annotation.
     let result = parse_luau(&allocator, "obj:method(1)");
@@ -456,8 +456,8 @@ fn annotation_not_confused_with_method_call() {
 #[test]
 fn type_annotations_rejected_outside_luau() {
     let allocator = Allocator::new();
-    let result = luck_parser::parse(&allocator, "local x: number = 1", LuaVersion::Lua54);
-    assert_ne!(result.errors, Vec::<luck_token::SourceError>::new());
+    let result = luck_parser::parse(&allocator, b"local x: number = 1", LuaVersion::Lua54);
+    assert_ne!(result.errors, Vec::<luck_diagnostics::Diagnostic>::new());
 }
 
 #[test]
@@ -477,7 +477,7 @@ fn mixed_union_intersection_rejected() {
 }
 
 #[test]
-fn table_type_shape_rules() {
+fn table_type_holds_one_array_type_or_at_most_one_indexer() {
     let allocator = Allocator::new();
     // TableType ::= '{' Type '}' | '{' [PropList] '}'
     let invalid_sources = [
@@ -503,7 +503,7 @@ fn table_type_shape_rules() {
 }
 
 #[test]
-fn generic_type_list_ordering() {
+fn generic_lists_follow_luaus_ordering_and_default_rules() {
     let allocator = Allocator::new();
     // Packs come last, a plain parameter after a defaulted one needs a
     // default, a default must match its parameter's kind, and only aliases

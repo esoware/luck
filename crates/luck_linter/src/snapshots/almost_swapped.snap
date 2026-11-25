@@ -1,0 +1,27 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: `a = b; b = a` doesn't swap
+ --> Lua54:2:1
+1 | local a, b = 1, 2
+2 | a = b
+  | ^^^^^
+3 | b = a
+  | ^^^^^
+help: use `a, b = b, a` to swap both at once
+
+error: `a = b; b = a` doesn't swap
+ --> Lua54:2:1
+1 | local f = function() local a, b = 1, 2
+2 | a = b
+  | ^^^^^
+3 | b = a end
+  | ^^^^^
+help: use `a, b = b, a` to swap both at once
+
+error: `a = b; b = a` doesn't swap
+ --> Lua54:2:1
+1 | local a, b = 1, 2
+2 | a = b; b = a
+  | ^^^^^^^^^^^^
+help: use `a, b = b, a` to swap both at once

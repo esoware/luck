@@ -1,99 +1,144 @@
-//! The compressor: an in-place walk that runs every rewrite the tree allows
-//! as it leaves each node.
+//! The compressor: passes of an in-place walk that runs every rewrite the
+//! tree allows as it leaves each node, until a pass changes nothing, as
+//! `oxc_minifier`'s peephole loop runs.
 //!
-//! The walk reads each name's binding from the name itself and decides by
-//! what the bind walk counted of the binding, which every rewrite keeps true
-//! by uncounting what it drops. A block's locals are only ever referenced in
-//! the block, so the walk drops the ones nothing references as it leaves it,
-//! and one walk reaches the fixpoint. It walks again only when it leaves a
-//! rewrite behind that it could see but not make, after a fresh count.
+//! A rewrite reads each name's symbol and references from `luck_semantic`'s
+//! [`Scoping`], by the name's index. One that drops part of the tree marks
+//! the references in it as dropped, which every query of a symbol's
+//! references skips, so each decision reads the tree as it stands. At the
+//! end of a pass the symbols' lists lose the dropped references. Debug
+//! builds check that the lists match a fresh analysis once the passes
+//! settle.
 //!
-//! Each rewrite lives in the module named after the flag that turns it on,
-//! and `respell` holds what two flags share. Rewrites build their nodes in
-//! the shape the parser gives the text they print, which is what makes the
-//! fixpoint's own output a fixpoint.
+//! Once they settle, `lift_locals` hoists each function's declarations,
+//! which reshapes its bindings, so the scoping is built again and the passes
+//! run again on what lifting left.
+//!
+//! Each rewrite lives in the module named after the flag that turns it on.
+//! Rewrites build their nodes in the shape the parser gives the text they
+//! print, so the fixpoint's own output is a fixpoint. The printer writes
+//! whatever parentheses grouping needs, so a rewrite adds only those that
+//! change what they hold. A literal is a value, which `luck_codegen` spells
+//! the shortest way, so no rewrite respells one.
 
 mod fold_constants;
 mod inline_locals;
 mod lift_locals;
 mod merge_locals;
 mod remove_dead_code;
-mod respell;
-mod shorten_numbers;
-mod shorten_strings;
 mod simplify_indexes;
 mod simplify_parens;
 mod simplify_statements;
 
-use core::cell::Cell;
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Allocator, List};
 use luck_ast::{
-    AttributedName, BinaryOp, Block, Expression, FunctionArgs, FunctionBody, Statement, Suffix,
-    SuffixedExpression, TableConstructor, Type, Visitor as _, VisitorMut, is_prefix_expr,
+    Assignment, AttributedName, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,
+    FunctionBody, GenericFor, GlobalDeclaration, Name, ReturnStatement, Statement, Suffix,
+    SuffixedExpression, TableConstructor, TreeCounts, Type, Visit, VisitMut,
 };
-use luck_token::{LuaVersion, NumberSubtypes};
+use luck_data_structures::BitSet;
+use luck_semantic::{Scoping, SymbolId};
+use luck_token::{LuaVersion, UnOp};
+use luck_value::ConstantEvaluation as _;
 
-use self::inline_locals::{OperandPosition, Value};
-use self::lift_locals::Lifter;
+use self::inline_locals::Held;
 use self::remove_dead_code::{UnusedLocalAction, unused_local_action};
-use self::respell::Respeller;
-use crate::binding::{Bindings, Counter, NONE, is_droppable_function, local_of};
-use crate::expr::{constant_truthiness, fits_at_depth, inner_operand_side, parenthesize};
-use crate::limits::{GENERIC_FOR_STATE_LOCALS, NUMERIC_FOR_STATE_LOCALS, parameter_locals};
+use self::simplify_parens::Place;
+use crate::binding::{NameIndexes, ResolvedNames, analyze, is_droppable_function};
+use crate::limits::{GENERIC_FOR_STATE_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals};
 use crate::transform_config::TransformConfig;
 
-/// A walk leaves another behind only for a rewrite it exposed late, so a
-/// handful settle any input, and the cap only bounds one that never stops,
-/// which the fixpoint tests catch.
-const MAX_WALKS: usize = 8;
+/// A pass leaves another only for what its own rewrites exposed, so a
+/// handful settle any input, and the caps bound only a rewrite that never
+/// stops, which debug builds report.
+const MAX_PASSES: usize = 10;
+const MAX_ROUNDS: usize = 4;
 
-/// Compresses `block`, whose bindings `bindings` holds, until a walk leaves
-/// nothing for another.
+/// Compresses `chunk` until a pass changes nothing, then lifts its
+/// functions' declarations and compresses what that leaves, until lifting
+/// finds nothing more. A lift indexes the names it hoists from
+/// `name_indexes`.
+///
+/// Returns the last scoping, whose tables a later analysis can reuse.
 pub(crate) fn compress<'ast>(
     allocator: &'ast Allocator,
-    version: LuaVersion,
+    chunk: &mut Chunk<'ast>,
+    counts: TreeCounts,
     config: TransformConfig,
-    bindings: &mut Bindings,
-    block: &mut Block<'ast>,
-) {
-    let mut compressor = Compressor::new(allocator, version, config, bindings);
-    for walk in 1..=MAX_WALKS {
-        compressor.walk(block);
-        if !compressor.needs_revisit || walk == MAX_WALKS {
+    name_indexes: &mut NameIndexes,
+) -> Scoping {
+    let mut scoping = analyze(chunk, counts, None);
+    for round in 1..=MAX_ROUNDS {
+        let mut compressor = Compressor::new(allocator, config, &mut scoping);
+        compressor.run(&mut chunk.block);
+        #[cfg(debug_assertions)]
+        compressor.assert_references_match(chunk, counts);
+        if !(config.lift_locals && compressor.lift(&mut chunk.block, name_indexes)) {
             break;
         }
-        compressor.recount(block);
+        debug_assert!(round < MAX_ROUNDS, "lifting a lifted tree lifted more");
+        scoping = analyze(chunk, counts, Some(scoping));
+    }
+    scoping
+}
+
+/// Drops the statements at `indexes`, which ascend, and keeps the others in
+/// order, in place.
+fn remove_stmts(stmts: &mut List<'_, Statement<'_>>, indexes: &[usize]) {
+    if indexes.is_empty() {
+        return;
+    }
+    let mut removed = indexes.iter().peekable();
+    let mut kept = 0;
+    for index in 0..stmts.len() {
+        if removed.next_if_eq(&&index).is_none() {
+            stmts.swap(kept, index);
+            kept += 1;
+        }
+    }
+    stmts.truncate(kept);
+}
+
+/// Marks the references in a part of the tree a rewrite drops.
+struct Dropper<'walk> {
+    scoping: &'walk Scoping,
+    dropped: &'walk mut BitSet,
+}
+
+impl<'tree> Visit<'tree> for Dropper<'_> {
+    fn visit_name(&mut self, name: &'tree Name<'tree>) {
+        if let Some(reference) = self.scoping.reference_of(name) {
+            self.dropped.insert(reference.index());
+        }
     }
 }
 
-#[expect(clippy::struct_excessive_bools, reason = "each bool is a separate fact about the walk")]
 pub(crate) struct Compressor<'walk, 'ast> {
     allocator: &'ast Allocator,
     version: LuaVersion,
-    subtypes: NumberSubtypes,
     config: TransformConfig,
-    bindings: &'walk mut Bindings,
+    scoping: &'walk mut Scoping,
+    /// The references whose names a rewrite dropped since the scoping was
+    /// built.
+    dropped: BitSet,
     has_changed: bool,
-    /// Whether the walk left a rewrite it exposed but couldn't make.
-    needs_revisit: bool,
     /// Levels of nesting open where the walk is.
     depth: usize,
-    /// Functions open where the walk is, and one past that count at the
-    /// innermost type the walk is in, or 0, as the bind walk counts them.
-    function_depth: u32,
-    type_floor: u32,
-    /// The inlined locals' values waiting for their one read, each indexed
-    /// by its binding's `held_value`.
-    values: Vec<Option<Value<'ast>>>,
-    held_count: usize,
-    /// Whether a rewrite stayed undone for want of depth, which it may have
-    /// once the tree around it flattens.
-    has_depth_refusal: Cell<bool>,
-    /// Whether a value has landed bare as an operand since the run being
-    /// walked began, so the run may hold one to splice.
-    has_bare_operand: bool,
+    /// Types the walk is in, where it keeps every truncation.
+    type_depth: usize,
+    /// The initializers of the locals being inlined, each until the block
+    /// that declares it ends, innermost block's last.
+    held: Vec<Held<'ast>>,
+    /// Each symbol's place in `held`, or [`inline_locals::NOT_HELD`].
+    held_index: Vec<u32>,
+    /// How many of `held` wait for their read.
+    waiting: usize,
+    /// Whether a value has landed as a run among the operands of the run
+    /// being walked, which then joins it where it groups the same, so a
+    /// chain of inlined values nests no deeper than one.
+    has_landed_run: bool,
     /// The inlined locals taken in by the values landed since the
     /// initializer being walked began.
     landed_locals: usize,
@@ -101,157 +146,147 @@ pub(crate) struct Compressor<'walk, 'ast> {
     /// innermost last.
     landed_counts: Vec<usize>,
     live_registers: usize,
-    /// The bindings of the group being merged.
-    group: Vec<usize>,
+    /// The bindings of the group being merged, or of the bare `local` being
+    /// fused.
+    group: Vec<SymbolId>,
     /// The calls the unused `local`s of the block the walk is leaving
     /// leave, each after its index.
     late_calls: Vec<(usize, Statement<'ast>)>,
+    /// The indexes of the statements a block loses.
+    removed_stmts: Vec<usize>,
     /// A block's statements while `do` blocks in it give up theirs.
     unwrapped_stmts: Vec<Statement<'ast>>,
     /// Whether the `if` the walk enters next is the one statement of an `if`
     /// that merges the run of nested `if`s it starts.
     is_in_if_run: bool,
-    /// Whether the `local` the walk enters next holds a late inlined read,
-    /// so the names it declares are read only where the walk has been.
-    is_late_read: bool,
-    respeller: Respeller,
-    lifter: Lifter<'ast>,
 }
 
 impl<'walk, 'ast> Compressor<'walk, 'ast> {
     pub(crate) fn new(
         allocator: &'ast Allocator,
-        version: LuaVersion,
         config: TransformConfig,
-        bindings: &'walk mut Bindings,
+        scoping: &'walk mut Scoping,
     ) -> Self {
+        let dropped = BitSet::new(scoping.references().len());
+        let held_index = vec![inline_locals::NOT_HELD; scoping.symbols().len()];
         Self {
             allocator,
-            version,
-            subtypes: NumberSubtypes::from(version),
+            version: scoping.version(),
             config,
-            bindings,
+            scoping,
+            dropped,
             has_changed: false,
-            needs_revisit: false,
             depth: 0,
-            function_depth: 0,
-            type_floor: 0,
-            values: Vec::new(),
-            held_count: 0,
-            has_depth_refusal: Cell::new(false),
-            has_bare_operand: false,
+            type_depth: 0,
+            held: Vec::new(),
+            held_index,
+            waiting: 0,
+            has_landed_run: false,
             landed_locals: 0,
             landed_counts: Vec::new(),
             live_registers: 0,
             group: Vec::new(),
             late_calls: Vec::new(),
+            removed_stmts: Vec::new(),
             unwrapped_stmts: Vec::new(),
             is_in_if_run: false,
-            is_late_read: false,
-            respeller: Respeller::default(),
-            lifter: Lifter::default(),
         }
     }
 
-    /// One walk over `block`, which says whether it changed anything.
-    pub(crate) fn walk(&mut self, block: &mut Block<'ast>) -> bool {
+    /// Walks `block` until a pass changes nothing.
+    fn run(&mut self, block: &mut Block<'ast>) {
+        for pass in 1..=MAX_PASSES {
+            if !self.pass(block) {
+                return;
+            }
+            debug_assert!(pass < MAX_PASSES, "a pass still changed the tree after {pass} passes");
+        }
+    }
+
+    /// One walk over `block`, after which the symbols' lists lose the
+    /// references it dropped, which says whether it changed anything.
+    pub(crate) fn pass(&mut self, block: &mut Block<'ast>) -> bool {
         self.has_changed = false;
-        self.needs_revisit = false;
-        self.has_depth_refusal.set(false);
-        self.depth = 0;
-        self.function_depth = 0;
-        self.type_floor = 0;
-        self.values.clear();
-        self.held_count = 0;
-        self.live_registers = 0;
         self.visit_block(block);
         // The chunk is a function too, and returns nothing either way.
-        if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(block) {
-            block.last_stmt = None;
-            self.has_changed = true;
+        if self.config.remove_dead_code {
+            self.has_changed |= remove_dead_code::drop_bare_return(block);
         }
-        self.needs_revisit |= self.has_depth_refusal.get() && self.has_changed;
-        self.needs_revisit |= self.take_freed_names();
+        if self.has_changed {
+            let dropped = &self.dropped;
+            self.scoping
+                .retain_resolved_references(|reference| !dropped.contains(reference.index()));
+        }
         self.has_changed
     }
 
-    /// Whether `expr` still nests within the parser's cap once it sits
-    /// `added_levels` below `depth`, noting when it doesn't.
-    fn fits(&self, depth: usize, added_levels: usize, expr: &Expression<'_>) -> bool {
-        let fits = fits_at_depth(depth, added_levels, expr);
-        if !fits {
-            self.has_depth_refusal.set(true);
-        }
-        fits
-    }
-
-    /// Counts every binding's references afresh, for a walk after one that
-    /// changed where they sit.
-    fn recount(&mut self, block: &Block<'ast>) {
-        for binding in &mut self.bindings.entries {
-            binding.reads = 0;
-            binding.writes = 0;
-            binding.captures = 0;
-            binding.held_value = NONE;
-        }
-        self.bindings.global_uses.fill(0);
-        self.bindings.name_captures.fill(0);
-        self.bindings.global_declarations.fill(0);
-        let mut counter = Counter {
-            bindings: self.bindings,
-            is_retracting: false,
-            function_depth: 0,
-            type_floor: 0,
-            depth: 0,
+    /// Checks the symbols' lists against a fresh analysis of the tree: each
+    /// name that refers to a symbol is live and in its list, and no list
+    /// holds a reference whose name left the tree.
+    #[cfg(debug_assertions)]
+    fn assert_references_match(&self, chunk: &Chunk<'_>, counts: TreeCounts) {
+        let fresh = analyze(chunk, counts, None);
+        let mut check = FreshCheck {
+            scoping: self.scoping,
+            dropped: &self.dropped,
+            fresh: &fresh,
+            pairs: vec![None; self.scoping.symbols().len()],
         };
-        counter.visit_block(block);
-    }
-
-    const fn counter(&mut self) -> Counter<'_> {
-        Counter {
-            bindings: self.bindings,
-            is_retracting: true,
-            function_depth: self.function_depth,
-            type_floor: self.type_floor,
-            depth: 0,
+        check.visit_block(&chunk.block);
+        for (symbol, pair) in self.scoping.symbols().iter().zip(&check.pairs) {
+            let kept = self.scoping.resolved_references(symbol.id).len();
+            let found =
+                pair.map_or(0, |fresh_symbol| fresh.resolved_references(fresh_symbol).len());
+            assert_eq!(kept, found, "a rewrite dropped a name without marking its reference");
         }
     }
 
-    /// Uncounts the references in `expr`, which the walk drops.
-    fn retract_expr(&mut self, expr: &Expression<'ast>) {
-        self.counter().visit_expr(expr);
+    const fn dropper(&mut self) -> Dropper<'_> {
+        Dropper { scoping: self.scoping, dropped: &mut self.dropped }
     }
 
-    fn retract_stmt(&mut self, stmt: &Statement<'ast>) {
-        self.counter().visit_stmt(stmt);
+    /// Marks the references in `expr`, which the walk drops.
+    fn drop_expr(&mut self, expr: &Expression<'ast>) {
+        self.dropper().visit_expr(expr);
     }
 
-    fn retract_block(&mut self, block: &Block<'ast>) {
-        self.counter().visit_block(block);
+    fn drop_stmt(&mut self, stmt: &Statement<'ast>) {
+        self.dropper().visit_stmt(stmt);
     }
 
-    /// Uncounts the references in the annotation of a name the walk drops
-    /// from its `local`.
-    fn retract_annotation(&mut self, attributed: &AttributedName<'ast>) {
+    fn drop_block(&mut self, block: &Block<'ast>) {
+        self.dropper().visit_block(block);
+    }
+
+    /// Marks the references in the annotation of a name the walk drops from
+    /// its `local`.
+    fn drop_annotation(&mut self, attributed: &AttributedName<'ast>) {
         if let Some(ty) = &attributed.type_annotation {
-            self.counter().visit_type(ty);
+            self.dropper().visit_type(ty);
         }
+    }
+
+    /// Whether code the tree keeps reads or writes the symbol `name`
+    /// declares. A name that declares none is taken to be used, and a
+    /// recursive `local function`'s references to itself in its body keep
+    /// nothing alive.
+    fn is_used(&self, name: &Name<'_>) -> bool {
+        self.scoping.symbol_of(name).is_none_or(|symbol| {
+            self.scoping.resolved_references(symbol).iter().any(|&reference| {
+                !self.dropped.contains(reference.index())
+                    && !self.scoping.reference(reference).is_recursive
+            })
+        })
     }
 
     /// Walks each statement, and drops the ones the walk leaves nothing of.
     fn visit_stmts(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
-        let mut kept = 0usize;
+        let mut kept = 0;
         for index in 0..stmts.len() {
-            let Some(stmt) = stmts.get_mut(index) else {
-                break;
-            };
-            if self.visit_kept_stmt(stmt) {
+            if self.visit_kept_stmt(&mut stmts[index]) {
                 stmts.swap(kept, index);
-                if let Some(kept_stmt) = stmts.get(kept) {
-                    self.live_registers =
-                        self.live_registers.saturating_add(merge_locals::declared_count(kept_stmt));
-                }
-                kept = kept.saturating_add(1);
+                self.live_registers += merge_locals::declared_count(&stmts[kept]);
+                kept += 1;
             } else {
                 self.has_changed = true;
             }
@@ -267,34 +302,30 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Statement::LocalAssignment(local) => {
                 if should_remove_dead_code
                     && local.names.iter().all(|attributed| !self.is_used(&attributed.name))
-                    && unused_local_action(local, self.version) == UnusedLocalAction::Remove
+                    && unused_local_action(local, self.names()) == UnusedLocalAction::Remove
                 {
-                    self.retract_stmt(stmt);
+                    self.drop_stmt(stmt);
                     return false;
                 }
                 return self.visit_local(stmt);
             }
             Statement::LocalFunction(local_function) => {
                 if should_remove_dead_code
-                    && is_droppable_function(local_function, self.version)
+                    && is_droppable_function(local_function, self.scoping)
                     && !self.is_used(&local_function.name)
                 {
-                    self.retract_stmt(stmt);
+                    self.drop_stmt(stmt);
                     return false;
                 }
-                let id = local_of(&local_function.name);
-                self.set_open(id, true);
-                self.walk_stmt(stmt);
-                self.set_open(id, false);
-                return true;
             }
             Statement::IfStatement(_) => return self.visit_if(stmt),
             Statement::WhileLoop(while_loop) => {
                 self.visit_expr(&mut while_loop.condition);
                 if should_remove_dead_code
-                    && constant_truthiness(&while_loop.condition) == Some(false)
+                    && while_loop.condition.get_side_free_boolean_value(&self.names())
+                        == Some(false)
                 {
-                    self.retract_block(&while_loop.block);
+                    self.drop_stmt(stmt);
                     return false;
                 }
                 self.visit_block(&mut while_loop.block);
@@ -303,43 +334,40 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Statement::RepeatLoop(_) => return self.visit_repeat(stmt),
             Statement::DoBlock(do_block) => {
                 self.visit_block(&mut do_block.block);
-                return !(should_remove_dead_code
-                    && remove_dead_code::is_empty_block(&do_block.block));
+                return !(should_remove_dead_code && do_block.block.stmts.is_empty());
             }
             Statement::NumericFor(numeric_for) => {
-                if should_remove_dead_code && remove_dead_code::has_default_step(numeric_for) {
-                    numeric_for.step = None;
+                if should_remove_dead_code
+                    && remove_dead_code::has_default_step(numeric_for, self.names())
+                    && let Some(step) = numeric_for.step.take()
+                {
+                    self.drop_expr(&step);
                     self.has_changed = true;
                 }
                 let outer_registers = self.live_registers;
-                self.live_registers =
-                    self.live_registers.saturating_add(NUMERIC_FOR_STATE_LOCALS.saturating_add(1));
+                self.live_registers += NUMERIC_FOR_STATE_REGISTERS + 1;
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
             }
             Statement::GenericFor(generic_for) => {
                 let outer_registers = self.live_registers;
-                let loop_registers =
-                    GENERIC_FOR_STATE_LOCALS.saturating_add(generic_for.names.len());
-                self.live_registers = self.live_registers.saturating_add(loop_registers);
+                self.live_registers += GENERIC_FOR_STATE_REGISTERS + generic_for.names.len();
                 self.walk_stmt(stmt);
                 self.live_registers = outer_registers;
                 return true;
             }
-            // A Lua 5.2+ `;` never decides whether a label ends its block,
-            // since every Lua skips past it to see, and the printer puts one
-            // back before a statement that starts with `(`.
-            Statement::EmptyStatement(_) => return !should_remove_dead_code,
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
@@ -348,23 +376,13 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         true
     }
 
-    /// A `local function`'s references to itself in its own body keep
-    /// nothing alive.
-    fn set_open(&mut self, id: Option<usize>, is_open: bool) {
-        if let Some(binding) = id.and_then(|own| self.bindings.get_mut(own)) {
-            binding.is_open = is_open;
-        }
-    }
-
-    /// What a block takes once its statements have theirs: its unused
-    /// locals go, then `do` blocks give up their statements, neighbors
-    /// merge, and a run of `if ... return` folds.
-    fn finish_block(&mut self, block: &mut Block<'ast>, outer_registers: usize) {
+    /// What a block takes once its statements have theirs: the locals it
+    /// inlined go, then its unused locals, then `do` blocks give up their
+    /// statements, neighbors merge, and a run of `if ... return` folds.
+    fn finish_block(&mut self, block: &mut Block<'ast>, outer_registers: usize, held_start: usize) {
+        self.settle_held(&mut block.stmts, held_start);
         if self.config.remove_dead_code {
             self.drop_unused(&mut block.stmts);
-        }
-        if self.config.inline_locals {
-            self.inline_late(block, outer_registers);
         }
         if self.config.simplify_statements {
             self.unwrap_do_blocks(block);
@@ -379,38 +397,33 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
         self.live_registers = outer_registers;
     }
 
-    /// Walks a run's operands, landing an inlined value bare wherever it
-    /// keeps its grouping, and splices a run that lands bare at the run's
-    /// own level.
-    fn walk_run(&mut self, run: &mut BinaryOp<'ast>) {
-        if self.descend() {
-            if self.held_count > 0 {
-                self.close_casts_before_less_than(run);
-            }
-            let op = run.links.first().op;
-            let inner_position = OperandPosition::of_side(op, inner_operand_side(run));
-            let outer_has_bare_operand = mem::replace(&mut self.has_bare_operand, false);
-            self.visit_operand(&mut run.first, OperandPosition::Left(op));
-            let last_index = run.links.len().saturating_sub(1);
-            for (i, link) in run.links.iter_mut().enumerate() {
-                let position =
-                    if i == last_index { OperandPosition::Right(op) } else { inner_position };
-                self.visit_operand(&mut link.operand, position);
-            }
-            if mem::replace(&mut self.has_bare_operand, outer_has_bare_operand) {
-                run.splice_operands(self.allocator);
-            }
-        }
-        self.ascend();
+    /// Where an expression stands that takes only its first value, or in a
+    /// type, where the walk keeps every truncation.
+    const fn one_value(&self) -> Place {
+        if self.type_depth > 0 { Place::AllValues } else { Place::OneValue }
     }
 
-    /// Walks an expression and rewrites it, as an operand of an operator or
-    /// a cast, or standing alone, where it groups with nothing around it.
-    fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
+    /// Where the item at `index` of a list of `count` stands: the last may
+    /// spread its values when `can_spread`.
+    const fn list_item(&self, index: usize, count: usize, can_spread: bool) -> Place {
+        if can_spread && index + 1 == count { Place::AllValues } else { self.one_value() }
+    }
+
+    /// Walks the values of a list that fills `targets` slots.
+    fn visit_values(&mut self, values: &mut [Expression<'ast>], targets: usize) {
+        let count = values.len();
+        for (index, value) in values.iter_mut().enumerate() {
+            let place = self.list_item(index, count, targets > count);
+            self.visit_expr_in(value, place);
+        }
+    }
+
+    /// Walks an expression and rewrites it at `place`.
+    fn visit_expr_in(&mut self, expr: &mut Expression<'ast>, place: Place) {
         match expr {
             Expression::Name(name) => {
-                if self.held_count > 0
-                    && let Some(value) = local_of(name).and_then(|id| self.take_value(id))
+                if self.waiting > 0
+                    && let Some(value) = self.take_held(name)
                 {
                     *expr = value;
                 }
@@ -419,14 +432,16 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             Expression::BinaryOp(run) => self.walk_run(run),
             Expression::UnaryOp(unary_op) => {
                 if self.descend() {
-                    self.visit_operand(&mut unary_op.operand, OperandPosition::Unary);
+                    let operand_place =
+                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::OneValue };
+                    self.visit_operand(&mut unary_op.operand, operand_place);
                 }
                 self.ascend();
             }
             // Luau
             Expression::TypeCast(cast) => {
                 if self.descend() {
-                    self.visit_operand(&mut cast.expr, OperandPosition::Cast);
+                    self.visit_operand(&mut cast.expr, Place::OneValue);
                     self.visit_type(&mut cast.ty);
                 }
                 self.ascend();
@@ -446,100 +461,74 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::InterpolatedString(_)
             | Expression::Error(_) => self.walk_expr(expr),
         }
-        self.leave_expr(expr, is_operand);
+        self.leave_expr(expr, place);
     }
 
-    /// The rewrites an expression takes once its operands have theirs.
-    fn leave_expr(&mut self, expr: &mut Expression<'ast>, is_operand: bool) {
+    /// Its own frame, so the locals it needs stay out of the one every level
+    /// of nesting takes.
+    fn walk_run(&mut self, run: &mut BinaryOp<'ast>) {
+        if self.descend() {
+            let outer_has_landed_run = mem::replace(&mut self.has_landed_run, false);
+            self.visit_operand(&mut run.first, Place::OneValue);
+            for link in &mut *run.links {
+                self.visit_operand(&mut link.operand, Place::OneValue);
+            }
+            if mem::replace(&mut self.has_landed_run, outer_has_landed_run) {
+                run.splice_operands(self.allocator);
+            }
+        }
+        self.ascend();
+    }
+
+    /// The rewrites an expression at `place` takes once its operands have
+    /// theirs.
+    fn leave_expr(&mut self, expr: &mut Expression<'ast>, place: Place) {
         let allocator = self.allocator;
         match expr {
             Expression::BinaryOp(_) => {
                 if self.config.remove_dead_code && self.fold_redundant_ternary(expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr, is_operand);
+                    return self.leave_expr(expr, place);
                 }
                 if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr, is_operand);
+                    return self.leave_expr(expr, place);
                 }
-                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
-                    self.has_changed = true;
+                // A run a rewrite built has operands no walk left, and an
+                // operand takes one value.
+                if self.config.simplify_parens
+                    && let Expression::BinaryOp(run) = expr
+                {
+                    let mut has_stripped = simplify_parens::strip(&mut run.first, Place::OneValue);
+                    for link in &mut *run.links {
+                        has_stripped |= simplify_parens::strip(&mut link.operand, Place::OneValue);
+                    }
+                    if has_stripped | run.splice_operands(allocator) {
+                        self.has_changed = true;
+                    }
                 }
             }
             Expression::UnaryOp(_) => {
                 if self.config.fold_constants && self.fold(expr) {
                     self.has_changed = true;
-                    return self.leave_expr(expr, is_operand);
+                    return self.leave_expr(expr, place);
                 }
-                if self.config.simplify_parens && simplify_parens::strip(allocator, expr) {
-                    self.has_changed = true;
+                // So does an operator a rewrite built.
+                if self.config.simplify_parens
+                    && let Expression::UnaryOp(unary_op) = expr
+                {
+                    let operand_place =
+                        if unary_op.op == UnOp::Neg { Place::Negated } else { Place::OneValue };
+                    if simplify_parens::strip(&mut unary_op.operand, operand_place) {
+                        self.has_changed = true;
+                    }
                 }
             }
             Expression::Parenthesized(_) => {
-                if self.config.simplify_parens
-                    && if is_operand {
-                        simplify_parens::strip(allocator, expr)
-                    } else {
-                        simplify_parens::strip_standalone(expr)
-                    }
-                {
+                if self.config.simplify_parens && simplify_parens::strip(expr, place) {
                     self.has_changed = true;
                 }
             }
-            Expression::StringLiteral(literal) => {
-                if self.config.shorten_strings
-                    && self.respeller.shorten_string(allocator, self.version, literal)
-                {
-                    self.has_changed = true;
-                }
-            }
-            Expression::Number(literal) => {
-                if self.config.shorten_numbers
-                    && self.respeller.shorten_number(allocator, self.subtypes, literal)
-                {
-                    self.has_changed = true;
-                }
-            }
-            // Luau
-            Expression::Integer(literal) => {
-                if self.config.shorten_numbers && self.respeller.shorten_integer(allocator, literal)
-                {
-                    self.has_changed = true;
-                }
-            }
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => {}
-        }
-    }
-
-    /// Folds `expr` and uncounts the operands the fold drops. A literal the
-    /// fold leaves at either end of a run, or under a `-`, is one the walk
-    /// never reaches, so it takes its rewrites here, and the caller's take
-    /// a whole folded literal.
-    fn fold(&mut self, expr: &mut Expression<'ast>) -> bool {
-        let (allocator, version) = (self.allocator, self.version);
-        let mut counter = self.counter();
-        if !fold_constants::fold(allocator, version, expr, &mut |dropped| {
-            counter.visit_expr(dropped);
-        }) {
-            return false;
-        }
-        match expr {
-            Expression::BinaryOp(run) => {
-                self.leave_literal(&mut run.first);
-                self.leave_literal(&mut run.links.last_mut().operand);
-            }
-            Expression::UnaryOp(_) => self.leave_literal(expr),
             Expression::Nil(_)
             | Expression::False(_)
             | Expression::True(_)
@@ -550,89 +539,59 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Expression::FunctionDef(_)
             | Expression::Name(_)
             | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
             | Expression::TableConstructor(_)
             | Expression::IfExpression(_)
             | Expression::InterpolatedString(_)
             | Expression::TypeCast(_)
             | Expression::Error(_) => {}
         }
-        true
     }
 
-    /// The rewrites of a folded literal, a negative number's numeral
-    /// included.
-    fn leave_literal(&mut self, expr: &mut Expression<'ast>) {
-        match expr {
-            Expression::Number(_) | Expression::StringLiteral(_) => self.leave_expr(expr, true),
-            Expression::UnaryOp(negation) if matches!(negation.operand, Expression::Number(_)) => {
-                self.leave_expr(&mut negation.operand, true);
-            }
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Integer(_)
-            | Expression::UnaryOp(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::BinaryOp(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::IfExpression(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => {}
-        }
+    /// The dialect and the names as the scoping resolves them, for what
+    /// `luck_value` tells of an expression.
+    const fn names(&self) -> ResolvedNames<'_> {
+        ResolvedNames(self.scoping)
     }
 }
 
-impl<'ast> VisitorMut<'ast> for Compressor<'_, 'ast> {
+impl<'ast> VisitMut<'ast> for Compressor<'_, 'ast> {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         true
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 
     fn visit_block(&mut self, block: &mut Block<'ast>) {
         self.descend();
         let outer_registers = self.live_registers;
+        let held_start = self.held.len();
         self.visit_stmts(&mut block.stmts);
-        if let Some(last) = &mut block.last_stmt {
-            self.visit_last_stmt(last);
-        }
-        self.finish_block(block, outer_registers);
+        self.finish_block(block, outer_registers, held_start);
         self.ascend();
     }
 
-    /// Every place the default walks reach an expression from is one where
-    /// it stands alone. Operands and chain prefixes have walks of their own.
     fn visit_expr(&mut self, expr: &mut Expression<'ast>) {
-        self.visit_expr_in(expr, false);
+        let place = self.one_value();
+        self.visit_expr_in(expr, place);
     }
 
-    /// The prefix's own parentheses aren't the walk's to strip, since a
-    /// literal such as `("s"):rep(2)` needs them.
-    fn visit_suffixed(&mut self, chain: &mut SuffixedExpression<'ast>) {
+    /// A name the walk reaches outside an expression, as `function t.f()`
+    /// reads `t`, can't take a value, so the local it reads keeps its own.
+    fn visit_name(&mut self, name: &mut Name<'ast>) {
+        if self.waiting > 0 {
+            self.refuse_held(name);
+        }
+    }
+
+    /// A prefix's parentheses go with the chain's, since a Luau
+    /// instantiation passes every value of what it follows.
+    fn visit_suffixed_expr(&mut self, suffixed_expr: &mut SuffixedExpression<'ast>) {
         if self.descend() {
-            if let Expression::Parenthesized(parenthesized) = &mut chain.prefix {
-                if self.descend() {
-                    self.visit_expr(&mut parenthesized.expr);
-                }
-                self.ascend();
-            } else {
-                self.visit_expr(&mut chain.prefix);
-                // Only an inlined value can leave a prefix that can't stand
-                // bare, as `x["k"]` with `x = 37.5` becomes `(37.5)["k"]`.
-                if !is_prefix_expr(&chain.prefix) {
-                    chain.prefix = parenthesize(self.allocator, chain.prefix.take());
-                }
-            }
-            for suffix in &mut *chain.suffixes {
+            self.visit_expr_in(&mut suffixed_expr.prefix, Place::AllValues);
+            for suffix in &mut *suffixed_expr.suffixes {
                 match suffix {
                     Suffix::Field(_) => {}
                     Suffix::Index { index, .. } => {
@@ -646,88 +605,138 @@ impl<'ast> VisitorMut<'ast> for Compressor<'_, 'ast> {
                     Suffix::Call(args) => self.visit_function_args(args),
                     Suffix::MethodCall(call) => {
                         if let Some(type_args) = &mut call.type_args {
-                            for ty in &mut type_args.args {
-                                self.visit_type(ty);
-                            }
+                            self.visit_type_args(type_args);
                         }
                         self.visit_function_args(&mut call.args);
                     }
                     // Luau
-                    Suffix::TypeInstantiation { type_args, .. } => {
-                        for ty in &mut type_args.args {
-                            self.visit_type(ty);
-                        }
-                    }
+                    Suffix::TypeInstantiation { type_args, .. } => self.visit_type_args(type_args),
                 }
             }
-            if self.config.simplify_parens && simplify_parens::strip_prefix(self.allocator, chain) {
+            if self.config.simplify_parens
+                && simplify_parens::strip_prefix(self.allocator, suffixed_expr)
+            {
                 self.has_changed = true;
             }
         }
         self.ascend();
     }
 
-    fn visit_function_args(&mut self, args: &mut FunctionArgs<'ast>) {
-        self.walk_function_args(args);
-        if self.config.simplify_parens && simplify_parens::strip_call_args(args) {
+    fn visit_function_args(&mut self, function_args: &mut FunctionArgs<'ast>) {
+        if let FunctionArgs::Parenthesized { args, .. } = function_args {
+            self.visit_values(args, usize::MAX);
+        } else {
+            self.walk_function_args(function_args);
+        }
+        if self.config.simplify_parens && simplify_parens::strip_call_args(function_args) {
             self.has_changed = true;
         }
-        if self.config.shorten_strings
-            && let FunctionArgs::StringLiteral(literal) = args
-            && self.respeller.shorten_string(self.allocator, self.version, literal)
+    }
+
+    /// The last field spreads its values when it's positional.
+    fn visit_table_constructor(&mut self, table_constructor: &mut TableConstructor<'ast>) {
+        if self.descend() {
+            let count = table_constructor.fields.len();
+            for (index, field) in table_constructor.fields.iter_mut().enumerate() {
+                if let Field::Positional(value) = field {
+                    let place = self.list_item(index, count, true);
+                    self.visit_expr_in(value, place);
+                } else {
+                    self.visit_field(field);
+                }
+            }
+        }
+        self.ascend();
+        if self.config.simplify_indexes
+            && simplify_indexes::simplify_table(table_constructor, self.version)
         {
             self.has_changed = true;
         }
     }
 
-    fn visit_table_constructor(&mut self, table: &mut TableConstructor<'ast>) {
-        self.walk_table_constructor(table);
-        if self.config.simplify_indexes && simplify_indexes::simplify_table(table, self.version) {
-            self.has_changed = true;
-        }
+    fn visit_return_stmt(&mut self, return_stmt: &mut ReturnStatement<'ast>) {
+        self.visit_values(&mut return_stmt.exprs, usize::MAX);
     }
 
-    /// The signature belongs to the scope around the function, as the bind
-    /// walk counts it.
-    fn visit_function_body(&mut self, body: &mut FunctionBody<'ast>) {
-        let outer_registers = mem::replace(&mut self.live_registers, parameter_locals(body));
-        if self.descend() {
-            if let Some(generics) = &mut body.generics {
-                self.visit_generic_type_list(generics);
-            }
-            for param in &mut body.params {
-                if let Some(ty) = &mut param.type_annotation {
-                    self.visit_type(ty);
-                }
-            }
-            if let Some(ty) =
-                body.vararg.as_mut().and_then(|vararg| vararg.type_annotation.as_mut())
-            {
-                self.visit_type(ty);
-            }
-            if let Some(ty) = &mut body.return_type {
-                self.visit_type(ty);
-            }
-            self.function_depth = self.function_depth.saturating_add(1);
-            let outer_has_changed = mem::take(&mut self.has_changed);
-            self.visit_block(&mut body.block);
-            if self.config.remove_dead_code && remove_dead_code::ends_in_bare_return(&body.block) {
-                body.block.last_stmt = None;
-                self.has_changed = true;
-            }
-            if self.config.lift_locals {
-                self.lift(body);
-            }
-            self.has_changed |= outer_has_changed;
-            self.function_depth = self.function_depth.saturating_sub(1);
+    fn visit_assignment(&mut self, assignment: &mut Assignment<'ast>) {
+        for target in &mut assignment.targets {
+            self.visit_var(target);
         }
-        self.ascend();
+        let targets = assignment.targets.len();
+        self.visit_values(&mut assignment.values, targets);
+    }
+
+    // Lua 5.5
+    fn visit_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
+        for attributed in &mut global_declaration.names {
+            self.visit_attributed_name(attributed);
+        }
+        let names = global_declaration.names.len();
+        self.visit_values(&mut global_declaration.exprs, names);
+    }
+
+    /// The values a generic `for` takes are its iterator, state, and control
+    /// value, and on Lua 5.4+ a closing value, so the last may spread.
+    fn visit_generic_for(&mut self, generic_for: &mut GenericFor<'ast>) {
+        for param in &mut generic_for.names {
+            self.visit_param(param);
+        }
+        self.visit_values(&mut generic_for.exprs, usize::MAX);
+        self.visit_block(&mut generic_for.block);
+    }
+
+    fn visit_function_body(&mut self, function_body: &mut FunctionBody<'ast>) {
+        let outer_registers =
+            mem::replace(&mut self.live_registers, parameter_locals(function_body));
+        self.walk_function_body(function_body);
+        if self.config.remove_dead_code {
+            self.has_changed |= remove_dead_code::drop_bare_return(&mut function_body.block);
+        }
         self.live_registers = outer_registers;
     }
 
     fn visit_type(&mut self, ty: &mut Type<'ast>) {
-        let outer_floor = mem::replace(&mut self.type_floor, self.function_depth.saturating_add(1));
+        self.type_depth += 1;
         self.walk_type(ty);
-        self.type_floor = outer_floor;
+        self.type_depth -= 1;
+    }
+}
+
+/// Pairs each symbol the scoping has with the one a fresh analysis finds
+/// for the same name, and checks that every name that refers to one refers
+/// to its pair, by a live reference.
+#[cfg(debug_assertions)]
+struct FreshCheck<'check> {
+    scoping: &'check Scoping,
+    dropped: &'check BitSet,
+    fresh: &'check Scoping,
+    pairs: Vec<Option<SymbolId>>,
+}
+
+#[cfg(debug_assertions)]
+impl<'tree> Visit<'tree> for FreshCheck<'_> {
+    fn visit_name(&mut self, name: &'tree Name<'tree>) {
+        if let (Some(symbol), Some(fresh)) =
+            (self.scoping.symbol_of(name), self.fresh.symbol_of(name))
+        {
+            self.pairs[symbol.index()] = Some(fresh);
+        }
+        let kept = self.scoping.reference_of(name);
+        let found = self.fresh.reference_of(name);
+        assert_eq!(kept.is_some(), found.is_some(), "{name:?} refers in one analysis only");
+        if let (Some(reference), Some(fresh)) = (kept, found) {
+            assert!(!self.dropped.contains(reference.index()), "{name:?} is marked dropped");
+            let fresh_resolved = self.fresh.reference(fresh).resolved;
+            let paired = self.scoping.reference(reference).resolved.and_then(|symbol| {
+                let pair = &mut self.pairs[symbol.index()];
+                // An implicit `self` or `arg` has no name, so its first
+                // reference pairs it.
+                if pair.is_none() {
+                    *pair = fresh_resolved;
+                }
+                *pair
+            });
+            assert_eq!(paired, fresh_resolved, "{name:?} resolves elsewhere");
+        }
     }
 }

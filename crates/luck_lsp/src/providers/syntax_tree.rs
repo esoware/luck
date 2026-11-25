@@ -1,5 +1,5 @@
-use core::fmt::{self, Write as _};
-use core::mem;
+use std::fmt::{self, Write as _};
+use std::mem;
 
 use crate::document::DocumentState;
 
@@ -8,11 +8,11 @@ use crate::document::DocumentState;
 /// its size.
 const MAX_DUMP_BYTES: usize = 8 * 1024 * 1024;
 
+#[expect(clippy::use_debug, reason = "this dump's format is the AST's `Debug` output")]
 pub(crate) fn syntax_tree(document: &DocumentState) -> String {
     let mut dump = PrettyDump::default();
-    #[expect(clippy::use_debug, reason = "this dump's format is the AST's `Debug` output")]
     // The only error is the limit, which ends the dump with its marker.
-    let _unused = write!(dump, "{:?}", document.parse().block);
+    let _ = write!(dump, "{:?}", document.parse().chunk);
     dump.text
 }
 
@@ -41,7 +41,7 @@ impl PrettyDump {
         if self.is_cut_off {
             return;
         }
-        if self.text.len().saturating_add(piece.len()) > MAX_DUMP_BYTES {
+        if self.text.len() + piece.len() > MAX_DUMP_BYTES {
             self.text.push_str("\n... the rest of the tree is cut off here");
             self.is_cut_off = true;
             return;
@@ -62,7 +62,7 @@ impl PrettyDump {
 
     fn open(&mut self, opener: &str) {
         self.push(opener);
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         self.new_line();
     }
 
@@ -132,49 +132,23 @@ impl fmt::Write for PrettyDump {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-    use std::fs;
-    use std::path::Path;
-
     use luck_ast::MAX_NESTING_DEPTH;
-    use luck_core::LuaTarget;
-    use luck_testgen::{
-        collect_fixture_files, detect_version, generate_full, on_the_smallest_stack,
-    };
-    use luck_token::LuaVersion;
+    use luck_testgen::{generate_full_grammar, lua_fixtures, on_the_smallest_stack};
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
     use crate::fixtures::document;
 
-    const fn target(version: LuaVersion) -> LuaTarget {
-        match version {
-            LuaVersion::Lua51 => LuaTarget::Lua51,
-            LuaVersion::Lua52 => LuaTarget::Lua52,
-            LuaVersion::Lua53 => LuaTarget::Lua53,
-            LuaVersion::Lua54 => LuaTarget::Lua54,
-            LuaVersion::Lua55 => LuaTarget::Lua55,
-            LuaVersion::Luau => LuaTarget::Luau,
-        }
-    }
-
     #[test]
     fn a_dump_lays_the_tree_out_as_pretty_debug_does() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-        let mut sources = Vec::new();
-        for path in collect_fixture_files(&root).expect("fixture tree is readable") {
-            if matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")) {
-                let relative = path.strip_prefix(&root).expect("fixture is under the root");
-                let text = fs::read_to_string(&path).expect("fixture is readable");
-                sources.push((detect_version(relative), text));
-            }
-        }
-        assert!(!sources.is_empty(), "no fixtures found under {}", root.display());
+        let mut sources: Vec<(LuaVersion, String)> =
+            lua_fixtures().into_iter().map(|fixture| (fixture.version, fixture.source)).collect();
         for version in LuaVersion::ALL {
-            sources.extend((0..20).map(|seed| (version, generate_full(seed, version, 25))));
+            sources.extend((0..20).map(|seed| (version, generate_full_grammar(seed, version, 25))));
         }
         for (version, text) in sources {
-            let document = document(&text, target(version));
-            let expected = format!("{:#?}", document.parse().block);
+            let document = document(&text, version.into());
+            let expected = format!("{:#?}", document.parse().chunk);
             if expected.len() <= MAX_DUMP_BYTES {
                 assert_eq!(syntax_tree(&document), expected, "{version:?}\n{text}");
             }
@@ -188,7 +162,7 @@ mod tests {
     #[test]
     fn a_tree_at_the_cap_dumps_within_the_bound_on_the_smallest_stack() {
         // The chunk is a level, and each function a body and a block.
-        let levels = MAX_NESTING_DEPTH.saturating_sub(1).div_euclid(2);
+        let levels = (MAX_NESTING_DEPTH - 1) / 2;
         let source = format!(
             "{}local innermost = 1{}",
             "local function f() ".repeat(levels),
@@ -198,7 +172,7 @@ mod tests {
             let document = document(text, LuaTarget::Lua54);
             assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
             let dump = syntax_tree(&document);
-            assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());
+            assert!(dump.len() <= MAX_DUMP_BYTES + 64, "{}", dump.len());
             assert!(dump.ends_with("cut off here"), "the dump says it stopped early");
         });
     }
@@ -209,7 +183,7 @@ mod tests {
         let text = format!("local x = {chain}\n").repeat(40);
         let document = document(&text, LuaTarget::Lua54);
         let dump = syntax_tree(&document);
-        assert!(dump.len() <= MAX_DUMP_BYTES.saturating_add(64), "{}", dump.len());
+        assert!(dump.len() <= MAX_DUMP_BYTES + 64, "{}", dump.len());
         assert!(dump.ends_with("cut off here"), "the dump says it stopped early");
     }
 }

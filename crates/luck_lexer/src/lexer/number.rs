@@ -1,0 +1,298 @@
+use luck_diagnostics::Diagnostic;
+use luck_token::{LuaVersion, Span, TokenKind, read_integer};
+
+use super::Lexer;
+use crate::cursor::Cursor;
+
+impl Lexer<'_> {
+    /// Lex a numeral that starts at `start` with `first`, a digit or a `.`
+    /// before one, with the cursor past `first`, or report a malformed one
+    /// and return `None`.
+    #[inline]
+    pub(super) fn lex_number(&mut self, start: usize, first: u8) -> Option<TokenKind> {
+        let rest = self.cursor.rest();
+        let digit_count = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        // Most numerals are decimal integers that nothing else touches.
+        if first != b'.'
+            && !rest
+                .get(digit_count)
+                .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+        {
+            self.cursor.advance_by(digit_count);
+            return Some(TokenKind::Number);
+        }
+        match scan_other_number(&mut self.cursor, self.version, start, first) {
+            Ok(kind) => Some(kind),
+            Err(error) => {
+                self.errors.push(error);
+                None
+            }
+        }
+    }
+}
+
+/// Cold and out of line, which parses 1-2% faster than leaving it to the
+/// compiler.
+#[cold]
+#[inline(never)]
+fn scan_other_number(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+    first: u8,
+) -> Result<TokenKind, Diagnostic> {
+    let is_integer = match (first, cursor.rest()) {
+        // Every reference scanner reads the digit after a leading `.` as the
+        // numeral's first, so `.0x` opens a hex scan that can never convert.
+        (b'.', [b'0', b'x' | b'X', ..]) => {
+            cursor.bump();
+            return Err(touching_letter_error(cursor, start));
+        }
+        (b'0', after_zero) => {
+            // Luau strips every `_` before conversion, so `0_x1` is hex.
+            let underscore_count = if version.has_underscore_separators() {
+                after_zero.iter().take_while(|&&b| b == b'_').count()
+            } else {
+                0
+            };
+            let prefix_length = underscore_count + 1;
+            match after_zero.get(underscore_count) {
+                Some(b'x' | b'X') => scan_hex_number(cursor, version, start, prefix_length)?,
+                // Luau
+                Some(b'b' | b'B') if version.has_binary_literals() => {
+                    scan_binary_number(cursor, version, start, prefix_length)?
+                }
+                _ => scan_decimal_number(cursor, version, start, false)?,
+            }
+        }
+        _ => scan_decimal_number(cursor, version, start, first == b'.')?,
+    };
+    Ok(if is_integer { TokenKind::Integer } else { TokenKind::Number })
+}
+
+/// Whether the numeral took the Luau `i` suffix. The cursor is past the `0`,
+/// `prefix_length` bytes before the hex digits.
+fn scan_hex_number(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+    prefix_length: usize,
+) -> Result<bool, Diagnostic> {
+    cursor.advance_by(prefix_length);
+
+    let has_integer_part = eat_digits(cursor, version, u8::is_ascii_hexdigit);
+
+    // Only a fraction can stand in for the integer digits, and without hex
+    // floats a `.` can't start one, so a digitless `0x` is malformed there
+    // whatever follows it.
+    let can_have_fraction = version.has_hex_floats() && cursor.peek() == Some(b'.');
+    if !has_integer_part && !can_have_fraction {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "hex literal requires at least one digit after `0x`",
+        ));
+    }
+
+    if version.has_hex_floats() {
+        // Lua 5.2+
+        if cursor.eat(b'.') {
+            let has_fraction = eat_digits(cursor, version, u8::is_ascii_hexdigit);
+            if !has_integer_part && !has_fraction {
+                return Err(Diagnostic::e008(
+                    cursor.span_since(start),
+                    "hex float requires digits before or after decimal point",
+                ));
+            }
+        }
+        if matches!(cursor.peek(), Some(b'p' | b'P')) && !eat_exponent(cursor, version) {
+            return Err(Diagnostic::e008(
+                cursor.span_since(start),
+                "hex float exponent requires digits",
+            ));
+        }
+    } else if matches!(cursor.rest(), [b'.', digit, ..] if digit.is_ascii_hexdigit())
+        || matches!(cursor.peek(), Some(b'p' | b'P'))
+    {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "hex float literals are not supported in this Lua version",
+        ));
+    }
+
+    let is_integer = eat_integer_suffix(cursor, version, start)?;
+
+    if (version.has_hex_scan_dots() && cursor.peek() == Some(b'.'))
+        || is_touching_numeral(cursor, version)
+    {
+        return Err(Diagnostic::e008(
+            Span::from_indices(start, cursor.position() + 1),
+            "malformed hexadecimal number",
+        ));
+    }
+    Ok(is_integer)
+}
+
+/// Whether the numeral took the Luau `i` suffix. The cursor is past the `0`,
+/// `prefix_length` bytes before the binary digits.
+fn scan_binary_number(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+    prefix_length: usize,
+) -> Result<bool, Diagnostic> {
+    cursor.advance_by(prefix_length);
+
+    if !eat_digits(cursor, version, |b| matches!(b, b'0' | b'1')) {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "binary literal requires at least one digit",
+        ));
+    }
+
+    let is_integer = eat_integer_suffix(cursor, version, start)?;
+
+    if is_touching_numeral(cursor, version) {
+        return Err(touching_letter_error(cursor, start));
+    }
+    Ok(is_integer)
+}
+
+/// Whether the numeral took the Luau `i` suffix. The cursor is past the first
+/// digit, or past a leading `.` when `is_fraction` holds.
+fn scan_decimal_number(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+    is_fraction: bool,
+) -> Result<bool, Diagnostic> {
+    let mut is_float = is_fraction;
+    if !is_fraction {
+        eat_digits(cursor, version, u8::is_ascii_digit);
+        if cursor.peek() == Some(b'.') && cursor.peek_next() != Some(b'.') {
+            is_float = true;
+            cursor.bump();
+        }
+    }
+    if is_float {
+        eat_digits(cursor, version, u8::is_ascii_digit);
+    }
+
+    let has_exponent = matches!(cursor.peek(), Some(b'e' | b'E'));
+    if has_exponent {
+        is_float = true;
+        if !eat_exponent(cursor, version) {
+            return Err(Diagnostic::e008(
+                cursor.span_since(start),
+                "decimal exponent requires digits",
+            ));
+        }
+    }
+
+    if !has_exponent || version.has_hex_scan_dots() {
+        reject_adjacent_concat(cursor, start)?;
+    }
+
+    // Luau consumes the suffix on floats too: `2.5i` is a malformed integer,
+    // not a float followed by an identifier.
+    if is_float && version.has_luau_integer_literals() && cursor.eat(b'i') {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "the `i` integer suffix is not allowed on float literals",
+        ));
+    }
+    let is_integer = eat_integer_suffix(cursor, version, start)?;
+
+    if is_touching_numeral(cursor, version) {
+        return Err(touching_letter_error(cursor, start));
+    }
+    Ok(is_integer)
+}
+
+/// Whether the byte at the cursor would join the numeral in `version`'s
+/// scanner and leave it unconvertible. 5.2 and 5.3 only read on through hex
+/// digits, so any other letter starts a new token there.
+fn is_touching_numeral(cursor: &Cursor<'_>, version: LuaVersion) -> bool {
+    cursor.peek().is_some_and(|b| {
+        if version.has_strict_numeral_end() {
+            b.is_ascii_alphanumeric() || b == b'_'
+        } else {
+            b.is_ascii_hexdigit()
+        }
+    })
+}
+
+fn touching_letter_error(cursor: &Cursor<'_>, start: usize) -> Diagnostic {
+    Diagnostic::e008(
+        Span::from_indices(start, cursor.position() + 1),
+        "malformed number (a numeral cannot touch a letter)",
+    )
+}
+
+/// Consume digits that satisfy `is_digit`, plus underscore separators where
+/// `version` has them, and return whether any digit was among them.
+///
+/// Elsewhere an underscore ends the digits. Luau strips underscores
+/// anywhere in the literal before conversion, so `0b_01`, `1__2`, and `12_`
+/// are all valid there, with no placement rules.
+fn eat_digits(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    is_digit: impl Fn(&u8) -> bool,
+) -> bool {
+    let digits_start = cursor.position();
+    if version.has_underscore_separators() {
+        cursor.eat_while(|b| is_digit(&b) || b == b'_');
+        cursor.text_since(digits_start).iter().any(|&b| b != b'_')
+    } else {
+        cursor.eat_while(|b| is_digit(&b));
+        cursor.position() > digits_start
+    }
+}
+
+/// Consume an exponent with the cursor on its marker (`e` or `p`): the
+/// marker, an optional sign, and the decimal digits. Returns whether any
+/// digits followed.
+fn eat_exponent(cursor: &mut Cursor<'_>, version: LuaVersion) -> bool {
+    cursor.bump();
+    if matches!(cursor.peek(), Some(b'+' | b'-')) {
+        cursor.bump();
+    }
+    eat_digits(cursor, version, u8::is_ascii_digit)
+}
+
+/// Consume a Luau `i` suffix and any `_` after it, range-checking the
+/// integer, and return whether there was one.
+///
+/// A decimal literal must fit an `i64`, while hexadecimal and binary ones may
+/// use all 64 bits, matching Luau's bit-pattern semantics.
+fn eat_integer_suffix(
+    cursor: &mut Cursor<'_>,
+    version: LuaVersion,
+    start: usize,
+) -> Result<bool, Diagnostic> {
+    if !(version.has_luau_integer_literals() && cursor.eat(b'i')) {
+        return Ok(false);
+    }
+    let numeral = str::from_utf8(cursor.text_since(start)).expect("a numeral is ASCII");
+    if read_integer(numeral).is_none() {
+        return Err(Diagnostic::e008(
+            cursor.span_since(start),
+            "integer literal is outside the 64-bit range",
+        ));
+    }
+    cursor.eat_while(|b| b == b'_');
+    Ok(true)
+}
+
+/// Every reference scanner consumes `.` greedily up to an exponent, so that
+/// is "malformed number", never a concat (`1 ..2` needs the space). Past an
+/// exponent only the 5.2+ scanners still do.
+fn reject_adjacent_concat(cursor: &Cursor<'_>, start: usize) -> Result<(), Diagnostic> {
+    if cursor.rest().starts_with(b"..") {
+        return Err(Diagnostic::e008(
+            Span::from_indices(start, cursor.position() + 2),
+            "malformed number (a numeral cannot directly precede `..`)",
+        ));
+    }
+    Ok(())
+}

@@ -1,32 +1,29 @@
-use luck_ast::{Field, TableConstructor};
+use luck_ast::{AstKind, AstType, Field};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags table constructors that mix positional fields with `name = value`
 /// fields, which `ipairs` skips.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MixedTable;
 
-impl_rule!(
+declare_lint_rule!(
     MixedTable,
-    "mixed_table",
     Suspicious,
     Warning,
     "table constructor mixes positional and record-style fields"
 );
 
-impl NodeRule for MixedTable {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::TableConstructor])
-    }
-    fn on_table(
-        &self,
-        table: &TableConstructor<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
+impl Rule for MixedTable {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::TableConstructor]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::TableConstructor(table) = node.kind() else {
+            return;
+        };
         let mut has_positional = false;
         let mut has_named = false;
         for field in &table.fields {
@@ -39,7 +36,7 @@ impl NodeRule for MixedTable {
             }
         }
         if has_positional && has_named {
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     "table mixes positional and record fields, so iteration with `ipairs` will \
                      skip the record fields",
@@ -55,56 +52,26 @@ impl NodeRule for MixedTable {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&MixedTable, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_positional_with_named() {
-        let diags = run("local t = {1, 2, foo = 3}");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_pure_positional() {
-        let diags = run("local t = {1, 2, 3}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_pure_record() {
-        let diags = run("local t = {a = 1, b = 2}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_positional_with_bracketed_key() {
+    const PASS: &[&str] = &[
+        "local t = {1, 2, 3}",
+        "local t = {a = 1, b = 2}",
         // `[3] = "x"` is explicit numeric placement the author opted into.
-        let diags = run(r#"local t = {1, 2, [3] = "x"}"#);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+        r#"local t = {1, 2, [3] = "x"}"#,
+        "local t = {}",
+    ];
+
+    const FAIL: &[&str] = &[
+        "local t = {1, 2, foo = 3}",
+        "local t = {foo = 1, 2, 3}",
+        // A `f{}` table is a table constructor.
+        "foo{ 1, x = 2 }",
+    ];
 
     #[test]
-    fn ignores_empty_table() {
-        let diags = run("local t = {}");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_named_then_positional() {
-        let diags = run("local t = {foo = 1, 2, 3}");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_mixed_table_in_table_call_argument() {
-        let diags = run("foo{ 1, x = 2 }");
-        assert_eq!(diags.len(), 1, "a `f{{...}}` table is a table constructor: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::MixedTable, PASS, FAIL).test_and_snapshot();
     }
 }

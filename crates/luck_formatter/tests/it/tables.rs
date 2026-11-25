@@ -195,6 +195,25 @@ local Status = {
 }
 
 #[test]
+fn a_packed_list_wraps_its_last_value_with_the_comma_the_break_adds() {
+    // `\t5, 6666` is eleven columns, and the trailing comma makes it twelve.
+    let options = FormatOptions { line_width: 11, ..FormatOptions::default() };
+    assert_format_with(
+        "local t = {1, 2, 3, 4, 5, 6666}\n",
+        "\
+local t = {
+\t1, 2,
+\t3, 4,
+\t5,
+\t6666,
+}
+",
+        LuaVersion::Lua54,
+        &options,
+    );
+}
+
+#[test]
 fn fill_entry_with_grouped_dot_chain() {
     // A dot chain of three or more accesses gets its own group inside the
     // fill entry, and the fill printer must not take that group's soft lines

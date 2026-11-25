@@ -1,50 +1,27 @@
-use core::fmt::Write as _;
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
 use luck_parser::{parse, parse_with_tokens};
-use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
-
-fn fixtures_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate dir has parent")
-        .parent()
-        .expect("crates dir has parent")
-        .join("tests")
-        .join("fixtures")
-}
+use luck_testgen::lua_fixtures;
 
 #[test]
 fn fixtures_outside_errors_parse_cleanly() {
     let allocator = Allocator::new();
-    let root = fixtures_directory();
-    let files: Vec<PathBuf> = collect_fixture_files(&root)
-        .expect("fixture tree is readable")
-        .into_iter()
-        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
-        .collect();
-    assert!(!files.is_empty(), "no fixture files found");
-
     let mut failures = Vec::new();
-    let mut success_count = 0usize;
+    let mut success_count = 0;
 
-    for path in &files {
-        let relative = path.strip_prefix(&root).expect("fixture is under the root");
-        let source = fs::read_to_string(path).expect("failed to read fixture file");
-        let result = parse(&allocator, &source, detect_version(relative));
+    for fixture in lua_fixtures() {
+        let result = parse(&allocator, fixture.source.as_bytes(), fixture.version);
 
-        if is_error_fixture(relative) {
+        if fixture.is_error {
             // Fixtures under `errors/` may or may not parse.
             continue;
         }
 
         if result.errors.is_empty() {
-            success_count = success_count.saturating_add(1);
+            success_count += 1;
         } else {
-            failures.push((path.clone(), result.errors));
+            failures.push((fixture.path, result.errors));
         }
     }
 
@@ -64,17 +41,15 @@ fn fixtures_outside_errors_parse_cleanly() {
 
 #[test]
 fn every_fixture_parses_with_the_tokens_it_lexes_to() {
-    let root = fixtures_directory();
-    let files = collect_fixture_files(&root).expect("fixture tree is readable");
-    for path in files
-        .iter()
-        .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau")))
-    {
-        let relative = path.strip_prefix(&root).expect("fixture is under the root");
-        let source = fs::read_to_string(path).expect("failed to read fixture file");
-        let version = detect_version(relative);
+    for fixture in lua_fixtures() {
+        let (source, version) = (fixture.source.as_bytes(), fixture.version);
         let allocator = Allocator::new();
-        let (_, tokens) = parse_with_tokens(&allocator, &source, version);
-        assert_eq!(tokens, luck_lexer::lex(&source, version).tokens, "{}", relative.display());
+        let tokens = parse_with_tokens(&allocator, source, version).tokens;
+        assert_eq!(
+            tokens,
+            luck_lexer::lex(source, version).tokens,
+            "{}",
+            fixture.relative_path.display()
+        );
     }
 }

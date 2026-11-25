@@ -1,57 +1,60 @@
 use luck_ast::{
-    Block, Expression, GenericFor, LocalAssignment, Name, NumericFor, Statement, Suffix, Var,
+    AstKind, AstType, Block, Expression, GenericFor, GetSpan as _, LocalAssignment, Name,
+    NumericFor, Statement, Suffix, Var,
 };
-use luck_semantic::{ScopeTree, SemanticAnalysis};
+use luck_semantic::{AstNode, AstTypesBitset, Scoping, SymbolId};
+use luck_stdlib::SemanticAnalysis;
 use luck_token::{Span, UnOp};
 
 use crate::call::is_global_call;
+use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
-use crate::nodes::adjacent_stmts;
-use crate::number::is_number_literal;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::number::has_number_value;
+use crate::rule::{Rule, declare_lint_rule};
 
 /// The help suggests `table.clone(src)` where the target's stdlib has it, and
 /// `table.move(src, 1, #src, 1, {})` otherwise. A target with neither gets no
 /// finding.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ManualTableClone;
 
 // Manual copy loops are slower than a single stdlib call.
-impl_rule!(
+declare_lint_rule!(
     ManualTableClone,
-    "manual_table_clone",
     Performance,
     Warning,
     "manual table copy; use `table.clone` or `table.move`"
 );
 
-impl WholeRule for ManualTableClone {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let semantic = context.semantic;
-        let Some(suggestion) = Suggestion::for_target(semantic) else {
-            return Vec::new();
+impl Rule for ManualTableClone {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
+
+    fn should_run(&self, host: &ContextHost<'_>) -> bool {
+        CopyCall::for_target(host.semantic).is_some()
+    }
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
         };
-        context
-            .nodes
-            .blocks()
-            .iter()
-            .flat_map(|block| adjacent_stmts(block))
-            .filter_map(|(first, second)| manual_copy_span(first, second, suggestion, semantic))
-            .map(|span| {
-                Finding::new("manual table copy can be replaced with a stdlib call", span)
-                    .with_help(suggestion.help())
-            })
-            .collect()
+        for (first, second) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
+            if let Some((span, copy_call)) = manual_copy(first, second, context) {
+                context.diagnostic(
+                    Finding::new("manual table copy can be replaced with a stdlib call", span)
+                        .with_help(copy_call.help()),
+                );
+            }
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Suggestion {
+enum CopyCall {
     TableClone,
     TableMove,
 }
 
-impl Suggestion {
+impl CopyCall {
     /// `None` when the target's stdlib has neither.
     fn for_target(semantic: &SemanticAnalysis<'_>) -> Option<Self> {
         let stdlib = semantic.stdlib();
@@ -73,28 +76,27 @@ impl Suggestion {
     }
 }
 
-/// The span from the `local` through the loop, when `stmt` is
-/// `local out = {}` and `next` a copy loop that `suggestion` can replace.
-fn manual_copy_span(
+/// The span from the `local` through the loop, and the call that can replace
+/// them, when `stmt` is `local out = {}` and `next` a loop that copies a table
+/// into it.
+fn manual_copy(
     stmt: &Statement<'_>,
     next: &Statement<'_>,
-    suggestion: Suggestion,
-    semantic: &SemanticAnalysis<'_>,
-) -> Option<Span> {
+    context: &LintContext<'_, '_>,
+) -> Option<(Span, CopyCall)> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
-    let destination = single_empty_table_local(local)?;
+    let destination = empty_table_local(local, context.scoping())?;
+    let copy_call = CopyCall::for_target(context.semantic)?;
     let is_copy = match next {
         // `table.move` copies only the array part, so it can't stand in for
         // a `pairs` loop.
-        Statement::GenericFor(loop_node) => {
-            is_generic_clone(loop_node, destination, semantic)
-                && !matches!(suggestion, Suggestion::TableMove)
+        Statement::GenericFor(generic_for) => {
+            !matches!(copy_call, CopyCall::TableMove)
+                && is_generic_copy(generic_for, destination, context)
         }
-        Statement::NumericFor(loop_node) => {
-            is_numeric_clone(loop_node, destination, semantic.scope_tree())
-        }
+        Statement::NumericFor(numeric_for) => is_numeric_copy(numeric_for, destination, context),
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::DoBlock(_)
@@ -104,82 +106,80 @@ fn manual_copy_span(
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
         | Statement::LocalAssignment(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
         | Statement::GlobalFunction(_)
         | Statement::GlobalStar(_)
         | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
     };
-    is_copy.then(|| Span::new(local.span.start, next.span().end))
+    is_copy.then(|| (Span::new(local.span.start, next.span().end), copy_call))
 }
 
-fn single_empty_table_local<'ast>(local: &'ast LocalAssignment<'ast>) -> Option<&'ast Name<'ast>> {
-    let [attributed] = &*local.names else {
+/// The local `local` declares, when it's exactly `local out = {}`.
+fn empty_table_local(local: &LocalAssignment<'_>, tree: &Scoping) -> Option<SymbolId> {
+    let ([attributed], [Expression::TableConstructor(table)]) = (&*local.names, &*local.exprs)
+    else {
         return None;
     };
-    let [Expression::TableConstructor(table)] = &*local.exprs else {
+    if !table.fields.is_empty() {
         return None;
-    };
-    table.fields.is_empty().then_some(&attributed.name)
+    }
+    tree.symbol_of(&attributed.name)
 }
 
-/// Is this `for k, v in pairs(src) do out[k] = v end`?
-fn is_generic_clone(
-    loop_node: &GenericFor<'_>,
-    destination: &Name<'_>,
-    semantic: &SemanticAnalysis<'_>,
+/// Whether `generic_for` is `for k, v in pairs(src) do out[k] = v end`.
+fn is_generic_copy(
+    generic_for: &GenericFor<'_>,
+    destination: SymbolId,
+    context: &LintContext<'_, '_>,
 ) -> bool {
-    let [key, value] = &*loop_node.names else {
+    let ([key, value], [iterator]) = (&*generic_for.names, &*generic_for.exprs) else {
         return false;
     };
-    let [iterator] = &*loop_node.exprs else {
+    let tree = context.scoping();
+    let (Some(key), Some(value)) = (tree.symbol_of(&key.name), tree.symbol_of(&value.name)) else {
         return false;
     };
-    let tree = semantic.scope_tree();
-    is_pairs_call(iterator, semantic)
-        && copied_value(&loop_node.block, destination, &key.name, tree)
-            .is_some_and(|copied| is_read_of_local(copied, &value.name, tree))
+    is_pairs_call(iterator, tree)
+        && copied_value(&generic_for.block, destination, key, tree)
+            .is_some_and(|copied| is_name_of(copied, value, tree))
 }
 
-/// Is this `for i = 1, #src do out[i] = src[i] end`?
-fn is_numeric_clone(
-    loop_node: &NumericFor<'_>,
-    destination: &Name<'_>,
-    tree: &ScopeTree<'_>,
+/// Whether `numeric_for` is `for i = 1, #src do out[i] = src[i] end`.
+fn is_numeric_copy(
+    numeric_for: &NumericFor<'_>,
+    destination: SymbolId,
+    context: &LintContext<'_, '_>,
 ) -> bool {
-    let version = tree.version();
-    let Some(source_table) = length_of_name(&loop_node.limit) else {
+    let tree = context.scoping();
+    let (Some(source_table), Some(index)) =
+        (length_of_name(&numeric_for.limit), tree.symbol_of(&numeric_for.name))
+    else {
         return false;
     };
-    let has_unit_step =
-        loop_node.step.as_ref().is_none_or(|step| is_number_literal(step, 1.0, version));
-    is_number_literal(&loop_node.start, 1.0, version)
-        && has_unit_step
-        && copied_value(&loop_node.block, destination, &loop_node.name, tree).is_some_and(
-            |copied| {
-                index_read(copied).is_some_and(|(prefix, index)| {
-                    is_same_binding(prefix, source_table, tree)
-                        && is_read_of_local(index, &loop_node.name, tree)
-                })
-            },
-        )
+    let is_one = |expr: &Expression<'_>| has_number_value(expr, context, 1.0);
+    is_one(&numeric_for.start)
+        && numeric_for.step.as_ref().is_none_or(is_one)
+        && copied_value(&numeric_for.block, destination, index, tree).is_some_and(|copied| {
+            index_read(copied).is_some_and(|(table, key)| {
+                is_same_binding(table, source_table, tree) && is_name_of(key, index, tree)
+            })
+        })
 }
 
 /// The value assigned when `body` is exactly `destination[key] = value`.
 fn copied_value<'ast>(
     body: &'ast Block<'ast>,
-    destination: &Name<'_>,
-    key: &Name<'_>,
-    tree: &ScopeTree<'_>,
+    destination: SymbolId,
+    key: SymbolId,
+    tree: &Scoping,
 ) -> Option<&'ast Expression<'ast>> {
-    if body.last_stmt.is_some() {
-        return None;
-    }
     let [Statement::Assignment(assignment)] = &*body.stmts else {
         return None;
     };
@@ -189,8 +189,7 @@ fn copied_value<'ast>(
     let [Suffix::Index { index, .. }] = &*target.suffixes else {
         return None;
     };
-    (is_read_of_local(&target.prefix, destination, tree) && is_read_of_local(index, key, tree))
-        .then_some(value)
+    (is_name_of(&target.prefix, destination, tree) && is_name_of(index, key, tree)).then_some(value)
 }
 
 /// The table and the key of `table[key]`.
@@ -207,12 +206,12 @@ fn index_read<'ast>(
 }
 
 /// A shadowed one is a user iterator, not a table walk.
-fn is_pairs_call(expr: &Expression<'_>, semantic: &SemanticAnalysis<'_>) -> bool {
+fn is_pairs_call(expr: &Expression<'_>, tree: &Scoping) -> bool {
     let Expression::Suffixed(chain) = expr else {
         return false;
     };
     chain.last_call().is_some_and(|call| {
-        is_global_call(call, "pairs", semantic) || is_global_call(call, "ipairs", semantic)
+        is_global_call(call, "pairs", tree) || is_global_call(call, "ipairs", tree)
     })
 }
 
@@ -229,212 +228,147 @@ fn length_of_name<'ast>(expr: &'ast Expression<'ast>) -> Option<&'ast Name<'ast>
     Some(name)
 }
 
-fn declaration_of(name: &Name<'_>, tree: &ScopeTree<'_>) -> Option<Span> {
-    let reference = tree.reference(tree.reference_of(name)?);
-    Some(tree.symbol(reference.resolved?).definition_span)
-}
-
-fn is_read_of_local(expr: &Expression<'_>, declaration: &Name<'_>, tree: &ScopeTree<'_>) -> bool {
-    matches!(expr, Expression::Name(name)
-        if declaration_of(name, tree) == Some(declaration.span))
+fn is_name_of(expr: &Expression<'_>, symbol: SymbolId, tree: &Scoping) -> bool {
+    matches!(expr, Expression::Name(name) if tree.resolved_symbol_of(name) == Some(symbol))
 }
 
 /// Whether `expr` is the same name as `source`, resolving the same way, so a
 /// loop variable that shadows it doesn't count.
-fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &ScopeTree<'_>) -> bool {
+fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &Scoping) -> bool {
     matches!(expr, Expression::Name(name)
         if name.text == source.text
-            && declaration_of(name, tree) == declaration_of(source, tree))
+            && tree.resolved_symbol_of(name) == tree.resolved_symbol_of(source))
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<LintDiagnostic> {
-        run_rule(&ManualTableClone, source, version)
-    }
-
-    #[test]
-    fn flags_generic_for_pairs_on_luau() {
-        let source = "\
-local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap_or("").contains("table.clone"),
-            "help: {:?}",
-            diags[0].help
-        );
-    }
-
-    #[test]
-    fn flags_numeric_for_on_lua54() {
-        let source = "\
-local out = {}
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap_or("").contains("table.move"),
-            "help: {:?}",
-            diags[0].help
-        );
-    }
-
-    #[test]
-    fn ignores_pairs_copy_on_lua54() {
+    const PASS: &[(&str, LuaTarget)] = &[
         // `table.move` copies only the array part.
-        let source = "\
+        (
+            "\
 local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_extra_body_stmt() {
-        let source = "\
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local out = {}
 for k, v in pairs(src) do out[k] = v
-print(k) end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_numeric_for_on_lua55_with_table_move() {
-        let source = "\
-local out = {}
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(
-            diags[0].help.as_deref().unwrap_or("").contains("table.move"),
-            "help: {:?}",
-            diags[0].help
-        );
-    }
-
-    #[test]
-    fn ignores_pairs_copy_on_lua55() {
+print(k) end",
+            LuaTarget::Luau,
+        ),
         // The 5.5 stdlib has no `table.clone`, and `table.move` can't copy a
         // `pairs` loop.
-        let source = "\
+        (
+            "\
 local src = {1}
 local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Lua55);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_hex_start_and_step() {
-        let source = "\
-local out = {}
-for i = 0x1, #src, 0x1 do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_generic_key_shadowing_destination() {
-        let source = "\
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
 local src = {1}
 local out = {}
 for out, v in pairs(src) do out[out] = v end
-return out";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_generic_value_shadowing_destination() {
-        let source = "\
+return out",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local out = {}
-for k, out in pairs(src) do out[k] = out end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_variable_shadowing_destination() {
-        let source = "\
+for k, out in pairs(src) do out[k] = out end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local out = {}
-for out = 1, #src do out[out] = src[out] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_variable_shadowing_source_table() {
-        let source = "\
+for out = 1, #src do out[out] = src[out] end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local out = {}
-for src = 1, #src do out[src] = src[src] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_lua51() {
+for src = 1, #src do out[src] = src[src] end",
+            LuaTarget::Lua54,
+        ),
         // Lua 5.1 has neither helper, so the rule stays silent.
-        let source = "\
+        (
+            "\
 local out = {}
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua51);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_not_empty_table() {
-        let source = "\
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua51,
+        ),
+        (
+            "\
 local out = {1, 2}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_destination_differs() {
-        // The assignment writes to a different table than the one
-        // declared above the loop.
-        let source = "\
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+        // The assignment writes to a different table than the one declared above
+        // the loop.
+        (
+            "\
 local out = {}
-for k, v in pairs(src) do other[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_pairs() {
-        let source = "\
+for k, v in pairs(src) do other[k] = v end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
 local pairs = next
 local out = {}
-for k, v in pairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+    ];
 
-    #[test]
-    fn flags_ipairs_form() {
-        let source = "\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local out = {}
-for k, v in ipairs(src) do out[k] = v end";
-        let diags = run(source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-    }
+for k, v in pairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+        (
+            "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local out = {}
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
+local out = {}
+for i = 0x1, #src, 0x1 do out[i] = src[i] end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local out = {}
+for k, v in ipairs(src) do out[k] = v end",
+            LuaTarget::Luau,
+        ),
+        // A `;` doesn't change the copy.
+        (
+            "\
+local out = {};
+for i = 1, #src do out[i] = src[i] end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn flags_copy_after_semicolon() {
-        let source = "\
-local out = {};
-for i = 1, #src do out[i] = src[i] end";
-        let diags = run(source, LuaVersion::Lua54);
-        assert_eq!(diags.len(), 1, "a `;` doesn't change the copy: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::ManualTableClone, PASS, FAIL).test_and_snapshot();
     }
 }

@@ -1,17 +1,21 @@
+mod batch;
+mod number;
 mod string;
 
-use core::mem;
+use std::borrow::Cow;
+use std::mem;
 
+use luck_diagnostics::Diagnostic;
+use luck_simd::DynCpu;
 use luck_token::{
-    Comment, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind, chunk_start,
-    has_line_break, has_shebang,
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
+    chunk_start, has_line_break, has_shebang,
 };
 
 use crate::cursor::Cursor;
-use crate::lex_error::{LexError, lex_error};
 use crate::lex_result::LexResult;
-use crate::number::scan_number;
-use string::{advance_past_long_bracket_close, eat_long_bracket_level};
+use batch::{BUFFER_TOKENS, UNREAD_TOKEN};
+use string::LongBracketKind;
 
 /// The densest real file among the benchmark files runs about this many
 /// bytes per token, so most sources fit the first reservation, and pages a
@@ -23,33 +27,31 @@ const MAX_RESERVED_TOKENS: usize = 1 << 20;
 
 /// A source over 4 GiB yields only the error [`Lexer::new`] reports, with no
 /// tokens.
-#[must_use]
-pub fn lex(source: &str, version: LuaVersion) -> LexResult {
+pub fn lex(source: &[u8], version: LuaVersion) -> LexResult {
     let mut lexer = match Lexer::new(source, version) {
         Ok(lexer) => lexer,
-        Err(error) => {
-            return LexResult {
-                tokens: Vec::new(),
-                comments: Vec::new(),
-                errors: vec![error],
-                unterminated: Vec::new(),
-            };
-        }
+        Err(error) => return LexResult { errors: vec![error], ..LexResult::default() },
     };
     let mut tokens = Vec::with_capacity(lexer.token_capacity());
-    loop {
-        let token = lexer.lex_token();
-        tokens.push(token);
-        if token.kind == TokenKind::Eof {
-            break;
+    if matches!(lexer.cpu, DynCpu::Generic(_)) {
+        loop {
+            let token = lexer.scan_token();
+            tokens.push(token);
+            if token.kind == TokenKind::Eof {
+                break;
+            }
+        }
+    } else {
+        loop {
+            lexer.refill();
+            let batch = &lexer.buffer[..lexer.buffered];
+            tokens.extend_from_slice(batch);
+            if batch.last().is_some_and(|token| token.kind == TokenKind::Eof) {
+                break;
+            }
         }
     }
-    LexResult {
-        tokens,
-        comments: lexer.comments,
-        errors: lexer.errors,
-        unterminated: lexer.unterminated,
-    }
+    lexer.finish(tokens)
 }
 
 #[derive(Debug)]
@@ -64,12 +66,24 @@ pub struct Lexer<'source> {
     comments: Vec<Comment>,
     /// How many of `comments` know their token. The rest lead the next one.
     attached_comment_count: usize,
-    errors: Vec<LexError>,
+    errors: Vec<Diagnostic>,
     /// Unmatched `{` count for each open interpolation expression, innermost
     /// last (Luau). A `}` at depth 0 closes the expression and resumes the
     /// string.
     interpolation_brace_depths: Vec<u32>,
-    unterminated: Vec<Span>,
+    /// Whether a block comment ran to the end of the source without its
+    /// closer, which the `Eof` token after it says.
+    is_in_block_comment: bool,
+    /// Whether the string being lexed holds an escape, which its token says.
+    has_escape: bool,
+    lenient_escapes: Vec<Span>,
+    /// A SIMD feature set lexes into `buffer` a batch at a time, and
+    /// `Generic` a token at a time.
+    cpu: DynCpu,
+    buffer: [Token; BUFFER_TOKENS],
+    /// How many tokens `buffer` holds, of which the first `taken` are read.
+    buffered: usize,
+    taken: usize,
 }
 
 impl<'source> Lexer<'source> {
@@ -78,11 +92,26 @@ impl<'source> Lexer<'source> {
     ///
     /// # Errors
     ///
-    /// Returns a [`LexError`] for a source over 4 GiB, which `u32` spans can't
+    /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
-    pub fn new(source: &'source str, version: LuaVersion) -> Result<Self, LexError> {
+    pub fn new(source: &'source [u8], version: LuaVersion) -> Result<Self, Diagnostic> {
+        Self::with_cpu(source, version, DynCpu::detect())
+    }
+
+    /// [`Self::new`] with the feature set `cpu`, which a test picks so it
+    /// checks each the CPU has.
+    ///
+    /// # Errors
+    ///
+    /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
+    /// address.
+    pub fn with_cpu(
+        source: &'source [u8],
+        version: LuaVersion,
+        cpu: DynCpu,
+    ) -> Result<Self, Diagnostic> {
         if u32::try_from(source.len()).is_err() {
-            return Err(lex_error(
+            return Err(Diagnostic::e008(
                 Span::new(0, 0),
                 format!(
                     "input is {} bytes, but the maximum supported file size is 4 GiB",
@@ -92,13 +121,13 @@ impl<'source> Lexer<'source> {
         }
 
         let source_end = if version.has_nul_source_end() {
-            memchr::memchr(0, source.as_bytes()).unwrap_or(source.len())
+            memchr::memchr(0, source).unwrap_or(source.len())
         } else {
             source.len()
         };
 
         let mut lexer = Self {
-            cursor: Cursor::new(source.get(..source_end).unwrap_or(source)),
+            cursor: Cursor::new(&source[..source_end]),
             version,
             has_line_break: true,
             last_token_start: 0,
@@ -106,7 +135,13 @@ impl<'source> Lexer<'source> {
             attached_comment_count: 0,
             errors: Vec::new(),
             interpolation_brace_depths: Vec::new(),
-            unterminated: Vec::new(),
+            is_in_block_comment: false,
+            has_escape: false,
+            lenient_escapes: Vec::new(),
+            cpu,
+            buffer: [UNREAD_TOKEN; BUFFER_TOKENS],
+            buffered: 0,
+            taken: 0,
         };
 
         lexer.cursor.advance_by(chunk_start(source, version));
@@ -119,67 +154,82 @@ impl<'source> Lexer<'source> {
     }
 
     /// Lex and return the next token on demand, without materializing the
-    /// whole stream. Comments and errors accumulate on the lexer; collect
-    /// them with [`Lexer::finish`] once the caller has drained to EOF.
+    /// whole stream. Comments, errors, and the rest accumulate on the lexer;
+    /// collect them with [`Lexer::finish`] once the caller has drained to
+    /// EOF.
     /// Returns the same EOF token forever once the source is exhausted.
     ///
-    /// Always inlined, so call it from one place, as the parser does.
-    #[expect(clippy::inline_always, reason = "measured: the parser runs 2-4% faster for it")]
+    /// Always inlined, so a caller runs its loop without a call per token.
+    /// Call it from one place, as the parser does.
+    #[expect(
+        clippy::inline_always,
+        reason = "measured: the parser runs 2-4% faster for it, and `lex` 10-15%"
+    )]
     #[inline(always)]
     pub fn next_token(&mut self) -> Token {
-        self.lex_token()
+        if matches!(self.cpu, DynCpu::Generic(_)) {
+            return self.scan_token();
+        }
+        if self.taken == self.buffered {
+            self.refill();
+        }
+        let token = self.buffer[self.taken];
+        self.taken += 1;
+        token
     }
 
-    /// Always inlined, so `lex` runs its loop without a call per token.
-    #[expect(clippy::inline_always, reason = "measured: the call per token costs 10-15%")]
+    /// Lex the next token a byte at a time, as `Generic` lexes every token
+    /// and a SIMD feature set every token a window can't.
+    #[expect(clippy::inline_always, reason = "inlined into `next_token`, as it was")]
     #[inline(always)]
-    fn lex_token(&mut self) -> Token {
+    fn scan_token(&mut self) -> Token {
         loop {
             self.skip_whitespace();
             let start = self.cursor.position();
-            let Some(byte) = self.cursor.peek() else {
-                let eof = self.token(TokenKind::Eof, start);
-                self.has_line_break = eof.has_line_break_before;
-                return eof;
+            // The byte after the first reads as NUL past the end of the
+            // source, which no token goes on with, so one end check covers
+            // both.
+            let (byte, next) = match *self.cursor.rest() {
+                [byte, next, ..] => (byte, next),
+                [byte] => (byte, 0),
+                [] => {
+                    let mut eof = self.token(TokenKind::Eof, start);
+                    eof.is_unterminated = self.is_in_block_comment;
+                    self.has_line_break = eof.has_line_break_before;
+                    return eof;
+                }
             };
             // A name's scan takes its first byte too, so it vouches for the
             // whole name.
             if matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-                let kind = TokenKind::keyword(self.cursor.eat_name(), self.version)
-                    .unwrap_or(TokenKind::Identifier);
+                let name = self.cursor.eat_name();
+                let kind = TokenKind::keyword(name, self.version).unwrap_or(TokenKind::Identifier);
                 return self.token(kind, start);
             }
             self.cursor.bump();
             // The bytes that start most tokens come first. The rest go to
             // `lex_operator`, so this stays a small function.
             let kind = match byte {
-                b'0'..=b'9' => match scan_number(&mut self.cursor, self.version, start, byte) {
-                    Ok(kind) => kind,
-                    Err(error) => {
-                        self.errors.push(error);
-                        continue;
-                    }
+                b'0'..=b'9' => match self.lex_number(start, byte) {
+                    Some(kind) => kind,
+                    None => continue,
                 },
                 b'(' => TokenKind::LeftParen,
                 b')' => TokenKind::RightParen,
                 b',' => TokenKind::Comma,
-                b'=' => self.either(b'=', TokenKind::EqualEqual, TokenKind::Equal),
-                b'.' => match self.cursor.peek() {
-                    Some(b'0'..=b'9') => {
-                        match scan_number(&mut self.cursor, self.version, start, byte) {
-                            Ok(kind) => kind,
-                            Err(error) => {
-                                self.errors.push(error);
-                                continue;
-                            }
-                        }
-                    }
-                    Some(b'.') => {
+                b'=' => self.either(next, b'=', TokenKind::EqualEqual, TokenKind::Equal),
+                b'.' => match next {
+                    b'0'..=b'9' => match self.lex_number(start, byte) {
+                        Some(kind) => kind,
+                        None => continue,
+                    },
+                    b'.' => {
                         self.cursor.bump();
                         if self.cursor.eat(b'.') {
                             TokenKind::DotDotDot
                         } else {
-                            self.compound_or(TokenKind::DotDotEqual, TokenKind::DotDot)
+                            let following = self.cursor.peek().unwrap_or(0);
+                            self.compound_or(following, TokenKind::DotDotEqual, TokenKind::DotDot)
                         }
                     }
                     _ => TokenKind::Dot,
@@ -187,7 +237,7 @@ impl<'source> Lexer<'source> {
                 b'"' | b'\'' => return self.lex_short_string(start, byte),
                 b'{' => {
                     if let Some(depth) = self.interpolation_brace_depths.last_mut() {
-                        *depth = depth.saturating_add(1);
+                        *depth += 1;
                     }
                     TokenKind::LeftBrace
                 }
@@ -195,18 +245,18 @@ impl<'source> Lexer<'source> {
                     // Luau: a `}` at depth 0 closes the expression and resumes the string.
                     Some(0) => return self.lex_interpolated_string_continuation(start),
                     Some(depth) => {
-                        *depth = depth.saturating_sub(1);
+                        *depth -= 1;
                         TokenKind::RightBrace
                     }
                     None => TokenKind::RightBrace,
                 },
-                b'[' => match eat_long_bracket_level(&mut self.cursor) {
+                b'[' => match self.eat_long_bracket_level() {
                     Some(level) => return self.lex_long_string(start, level),
                     None => TokenKind::LeftBracket,
                 },
                 b']' => TokenKind::RightBracket,
-                b':' => self.either(b':', TokenKind::DoubleColon, TokenKind::Colon),
-                b'-' if self.cursor.peek() == Some(b'-') => {
+                b':' => self.either(next, b':', TokenKind::DoubleColon, TokenKind::Colon),
+                b'-' if next == b'-' => {
                     self.lex_comment(start);
                     continue;
                 }
@@ -214,7 +264,7 @@ impl<'source> Lexer<'source> {
                 b'`' if self.version.has_interpolated_strings() => {
                     return self.lex_interpolated_string(start);
                 }
-                _ => match self.lex_operator(start, byte) {
+                _ => match self.lex_operator(start, byte, next) {
                     Some(kind) => kind,
                     None => continue,
                 },
@@ -224,22 +274,19 @@ impl<'source> Lexer<'source> {
     }
 
     /// What a list of the tokens left to lex reserves.
-    #[must_use]
     pub fn token_capacity(&self) -> usize {
         self.cursor.rest().len().div_ceil(BYTES_PER_TOKEN).min(MAX_RESERVED_TOKENS)
     }
 
-    #[must_use]
-    pub fn finish(self) -> (Vec<Comment>, Vec<LexError>) {
-        (self.comments, self.errors)
-    }
-
-    /// The spans of the string tokens and block comments lexed so far that a
-    /// line break or the end of the source cut off before their closing
-    /// delimiter, in source order.
-    #[must_use]
-    pub fn unterminated(&self) -> &[Span] {
-        &self.unterminated
+    /// What the lexer gathered, with `tokens`, the ones its caller took from
+    /// [`Lexer::next_token`].
+    pub fn finish(self, tokens: Vec<Token>) -> LexResult {
+        LexResult {
+            tokens,
+            comments: self.comments,
+            errors: self.errors,
+            lenient_escapes: self.lenient_escapes,
+        }
     }
 
     #[inline]
@@ -273,20 +320,20 @@ impl<'source> Lexer<'source> {
             kind,
             has_line_break_before: mem::replace(&mut self.has_line_break, false),
             is_unterminated: false,
+            has_escape: mem::take(&mut self.has_escape),
         }
     }
 
     fn attach_leading_comments(&mut self, token_start: u32) {
-        let waiting = self.comments.get_mut(self.attached_comment_count..).unwrap_or_default();
-        for comment in waiting {
+        for comment in &mut self.comments[self.attached_comment_count..] {
             comment.attached_to = token_start;
         }
         self.attached_comment_count = self.comments.len();
     }
 
     #[cold]
-    fn reject(&mut self, start: usize, message: impl Into<String>) {
-        self.errors.push(lex_error(self.cursor.span_since(start), message));
+    fn reject(&mut self, start: usize, message: impl Into<Cow<'static, str>>) {
+        self.errors.push(Diagnostic::e008(self.cursor.span_since(start), message));
     }
 
     fn lex_shebang(&mut self) {
@@ -295,15 +342,15 @@ impl<'source> Lexer<'source> {
         // comment and only a CRLF's CR is left out of it.
         let rest = self.cursor.rest();
         let line_length = memchr::memchr(b'\n', rest).unwrap_or(rest.len());
-        let line = rest.get(..line_length).unwrap_or_default();
+        let line = &rest[..line_length];
         self.cursor.advance_by(line.strip_suffix(b"\r").unwrap_or(line).len());
         self.comments.push(Comment {
             span: self.cursor.span_since(start),
             attached_to: 0,
             kind: CommentKind::Shebang,
             position: CommentPosition::Leading,
-            is_preceded_by_newline: false,
             is_followed_by_newline: self.cursor.is_at_line_end(self.version),
+            content: CommentContent::Plain,
         });
     }
 
@@ -313,19 +360,10 @@ impl<'source> Lexer<'source> {
         self.cursor.bump();
 
         let kind = if self.cursor.eat(b'[')
-            && let Some(level) = eat_long_bracket_level(&mut self.cursor)
+            && let Some(level) = self.eat_long_bracket_level()
         {
-            let is_terminated = advance_past_long_bracket_close(
-                &mut self.cursor,
-                self.version,
-                start,
-                level,
-                "unterminated block comment",
-                &mut self.errors,
-            );
-            if !is_terminated {
-                self.unterminated.push(self.cursor.span_since(start));
-            }
+            let body = self.scan_long_bracket_body(start, level, LongBracketKind::Comment);
+            self.is_in_block_comment = !body.is_closed;
             // The delimiters (`--[=*[` and `]=*]`) never hold a line break,
             // so scanning the whole comment is equivalent to scanning only
             // the body.
@@ -342,8 +380,7 @@ impl<'source> Lexer<'source> {
         // A comment with no line break since the previous token trails it,
         // and any other leads the next token. The start of the source counts
         // as a line break, so a trailing comment always has a token.
-        let is_preceded_by_newline = self.has_line_break;
-        let (attached_to, position) = if is_preceded_by_newline {
+        let (attached_to, position) = if self.has_line_break {
             (0, CommentPosition::Leading)
         } else {
             (self.last_token_start, CommentPosition::Trailing)
@@ -353,8 +390,8 @@ impl<'source> Lexer<'source> {
             attached_to,
             kind,
             position,
-            is_preceded_by_newline,
             is_followed_by_newline: self.cursor.is_at_line_end(self.version),
+            content: CommentContent::of(self.cursor.text_since(start), kind, self.version),
         });
         if position == CommentPosition::Trailing {
             self.attached_comment_count = self.comments.len();
@@ -365,36 +402,47 @@ impl<'source> Lexer<'source> {
     }
 
     /// Lex an operator from its first `byte` at `start`, with the cursor past
-    /// it, or report the byte and return `None` where it starts no token.
-    fn lex_operator(&mut self, start: usize, byte: u8) -> Option<TokenKind> {
+    /// it, at `next`, or report the byte and return `None` where it starts no
+    /// token.
+    fn lex_operator(&mut self, start: usize, byte: u8, next: u8) -> Option<TokenKind> {
         Some(match byte {
             b';' => TokenKind::Semicolon,
             b'#' => TokenKind::Hash,
             b'-' => {
                 // Luau
-                if self.version.has_type_syntax() && self.cursor.eat(b'>') {
+                if self.version.has_type_syntax() && next == b'>' {
+                    self.cursor.bump();
                     TokenKind::Arrow
                 } else {
-                    self.compound_or(TokenKind::MinusEqual, TokenKind::Minus)
+                    self.compound_or(next, TokenKind::MinusEqual, TokenKind::Minus)
                 }
             }
-            b'+' => self.compound_or(TokenKind::PlusEqual, TokenKind::Plus),
-            b'*' => self.compound_or(TokenKind::StarEqual, TokenKind::Star),
+            b'+' => self.compound_or(next, TokenKind::PlusEqual, TokenKind::Plus),
+            b'*' => self.compound_or(next, TokenKind::StarEqual, TokenKind::Star),
             b'/' => {
-                if self.version.has_floor_div() && self.cursor.eat(b'/') {
-                    self.compound_or(TokenKind::FloorDivEqual, TokenKind::FloorDiv)
+                if self.version.has_floor_div() && next == b'/' {
+                    self.cursor.bump();
+                    let following = self.cursor.peek().unwrap_or(0);
+                    self.compound_or(following, TokenKind::FloorDivEqual, TokenKind::FloorDiv)
                 } else {
-                    self.compound_or(TokenKind::SlashEqual, TokenKind::Slash)
+                    self.compound_or(next, TokenKind::SlashEqual, TokenKind::Slash)
                 }
             }
-            b'%' => self.compound_or(TokenKind::PercentEqual, TokenKind::Percent),
-            b'^' => self.compound_or(TokenKind::CaretEqual, TokenKind::Caret),
-            b'<' => self.angle(b'<', TokenKind::LessEqual, TokenKind::ShiftLeft, TokenKind::Less),
-            b'>' => {
-                self.angle(b'>', TokenKind::GreaterEqual, TokenKind::ShiftRight, TokenKind::Greater)
+            b'%' => self.compound_or(next, TokenKind::PercentEqual, TokenKind::Percent),
+            b'^' => self.compound_or(next, TokenKind::CaretEqual, TokenKind::Caret),
+            b'<' => {
+                self.angle(next, b'<', TokenKind::LessEqual, TokenKind::ShiftLeft, TokenKind::Less)
             }
+            b'>' => self.angle(
+                next,
+                b'>',
+                TokenKind::GreaterEqual,
+                TokenKind::ShiftRight,
+                TokenKind::Greater,
+            ),
             b'~' => {
-                if self.cursor.eat(b'=') {
+                if next == b'=' {
+                    self.cursor.bump();
                     TokenKind::TildeEqual
                 } else if self.version.has_bitwise_ops() {
                     TokenKind::Tilde
@@ -428,36 +476,47 @@ impl<'source> Lexer<'source> {
         })
     }
 
-    /// `compound` when a compound-assignment `=` follows, consuming it, else
-    /// `plain`.
+    /// `compound` when `following`, the byte at the cursor, is a
+    /// compound-assignment `=`, consuming it, else `plain`.
     #[inline]
-    fn compound_or(&mut self, compound: TokenKind, plain: TokenKind) -> TokenKind {
-        if self.version.has_compound_assignment() && self.cursor.eat(b'=') {
+    fn compound_or(&mut self, following: u8, compound: TokenKind, plain: TokenKind) -> TokenKind {
+        if self.version.has_compound_assignment() && following == b'=' {
+            self.cursor.bump();
             compound
         } else {
             plain
         }
     }
 
-    /// `pair` when `second` follows, consuming it, else `single`.
+    /// `pair` when `next`, the byte at the cursor, is `second`, consuming it,
+    /// else `single`.
     #[inline]
-    fn either(&mut self, second: u8, pair: TokenKind, single: TokenKind) -> TokenKind {
-        if self.cursor.eat(second) { pair } else { single }
+    fn either(&mut self, next: u8, second: u8, pair: TokenKind, single: TokenKind) -> TokenKind {
+        if next == second {
+            self.cursor.bump();
+            pair
+        } else {
+            single
+        }
     }
 
-    /// Finish `<` or `>`: `or_equal` before `=`, `shift` before a second
-    /// `angle` where the version has shifts, else `plain`.
+    /// Finish `<` or `>`, with `next` at the cursor: `or_equal` before `=`,
+    /// `shift` before a second `angle` where the version has shifts, else
+    /// `plain`.
     #[inline]
     fn angle(
         &mut self,
+        next: u8,
         angle: u8,
         or_equal: TokenKind,
         shift: TokenKind,
         plain: TokenKind,
     ) -> TokenKind {
-        if self.cursor.eat(b'=') {
+        if next == b'=' {
+            self.cursor.bump();
             or_equal
-        } else if self.version.has_bitwise_ops() && self.cursor.eat(angle) {
+        } else if self.version.has_bitwise_ops() && next == angle {
+            self.cursor.bump();
             shift
         } else {
             plain
@@ -472,7 +531,10 @@ impl<'source> Lexer<'source> {
 
     #[cold]
     fn reject_unexpected_character(&mut self, start: usize, byte: u8) {
-        let unexpected = self.cursor.eat_rest_of_char(start).unwrap_or_else(|| char::from(byte));
-        self.reject(start, format!("unexpected character `{unexpected}`"));
+        let message = match self.cursor.eat_rest_of_char(start) {
+            Some(unexpected) => format!("unexpected character `{unexpected}`"),
+            None => format!("unexpected byte 0x{byte:02X}"),
+        };
+        self.reject(start, message);
     }
 }

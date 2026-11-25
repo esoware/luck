@@ -1,18 +1,18 @@
-//! Each graph covers one block and stops at nested function bodies, whose
-//! flow is their own.
+//! A function's control-flow graph, which every rule that asks for one
+//! shares. Each graph covers one block and stops at nested function bodies,
+//! whose flow is their own.
 
-use core::mem;
-use core::num::Saturating;
+use std::cell::OnceCell;
+use std::mem;
 
-use luck_ast::{
-    Block, Expression, FunctionBody, IfStatement, LastStatement, Name, RepeatLoop, Statement, Type,
-    Visitor, WhileLoop, unwrap_parentheses,
-};
-use luck_semantic::SemanticAnalysis;
-use luck_token::{BinOp, Span};
+use luck_ast::{Block, GetSpan as _, IfStatement, Name, RepeatLoop, Statement, WhileLoop};
+use luck_semantic::LabelId;
+use luck_token::Span;
+use luck_value::ToBoolean as _;
 use rustc_hash::FxHashMap;
 
 use crate::call::is_global_call;
+use crate::context::ContextHost;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Exit {
@@ -59,6 +59,9 @@ pub(crate) struct FlowGraph {
     is_reachable: Vec<bool>,
     /// Each loop body, in source order.
     loops: Vec<LoopBody>,
+    /// What each loop's body reaches, in the order of `loops`, built on
+    /// first use.
+    loop_exits: OnceCell<Box<[Exits]>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,10 +99,9 @@ pub(crate) struct LocalDeclaration {
 }
 
 impl FlowGraph {
-    pub(crate) fn of_block<'ast>(
-        block: &'ast Block<'ast>,
-        semantic: &'ast SemanticAnalysis<'ast>,
-    ) -> Self {
+    /// The graph of `block`, which a function body's block is in every
+    /// graph a rule reads.
+    pub(crate) fn of_block<'ast>(block: &'ast Block<'ast>, host: &ContextHost<'ast>) -> Self {
         let mut builder = GraphBuilder {
             graph: Self {
                 successors: vec![[None; 2]; EXIT_NODE_COUNT],
@@ -108,15 +110,15 @@ impl FlowGraph {
                 locals: Vec::new(),
                 is_reachable: Vec::new(),
                 loops: Vec::new(),
+                loop_exits: OnceCell::new(),
             },
-            semantic,
+            host,
             cursor: None,
             run: None,
             scope_end: 0,
             break_target: Exit::Break.node(),
             continue_target: Exit::End.node(),
-            labels: FxHashMap::default(),
-            label_names: Vec::new(),
+            label_nodes: FxHashMap::default(),
         };
         let entry = builder.new_node();
         builder.cursor = Some(entry);
@@ -127,9 +129,7 @@ impl FlowGraph {
         let mut is_reachable = vec![false; graph.node_count()];
         let mut stack = vec![entry];
         while let Some(node) = stack.pop() {
-            if let Some(mark) = is_reachable.get_mut(node)
-                && !mem::replace(mark, true)
-            {
+            if !mem::replace(&mut is_reachable[node], true) {
                 stack.extend(graph.successors(node));
             }
         }
@@ -138,10 +138,11 @@ impl FlowGraph {
     }
 
     pub(crate) fn reaches(&self, exit: Exit) -> bool {
-        self.is_reachable.get(exit.node()).copied().unwrap_or_default()
+        self.is_reachable[exit.node()]
     }
 
-    pub(crate) fn exits(&self) -> Exits {
+    #[cfg(test)]
+    fn exits(&self) -> Exits {
         let mut exits = Exits::default();
         for exit in [Exit::End, Exit::Break, Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error] {
             if self.reaches(exit) {
@@ -151,13 +152,17 @@ impl FlowGraph {
         exits
     }
 
-    /// The exits each loop's body reaches, by where the loop starts, as the
-    /// graph of that body alone has them, where a jump out of the body is a
-    /// `Break`.
-    ///
+    /// The exits the body of the loop that starts at `loop_start` reaches,
+    /// as the graph of that body alone has them, where a jump out of the
+    /// body is a `Break`.
+    pub(crate) fn loop_exits(&self, loop_start: u32) -> Option<Exits> {
+        let index = self.loops.binary_search_by_key(&loop_start, |body| body.start).ok()?;
+        Some(self.loop_exits.get_or_init(|| self.every_loop_s_exits())[index])
+    }
+
     /// Inner bodies go first, so an outer one steps over each in one move to
     /// what it reaches past its end, and the whole costs one pass.
-    pub(crate) fn loop_exits(&self) -> impl Iterator<Item = (u32, Exits)> {
+    fn every_loop_s_exits(&self) -> Box<[Exits]> {
         let mut reached: Vec<Vec<usize>> = vec![Vec::new(); self.loops.len()];
         let mut visited_in = vec![usize::MAX; self.node_count()];
         let mut stack = Vec::new();
@@ -165,8 +170,7 @@ impl FlowGraph {
             let mut past_end = Vec::new();
             stack.push(body.entry);
             while let Some(node) = stack.pop() {
-                if visited_in.get_mut(node).is_none_or(|visit| mem::replace(visit, index) == index)
-                {
+                if mem::replace(&mut visited_in[node], index) == index {
                     continue;
                 }
                 if !(body.entry..body.end).contains(&node) {
@@ -174,38 +178,39 @@ impl FlowGraph {
                 } else if node != body.entry
                     && let Ok(inner) = self.loops.binary_search_by_key(&node, |inner| inner.entry)
                 {
-                    stack.extend(reached.get(inner).into_iter().flatten());
+                    stack.extend(&reached[inner]);
                 } else {
                     stack.extend(self.successors(node));
                 }
             }
-            if let Some(slot) = reached.get_mut(index) {
-                *slot = past_end;
-            }
+            reached[index] = past_end;
         }
-        self.loops.iter().zip(reached).map(|(body, past_end)| {
-            let mut exits = Exits::default();
-            for node in past_end {
-                let exit = if node == body.continue_target {
-                    Exit::End
-                } else {
-                    // Else the loop's `break`, or a jump out of its body.
-                    [Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error]
-                        .into_iter()
-                        .find(|exit| exit.node() == node)
-                        .unwrap_or(Exit::Break)
-                };
-                exits.insert(exit);
-            }
-            (body.start, exits)
-        })
+        self.loops
+            .iter()
+            .zip(reached)
+            .map(|(body, past_end)| {
+                let mut exits = Exits::default();
+                for node in past_end {
+                    let exit = if node == body.continue_target {
+                        Exit::End
+                    } else {
+                        // Else the loop's `break`, or a jump out of its body.
+                        [Exit::ReturnValue, Exit::ReturnEmpty, Exit::Error]
+                            .into_iter()
+                            .find(|exit| exit.node() == node)
+                            .unwrap_or(Exit::Break)
+                    };
+                    exits.insert(exit);
+                }
+                exits
+            })
+            .collect()
     }
 
     /// Whether the code at `offset`, or else the first code after it, can
     /// run. True past the last code.
     pub(crate) fn can_run(&self, offset: u32) -> bool {
-        self.node_at(offset)
-            .is_none_or(|node| self.is_reachable.get(node).copied().unwrap_or_default())
+        self.node_at(offset).is_none_or(|node| self.is_reachable[node])
     }
 
     /// The node of the code at `offset`, or else of the first code after it.
@@ -219,7 +224,7 @@ impl FlowGraph {
     }
 
     pub(crate) fn successors(&self, node: usize) -> impl Iterator<Item = usize> + '_ {
-        self.successors.get(node).into_iter().flatten().copied().flatten()
+        self.successors[node].into_iter().flatten()
     }
 
     pub(crate) fn locals(&self) -> &[LocalDeclaration] {
@@ -227,13 +232,13 @@ impl FlowGraph {
     }
 
     pub(crate) fn starts_at_or_after(&self, node: usize, offset: u32) -> bool {
-        self.code_starts.get(node).is_some_and(|start| *start >= offset)
+        self.code_starts[node] >= offset
     }
 }
 
-struct GraphBuilder<'ast> {
+struct GraphBuilder<'host, 'ast> {
     graph: FlowGraph,
-    semantic: &'ast SemanticAnalysis<'ast>,
+    host: &'host ContextHost<'ast>,
     /// The node the next code runs after, or `None` right after a jump.
     cursor: Option<usize>,
     /// The run of simple statements the cursor ends, which the next one
@@ -242,22 +247,20 @@ struct GraphBuilder<'ast> {
     scope_end: u32,
     break_target: usize,
     continue_target: usize,
-    /// The node of each label visible here, by name, innermost last.
-    labels: FxHashMap<&'ast str, Vec<usize>>,
-    /// The name of each label in `labels`, in the order they became visible.
-    label_names: Vec<&'ast str>,
+    /// The node of each label of a block the builder has entered, which
+    /// the `goto`s semantic analysis resolved to it jump to.
+    label_nodes: FxHashMap<LabelId, usize>,
 }
 
-impl<'ast> GraphBuilder<'ast> {
+impl<'ast> GraphBuilder<'_, 'ast> {
     fn new_node(&mut self) -> usize {
         self.graph.successors.push([None; 2]);
         self.graph.code_starts.push(0);
-        self.graph.node_count().saturating_sub(1)
+        self.graph.node_count() - 1
     }
 
     fn connect(&mut self, from: usize, to: usize) {
-        if let Some(successors) = self.graph.successors.get_mut(from)
-            && let Some(free_edge) = successors.iter_mut().find(|edge| edge.is_none())
+        if let Some(free_edge) = self.graph.successors[from].iter_mut().find(|edge| edge.is_none())
         {
             *free_edge = Some(to);
         }
@@ -272,9 +275,7 @@ impl<'ast> GraphBuilder<'ast> {
 
     fn code(&mut self, span: Span) -> usize {
         let node = self.new_node();
-        if let Some(code_start) = self.graph.code_starts.get_mut(node) {
-            *code_start = span.start;
-        }
+        self.graph.code_starts[node] = span.start;
         self.graph.code.push((span, node));
         self.advance_to(node);
         node
@@ -313,35 +314,27 @@ impl<'ast> GraphBuilder<'ast> {
     fn scoped_block(&mut self, block: &'ast Block<'ast>, scope_end: u32) {
         self.run = None;
         let outer_scope_end = mem::replace(&mut self.scope_end, scope_end);
-        let outer_label_count = self.label_names.len();
-        // A label is visible in its whole block, `goto`s before it included.
+        // A label is visible in its whole block, `goto`s before it included,
+        // so its node comes before the code of every block inside it.
         for stmt in &block.stmts {
             if let Statement::Label(label) = stmt
-                && let name = label.name.text
-                && !name.is_empty()
+                && let Some(id) = self.host.scoping().label_of(&label.name)
             {
                 let node = self.new_node();
-                self.labels.entry(name.as_str()).or_default().push(node);
-                self.label_names.push(name.as_str());
+                self.label_nodes.insert(id, node);
             }
         }
         for stmt in &block.stmts {
             self.stmt(stmt);
         }
-        if let Some(last) = &block.last_stmt {
-            self.last_stmt(last);
-        }
-        for name in self.label_names.drain(outer_label_count..) {
-            if let Some(nodes) = self.labels.get_mut(name) {
-                nodes.pop();
-            }
-        }
         self.scope_end = outer_scope_end;
         self.run = None;
     }
 
+    /// The node of the label `name` names, or reaches as a `goto`'s.
     fn label_node(&self, name: &Name<'_>) -> Option<usize> {
-        self.labels.get(name.text.as_str())?.last().copied()
+        let id = self.host.scoping().label_of(name)?;
+        self.label_nodes.get(&id).copied()
     }
 
     fn stmt(&mut self, stmt: &'ast Statement<'ast>) {
@@ -350,7 +343,7 @@ impl<'ast> GraphBuilder<'ast> {
                 let node = self.simple(chain.span);
                 if chain
                     .last_call()
-                    .is_some_and(|call| is_global_call(call, "error", self.semantic))
+                    .is_some_and(|call| is_global_call(call, "error", self.host.scoping()))
                 {
                     self.connect(node, Exit::Error.node());
                     self.cursor = None;
@@ -387,9 +380,14 @@ impl<'ast> GraphBuilder<'ast> {
                     self.advance_to(target);
                 }
             }
-            // Lua 5.2+: `break` as an ordinary statement.
+            Statement::Return(node) => {
+                let exit =
+                    if node.exprs.is_empty() { Exit::ReturnEmpty } else { Exit::ReturnValue };
+                self.jump(node.span, exit.node());
+            }
             Statement::Break(span) => self.jump(*span, self.break_target),
-            Statement::EmptyStatement(_) => {}
+            // Luau
+            Statement::Continue(span) => self.jump(*span, self.continue_target),
             Statement::Assignment(_)
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
@@ -400,22 +398,6 @@ impl<'ast> GraphBuilder<'ast> {
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {
                 self.simple(stmt.span());
-            }
-        }
-    }
-
-    fn last_stmt(&mut self, last: &'ast LastStatement<'ast>) {
-        match last {
-            LastStatement::Return(node) => {
-                let exit =
-                    if node.exprs.is_empty() { Exit::ReturnEmpty } else { Exit::ReturnValue };
-                self.jump(node.span, exit.node());
-            }
-            LastStatement::Break(span) => self.jump(*span, self.break_target),
-            // Luau
-            LastStatement::Continue(span) => self.jump(*span, self.continue_target),
-            LastStatement::Error(span) => {
-                self.code(*span);
             }
         }
     }
@@ -439,16 +421,14 @@ impl<'ast> GraphBuilder<'ast> {
         self.break_target = outer_break_target;
         self.continue_target = outer_continue_target;
         let end = self.graph.node_count();
-        if let Some(body) = self.graph.loops.get_mut(index) {
-            body.end = end;
-        }
+        self.graph.loops[index].end = end;
         entry
     }
 
     fn while_loop(&mut self, node: &'ast WhileLoop<'ast>) {
         let head = self.code(Span::new(node.span.start, node.block.span.start));
         let after = self.new_node();
-        let truth = literal_truth(&node.condition);
+        let truth = node.condition.to_boolean(self.host);
         if truth == Some(false) {
             self.cursor = None;
         }
@@ -466,7 +446,7 @@ impl<'ast> GraphBuilder<'ast> {
         let scope_end = node.condition.span().end;
         let body = self.loop_body(node.span.start, &node.block, scope_end, after, condition);
         self.graph.code.push((node.condition.span(), condition));
-        let truth = literal_truth(&node.condition);
+        let truth = node.condition.to_boolean(self.host);
         if truth != Some(true) {
             self.connect(condition, body);
         }
@@ -507,159 +487,37 @@ impl<'ast> GraphBuilder<'ast> {
     }
 }
 
-fn literal_truth(condition: &Expression<'_>) -> Option<bool> {
-    match unwrap_parentheses(condition) {
-        Expression::Nil(_) | Expression::False(_) => Some(false),
-        Expression::True(_)
-        | Expression::Number(_)
-        | Expression::Integer(_)
-        | Expression::StringLiteral(_)
-        | Expression::InterpolatedString(_)
-        | Expression::TableConstructor(_)
-        | Expression::FunctionDef(_) => Some(true),
-        Expression::VarArg(_)
-        | Expression::Name(_)
-        | Expression::Suffixed(_)
-        | Expression::Parenthesized(_)
-        | Expression::BinaryOp(_)
-        | Expression::UnaryOp(_)
-        | Expression::IfExpression(_)
-        | Expression::TypeCast(_)
-        | Expression::Error(_) => None,
-    }
-}
-
-pub(crate) fn decision_points(block: &Block<'_>) -> u32 {
-    let mut points = DecisionPoints::default();
-    points.visit_block(block);
-    points.count.0
-}
-
-/// One per `if`, `elseif`, and loop, one per `and` or `or`, and one per `if`
-/// or `elseif` of a Luau if-expression.
-#[derive(Default)]
-struct DecisionPoints {
-    count: Saturating<u32>,
-}
-
-impl DecisionPoints {
-    fn count_clauses(&mut self, clause_count: usize) {
-        self.count += u32::try_from(clause_count.saturating_add(1)).unwrap_or(u32::MAX);
-    }
-}
-
-impl<'ast> Visitor<'ast> for DecisionPoints {
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        match stmt {
-            Statement::IfStatement(node) => self.count_clauses(node.elseif_clauses.len()),
-            Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_) => self.count += 1,
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_stmt(stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        match expr {
-            Expression::BinaryOp(node) => {
-                if matches!(node.links.first().op, BinOp::And | BinOp::Or) {
-                    self.count += u32::try_from(node.links.len()).unwrap_or(u32::MAX);
-                }
-            }
-            // Luau
-            Expression::IfExpression(node) => self.count_clauses(node.elseif_clauses.len()),
-            Expression::Nil(_)
-            | Expression::False(_)
-            | Expression::True(_)
-            | Expression::Number(_)
-            | Expression::Integer(_)
-            | Expression::StringLiteral(_)
-            | Expression::VarArg(_)
-            | Expression::FunctionDef(_)
-            | Expression::Name(_)
-            | Expression::Suffixed(_)
-            | Expression::Parenthesized(_)
-            | Expression::TableConstructor(_)
-            | Expression::UnaryOp(_)
-            | Expression::InterpolatedString(_)
-            | Expression::TypeCast(_)
-            | Expression::Error(_) => {}
-        }
-        self.walk_expr(expr);
-    }
-
-    fn visit_function_body(&mut self, _body: &'ast FunctionBody<'ast>) {}
-
-    fn visit_type(&mut self, _ty: &'ast Type<'ast>) {}
-}
-
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
-    use luck_allocator::Allocator;
-    use luck_ast::TreeCounts;
-    use luck_token::{LuaVersion, StdlibEnvironment};
+    use luck_ast::{FunctionBody, GenericFor, NumericFor, Visit};
+    use luck_token::LuaVersion;
 
     use super::*;
-
-    fn parse_block<'ast>(
-        allocator: &'ast Allocator,
-        source: &'ast str,
-        version: LuaVersion,
-    ) -> &'ast Block<'ast> {
-        let parse = luck_parser::parse(allocator, source, version);
-        assert!(parse.errors.is_empty(), "parser errors for {source:?}: {:?}", parse.errors);
-        allocator.alloc(parse.block)
-    }
-
-    fn analyze<'ast>(block: &'ast Block<'ast>, version: LuaVersion) -> SemanticAnalysis<'ast> {
-        luck_semantic::analyze(block, TreeCounts::default(), version, StdlibEnvironment::Standalone)
-    }
+    use crate::fixtures::with_host;
 
     fn flow_of(source: &str, version: LuaVersion) -> FlowGraph {
-        let allocator = Allocator::new();
-        let block = parse_block(&allocator, source, version);
-        FlowGraph::of_block(block, &analyze(block, version))
+        with_host(source, version.into(), |host| FlowGraph::of_block(&host.chunk.block, host))
     }
 
     fn flow(source: &str) -> FlowGraph {
         flow_of(source, LuaVersion::Lua54)
     }
 
-    fn points(source: &str) -> u32 {
-        decision_points(parse_block(&Allocator::new(), source, LuaVersion::Lua54))
-    }
-
     #[test]
     fn a_straight_run_of_statements_is_one_node() {
         let one = flow("local a").node_count();
         let mut run = String::from("local a, b");
-        for i in 0..100u32 {
-            let _unused = write!(
+        for i in 0..100 {
+            write!(
                 run,
                 "
 a = {i}
 b = f(a)
 print(a, b)"
-            );
+            )
+            .unwrap();
         }
         assert_eq!(flow(&run).node_count(), one);
         let block_between = "\
@@ -750,7 +608,7 @@ while true do if c then break end end",
 
     #[test]
     fn while_with_truthy_literal_condition_never_falls_through() {
-        for condition in ["1", "'s'", "{}", "(true)"] {
+        for condition in ["1", "'s'", "{}", "(true)", "x or true", "1 < 2"] {
             let graph = flow(&format!("while {condition} do print(1) end"));
             assert!(!graph.reaches(Exit::End), "{condition}");
         }
@@ -832,13 +690,15 @@ return 2",
 
     #[test]
     fn continue_of_the_analyzed_block_ends_it() {
-        let allocator = Allocator::new();
-        let block = parse_block(&allocator, "for _ = 1, 3 do continue end", LuaVersion::Luau);
-        let Some(Statement::NumericFor(numeric_for)) = block.stmts.first() else {
-            panic!("the statement must be a numeric for");
-        };
-        let semantic = analyze(block, LuaVersion::Luau);
-        assert!(FlowGraph::of_block(&numeric_for.block, &semantic).reaches(Exit::End));
+        let reaches_end =
+            with_host("for _ = 1, 3 do continue end", LuaVersion::Luau.into(), |host| {
+                let Some(Statement::NumericFor(numeric_for)) = host.chunk.block.stmts.first()
+                else {
+                    panic!("the statement must be a numeric for");
+                };
+                FlowGraph::of_block(&numeric_for.block, host).reaches(Exit::End)
+            });
+        assert!(reaches_end);
     }
 
     #[test]
@@ -867,19 +727,15 @@ goto top",
 
     #[test]
     fn goto_to_a_label_outside_the_block_leaves_it() {
-        let allocator = Allocator::new();
-        let block = parse_block(
-            &allocator,
-            "\
+        let source = "\
 while true do goto done end
-::done::",
-            LuaVersion::Lua54,
-        );
-        let Some(Statement::WhileLoop(while_loop)) = block.stmts.first() else {
-            panic!("the statement must be a while loop");
-        };
-        let semantic = analyze(block, LuaVersion::Lua54);
-        let graph = FlowGraph::of_block(&while_loop.block, &semantic);
+::done::";
+        let graph = with_host(source, LuaVersion::Lua54.into(), |host| {
+            let Some(Statement::WhileLoop(while_loop)) = host.chunk.block.stmts.first() else {
+                panic!("the statement must be a while loop");
+            };
+            FlowGraph::of_block(&while_loop.block, host)
+        });
         assert!(graph.reaches(Exit::Break));
         assert!(!graph.reaches(Exit::End));
     }
@@ -914,14 +770,15 @@ goto a",
     #[test]
     fn gotos_find_their_labels_among_many() {
         let mut source = String::new();
-        for i in 0..2_000u32 {
-            let _unused = writeln!(
+        for i in 0..2_000 {
+            writeln!(
                 source,
                 "\
 goto l{i}
 do return end
 ::l{i}::"
-            );
+            )
+            .unwrap();
         }
         let graph = flow(&source);
         assert!(graph.reaches(Exit::End));
@@ -933,35 +790,28 @@ do return end
     #[derive(Default)]
     struct LoopBodies<'ast>(Vec<(u32, &'ast Block<'ast>)>);
 
-    impl<'ast> Visitor<'ast> for LoopBodies<'ast> {
-        fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-            match stmt {
-                Statement::WhileLoop(node) => self.0.push((node.span.start, &node.block)),
-                Statement::RepeatLoop(node) => self.0.push((node.span.start, &node.block)),
-                Statement::NumericFor(node) => self.0.push((node.span.start, &node.block)),
-                Statement::GenericFor(node) => self.0.push((node.span.start, &node.block)),
-                Statement::Assignment(_)
-                | Statement::FunctionCall(_)
-                | Statement::DoBlock(_)
-                | Statement::IfStatement(_)
-                | Statement::FunctionDecl(_)
-                | Statement::LocalFunction(_)
-                | Statement::LocalAssignment(_)
-                | Statement::EmptyStatement(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
-                | Statement::Break(_)
-                | Statement::CompoundAssignment(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::Error(_) => {}
-            }
-            self.walk_stmt(stmt);
+    impl<'ast> Visit<'ast> for LoopBodies<'ast> {
+        fn visit_while_loop(&mut self, while_loop: &'ast WhileLoop<'ast>) {
+            self.0.push((while_loop.span.start, &while_loop.block));
+            self.walk_while_loop(while_loop);
         }
 
-        fn visit_function_body(&mut self, _body: &'ast FunctionBody<'ast>) {}
+        fn visit_repeat_loop(&mut self, repeat_loop: &'ast RepeatLoop<'ast>) {
+            self.0.push((repeat_loop.span.start, &repeat_loop.block));
+            self.walk_repeat_loop(repeat_loop);
+        }
+
+        fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
+            self.0.push((numeric_for.span.start, &numeric_for.block));
+            self.walk_numeric_for(numeric_for);
+        }
+
+        fn visit_generic_for(&mut self, generic_for: &'ast GenericFor<'ast>) {
+            self.0.push((generic_for.span.start, &generic_for.block));
+            self.walk_generic_for(generic_for);
+        }
+
+        fn visit_function_body(&mut self, _function_body: &'ast FunctionBody<'ast>) {}
     }
 
     #[test]
@@ -990,18 +840,20 @@ do return end
             ),
         ];
         for (source, version) in sources {
-            let allocator = Allocator::new();
-            let block = parse_block(&allocator, source, version);
-            let semantic = analyze(block, version);
-            let nested: FxHashMap<u32, Exits> =
-                FlowGraph::of_block(block, &semantic).loop_exits().collect();
-            let mut bodies = LoopBodies::default();
-            bodies.visit_block(block);
-            assert!(!bodies.0.is_empty(), "{source}");
-            for (start, body) in bodies.0 {
-                let alone = FlowGraph::of_block(body, &semantic).exits();
-                assert_eq!(nested.get(&start), Some(&alone), "the loop at {start} in {source}");
-            }
+            with_host(source, version.into(), |host| {
+                let graph = FlowGraph::of_block(&host.chunk.block, host);
+                let mut bodies = LoopBodies::default();
+                bodies.visit_block(&host.chunk.block);
+                assert!(!bodies.0.is_empty(), "{source}");
+                for (start, body) in bodies.0 {
+                    let alone = FlowGraph::of_block(body, host).exits();
+                    assert_eq!(
+                        graph.loop_exits(start),
+                        Some(alone),
+                        "the loop at {start} in {source}"
+                    );
+                }
+            });
         }
     }
 
@@ -1016,101 +868,5 @@ print(2)";
         let offset_of = |text: &str| u32::try_from(source.find(text).expect("in source")).unwrap();
         assert!(!graph.can_run(offset_of("print(1)")));
         assert!(graph.can_run(offset_of("print(2)")));
-    }
-
-    #[test]
-    fn decision_points_empty_block() {
-        // The rule adds McCabe's baseline of 1; the count here is 0.
-        assert_eq!(points(""), 0);
-    }
-
-    #[test]
-    fn decision_points_single_if() {
-        assert_eq!(
-            points(
-                "\
-local c = 1
-if c then end"
-            ),
-            1
-        );
-    }
-
-    #[test]
-    fn decision_points_if_with_and() {
-        // +1 for the if, +1 for the `and`.
-        assert_eq!(
-            points(
-                "\
-local a = 1
-local b = 1
-if a and b then end"
-            ),
-            2
-        );
-    }
-
-    #[test]
-    fn decision_points_if_elseif() {
-        // +1 for the if, +1 for the elseif.
-        assert_eq!(
-            points(
-                "\
-local a = 1
-local b = 1
-if a then elseif b then end"
-            ),
-            2
-        );
-    }
-
-    #[test]
-    fn decision_points_each_loop_kind() {
-        assert_eq!(points("while a do end"), 1);
-        assert_eq!(points("repeat until a"), 1);
-        assert_eq!(points("for i = 1, 2 do end"), 1);
-        assert_eq!(points("for _ in f do end"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_table_call_argument() {
-        assert_eq!(points("f{a and b}"), 1);
-        assert_eq!(points("f({a and b})"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_assignment_target() {
-        assert_eq!(points("t[a or b] = 1"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_return() {
-        assert_eq!(points("return a and b"), 1);
-    }
-
-    #[test]
-    fn decision_points_in_return_after_a_terminating_stmt() {
-        assert_eq!(points("do return end return a and b"), 1);
-    }
-
-    #[test]
-    fn decision_points_skip_nested_functions() {
-        assert_eq!(points("local f = function() if a then end end"), 0);
-        assert_eq!(points("local function f() if a then end end"), 0);
-    }
-
-    #[test]
-    fn decision_points_nested_elseif_chain() {
-        // +1 for the if, +1 per elseif (two of them) = 3.
-        assert_eq!(
-            points(
-                "\
-local a = 1
-local b = 1
-local c = 1
-if a then elseif b then elseif c then end"
-            ),
-            3
-        );
     }
 }

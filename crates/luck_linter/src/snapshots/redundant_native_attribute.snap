@@ -1,0 +1,105 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native
+2 | @native function f() end
+  | ^^^^^^^
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | function f() end
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native
+2 | @native
+  | ^^^^^^^
+3 | local function f() end
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | local function f() end
+  | f()
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:3:1
+2 | do
+3 | @native function f() end
+  | ^^^^^^^
+4 | end
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | do
+  | function f() end
+  | end
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native
+2 | @native
+  | ^^^^^^^
+3 | local function a() end
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | local function a() end
+  | local f = @native function() end
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:4:11
+3 | local function a() end
+4 | local f = @native function() end
+  |           ^^^^^^^
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | @native
+  | local function a() end
+  | local f = function() end
+
+all fixes:
+  | --!native
+  | local function a() end
+  | local f = function() end
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native
+2 | @[native] function f() end
+  | ^^^^^^^^
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | function f() end
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native
+2 | @[native, deprecated] function f() end
+  | ^^^^^^^^
+tag: unnecessary
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native 
+2 | @native function f() end
+  | ^^^^^^^
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native 
+  | function f() end
+
+warning: `@native` attribute is redundant in a `--!native` module
+ --> Luau:2:1
+1 | --!native
+2 | @native
+  | ^^^^^^^
+3 | local function f() end
+tag: unnecessary
+fix: remove the redundant `@native` attribute
+  | --!native
+  | local function f() end
+  | f()

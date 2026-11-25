@@ -1,11 +1,12 @@
-use core::iter::once;
-use core::{fmt, mem};
+use std::iter::once;
+use std::{fmt, mem};
 
-use luck_allocator::{Allocator, Box, ListIntoIter};
-use luck_token::{Associativity, BinOp, OperandSide, Span};
+use luck_allocator::{Allocator, Box};
+use luck_token::Span;
 
-use crate::expr::{BinaryLink, BinaryOp, Expression, FunctionArgs, Suffix, SuffixedExpression};
+use crate::expr::{Expression, FunctionArgs, Suffix, SuffixedExpression};
 use crate::leaf::Name;
+use crate::span::GetSpan;
 use crate::types::TypeArgs;
 
 /// A chain's prefix and its first few suffixes, read as one expression: what
@@ -14,24 +15,24 @@ use crate::types::TypeArgs;
 pub struct ChainHead<'ast> {
     pub prefix: &'ast Expression<'ast>,
     pub suffixes: &'ast [Suffix<'ast>],
+    /// Where the chain starts, which is before the prefix when the prefix is
+    /// in parentheses the tree doesn't keep.
+    pub start: u32,
 }
 
 impl<'ast> ChainHead<'ast> {
     /// The prefix, when no suffix follows it.
-    #[must_use]
     pub const fn as_expr(self) -> Option<&'ast Expression<'ast>> {
         if self.suffixes.is_empty() { Some(self.prefix) } else { None }
     }
 
     /// The name, when the head is nothing else.
-    #[must_use]
     pub fn as_name(self) -> Option<&'ast Name<'ast>> {
         if let Some(Expression::Name(name)) = self.as_expr() { Some(name) } else { None }
     }
 
     /// `None` for a prefix other than a name, or a suffix other than a
     /// field.
-    #[must_use]
     pub fn dotted_path(self) -> Option<DottedPath<'ast>> {
         let Expression::Name(root) = self.prefix else {
             return None;
@@ -40,16 +41,20 @@ impl<'ast> ChainHead<'ast> {
         is_dotted.then_some(DottedPath { root, fields: self.suffixes })
     }
 
-    #[must_use]
     pub fn split_last(self) -> Option<(Self, &'ast Suffix<'ast>)> {
         let (last, before) = self.suffixes.split_last()?;
-        Some((Self { prefix: self.prefix, suffixes: before }, last))
+        Some((Self { suffixes: before, ..self }, last))
     }
+}
 
-    #[must_use]
-    pub fn span(self) -> Span {
+/// A head with a suffix spans from where the chain starts, so it holds the
+/// parentheses its prefix is in, and a head with none is its prefix.
+impl GetSpan for ChainHead<'_> {
+    fn span(&self) -> Span {
         let prefix_span = self.prefix.span();
-        self.suffixes.last().map_or(prefix_span, |last| prefix_span.merge(last.span()))
+        self.suffixes.last().map_or(prefix_span, |last| {
+            prefix_span.merge(last.span()).merge(Span::new(self.start, self.start))
+        })
     }
 }
 
@@ -58,9 +63,9 @@ impl<'ast> ChainHead<'ast> {
 impl<'ast> From<&'ast Expression<'ast>> for ChainHead<'ast> {
     fn from(expr: &'ast Expression<'ast>) -> Self {
         if let Expression::Suffixed(chain) = expr {
-            Self { prefix: &chain.prefix, suffixes: &chain.suffixes }
+            chain.head(chain.suffixes.len())
         } else {
-            Self { prefix: expr, suffixes: &[] }
+            Self { prefix: expr, suffixes: &[], start: expr.span().start }
         }
     }
 }
@@ -74,7 +79,6 @@ pub struct DottedPath<'ast> {
 }
 
 impl<'ast> DottedPath<'ast> {
-    #[must_use]
     pub const fn root(self) -> &'ast Name<'ast> {
         self.root
     }
@@ -88,9 +92,8 @@ impl<'ast> DottedPath<'ast> {
     }
 
     /// How many names it has, the root's included.
-    #[must_use]
     pub const fn segment_count(self) -> usize {
-        self.fields.len().saturating_add(1)
+        self.fields.len() + 1
     }
 }
 
@@ -119,8 +122,7 @@ pub struct Call<'ast> {
 
 impl<'ast> Call<'ast> {
     /// `None` for a suffix other than a call.
-    #[must_use]
-    pub fn new(callee: ChainHead<'ast>, suffix: &'ast Suffix<'ast>) -> Option<Self> {
+    fn new(callee: ChainHead<'ast>, suffix: &'ast Suffix<'ast>) -> Option<Self> {
         match suffix {
             Suffix::Call(args) => Some(Self { callee, method: None, type_args: None, args }),
             Suffix::MethodCall(call) => Some(Self {
@@ -132,43 +134,56 @@ impl<'ast> Call<'ast> {
             Suffix::Field(_) | Suffix::Index { .. } | Suffix::TypeInstantiation { .. } => None,
         }
     }
+}
 
-    #[must_use]
-    pub fn span(self) -> Span {
-        self.callee.span().merge(self.args.span())
+/// From where the chain starts, as a head with a suffix.
+impl GetSpan for Call<'_> {
+    fn span(&self) -> Span {
+        self.callee
+            .span()
+            .merge(self.args.span())
+            .merge(Span::new(self.callee.start, self.callee.start))
     }
 }
 
 impl<'ast> SuffixedExpression<'ast> {
     /// The prefix and the first `count` suffixes, or all of them when there
     /// are fewer.
-    #[must_use]
     pub fn head(&self, count: usize) -> ChainHead<'_> {
         let suffixes: &[Suffix<'_>] = &self.suffixes;
-        ChainHead { prefix: &self.prefix, suffixes: suffixes.get(..count).unwrap_or(suffixes) }
+        ChainHead {
+            prefix: &self.prefix,
+            suffixes: suffixes.get(..count).unwrap_or(suffixes),
+            start: self.span.start,
+        }
     }
 
-    /// Every call in the chain, first to last.
-    pub fn calls(&self) -> impl Iterator<Item = Call<'_>> {
-        self.suffixes.iter().enumerate().filter_map(|(i, suffix)| Call::new(self.head(i), suffix))
+    /// The call whose suffix is at `index`, or `None` when that suffix is no
+    /// call or the chain has none there.
+    pub fn call_at(&self, index: usize) -> Option<Call<'_>> {
+        Call::new(self.head(index), self.suffixes.get(index)?)
+    }
+
+    /// Every call in the chain, first to last, with the index of its suffix.
+    pub fn calls(&self) -> impl Iterator<Item = (usize, Call<'_>)> {
+        self.suffixes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, suffix)| Some((i, Call::new(self.head(i), suffix)?)))
     }
 
     /// The call the chain ends in, if it ends in one.
-    #[must_use]
     pub fn last_call(&self) -> Option<Call<'_>> {
-        let (last, before) = self.suffixes.split_last()?;
-        Call::new(ChainHead { prefix: &self.prefix, suffixes: before }, last)
+        self.call_at(self.suffixes.len() - 1)
     }
 
     /// Whether the chain ends in a call, which makes it one too.
-    #[must_use]
     pub fn is_call(&self) -> bool {
         matches!(self.suffixes.last(), Suffix::Call(_) | Suffix::MethodCall(_))
     }
 
     /// Whether the chain ends in a field or an index, which makes it a
     /// [`Var`](crate::Var).
-    #[must_use]
     pub fn is_var(&self) -> bool {
         matches!(self.suffixes.last(), Suffix::Field(_) | Suffix::Index { .. })
     }
@@ -199,106 +214,10 @@ impl<'ast> SuffixedExpression<'ast> {
     }
 }
 
-impl<'ast> BinaryOp<'ast> {
-    /// What every operator in the run shares.
-    #[must_use]
-    pub fn precedence(&self) -> (u8, Associativity) {
-        self.links.first().op.precedence()
-    }
-
-    /// See [`BinOp::can_nest_bare`].
-    #[must_use]
-    pub fn can_nest_bare(&self, outer: BinOp, side: OperandSide) -> bool {
-        self.links.first().op.can_nest_bare(outer, side)
-    }
-
-    /// Merges each operand that a rewrite left as a bare run at this level
-    /// into this run, as printing and reading it back would, so the tree
-    /// nests no deeper than the parser would read it.
-    ///
-    /// A bare run among a merged run's own operands merges too, however many
-    /// runs deep, in one pass over the operands that move.
-    pub fn splice_operands(&mut self, allocator: &'ast Allocator) {
-        let level = self.precedence().0;
-        let is_bare_run = |operand: &Expression<'_>| matches!(operand, Expression::BinaryOp(inner) if inner.precedence().0 == level);
-        if !is_bare_run(&self.first) && !self.links.iter().any(|link| is_bare_run(&link.operand)) {
-            return;
-        }
-        // The links still to place, the innermost run's on top. A bare first
-        // operand's links swap in for the ones after them, which wait here.
-        let mut pending = Vec::new();
-        let mut first = self.first.take();
-        while let Expression::BinaryOp(inner) = first {
-            if inner.precedence().0 != level {
-                first = Expression::BinaryOp(inner);
-                break;
-            }
-            let Self { first: inner_first, links, .. } = Box::unbox(inner);
-            pending.push(mem::replace(&mut self.links, links).into_iter());
-            first = inner_first;
-        }
-        self.first = first;
-        pending.push(self.links.split_off_rest().into_iter());
-        // The one link left.
-        let head = self.links.last_mut();
-        head.operand = leftmost_operand(head.operand.take(), level, &mut pending);
-        while let Some(links) = pending.last_mut() {
-            let Some(link) = links.next() else {
-                pending.pop();
-                continue;
-            };
-            let operand = leftmost_operand(link.operand, level, &mut pending);
-            self.links.push(BinaryLink { op: link.op, operand }, allocator);
-        }
-    }
-}
-
-/// `operand` out of the bare runs at `level` it opens, whose links go on top
-/// of `pending`, to follow it.
-fn leftmost_operand<'ast>(
-    mut operand: Expression<'ast>,
-    level: u8,
-    pending: &mut Vec<ListIntoIter<'ast, BinaryLink<'ast>>>,
-) -> Expression<'ast> {
-    loop {
-        let Expression::BinaryOp(inner) = operand else {
-            return operand;
-        };
-        if inner.precedence().0 != level {
-            return Expression::BinaryOp(inner);
-        }
-        let BinaryOp { first, links, .. } = Box::unbox(inner);
-        pending.push(links.into_iter());
-        operand = first;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fixtures::Fixture;
-    use crate::one_or_more::OneOrMore;
-
-    fn unspliced_chain<'ast>(
-        prefix: Expression<'ast>,
-        suffix: Suffix<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Expression<'ast> {
-        let suffixes = OneOrMore::new(suffix, allocator);
-        let chain = SuffixedExpression { span: Span::default(), prefix, suffixes };
-        Expression::Suffixed(Box::new_in(chain, allocator))
-    }
-
-    fn unspliced_run<'ast>(
-        first: Expression<'ast>,
-        op: BinOp,
-        operand: Expression<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Expression<'ast> {
-        let links = OneOrMore::new(BinaryLink { op, operand }, allocator);
-        let run = BinaryOp { span: Span::default(), first, links };
-        Expression::BinaryOp(Box::new_in(run, allocator))
-    }
 
     #[test]
     fn dotted_path_reads_a_name_and_its_fields_only() {
@@ -322,70 +241,58 @@ mod tests {
     }
 
     #[test]
+    fn calls_reach_every_call_with_the_index_of_its_suffix() {
+        // f(a).b:m()["c"]
+        let fixture = Fixture::default();
+        let synth = fixture.synth();
+        let method = synth.method_call(
+            synth.field(synth.call(synth.name_expr("f"), [synth.name_expr("a")]), "b"),
+            "m",
+            [],
+        );
+        let indexed = synth.index(method, synth.string("c"));
+        let Expression::Suffixed(chain) = &indexed else {
+            panic!("expected a suffixed expression");
+        };
+        let calls: Vec<(usize, usize, bool)> = chain
+            .calls()
+            .map(|(index, call)| (index, call.callee.suffixes.len(), call.method.is_some()))
+            .collect();
+        assert_eq!(calls, [(0, 0, false), (2, 2, true)]);
+        assert!(chain.call_at(1).is_none(), "a field is no call");
+        assert!(chain.call_at(4).is_none(), "the chain has four suffixes");
+        assert!(chain.call_at(2).is_some_and(|call| call.method.is_some()));
+        assert!(chain.last_call().is_none(), "the chain ends in an index");
+    }
+
+    #[test]
     fn splice_prefix_joins_every_suffixed_prefix_in_order() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
         let called = synth.call(synth.name_expr("f"), []);
-        let field = unspliced_chain(called, Suffix::Field(synth.name("a")), allocator);
+        let field = fixture.unspliced_chain(called, Suffix::Field(synth.name("a")));
         let Expression::Suffixed(mut chain) =
-            unspliced_chain(field, Suffix::Field(synth.name("b")), allocator)
+            fixture.unspliced_chain(field, Suffix::Field(synth.name("b")))
         else {
             panic!("expected a suffixed expression");
         };
-        chain.splice_prefix(allocator);
+        chain.splice_prefix(fixture.allocator());
         assert!(matches!(chain.prefix, Expression::Name(_)));
         assert!(matches!(*chain.suffixes, [Suffix::Call(_), Suffix::Field(_), Suffix::Field(_)]));
     }
 
     #[test]
-    fn splice_operands_joins_bare_runs_at_its_level_in_order() {
+    fn splice_prefix_joins_chains_nested_any_number_of_levels_deep() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
-        let name = |name: &str| synth.name_expr(name);
-        // (a + b) - (c * d + e), with no parentheses: a + b - c * d + e.
-        let left = unspliced_run(name("a"), BinOp::Add, name("b"), allocator);
-        let product = unspliced_run(name("c"), BinOp::Mul, name("d"), allocator);
-        let right = unspliced_run(product, BinOp::Add, name("e"), allocator);
-        let Expression::BinaryOp(mut run) = unspliced_run(left, BinOp::Sub, right, allocator)
-        else {
-            panic!("expected a binary run");
-        };
-        run.splice_operands(allocator);
-        let ops: Vec<BinOp> = run.links.iter().map(|link| link.op).collect();
-        assert_eq!(ops, [BinOp::Add, BinOp::Sub, BinOp::Add]);
-        assert!(matches!(run.first, Expression::Name(_)));
-        assert!(matches!(run.links[1].operand, Expression::BinaryOp(_)), "`c * d` stays a run");
-    }
-
-    #[test]
-    fn splicing_joins_runs_nested_any_number_of_levels_deep() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth();
-        let allocator = fixture.allocator();
-        let name = || synth.name_expr("x");
-        let mut sum = name();
-        let mut concat = name();
-        let mut path = name();
-        for _ in 0..50_000u32 {
-            sum = unspliced_run(sum, BinOp::Add, name(), allocator);
-            concat = unspliced_run(name(), BinOp::Concat, concat, allocator);
-            path = unspliced_chain(path, Suffix::Field(synth.name("a")), allocator);
-        }
-        for nested in [sum, concat] {
-            let Expression::BinaryOp(mut run) = nested else {
-                panic!("expected a binary run");
-            };
-            run.splice_operands(allocator);
-            assert_eq!(run.links.len(), 50_000);
-            assert!(matches!(run.first, Expression::Name(_)));
-            assert!(run.links.iter().all(|link| matches!(link.operand, Expression::Name(_))));
+        let mut path = synth.name_expr("x");
+        for _ in 0..50_000 {
+            path = fixture.unspliced_chain(path, Suffix::Field(synth.name("a")));
         }
         let Expression::Suffixed(mut chain) = path else {
             panic!("expected a suffixed expression");
         };
-        chain.splice_prefix(allocator);
+        chain.splice_prefix(fixture.allocator());
         assert_eq!(chain.suffixes.len(), 50_000);
         assert!(matches!(chain.prefix, Expression::Name(_)));
     }

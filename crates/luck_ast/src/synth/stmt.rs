@@ -3,19 +3,12 @@ use luck_token::CompoundOp;
 use crate::expr::{Expression, Var};
 use crate::function::{FunctionAttribute, Parameter};
 use crate::stmt::{
-    Assignment, Attribute, AttributedName, Block, CompoundAssignment, DoBlock, ElseClause,
-    ElseIfClause, FunctionDecl, FunctionName, GenericFor, GlobalDeclaration, GlobalFunction,
-    GlobalStar, GotoStatement, IfStatement, LabelStatement, LastStatement, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, ReturnStatement,
-    Statement, TypeDeclaration, TypeDeclarationValue, WhileLoop,
+    Attribute, AttributedName, Block, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind,
+    LocalFunctionKind, Statement, TypeDeclarationValue,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the synthesizer is one type with its constructors split by node family"
-)]
 impl<'ast> Synth<'ast> {
     /// For attributes, generics, typed parameters, varargs, or a return
     /// type, use [`Synth::function_decl_full`].
@@ -23,7 +16,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `method` or a name in `name_path` or `params` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_decl(
         &self,
         name_path: &[&str],
@@ -40,7 +32,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `method` or a name in `name_path` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_decl_full<Attributes>(
         &self,
         name_path: &[&str],
@@ -53,17 +44,18 @@ impl<'ast> Synth<'ast> {
         Attributes: IntoIterator<Item = FunctionAttribute<'ast>>,
         Attributes::IntoIter: ExactSizeIterator,
     {
-        let name = FunctionName {
-            span: self.next_span(),
-            names: self.list(name_path.iter().map(|part| self.name(part))),
-            method: method.map(|method_name| self.name(method_name)),
-        };
-        Statement::FunctionDecl(self.boxed(FunctionDecl {
-            span: self.next_span(),
-            attributes: self.list(attributes),
+        let name = FunctionName::new(
+            self.next_span(),
+            self.list(name_path.iter().map(|part| self.name(part))),
+            method.map(|method_name| self.name(method_name)),
+        );
+        Statement::new_function_decl(
+            self.next_span(),
+            self.list(attributes),
             name,
-            body: self.function_body(signature, body),
-        }))
+            self.function_body(signature, body),
+            self.allocator,
+        )
     }
 
     /// For attributes or a full signature, use [`Synth::local_function_full`].
@@ -71,7 +63,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` or a name in `params` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn local_function(
         &self,
         name: &str,
@@ -87,7 +78,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn local_function_full<Attributes>(
         &self,
         name: &str,
@@ -107,7 +97,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn const_function<Attributes>(
         &self,
         name: &str,
@@ -127,7 +116,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn export_function<Attributes>(
         &self,
         name: &str,
@@ -154,13 +142,16 @@ impl<'ast> Synth<'ast> {
         Attributes: IntoIterator<Item = FunctionAttribute<'ast>>,
         Attributes::IntoIter: ExactSizeIterator,
     {
-        Statement::LocalFunction(self.boxed(LocalFunction {
-            span: self.next_span(),
-            attributes: self.list(attributes),
-            name: self.name(name),
-            body: self.function_body(signature, body),
+        let span = self.next_span();
+        Statement::new_local_function(
+            span,
+            self.list(attributes),
+            self.name(name),
+            self.function_body(signature, body),
+            span.start,
             kind,
-        }))
+            self.allocator,
+        )
     }
 
     /// Lua 5.5: `global function name`.
@@ -168,18 +159,18 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn global_function(
         &self,
         name: &str,
         signature: FunctionSignature<'ast>,
         body: Block<'ast>,
     ) -> Statement<'ast> {
-        Statement::GlobalFunction(self.boxed(GlobalFunction {
-            span: self.next_span(),
-            name: self.name(name),
-            body: self.function_body(signature, body),
-        }))
+        Statement::new_global_function(
+            self.next_span(),
+            self.name(name),
+            self.function_body(signature, body),
+            self.allocator,
+        )
     }
 
     /// For type annotations or Lua 5.4 attributes, use [`Synth::local_full`].
@@ -187,7 +178,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if a name in `names` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn local<Exprs>(&self, names: &[&str], exprs: Exprs) -> Statement<'ast>
     where
         Exprs: IntoIterator<Item = Expression<'ast>>,
@@ -198,7 +188,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Build `names` with [`Synth::attributed_name`].
-    #[must_use]
     pub fn local_full<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -214,7 +203,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
-    #[must_use]
     pub fn const_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -228,7 +216,6 @@ impl<'ast> Synth<'ast> {
     }
 
     /// Luau: `export local names = exprs`.
-    #[must_use]
     pub fn export_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -244,7 +231,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
-    #[must_use]
     pub fn export_const<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -272,12 +258,14 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        Statement::LocalAssignment(self.boxed(LocalAssignment {
-            span: self.next_span(),
-            names: self.list(names),
-            exprs: self.list(exprs),
+        Statement::new_local_assignment(
+            self.next_span(),
+            None,
+            self.list(names),
+            self.list(exprs),
             kind,
-        }))
+            self.allocator,
+        )
     }
 
     /// One declared name for [`Synth::local_full`] / [`Synth::global_declaration`],
@@ -287,26 +275,24 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` or `attribute` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn attributed_name(
         &self,
         name: &str,
         ty: Option<Type<'ast>>,
         attribute: Option<&str>,
     ) -> AttributedName<'ast> {
-        AttributedName {
-            name: self.name(name),
-            type_annotation: ty,
-            attribute: attribute.map(|attribute_name| self.boxed(self.attribute(attribute_name))),
-        }
+        AttributedName::new(
+            self.name(name),
+            ty.map(|annotation| self.boxed(annotation)),
+            attribute.map(|attribute_name| self.boxed(self.attribute(attribute_name))),
+        )
     }
 
     fn attribute(&self, name: &str) -> Attribute<'ast> {
-        Attribute { span: self.next_span(), name: self.name(name) }
+        Attribute::new(self.next_span(), self.name(name))
     }
 
     /// Lua 5.5: `global names = exprs`, or with no `=` when `exprs` is empty.
-    #[must_use]
     pub fn global_declaration<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
         Names: IntoIterator<Item = AttributedName<'ast>>,
@@ -314,11 +300,13 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        Statement::GlobalDeclaration(self.boxed(GlobalDeclaration {
-            span: self.next_span(),
-            names: self.list(names),
-            exprs: self.list(exprs),
-        }))
+        Statement::new_global_declaration(
+            self.next_span(),
+            None,
+            self.list(names),
+            self.list(exprs),
+            self.allocator,
+        )
     }
 
     /// Lua 5.5: `global *`, or `global <attribute> *`.
@@ -326,16 +314,15 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `attribute` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn global_star(&self, attribute: Option<&str>) -> Statement<'ast> {
-        Statement::GlobalStar(self.boxed(GlobalStar {
-            span: self.next_span(),
-            attribute: attribute.map(|name| self.attribute(name)),
-        }))
+        Statement::new_global_star(
+            self.next_span(),
+            attribute.map(|name| self.attribute(name)),
+            self.allocator,
+        )
     }
 
     /// Build targets with [`Synth::name_var`], [`Synth::index_var`], [`Synth::field_var`].
-    #[must_use]
     pub fn assign<Targets, Values>(&self, targets: Targets, values: Values) -> Statement<'ast>
     where
         Targets: IntoIterator<Item = Var<'ast>>,
@@ -343,34 +330,27 @@ impl<'ast> Synth<'ast> {
         Values: IntoIterator<Item = Expression<'ast>>,
         Values::IntoIter: ExactSizeIterator,
     {
-        Statement::Assignment(self.boxed(Assignment {
-            span: self.next_span(),
-            targets: self.list(targets),
-            values: self.list(values),
-        }))
+        Statement::new_assignment(
+            self.next_span(),
+            self.list(targets),
+            self.list(values),
+            self.allocator,
+        )
     }
 
     /// Luau: `target op= value`.
-    #[must_use]
     pub fn compound_assign(
         &self,
         target: Var<'ast>,
         op: CompoundOp,
         value: Expression<'ast>,
     ) -> Statement<'ast> {
-        Statement::CompoundAssignment(self.boxed(CompoundAssignment {
-            span: self.next_span(),
-            var: target,
-            op,
-            expr: value,
-        }))
+        Statement::new_compound_assignment(self.next_span(), target, op, value, self.allocator)
     }
 
     /// # Panics
     ///
     /// Panics if `call_expr` isn't a function call.
-    #[must_use]
-    #[expect(clippy::panic, reason = "documented panic")]
     #[expect(clippy::unused_self, reason = "every constructor is the synthesizer's")]
     pub fn call_stmt(&self, call_expr: Expression<'ast>) -> Statement<'ast> {
         let Expression::Suffixed(call) = call_expr else {
@@ -383,22 +363,18 @@ impl<'ast> Synth<'ast> {
         Statement::FunctionCall(call)
     }
 
-    #[must_use]
     pub fn do_block(&self, block: Block<'ast>) -> Statement<'ast> {
-        Statement::DoBlock(self.boxed(DoBlock { span: self.next_span(), block }))
+        Statement::new_do_block(self.next_span(), block, self.allocator)
     }
 
-    #[must_use]
     pub fn while_(&self, condition: Expression<'ast>, block: Block<'ast>) -> Statement<'ast> {
-        Statement::WhileLoop(self.boxed(WhileLoop { span: self.next_span(), condition, block }))
+        Statement::new_while_loop(self.next_span(), condition, block, self.allocator)
     }
 
-    #[must_use]
     pub fn repeat_(&self, block: Block<'ast>, condition: Expression<'ast>) -> Statement<'ast> {
-        Statement::RepeatLoop(self.boxed(RepeatLoop { span: self.next_span(), block, condition }))
+        Statement::new_repeat_loop(self.next_span(), block, condition, self.allocator)
     }
 
-    #[must_use]
     pub fn if_<ElseIfs>(
         &self,
         condition: Expression<'ast>,
@@ -412,20 +388,21 @@ impl<'ast> Synth<'ast> {
     {
         let span = self.next_span();
         let elseif_clauses = self.list(elseifs.into_iter().map(|(elseif_condition, block)| {
-            ElseIfClause { span: self.next_span(), condition: elseif_condition, block }
+            ElseIfClause::new(self.next_span(), elseif_condition, block)
         }));
-        let else_clause = else_block.map(|block| ElseClause { span: self.next_span(), block });
-        Statement::IfStatement(self.boxed(IfStatement {
+        let else_clause =
+            else_block.map(|block| ElseClause::boxed(self.next_span(), block, self.allocator));
+        Statement::new_if_stmt(
             span,
             condition,
-            block: then_block,
+            then_block,
             elseif_clauses,
             else_clause,
-        }))
+            self.allocator,
+        )
     }
 
     /// Build `variable` with [`Synth::param`] or [`Synth::param_typed`].
-    #[must_use]
     pub fn numeric_for(
         &self,
         variable: Parameter<'ast>,
@@ -434,19 +411,19 @@ impl<'ast> Synth<'ast> {
         step: Option<Expression<'ast>>,
         block: Block<'ast>,
     ) -> Statement<'ast> {
-        Statement::NumericFor(self.boxed(NumericFor {
-            span: self.next_span(),
-            name: variable.name,
-            type_annotation: variable.type_annotation,
+        Statement::new_numeric_for(
+            self.next_span(),
+            variable.name,
+            variable.type_annotation,
             start,
             limit,
             step,
             block,
-        }))
+            self.allocator,
+        )
     }
 
     /// Build names with [`Synth::param`] or [`Synth::param_typed`].
-    #[must_use]
     pub fn generic_for<Names, Exprs>(
         &self,
         names: Names,
@@ -459,75 +436,67 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        Statement::GenericFor(self.boxed(GenericFor {
-            span: self.next_span(),
-            names: self.list(names),
-            exprs: self.list(exprs),
+        Statement::new_generic_for(
+            self.next_span(),
+            self.list(names),
+            self.list(exprs),
             block,
-        }))
+            self.allocator,
+        )
     }
 
     /// # Panics
     ///
     /// Panics if `label` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn goto_(&self, label: &str) -> Statement<'ast> {
-        Statement::Goto(
-            self.boxed(GotoStatement { span: self.next_span(), name: self.name(label) }),
-        )
+        Statement::new_goto(self.next_span(), self.name(label), self.allocator)
     }
 
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn label(&self, name: &str) -> Statement<'ast> {
-        Statement::Label(
-            self.boxed(LabelStatement { span: self.next_span(), name: self.name(name) }),
-        )
+        Statement::new_label(self.next_span(), self.name(name), self.allocator)
     }
 
-    /// Lua 5.1 and Luau only allow `break` as the last statement, so use [`Synth::break_`] there.
-    #[must_use]
-    pub fn break_stmt(&self) -> Statement<'ast> {
-        Statement::Break(self.next_span())
-    }
-
-    /// The formatter drops these; only compact output prints them.
-    #[must_use]
-    pub fn empty_stmt(&self) -> Statement<'ast> {
-        Statement::EmptyStatement(self.next_span())
-    }
-
-    #[must_use]
-    pub fn return_<Exprs>(&self, exprs: Exprs) -> LastStatement<'ast>
+    pub fn return_<Exprs>(&self, exprs: Exprs) -> Statement<'ast>
     where
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        LastStatement::Return(
-            self.boxed(ReturnStatement { span: self.next_span(), exprs: self.list(exprs) }),
-        )
+        Statement::new_return(self.next_span(), self.list(exprs), self.allocator)
     }
 
-    #[must_use]
-    pub fn break_(&self) -> LastStatement<'ast> {
-        LastStatement::Break(self.next_span())
+    pub fn break_(&self) -> Statement<'ast> {
+        Statement::Break(self.next_span())
     }
 
     /// Luau: `continue`.
-    #[must_use]
-    pub fn continue_(&self) -> LastStatement<'ast> {
-        LastStatement::Continue(self.next_span())
+    pub fn continue_(&self) -> Statement<'ast> {
+        Statement::Continue(self.next_span())
     }
 
-    #[must_use]
-    pub fn block<Stmts>(&self, stmts: Stmts, last: Option<LastStatement<'ast>>) -> Block<'ast>
+    /// A statement that has to end its block, in the pinned dialect or in
+    /// any when none is pinned, goes in a `do ... end` of its own when others
+    /// follow it, so the printed block reads back.
+    pub fn block<Stmts>(&self, stmts: Stmts) -> Block<'ast>
     where
         Stmts: IntoIterator<Item = Statement<'ast>>,
         Stmts::IntoIter: ExactSizeIterator,
     {
-        Block { span: self.next_span(), stmts: self.list(stmts), last_stmt: last }
+        let given = stmts.into_iter();
+        let last_index = given.len().saturating_sub(1);
+        let ended = given.enumerate().map(|(i, stmt)| {
+            let has_to_end_block =
+                self.versions().iter().any(|&version| stmt.has_to_end_block(version));
+            if i < last_index && has_to_end_block {
+                let block = Block::new(self.next_span(), self.list([stmt]));
+                Statement::new_do_block(self.next_span(), block, self.allocator)
+            } else {
+                stmt
+            }
+        });
+        Block::new(self.next_span(), self.list(ended))
     }
 
     /// Luau: `[export] type name<generics> = value`.
@@ -535,7 +504,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn type_declaration(
         &self,
         is_exported: bool,
@@ -543,13 +511,14 @@ impl<'ast> Synth<'ast> {
         generics: Option<GenericTypeList<'ast>>,
         value: Type<'ast>,
     ) -> Statement<'ast> {
-        Statement::TypeDeclaration(self.boxed(TypeDeclaration {
-            span: self.next_span(),
+        Statement::new_type_declaration(
+            self.next_span(),
             is_exported,
-            name: self.name(name),
-            generics: generics.map(|list| self.boxed(list)),
-            value: TypeDeclarationValue::Alias(value),
-        }))
+            self.name(name),
+            generics.map(|list| self.boxed(list)),
+            TypeDeclarationValue::Alias(value),
+            self.allocator,
+        )
     }
 
     /// Luau: `[export] type function name funcbody`.
@@ -557,7 +526,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn type_function(
         &self,
         is_exported: bool,
@@ -565,15 +533,16 @@ impl<'ast> Synth<'ast> {
         signature: FunctionSignature<'ast>,
         body: Block<'ast>,
     ) -> Statement<'ast> {
-        Statement::TypeDeclaration(self.boxed(TypeDeclaration {
-            span: self.next_span(),
+        let value =
+            TypeDeclarationValue::TypeFunction(self.boxed(self.function_body(signature, body)));
+        Statement::new_type_declaration(
+            self.next_span(),
             is_exported,
-            name: self.name(name),
-            generics: None,
-            value: TypeDeclarationValue::TypeFunction(
-                self.boxed(self.function_body(signature, body)),
-            ),
-        }))
+            self.name(name),
+            None,
+            value,
+            self.allocator,
+        )
     }
 }
 
@@ -588,7 +557,7 @@ mod tests {
     fn builds_local_with_binary_op() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let sum = synth.binary_op(synth.number("1"), BinOp::Add, synth.number("2"));
+        let sum = synth.binary_op(synth.number_i64(1), BinOp::Add, synth.number_i64(2));
         let Statement::LocalAssignment(local) = synth.local(&["x"], [sum]) else {
             panic!("expected local assignment");
         };
@@ -620,7 +589,7 @@ mod tests {
         let [first] = &*local.names else {
             panic!("expected one name");
         };
-        assert!(matches!(first.type_annotation, Some(Type::Optional(_))));
+        assert!(matches!(first.type_annotation.as_deref(), Some(Type::Optional(_))));
     }
 
     #[test]
@@ -641,7 +610,7 @@ mod tests {
         assert_eq!(plain_local.kind, LocalAssignmentKind::Local);
 
         let function_stmt =
-            synth.const_function("pinned", [], FunctionSignature::default(), synth.block([], None));
+            synth.const_function("pinned", [], FunctionSignature::default(), synth.block([]));
         let Statement::LocalFunction(local_function) = &function_stmt else {
             panic!("expected local function");
         };
@@ -659,8 +628,7 @@ mod tests {
         };
         assert!(declaration.names.iter().all(|name| name.attribute.is_some()));
 
-        let function =
-            synth.global_function("main", FunctionSignature::default(), synth.block([], None));
+        let function = synth.global_function("main", FunctionSignature::default(), synth.block([]));
         assert!(matches!(function, Statement::GlobalFunction(_)));
 
         let Statement::GlobalStar(star) = synth.global_star(Some("const")) else {
@@ -674,7 +642,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let stmt =
-            synth.compound_assign(synth.name_var("counter"), CompoundOp::Add, synth.number("1"));
+            synth.compound_assign(synth.name_var("counter"), CompoundOp::Add, synth.number_i64(1));
         let Statement::CompoundAssignment(compound) = &stmt else {
             panic!("expected compound assignment");
         };
@@ -688,8 +656,8 @@ mod tests {
         let synth = fixture.synth();
         let stmt = synth.if_(
             synth.boolean(true),
-            synth.block([], None),
-            [(synth.boolean(false), synth.block([], None))],
+            synth.block([]),
+            [(synth.boolean(false), synth.block([]))],
             None,
         );
         let Statement::IfStatement(if_stmt) = &stmt else {
@@ -704,8 +672,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let call = synth.call(synth.name_expr("pairs"), [synth.name_expr("t")]);
-        let stmt =
-            synth.generic_for([synth.param("k"), synth.param("v")], [call], synth.block([], None));
+        let stmt = synth.generic_for([synth.param("k"), synth.param("v")], [call], synth.block([]));
         let Statement::GenericFor(generic_for) = &stmt else {
             panic!("expected generic for");
         };
@@ -719,10 +686,10 @@ mod tests {
         let synth = fixture.synth();
         let stmt = synth.numeric_for(
             synth.param_typed("i", synth.ty_named("number")),
-            synth.number("1"),
-            synth.number("10"),
+            synth.number_i64(1),
+            synth.number_i64(10),
             None,
-            synth.block([], None),
+            synth.block([]),
         );
         let Statement::NumericFor(numeric_for) = &stmt else {
             panic!("expected numeric for");
@@ -739,21 +706,39 @@ mod tests {
     }
 
     #[test]
-    fn builds_continue_and_breaks() {
+    fn builds_loop_exits() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        assert!(matches!(synth.continue_(), LastStatement::Continue(_)));
-        assert!(matches!(synth.break_(), LastStatement::Break(_)));
-        assert!(matches!(synth.break_stmt(), Statement::Break(_)));
-        assert!(matches!(synth.empty_stmt(), Statement::EmptyStatement(_)));
+        assert!(matches!(synth.continue_(), Statement::Continue(_)));
+        assert!(matches!(synth.break_(), Statement::Break(_)));
+    }
+
+    #[test]
+    fn a_block_ends_what_has_to_end_it_where_others_follow() {
+        let fixture = Fixture::default();
+        let shapes = |synth: Synth<'_>| {
+            let call = || synth.call_stmt(synth.call(synth.name_expr("f"), []));
+            let block = synth.block([
+                synth.break_(),
+                call(),
+                synth.return_([]),
+                call(),
+                synth.continue_(),
+                synth.return_([]),
+            ]);
+            block.stmts.iter().map(|stmt| matches!(stmt, Statement::DoBlock(_))).collect::<Vec<_>>()
+        };
+        let unpinned = shapes(fixture.synth());
+        assert_eq!(unpinned, [true, false, true, false, true, false]);
+        let pinned = shapes(fixture.synth().with_version(LuaVersion::Lua54));
+        assert_eq!(pinned, [false, false, true, false, true, false]);
     }
 
     #[test]
     fn builds_function_declaration_with_method() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let stmt =
-            synth.function_decl(&["a", "b"], Some("greet"), &["self"], synth.block([], None));
+        let stmt = synth.function_decl(&["a", "b"], Some("greet"), &["self"], synth.block([]));
         let Statement::FunctionDecl(function_decl) = &stmt else {
             panic!("expected function declaration");
         };
@@ -785,7 +770,7 @@ mod tests {
         let synth = fixture.synth();
         let signature =
             FunctionSignature { params: vec![synth.param("ty")], ..FunctionSignature::default() };
-        let stmt = synth.type_function(false, "Partial", signature, synth.block([], None));
+        let stmt = synth.type_function(false, "Partial", signature, synth.block([]));
         let Statement::TypeDeclaration(declaration) = &stmt else {
             panic!("expected type declaration");
         };

@@ -2,57 +2,64 @@
 //!
 //! That's constant branches and the `if`s they leave, loops that run once or
 //! never, a default `for` step, a bare closing `return`, `cond and X or X`,
-//! empty statements, and `local`s nothing kept uses.
+//! and `local`s nothing kept uses.
 //!
 //! A local is referenced only in its block, so the walk drops a `local`
 //! nothing references as it reaches it, and those its rewrites leave
 //! unreferenced as it leaves the block, last first, since each one's
 //! initializer can hold the last reference to one before it.
 
-use core::mem;
+use std::mem;
 
-use luck_allocator::{Allocator, Box, List};
+use luck_allocator::{Allocator, List};
 use luck_ast::{
-    BinaryOp, Block, DoBlock, ElseClause, ElseIfClause, Expression, IfStatement, LastStatement,
-    LocalAssignment, Name, NumericFor, OneOrMore, Statement, UnaryOp, VisitorMut as _,
+    BinaryOp, Block, ContentEq as _, ElseClause, ElseIfClause, Expression, GetSpan as _,
+    IfStatement, LocalAssignment, NumericFor, OneOrMore, Statement, VisitMut as _,
 };
-use luck_token::{BinOp, LuaVersion, UnOp};
+use luck_token::{BinOp, LuaNumber, UnOp};
+use luck_value::{
+    ConstantEvaluation as _, ConstantValue, MayHaveSideEffects as _, ValueContext as _,
+};
 
-use super::Compressor;
-use super::simplify_parens;
+use super::simplify_parens::Place;
 use super::simplify_statements::{has_no_else, holds_nested_if};
+use super::{Compressor, remove_stmts};
 use crate::binding::{
-    has_attributed_or_env_name, has_fixed_binding, is_droppable_function, local_of,
+    ResolvedNames, has_attributed_or_env_name, has_fixed_binding, is_droppable_function,
 };
-use crate::expr::{
-    binds_looser_than_unary, constant_truthiness, is_nil, is_pure_expr, is_same_pure_expr,
-    parenthesize, truncate_multi_value,
-};
+use crate::expr::{fits_at_depth, truncate_multi_value};
 
-pub(super) fn is_empty_block(block: &Block<'_>) -> bool {
-    block.stmts.is_empty() && block.last_stmt.is_none()
+/// A step of integer 1 is the default. On Lua 5.3+ a float step makes the
+/// loop a float one, so `1.0` isn't, but where every number is a float, it is.
+pub(super) fn has_default_step(numeric_for: &NumericFor<'_>, names: ResolvedNames<'_>) -> bool {
+    let default = if names.version().has_integer_subtype() {
+        LuaNumber::Int(1)
+    } else {
+        LuaNumber::Float(1.0)
+    };
+    numeric_for.step.as_ref().and_then(|step| step.evaluate_value(&names))
+        == Some(ConstantValue::Number(default))
 }
 
-/// A step of 1 is the default.
-pub(super) fn has_default_step(numeric_for: &NumericFor<'_>) -> bool {
-    matches!(&numeric_for.step, Some(Expression::Number(literal)) if literal.text == "1")
-}
-
-/// Only a bare `return` is removable. `return nil` returns one value, and
+/// Drops the `return` that ends `block`, a function's or the chunk's, when
+/// it's bare, and says whether it did. `return nil` returns one value, and
 /// `select('#', f())` observes the difference.
-pub(super) fn ends_in_bare_return(block: &Block<'_>) -> bool {
-    matches!(&block.last_stmt, Some(LastStatement::Return(return_stmt)) if return_stmt.exprs.is_empty())
+pub(super) fn drop_bare_return(block: &mut Block<'_>) -> bool {
+    let is_bare = matches!(
+        block.stmts.last(),
+        Some(Statement::Return(return_stmt)) if return_stmt.exprs.is_empty()
+    );
+    if is_bare {
+        block.stmts.truncate(block.stmts.len() - 1);
+    }
+    is_bare
 }
 
 /// Nested loops and function bodies aren't searched, since their exits can't
 /// reach this loop.
 fn has_loop_exit(block: &Block<'_>) -> bool {
-    if matches!(block.last_stmt, Some(LastStatement::Break(_) | LastStatement::Continue(_))) {
-        return true;
-    }
     block.stmts.iter().any(|stmt| match stmt {
-        // Lua 5.2+
-        Statement::Break(_) => true,
+        Statement::Break(_) | Statement::Continue(_) => true,
         Statement::DoBlock(do_block) => has_loop_exit(&do_block.block),
         Statement::IfStatement(if_stmt) => {
             has_loop_exit(&if_stmt.block)
@@ -69,7 +76,7 @@ fn has_loop_exit(block: &Block<'_>) -> bool {
         | Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::LocalAssignment(_)
-        | Statement::EmptyStatement(_)
+        | Statement::Return(_)
         | Statement::Goto(_)
         | Statement::Label(_)
         | Statement::GlobalDeclaration(_)
@@ -82,35 +89,32 @@ fn has_loop_exit(block: &Block<'_>) -> bool {
 
 fn do_block<'ast>(allocator: &'ast Allocator, block: Block<'ast>) -> Statement<'ast> {
     let span = block.span;
-    Statement::DoBlock(Box::new_in(DoBlock { span, block }, allocator))
+    Statement::new_do_block(span, block, allocator)
 }
 
 /// Only wraps in `not`. Inverting a comparison operator would change which
 /// metamethod is called, `__lt` instead of `__le` and so on.
 fn negate<'ast>(allocator: &'ast Allocator, expr: Expression<'ast>) -> Expression<'ast> {
-    let needs_parens =
-        matches!(&expr, Expression::BinaryOp(binary_op) if binds_looser_than_unary(binary_op));
     let span = expr.span();
-    let operand = if needs_parens { parenthesize(allocator, expr) } else { expr };
-    Expression::UnaryOp(Box::new_in(UnaryOp { span, op: UnOp::Not, operand }, allocator))
+    Expression::new_unary_op(span, UnOp::Not, expr, allocator)
 }
 
 /// `cond and X or X`, which a run of `or`s starts with when its first two
 /// operands are that.
-fn is_redundant_ternary(outer: &BinaryOp<'_>) -> bool {
+fn is_redundant_ternary(outer: &BinaryOp<'_>, names: ResolvedNames<'_>) -> bool {
     let Expression::BinaryOp(inner) = &outer.first else {
         return false;
     };
     let alternative = &outer.links.first().operand;
-    let conditions = inner.links.split_last().map_or(&[][..], |(_, before_last)| before_last);
+    let conditions = &inner.links[..inner.links.len() - 1];
     outer.links.first().op == BinOp::Or
         && inner.links.first().op == BinOp::And
-        && is_same_pure_expr(&inner.links.last().operand, alternative)
-        && is_pure_expr(&inner.first)
-        && conditions.iter().all(|link| is_pure_expr(&link.operand))
+        && inner.links.last().operand.content_eq(alternative)
+        && !inner.first.may_have_side_effects(&names)
+        && conditions.iter().all(|link| !link.operand.may_have_side_effects(&names))
         // X must be pure too: a call that returns a falsy value runs twice in
         // the original but once here.
-        && is_pure_expr(alternative)
+        && !alternative.may_have_side_effects(&names)
 }
 
 /// What becomes of a `local` when none of its names is used.
@@ -126,15 +130,16 @@ pub(super) enum UnusedLocalAction {
 /// droppable before a walk is droppable after it.
 pub(super) fn unused_local_action(
     local: &LocalAssignment<'_>,
-    version: LuaVersion,
+    names: ResolvedNames<'_>,
 ) -> UnusedLocalAction {
     // Exports, attributed names, and a 5.2+ `_ENV` are never dead.
-    if local.kind.is_exported() || has_attributed_or_env_name(local, version) {
+    if local.kind.is_exported() || has_attributed_or_env_name(local, names.0) {
         return UnusedLocalAction::Keep;
     }
-    if local.exprs.iter().all(is_pure_expr) {
+    let is_pure = |expr: &Expression<'_>| !expr.may_have_side_effects(&names);
+    if local.exprs.iter().all(is_pure) {
         UnusedLocalAction::Remove
-    } else if local.exprs.iter().all(|expr| is_pure_expr(expr) || is_call(expr)) {
+    } else if local.exprs.iter().all(|expr| is_pure(expr) || is_call(expr)) {
         UnusedLocalAction::ExtractCalls
     } else {
         UnusedLocalAction::Keep
@@ -157,47 +162,53 @@ enum Dropped {
 pub(super) fn is_nil_initialized(local: &LocalAssignment<'_>) -> bool {
     !local.kind.is_const()
         && local.names.len() == 1
-        && matches!(&*local.exprs, [value] if is_nil(value))
+        && matches!(&*local.exprs, [Expression::Nil(_)])
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the compressor is one type with its rewrites split by flag"
-)]
 impl<'ast> Compressor<'_, 'ast> {
-    pub(super) fn is_used(&self, name: &Name<'_>) -> bool {
-        local_of(name).is_some_and(|id| self.bindings.is_used(id))
-    }
-
     /// Drops what of `stmts`, a block the walk is leaving, nothing
     /// references.
     pub(super) fn drop_unused(&mut self, stmts: &mut List<'ast, Statement<'ast>>) {
         let mut has_dropped = false;
+        // The statements that go whole, last first.
+        let mut removed = mem::take(&mut self.removed_stmts);
+        removed.clear();
         for (index, stmt) in stmts.iter_mut().enumerate().rev() {
             match self.drop_unused_from(stmt, index) {
                 Dropped::Nothing => {}
                 Dropped::Part => has_dropped = true,
                 Dropped::Whole => {
-                    *stmt = Statement::EmptyStatement(stmt.span());
+                    removed.push(index);
                     has_dropped = true;
                 }
             }
         }
-        if !has_dropped {
-            return;
+        if has_dropped {
+            self.has_changed = true;
+            removed.reverse();
+            if self.late_calls.is_empty() {
+                remove_stmts(stmts, &removed);
+            } else {
+                self.insert_late_calls(stmts, &removed);
+            }
         }
-        self.has_changed = true;
+        self.removed_stmts = removed;
+    }
+
+    /// Drops the statements at `removed`, ascending, and puts the calls an
+    /// unused `local` leaves after the one that stands in its place.
+    fn insert_late_calls(&mut self, stmts: &mut List<'ast, Statement<'ast>>, removed: &[usize]) {
         let mut calls = self.late_calls.drain(..).rev().peekable();
-        let mut kept = Vec::with_capacity(stmts.len());
+        let mut to_drop = removed.iter().peekable();
+        let mut kept = Vec::with_capacity(stmts.len() + calls.len());
         for (index, stmt) in mem::take(stmts).into_iter().enumerate() {
-            if !matches!(stmt, Statement::EmptyStatement(_)) {
+            if to_drop.next_if_eq(&&index).is_none() {
                 kept.push(stmt);
             }
             while let Some((_, call)) = calls.next_if(|&(call_index, _)| call_index == index) {
                 kept.push(call);
             }
         }
-        drop(calls);
         *stmts = List::from_iter_in(kept, self.allocator);
     }
 
@@ -205,20 +216,20 @@ impl<'ast> Compressor<'_, 'ast> {
     fn drop_unused_from(&mut self, stmt: &mut Statement<'ast>, index: usize) -> Dropped {
         match stmt {
             Statement::LocalFunction(local_function) => {
-                if is_droppable_function(local_function, self.version)
+                if is_droppable_function(local_function, self.scoping)
                     && !self.is_used(&local_function.name)
                 {
-                    self.retract_stmt(stmt);
+                    self.drop_stmt(stmt);
                     return Dropped::Whole;
                 }
                 Dropped::Nothing
             }
             Statement::LocalAssignment(local) => {
                 if local.names.iter().all(|attributed| !self.is_used(&attributed.name)) {
-                    match unused_local_action(local, self.version) {
+                    match unused_local_action(local, self.names()) {
                         UnusedLocalAction::Keep => {}
                         UnusedLocalAction::Remove => {
-                            self.retract_stmt(stmt);
+                            self.drop_stmt(stmt);
                             return Dropped::Whole;
                         }
                         UnusedLocalAction::ExtractCalls => {
@@ -229,23 +240,22 @@ impl<'ast> Compressor<'_, 'ast> {
                 }
                 // Dropping a name and its value keeps every other name's
                 // value only when each name has its own.
-                if has_fixed_binding(local, self.version) || local.names.len() != local.exprs.len()
+                if has_fixed_binding(local, self.scoping) || local.names.len() != local.exprs.len()
                 {
                     return Dropped::Nothing;
                 }
-                let mut kept = 0usize;
+                let mut kept = 0;
                 for i in 0..local.names.len() {
-                    let (Some(attributed), Some(value)) = (local.names.get(i), local.exprs.get(i))
-                    else {
-                        break;
-                    };
-                    if !self.is_used(&attributed.name) && is_pure_expr(value) {
-                        self.retract_annotation(attributed);
-                        self.retract_expr(value);
+                    let (attributed, value) = (&local.names[i], &local.exprs[i]);
+                    if !self.is_used(&attributed.name)
+                        && !value.may_have_side_effects(&self.names())
+                    {
+                        self.drop_annotation(attributed);
+                        self.drop_expr(value);
                     } else {
                         local.names.swap(kept, i);
                         local.exprs.swap(kept, i);
-                        kept = kept.saturating_add(1);
+                        kept += 1;
                     }
                 }
                 let has_dropped = kept < local.names.len();
@@ -266,13 +276,14 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::NumericFor(_)
             | Statement::GenericFor(_)
             | Statement::FunctionDecl(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
-            | Statement::Break(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => Dropped::Nothing,
@@ -286,13 +297,13 @@ impl<'ast> Compressor<'_, 'ast> {
             return;
         };
         for attributed in &local.names {
-            self.retract_annotation(attributed);
+            self.drop_annotation(attributed);
         }
         let mut first_call = None;
         let calls_start = self.late_calls.len();
         for expr in &mut local.exprs {
             if !is_call(expr) {
-                self.retract_expr(expr);
+                self.drop_expr(expr);
                 continue;
             }
             if let Expression::Suffixed(chain) = expr.take() {
@@ -305,9 +316,7 @@ impl<'ast> Compressor<'_, 'ast> {
             }
         }
         // The calls go in last first, as the block's statements do.
-        if let Some(later) = self.late_calls.get_mut(calls_start..) {
-            later.reverse();
-        }
+        self.late_calls[calls_start..].reverse();
         if let Some(call) = first_call {
             *stmt = call;
         }
@@ -319,37 +328,46 @@ impl<'ast> Compressor<'_, 'ast> {
         let Expression::BinaryOp(outer) = expr else {
             return false;
         };
-        if !is_redundant_ternary(outer) {
+        if !is_redundant_ternary(outer, self.names()) {
             return false;
         }
-        self.retract_expr(&outer.first);
+        self.drop_expr(&outer.first);
         let allocator = self.allocator;
-        let Some(alternative) = (*outer.links).first_mut() else {
-            return false;
-        };
-        let kept = truncate_multi_value(allocator, alternative.operand.take());
-        match OneOrMore::from_list(outer.links.split_off_rest()) {
+        let kept = outer.links[0].operand.take();
+        match OneOrMore::from_list(outer.links.split_off(1)) {
             Some(rest) => {
                 outer.first = kept;
                 outer.links = rest;
             }
-            None => *expr = kept,
+            None => *expr = truncate_multi_value(allocator, kept),
         }
         true
     }
 
-    /// Uncounts the arms of an `if` the walk drops unwalked.
-    fn retract_arms(
+    /// Walks the condition of an `if`'s arm, and says whether it's truthy
+    /// when that's known and it can go, which it then does, dropped: the arm
+    /// runs whenever the `if` reaches it, or never.
+    fn visit_arm_condition(&mut self, condition: &mut Expression<'ast>) -> Option<bool> {
+        self.visit_expr(condition);
+        let truthiness = condition.get_side_free_boolean_value(&self.names());
+        if truthiness.is_some() {
+            self.drop_expr(condition);
+        }
+        truthiness
+    }
+
+    /// Drops the arms of an `if` the walk leaves unwalked.
+    fn drop_arms(
         &mut self,
         clauses: &[ElseIfClause<'ast>],
         else_clause: Option<&ElseClause<'ast>>,
     ) {
         for clause in clauses {
-            self.retract_expr(&clause.condition);
-            self.retract_block(&clause.block);
+            self.drop_expr(&clause.condition);
+            self.drop_block(&clause.block);
         }
         if let Some(clause) = else_clause {
-            self.retract_block(&clause.block);
+            self.drop_block(&clause.block);
         }
     }
 
@@ -357,9 +375,9 @@ impl<'ast> Compressor<'_, 'ast> {
     /// those, then trades branches, merges a nested `if`, or drops what's
     /// left. Says whether anything of it stays.
     ///
-    /// An arm under a falsy literal never runs. The first under a truthy
-    /// literal runs whenever it's reached, so it becomes the `else` and every
-    /// arm after it goes.
+    /// An arm under a falsy condition that can go never runs. The first under
+    /// a truthy one runs whenever it's reached, so it becomes the `else` and
+    /// every arm after it goes.
     pub(super) fn visit_if(&mut self, stmt: &mut Statement<'ast>) -> bool {
         let Statement::IfStatement(if_stmt) = stmt else {
             return true;
@@ -374,21 +392,20 @@ impl<'ast> Compressor<'_, 'ast> {
             return true;
         }
         let IfStatement { condition, block, elseif_clauses, else_clause, .. } = &mut **if_stmt;
-        self.visit_expr(condition);
-        let mut has_head = match constant_truthiness(condition) {
+        let mut has_head = match self.visit_arm_condition(condition) {
             Some(true) => {
                 self.visit_run_block(block, holds_run);
                 // The `if`s under it left their merge to this one, which goes.
                 if holds_run && let [Statement::IfStatement(inner)] = &mut *block.stmts {
-                    self.merge_nested_ifs(inner, self.depth.saturating_add(1));
+                    self.merge_nested_ifs(inner, self.depth + 1);
                 }
-                self.retract_arms(elseif_clauses, else_clause.as_ref());
+                self.drop_arms(elseif_clauses, else_clause.as_deref());
                 *stmt = do_block(self.allocator, block.take());
                 self.has_changed = true;
-                return !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block));
+                return !matches!(stmt, Statement::DoBlock(do_block) if do_block.block.stmts.is_empty());
             }
             Some(false) => {
-                self.retract_block(block);
+                self.drop_block(block);
                 false
             }
             None => {
@@ -398,17 +415,14 @@ impl<'ast> Compressor<'_, 'ast> {
         };
         let mut has_dropped_arm = !has_head;
         let mut taken_block = None;
-        let mut kept = 0usize;
+        let mut kept = 0;
         let mut taken_index = None;
         for index in 0..elseif_clauses.len() {
-            let Some(clause) = elseif_clauses.get_mut(index) else {
-                break;
-            };
-            self.visit_expr(&mut clause.condition);
-            let truthiness = constant_truthiness(&clause.condition);
+            let clause = &mut elseif_clauses[index];
+            let truthiness = self.visit_arm_condition(&mut clause.condition);
             has_dropped_arm |= truthiness.is_some();
             match truthiness {
-                Some(false) => self.retract_block(&clause.block),
+                Some(false) => self.drop_block(&clause.block),
                 Some(true) => {
                     taken_block = Some(clause.block.take());
                     taken_index = Some(index);
@@ -417,7 +431,7 @@ impl<'ast> Compressor<'_, 'ast> {
                 None if has_head => {
                     self.visit_block(&mut clause.block);
                     elseif_clauses.swap(kept, index);
-                    kept = kept.saturating_add(1);
+                    kept += 1;
                 }
                 // The first arm left takes the dropped head's place.
                 None => {
@@ -429,12 +443,11 @@ impl<'ast> Compressor<'_, 'ast> {
             }
         }
         if let Some(index) = taken_index {
-            let rest = elseif_clauses.get(index.saturating_add(1)..).unwrap_or_default();
-            self.retract_arms(rest, else_clause.as_ref());
+            self.drop_arms(&elseif_clauses[index + 1..], else_clause.as_deref());
         }
         elseif_clauses.truncate(kept);
         if let Some(taken) = taken_block {
-            *else_clause = Some(ElseClause { span: taken.span, block: taken });
+            *else_clause = Some(ElseClause::boxed(taken.span, taken, self.allocator));
         }
         if let Some(clause) = else_clause {
             self.visit_block(&mut clause.block);
@@ -445,8 +458,8 @@ impl<'ast> Compressor<'_, 'ast> {
         if !has_head {
             return match else_clause.take() {
                 Some(clause) => {
-                    *stmt = do_block(self.allocator, clause.block);
-                    !matches!(stmt, Statement::DoBlock(do_block) if is_empty_block(&do_block.block))
+                    *stmt = do_block(self.allocator, clause.unbox().block);
+                    !matches!(stmt, Statement::DoBlock(do_block) if do_block.block.stmts.is_empty())
                 }
                 // `if false then ... end`.
                 None => false,
@@ -459,10 +472,10 @@ impl<'ast> Compressor<'_, 'ast> {
         // An empty-body `if` can only go when evaluating the condition is
         // side-effect free: `if f() then end` calls f.
         let is_dead = has_no_else(if_stmt)
-            && is_empty_block(&if_stmt.block)
-            && is_pure_expr(&if_stmt.condition);
+            && if_stmt.block.stmts.is_empty()
+            && !if_stmt.condition.may_have_side_effects(&self.names());
         if is_dead {
-            self.retract_stmt(stmt);
+            self.drop_stmt(stmt);
         }
         !is_dead
     }
@@ -497,31 +510,26 @@ impl<'ast> Compressor<'_, 'ast> {
         let Some(else_clause) = &mut if_stmt.else_clause else {
             return;
         };
-        if is_empty_block(&else_clause.block) {
+        if else_clause.block.stmts.is_empty() {
             if_stmt.else_clause = None;
             self.has_changed = true;
             return;
         }
-        // The `not` and its parentheses nest the condition two levels
-        // deeper.
-        if is_empty_block(&if_stmt.block) && self.fits(self.depth, 2, &if_stmt.condition) {
+        // The `not` nests the condition a level deeper.
+        if if_stmt.block.stmts.is_empty() && fits_at_depth(self.depth, 1, &if_stmt.condition) {
             if_stmt.condition = negate(self.allocator, if_stmt.condition.take());
             if_stmt.block = else_clause.block.take();
             if_stmt.else_clause = None;
+            self.leave_expr(&mut if_stmt.condition, Place::OneValue);
             self.has_changed = true;
             return;
         }
-        // `if not c then A else B end` becomes `if c then B else A end`, and
-        // `c` stands alone there, so parentheses it needed under `not` can
-        // go.
+        // `if not c then A else B end` becomes `if c then B else A end`.
         while let Expression::UnaryOp(negation) = &mut if_stmt.condition
             && negation.op == UnOp::Not
         {
             if_stmt.condition = negation.operand.take();
             mem::swap(&mut if_stmt.block, &mut else_clause.block);
-            if self.config.simplify_parens {
-                simplify_parens::strip_standalone(&mut if_stmt.condition);
-            }
             self.has_changed = true;
         }
     }
@@ -538,25 +546,23 @@ impl<'ast> Compressor<'_, 'ast> {
             return true;
         };
         self.descend();
-        let outer_registers = self.live_registers;
+        let (outer_registers, held_start) = (self.live_registers, self.held.len());
         self.visit_stmts(&mut repeat_loop.block.stmts);
-        if let Some(last) = &mut repeat_loop.block.last_stmt {
-            self.visit_last_stmt(last);
-        }
         self.ascend();
         self.visit_expr(&mut repeat_loop.condition);
         self.descend();
-        self.finish_block(&mut repeat_loop.block, outer_registers);
+        self.finish_block(&mut repeat_loop.block, outer_registers, held_start);
         self.ascend();
         if !self.config.remove_dead_code
-            || constant_truthiness(&repeat_loop.condition) != Some(true)
+            || repeat_loop.condition.get_side_free_boolean_value(&self.names()) != Some(true)
             || has_loop_exit(&repeat_loop.block)
         {
             return true;
         }
+        self.drop_expr(&repeat_loop.condition);
         let block = repeat_loop.block.take();
         self.has_changed = true;
-        let is_empty = is_empty_block(&block);
+        let is_empty = block.stmts.is_empty();
         *stmt = do_block(self.allocator, block);
         !is_empty
     }
@@ -564,7 +570,7 @@ impl<'ast> Compressor<'_, 'ast> {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use std::fmt::Write as _;
 
     use luck_token::LuaVersion;
 
@@ -706,6 +712,18 @@ mod tests {
     }
 
     #[test]
+    fn negating_a_condition_drops_the_truncation_it_no_longer_needs() {
+        let config = TransformConfig { fold_constants: true, simplify_parens: true, ..DEAD_CODE };
+        for source in ["if (f()) then else g() end", "if {} and (f()) then else g() end"] {
+            assert_eq!(
+                minify_with(source, LuaVersion::Lua54, &config),
+                "if not f()then g()end",
+                "source: {source}"
+            );
+        }
+    }
+
+    #[test]
     fn negated_empty_then_condition_keeps_its_grouping() {
         for (condition, expected) in [
             ("a == b", "if not(a==b)then print(1)end"),
@@ -722,6 +740,9 @@ mod tests {
             ("return ... and 1 or 1\n", "return 1"),
             ("return ... and -2 ^ 3 or -2 ^ 3\n", "return-2^3"),
             ("return ... and {1, x = \"a\"} or {1, x = \"a\"}\n", "return{1,x=\"a\"}"),
+            // Lua leaves unspecified whether two closures created apart are
+            // the same value, so a program can't tell these apart.
+            ("return ... and function() end or function() end\n", "return function()end"),
             ("return a and ... or ...\n", "return a and...or..."),
             ("return true and ... or ...\n", "return(...)"),
         ] {
@@ -735,7 +756,7 @@ mod tests {
             "return ... and 1 or 2\n",
             "return ... and 1 or 1.0\n",
             "return ... and {1} or {2}\n",
-            "return ... and function() end or function() end\n",
+            "return ... and function() end or function(x) end\n",
         ] {
             assert!(remove_dead(source).contains("or"), "source: {source}");
         }
@@ -818,12 +839,12 @@ mod tests {
     #[test]
     fn removes_a_run_of_locals_each_used_only_by_the_next_in_one_walk() {
         let mut forward = String::from("local function f0() end\n");
-        for (i, previous) in (1..300u32).zip(0u32..) {
-            writeln!(forward, "local function f{i}() f{previous}() end").unwrap();
+        for i in 1..300 {
+            writeln!(forward, "local function f{i}() f{}() end", i - 1).unwrap();
         }
         let mut backward = String::new();
-        for (i, next) in (0..300u32).zip(1u32..) {
-            writeln!(backward, "local f{i} = function() f{next}() end").unwrap();
+        for i in 0..300 {
+            writeln!(backward, "local f{i} = function() f{}() end", i + 1).unwrap();
         }
         for source in [forward, backward] {
             assert_eq!(walk_once(&source, DEAD_CODE), "", "source: {source}");
@@ -851,6 +872,30 @@ mod tests {
             "g()"
         );
         assert_eq!(walk_once("local y = 1 local x = g(y)", DEAD_CODE), "local y=1 g(y)");
+    }
+
+    #[test]
+    fn removes_an_unused_local_whose_initializer_reads_only_locals() {
+        for source in [
+            "local a = ... local b = a return 1",
+            "local a = ... local b = {a, not a, a == nil, a and 1} return 1",
+            "local a = ... local b = function() return g end return 1",
+        ] {
+            assert_eq!(remove_dead(source), "return 1", "source: {source}");
+        }
+    }
+
+    #[test]
+    fn drops_a_branch_whose_condition_is_constant_and_reads_only_locals() {
+        for (source, expected) in [
+            ("local a = ... if a or true then f() end", "do f()end"),
+            ("local a = ... if a and nil then f() elseif {a} then g() end", "do g()end"),
+            ("local a = ... while a and false do f() end", ""),
+            ("local a = ... repeat f() until {a}", "do f()end"),
+            ("if g or true then f() end", "if g or true then f()end"),
+        ] {
+            assert_eq!(remove_dead(source), expected, "source: {source}");
+        }
     }
 
     #[test]

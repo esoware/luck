@@ -1,35 +1,37 @@
-use luck_semantic::{ResolvedCallee, StdlibEntry};
+use luck_ast::{AstKind, AstType, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_stdlib::{ResolvedCallee, StdlibEntry};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallPosition, CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MustUse;
 
-impl_rule!(
+declare_lint_rule!(
     MustUse,
-    "must_use",
     Suspicious,
     Warning,
     "return value of a must-use function is discarded"
 );
 
-impl NodeRule for MustUse {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt])
-    }
-    fn on_call(
-        &self,
-        site: &CallSite<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let CallSite { call, position, callee } = *site;
-        if position == CallPosition::Statement
-            && let Some(name) = callee.and_then(must_use_name)
-        {
-            findings.push(
+/// A call statement drops the results of its chain's last call.
+impl Rule for MustUse {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        let Some(index) = context.statement_call(node) else {
+            return;
+        };
+        let Some(call) = chain.call_at(index) else {
+            return;
+        };
+        if let Some(name) = context.callee(node, index).and_then(must_use_name) {
+            context.diagnostic(
                 Finding::new(format!("return value of `{name}` is discarded"), call.span())
                     .with_help("assign the result or remove the call"),
             );
@@ -38,108 +40,56 @@ impl NodeRule for MustUse {
 }
 
 fn must_use_name(callee: ResolvedCallee<'_>) -> Option<String> {
-    if let StdlibEntry::Function(function) = callee.entry()
-        && function.is_must_use
-    {
-        Some(callee.name())
-    } else {
-        None
-    }
+    let StdlibEntry::Function(function) = callee.entry() else {
+        return None;
+    };
+    function.is_must_use.then(|| callee.name())
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str, version: LuaVersion) -> Vec<String> {
-        run_rule(&MustUse, source, version)
-            .into_iter()
-            .map(|diag| diag.message.into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn flags_discarded_tostring() {
-        let messages = run("tostring(1)", LuaVersion::Lua54);
-        assert!(messages.iter().any(|message| message.contains("tostring")), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_used_tostring() {
-        let messages = run(
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
             "\
 local s = tostring(1)
 print(s)",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_discarded_pcall() {
-        // Discarding a pcall loses the success bool, which is the whole
-        // point of calling it.
-        let messages = run("pcall(f)", LuaVersion::Lua54);
-        assert!(messages.iter().any(|message| message.contains("pcall")), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_discarded_coroutine_create() {
-        let messages = run("coroutine.create(f)", LuaVersion::Lua54);
-        assert!(
-            messages.iter().any(|message| message.contains("coroutine.create")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn flags_discarded_table_clone_in_luau() {
-        let messages = run("table.clone(t)", LuaVersion::Luau);
-        assert!(messages.iter().any(|message| message.contains("table.clone")), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_table_insert() {
-        // table.insert mutates, so discarding the result is fine.
-        let messages = run("table.insert(t, 1)", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn ignores_method_call() {
-        let messages = run("obj:tostring()", LuaVersion::Lua54);
-        assert!(messages.is_empty(), "{messages:?}");
-    }
-
-    #[test]
-    fn flags_discarded_string_method() {
-        let messages = run(
-            "\
-local s = 'x'
-s:upper()",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.iter().any(|message| message.contains("s:upper")), "{messages:?}");
-    }
-
-    // A bare f:seek('set') rewind is idiomatic, so seek isn't must_use.
-    #[test]
-    fn ignores_discarded_file_seek() {
-        let messages = run(
+            LuaTarget::Lua54,
+        ),
+        // `table.insert` mutates, so discarding its result is fine.
+        ("table.insert(t, 1)", LuaTarget::Lua54),
+        ("obj:tostring()", LuaTarget::Lua54),
+        (
             "\
 local f = io.open('x')
 f:seek('set')",
-            LuaVersion::Lua54,
-        );
-        assert!(messages.is_empty(), "{messages:?}");
-    }
+            LuaTarget::Lua54,
+        ),
+        // The call runs a full collection.
+        ("collectgarbage()", LuaTarget::Luau),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        ("tostring(1)", LuaTarget::Lua54),
+        // Discarding a pcall loses the success bool, which is the whole point of
+        // calling it.
+        ("pcall(f)", LuaTarget::Lua54),
+        ("coroutine.create(f)", LuaTarget::Lua54),
+        ("table.clone(t)", LuaTarget::Luau),
+        (
+            "\
+local s = 'x'
+s:upper()",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn ignores_discarded_collectgarbage_on_luau() {
-        let messages = run("collectgarbage()", LuaVersion::Luau);
-        assert!(messages.is_empty(), "the call runs a full collection: {messages:?}");
+    fn test() {
+        Tester::new(RuleId::MustUse, PASS, FAIL).test_and_snapshot();
     }
 }

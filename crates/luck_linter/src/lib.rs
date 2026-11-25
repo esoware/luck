@@ -4,64 +4,51 @@
 //! comments.
 //!
 //! Rules fall into four categories: correctness, suspicious, style, and
-//! performance. Only correctness rules run by default. [`rules()`] lists every
-//! registered rule.
+//! performance. Only correctness rules run by default. [`RuleId::ALL`] lists
+//! every rule.
+//!
+//! A [`Linter`] compiles a [`LintConfig`] once and lints file after file.
 //!
 //! # Usage
 //!
 //! ```
 //! use luck_allocator::Allocator;
-//! use luck_core::LuaTarget;
-//! use luck_linter::LintConfig;
+//! use luck_linter::{FixKind, LintConfig, Linter};
+//! use luck_stdlib::library_for;
+//! use luck_token::LuaTarget;
 //!
 //! let allocator = Allocator::new();
-//! let diags = luck_linter::lint(&allocator, "print(1)", LuaTarget::Lua54, &LintConfig::default());
+//! let linter = Linter::new(LintConfig::default());
+//! let parse = luck_parser::parse(&allocator, b"print(1)", LuaTarget::Lua54.version());
+//! let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), None);
 //! assert!(diags.is_empty());
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
 mod binary;
-mod bus;
 mod call;
 mod cfg;
 mod config;
+mod context;
 mod diagnostic;
-mod driver;
+mod directives;
 mod fix;
 #[cfg(test)]
 mod fixtures;
 mod format_pattern;
 mod function_node;
+mod linter;
 mod local_flow;
-mod node_type;
-mod nodes;
 mod number;
-mod roblox;
 mod rule;
 mod rules;
 mod suggest;
-mod suppression;
+mod timing;
 mod underscore_fix;
-mod uninitialized;
 
-pub use config::{
-    CategoryLevels, CyclomaticComplexityOptions, LintConfig, RestrictedModulePathsOptions,
-    RuleLevel, RuleSetting, RuleSettings,
-};
-pub use diagnostic::{Category, LintDiagnostic, Severity};
-pub use driver::{Analysis, analyze, lint, lint_analyzed, lint_parsed};
-pub use fix::{
-    FIXPOINT_BUDGET, Fix, FixpointError, TextEdit, apply_fixes, apply_fixes_fixpoint,
-    non_overlapping_edits,
-};
-pub use rule::Rule;
-pub use rules::{rules, unknown_rule_names};
+pub use config::{CategoryLevels, LintConfig, RuleLevel, RuleSettings};
+pub use diagnostic::Message;
+pub use fix::{Fix, FixError, FixKind, Fixed, TextEdit, non_overlapping_edits};
+pub use linter::{Analysis, Linter};
+pub use rule::Category;
+pub use rules::RuleId;
+pub use timing::{RuleTiming, RuleTimings};

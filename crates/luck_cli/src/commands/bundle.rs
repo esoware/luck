@@ -2,18 +2,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_bundler::{BundleOptions, DynamicRequire, LineMapEntry, bundle, bundle_minified};
+use luck_allocator::ThreadAllocators;
+use luck_bundler::{DynamicRequire, LineMapEntry, bundle, bundle_minified};
 use luck_config::check_output_paths;
-use luck_core::LuaTarget;
+use luck_resolver::to_slash_lossy;
+use luck_token::LuaTarget;
+use serde_json::{Value, json};
 
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
-use crate::project::{
-    bundle_arenas, config_for_one_shot, entry_and_root, resolve_configured_target,
-    resolve_dynamic_require,
-};
-use crate::render::print_diags;
+use crate::project::{bundle_options, existing_file, one_shot_project};
+use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -33,7 +33,7 @@ pub(crate) struct BundleArgs {
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Search path template (repeatable).
+    /// Search path template (repeatable) [default: luck.json's `search_paths`].
     #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
     search_paths: Vec<String>,
 
@@ -41,7 +41,7 @@ pub(crate) struct BundleArgs {
     #[arg(long)]
     minify: bool,
 
-    /// How to treat require(expr): error, warn, or allow.
+    /// How to treat require(expr): error, warn, or allow [default: from luck.json].
     #[arg(long = "dynamic-require", value_name = "MODE")]
     dynamic_require: Option<DynamicRequire>,
 
@@ -55,45 +55,33 @@ pub(crate) struct BundleArgs {
 }
 
 impl BundleArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config, a bad entry path, or an output
-    /// that would replace a bundled file or another output, and
-    /// [`Exit::Failure`] when bundling or writing fails.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
-        let config = config_for_one_shot(self.config.as_deref(), &self.entry)?;
-        let target = resolve_configured_target(&config, self.target, &self.entry)?;
-        let version = target.lua_version();
-        let dynamic_require = resolve_dynamic_require(&config, self.dynamic_require);
-        let transforms = self.minify_flags.apply_to(config.transforms.unwrap_or_default());
+        let entry_path = existing_file(&self.entry)?;
+        let project = one_shot_project(self.config.as_deref(), entry_path)?;
+        let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
+        let version = target.version();
+        let transforms = self.minify_flags.apply_to(project.transforms());
+        let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
 
-        let (entry_path, project_root) = entry_and_root(&self.entry)?;
-        let options = BundleOptions {
-            version,
-            search_paths: &self.search_paths,
-            project_root,
-            dynamic_require,
-        };
-
-        let mut arenas = bundle_arenas();
+        let arenas = ThreadAllocators::new();
         if self.minify {
-            let minified = bundle_minified(&mut arenas, entry_path, &options, &transforms)
+            let minified = bundle_minified(&arenas, entry_path, &options, &transforms)
                 .map_err(|errors| fail_with_diags(&errors, version))?;
             check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
-                print_diags(&minified.warnings, version);
+                print_files(&minified.warnings, version);
             }
             return write_output(self.output.as_deref(), &minified.output);
         }
 
-        let result = bundle(&mut arenas, entry_path, &options)
+        let result = bundle(&arenas, entry_path, &options)
             .map_err(|errors| fail_with_diags(&errors, version))?;
 
         check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))
             .map_err(usage_error)?;
 
         if verbosity != Verbosity::Quiet {
-            print_diags(&result.warnings, version);
+            print_files(&result.warnings, version);
         }
 
         if let Some(map_path) = self.line_map.as_deref() {
@@ -104,22 +92,18 @@ impl BundleArgs {
     }
 }
 
-/// # Errors
-///
-/// Reports the failure and returns [`Exit::Failure`] when `map_path` can't be
-/// written.
 fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit> {
-    let entries: Vec<serde_json::Value> = line_map
+    let entries: Vec<Value> = line_map
         .iter()
         .map(|entry| {
-            serde_json::json!({
+            json!({
                 "bundleStartLine": entry.bundle_start_line,
                 "bundleEndLine": entry.bundle_end_line,
-                "path": entry.path,
+                "path": to_slash_lossy(&entry.path),
             })
         })
         .collect();
-    let map_json = serde_json::json!({ "version": 1u8, "entries": entries });
+    let map_json = json!({ "version": 1, "entries": entries });
     fs::write(map_path, format!("{map_json:#}\n"))
         .map_err(|e| operation_error(format!("cannot write `{}`: {e}", map_path.display())))
 }
@@ -127,10 +111,11 @@ fn write_line_map(map_path: &Path, line_map: &[LineMapEntry]) -> Result<(), Exit
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::BundleArgs;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     #[test]
     fn bundle_is_top_level_command_with_target_flag() {

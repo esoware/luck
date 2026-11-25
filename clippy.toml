@@ -1,14 +1,9 @@
 avoid-breaking-exported-api = false
-check-private-items = true
 allow-mixed-uninlined-format-args = false
-check-inconsistent-struct-field-initializers = true
 upper-case-acronyms-aggressive = true
 matches-for-let-else = "AllTypes"
 lint-commented-code = true
 allow-unwrap-in-tests = true
-allow-expect-in-tests = true
-allow-panic-in-tests = true
-allow-indexing-slicing-in-tests = true
 
 allowed-idents-below-min-chars = ["..", "a", "b", "c", "e", "f", "k", "v"]
 
@@ -20,10 +15,15 @@ disallowed-names = [
   "num", "cnt", "opt", "opts", "meta", "ws", "fut", "hdr", "cur", "pos", "ch", "evt",
 ]
 
+disallowed-methods = [
+  { path = "f32::mul_add", reason = "constant evaluation rounds the product and the sum separately, as the target does" },
+  { path = "f64::mul_add", reason = "constant evaluation rounds the product and the sum separately, as the target does" },
+]
+
 disallowed-types = [
   { path = "std::collections::HashMap", reason = "RandomState makes iteration order differ per run; use rustc_hash::FxHashMap" },
   { path = "std::collections::HashSet", reason = "RandomState makes iteration order differ per run; use rustc_hash::FxHashSet" },
-  { path = "std::sync::Mutex", reason = "poisoning; use parking_lot::Mutex or tokio::sync::Mutex" },
-  { path = "std::sync::RwLock", reason = "poisoning; use parking_lot::RwLock or tokio::sync::RwLock" },
-  { path = "std::sync::Condvar", reason = "use tokio::sync::Notify" },
+  { path = "std::sync::Mutex", reason = "poisoning; use parking_lot::Mutex" },
+  { path = "std::sync::RwLock", reason = "poisoning; use parking_lot::RwLock" },
+  { path = "std::sync::Condvar", reason = "poisoning; use parking_lot::Condvar" },
 ]

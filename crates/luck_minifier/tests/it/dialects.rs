@@ -2,7 +2,7 @@ use luck_allocator::Allocator;
 use luck_minifier::TransformConfig;
 use luck_token::LuaVersion;
 
-use crate::common::{minify_lua54, minify_luau, minify_with};
+use crate::common::{minify_lua54, minify_luau, minify_typed_luau, minify_with};
 
 #[test]
 fn lua54_const_attribute_survives_minification() {
@@ -31,16 +31,21 @@ print(x)
     assert!(result.contains("::"), "Got: {result}");
 }
 
-#[test]
-fn luau_type_declaration_survives_minification() {
-    let result = minify_luau(
-        "\
+const TYPED_SOURCE: &str = "\
 type Point = { x: number, y: number }
-local p: Point = { x = 1, y = 2 }
-return p
-",
-    );
-    assert!(result.contains("type"), "Got: {result}");
+local p: Point = { x = 1, y = 2 } :: Point
+return p, f<<Point>>(p :: any)
+";
+
+#[test]
+fn luau_types_go_by_default() {
+    assert_eq!(minify_luau(TYPED_SOURCE), "local e={x=1,y=2}return e,f(e)");
+}
+
+#[test]
+fn luau_type_declaration_survives_minification_without_stripping() {
+    let result = minify_typed_luau(TYPED_SOURCE);
+    assert!(result.contains("type") && result.contains("<<Point>>"), "Got: {result}");
 }
 
 #[test]
@@ -100,14 +105,14 @@ export function apply<T>(value: T)
     return identity<<T>>(value), public, mask
 end
 ";
-    let result = minify_luau(source);
+    let result = minify_typed_luau(source);
     assert!(result.contains("export local public=129312i"), "{result}");
     assert!(result.contains("export const mask=0xffffffffffffffffi"), "{result}");
     assert!(result.contains("export function apply"), "{result}");
     assert!(result.contains("identity<<T>>"), "{result}");
     assert!(result.contains(":T"), "{result}");
     let allocator = Allocator::new();
-    let reparsed = luck_parser::parse(&allocator, &result, LuaVersion::Luau);
+    let reparsed = luck_parser::parse(&allocator, result.as_bytes(), LuaVersion::Luau);
     assert!(
         reparsed.errors.is_empty(),
         "minified merged-RFC syntax must reparse: {:?}\n{result}",
@@ -118,7 +123,7 @@ end
 #[test]
 fn luau_instantiated_literal_survives_minification() {
     for (source, expected) in [
-        ("local a = `x{({})<<T>>}y`\n", "local l=`x{({})<<T>>}y`"),
+        ("local a = `x{({})<<T>>}y`\n", "local e=`x{({})<<T>>}y`"),
         ("return (\"s\")<<T>>()\n", "return(\"s\")<<T>>()"),
         (
             "\
@@ -128,35 +133,36 @@ print(s<<T>>)
             "print((\"x\")<<T>>)",
         ),
     ] {
-        let result = minify_luau(source);
+        let result = minify_typed_luau(source);
         assert_eq!(result, expected, "source: {source}");
-        assert_eq!(minify_luau(&result), result, "must be idempotent");
+        assert_eq!(minify_typed_luau(&result), result, "must be idempotent");
     }
 }
 
 #[test]
 fn inlined_cast_before_less_than_survives_minification() {
+    // Strings compare through the locale, so the comparison stays.
     let source = "\
-local s = 1 :: number
-return s < 2
+local s = 'a' :: string
+return s < 'b'
 ";
-    let result = minify_luau(source);
-    assert_eq!(result, "return(1::number)<2");
-    assert_eq!(minify_luau(&result), result, "must be idempotent");
+    let result = minify_typed_luau(source);
+    assert_eq!(result, "return('a'::string)<'b'");
+    assert_eq!(minify_typed_luau(&result), result, "must be idempotent");
 }
 
 #[test]
 fn function_inside_a_type_survives_minification() {
     for (source, expected) in [
-        ("type T = typeof(function(x) return x end)\n", "type T=typeof(function(l)return l end)"),
+        ("type T = typeof(function(x) return x end)\n", "type T=typeof(function(e)return e end)"),
         (
             "return f<<typeof(function(x) return x end)>>()\n",
-            "return f<<typeof(function(l)return l end)>>()",
+            "return f<<typeof(function(e)return e end)>>()",
         ),
     ] {
-        let result = minify_luau(source);
+        let result = minify_typed_luau(source);
         assert_eq!(result, expected, "source: {source}");
-        assert_eq!(minify_luau(&result), result, "must be idempotent");
+        assert_eq!(minify_typed_luau(&result), result, "must be idempotent");
     }
 }
 

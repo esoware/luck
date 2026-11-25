@@ -1,146 +1,97 @@
-use luck_ast::{ChainHead, Expression, Suffix, SuffixedExpression};
-use luck_token::{LuaVersion, Span, TokenKind, short_string_body};
+use luck_ast::{AstKind, AstType, Expression, Suffix, is_valid_identifier_in};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{ChainPosition, LintContext, NodeRule, impl_rule};
+use crate::fix::FixKind;
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct StringIndexToField;
 
-impl_rule!(
+declare_lint_rule!(
     StringIndexToField,
-    "string_index_to_field",
     Style,
     Warning,
-    "use of string-key index for an identifier-safe key; prefer dot syntax"
+    "use of string-key index for an identifier-safe key; prefer dot syntax",
+    fix = Fix
 );
 
-impl NodeRule for StringIndexToField {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::Suffixed])
-    }
-    fn on_chain(
-        &self,
-        chain: &SuffixedExpression<'_>,
-        _position: ChainPosition,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        for (position, suffix) in chain.suffixes.iter().enumerate() {
-            findings.extend(check_index(chain.head(position), suffix, context.semantic.version()));
+impl Rule for StringIndexToField {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for suffix in &chain.suffixes {
+            if let Some(finding) = check_index(suffix, context) {
+                context.diagnostic(finding);
+            }
         }
     }
 }
 
-fn check_index(head: ChainHead<'_>, suffix: &Suffix<'_>, version: LuaVersion) -> Option<Finding> {
-    let Suffix::Index { span: index_span, index: Expression::StringLiteral(literal) } = suffix
-    else {
+/// The fix replaces just the brackets, since parentheses the tree leaves
+/// out can close between the head and them.
+fn check_index(suffix: &Suffix<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
+    let Suffix::Index { span: brackets, index: Expression::StringLiteral(literal) } = suffix else {
         return None;
     };
-    // The body is the raw spelling. The shape check rejects the `\` of any
-    // escape, which could make the key differ from that spelling.
-    let name = short_string_body(literal.text)?;
-    if !TokenKind::is_identifier_shaped(name) || TokenKind::is_reserved(name, version) {
+    // The key is its value, however it's spelled.
+    let name = literal.as_str()?;
+    if !is_valid_identifier_in(name, context.semantic.version()) {
         return None;
     }
 
-    // Replace everything after the head, brackets included.
-    let span = Span::new(head.span().end, index_span.end);
+    let key = String::from_utf8_lossy(literal.span.text(context.source));
     Some(
-        Finding::new(format!("`[\"{name}\"]` is equivalent to `.{name}`"), span)
+        Finding::new(format!("`[{key}]` is equivalent to `.{name}`"), *brackets)
             .with_help("prefer dot access for identifier-safe keys")
-            .with_fix(Fix {
-                description: format!("rewrite `[\"{name}\"]` as `.{name}`"),
-                edits: vec![TextEdit { span, replacement: format!(".{name}") }],
+            .with_fix(context, FixKind::Fix, |fixer| {
+                fixer.replace(
+                    format!("rewrite `[{key}]` as `.{name}`"),
+                    *brackets,
+                    format!(".{name}").into_bytes(),
+                )
             }),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::{fix_and_reparse, run_rule};
+    use luck_token::LuaTarget;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&StringIndexToField, source, LuaVersion::Lua54)
-    }
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    #[test]
-    fn flags_identifier_safe_key() {
-        let source = "local x = t[\"foo\"]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t.foo");
-    }
+    const PASS: &[(&str, LuaTarget)] = &[
+        (r#"local x = t["end"]"#, LuaTarget::Lua54),
+        // Lua 5.5 builds without `LUA_COMPAT_GLOBAL` reserve `global`.
+        (r#"local x = t["global"]"#, LuaTarget::Lua55),
+        (r#"local x = t["with space"]"#, LuaTarget::Lua54),
+        (r#"local x = t["1bad"]"#, LuaTarget::Lua54),
+        (r#"local x = t["a\nb"]"#, LuaTarget::Lua54),
+    ];
 
-    #[test]
-    fn ignores_keyword_key() {
-        let diags = run("local x = t[\"end\"]");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_luau_continue_key() {
-        let diags = run_rule(&StringIndexToField, "local x = t[\"continue\"]", LuaVersion::Luau);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_identifier_key() {
-        let diags = run("local x = t[\"with space\"]");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_numeric_start() {
-        let diags = run("local x = t[\"1bad\"]");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_each_nested_index() {
-        let source = "local x = t[\"a\"][\"b\"]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t.a.b");
-    }
-
-    #[test]
-    fn flags_assignment_targets() {
-        let source = "t[\"a\"][\"b\"], u[\"c\"] = 1, 2";
-        let diags = run(source);
-        assert_eq!(diags.len(), 3, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "t.a.b, u.c = 1, 2");
-    }
-
-    #[test]
-    fn flags_compound_assignment_target() {
-        let source = "t[\"count\"] += 1";
-        let diags = run_rule(&StringIndexToField, source, LuaVersion::Luau);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Luau);
-        assert_eq!(fixed, "t.count += 1");
-    }
-
-    #[test]
-    fn ignores_escape_sequence_key() {
-        let diags = run("local x = t[\"a\\nb\"]");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_underscore_prefixed_key() {
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (r#"local x = t["foo"]"#, LuaTarget::Lua54),
+        ("local x = t['foo']", LuaTarget::Lua54),
+        // No fix, since it would delete the comment.
+        (r#"local x = t[--[[why]] "foo"]"#, LuaTarget::Lua54),
+        // Luau reads `continue` as a name wherever a name goes, a field included.
+        (r#"local x = t["continue"]"#, LuaTarget::Luau),
+        ("local x = (t)['a'] .. (t.u)['b']", LuaTarget::Lua54),
+        (r#"local x = t["a"]["b"]"#, LuaTarget::Lua54),
+        (r#"t["a"]["b"], u["c"] = 1, 2"#, LuaTarget::Lua54),
+        (r#"t["count"] += 1"#, LuaTarget::Luau),
+        (r#"local x = t["\102oo"] + t[ [[bar]] ]"#, LuaTarget::Lua54),
         // A leading `_` is valid in an identifier.
-        let source = "local x = t[\"_priv\"]";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "local x = t._priv");
+        (r#"local x = t["_priv"]"#, LuaTarget::Lua54),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::StringIndexToField, PASS, FAIL).test_and_snapshot();
     }
 }

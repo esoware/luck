@@ -32,14 +32,15 @@ macro_rules! transform_flags {
 }
 
 transform_flags! {
+    /// Luau: drop every type before the other passes run (on by default).
+    /// Turn it off to ship a typed library.
+    strip_types / no_strip_types,
     remove_dead_code / no_remove_dead_code,
     simplify_statements / no_simplify_statements,
     fold_constants / no_fold_constants,
     inline_locals / no_inline_locals,
     merge_locals / no_merge_locals,
     simplify_indexes / no_simplify_indexes,
-    shorten_strings / no_shorten_strings,
-    shorten_numbers / no_shorten_numbers,
     simplify_parens / no_simplify_parens,
     rename_locals / no_rename_locals,
     lift_locals / no_lift_locals,

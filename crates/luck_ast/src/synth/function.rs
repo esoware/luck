@@ -16,19 +16,14 @@ pub struct FunctionSignature<'ast> {
     pub return_type: Option<Type<'ast>>,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the synthesizer is one type with its constructors split by node family"
-)]
 impl<'ast> Synth<'ast> {
     /// A Luau function attribute in the plain `@name` form.
     ///
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_attribute(&self, name: &str) -> FunctionAttribute<'ast> {
-        FunctionAttribute { span: self.next_span(), name: self.name(name), args: None }
+        FunctionAttribute::new(self.next_span(), self.name(name), None)
     }
 
     /// A Luau function attribute in the bracketed `@[name(args)]` form.
@@ -36,7 +31,6 @@ impl<'ast> Synth<'ast> {
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn function_attribute_with_args<Args>(
         &self,
         name: &str,
@@ -46,11 +40,7 @@ impl<'ast> Synth<'ast> {
         Args: IntoIterator<Item = Expression<'ast>>,
         Args::IntoIter: ExactSizeIterator,
     {
-        FunctionAttribute {
-            span: self.next_span(),
-            name: self.name(name),
-            args: Some(self.list(args)),
-        }
+        FunctionAttribute::new(self.next_span(), self.name(name), Some(self.list(args)))
     }
 
     pub(super) fn function_body(
@@ -58,36 +48,33 @@ impl<'ast> Synth<'ast> {
         signature: FunctionSignature<'ast>,
         block: Block<'ast>,
     ) -> FunctionBody<'ast> {
-        FunctionBody {
-            span: self.next_span(),
-            generics: signature.generics.map(|generics| self.boxed(generics)),
-            params: List::from_iter_in(signature.params, self.allocator),
-            vararg: signature.vararg.map(|vararg| self.boxed(vararg)),
-            return_type: signature.return_type,
+        FunctionBody::new(
+            self.next_span(),
+            signature.generics.map(|generics| self.boxed(generics)),
+            List::from_iter_in(signature.params, self.allocator),
+            signature.vararg.map(|vararg| self.boxed(vararg)),
+            signature.return_type.map(|ty| self.boxed(ty)),
             block,
-        }
+        )
     }
 
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn param(&self, name: &str) -> Parameter<'ast> {
-        Parameter { name: self.name(name), type_annotation: None }
+        Parameter::new(self.name(name), None)
     }
 
     /// # Panics
     ///
     /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    #[must_use]
     pub fn param_typed(&self, name: &str, ty: Type<'ast>) -> Parameter<'ast> {
-        Parameter { name: self.name(name), type_annotation: Some(ty) }
+        Parameter::new(self.name(name), Some(self.boxed(ty)))
     }
 
     /// Lua 5.5's named `...name` form isn't supported, so `name` is `None`.
-    #[must_use]
     pub fn vararg_param(&self, type_annotation: Option<Type<'ast>>) -> VarArgParam<'ast> {
-        VarArgParam { span: self.next_span(), name: None, type_annotation }
+        VarArgParam::new(self.next_span(), None, type_annotation.map(|ty| self.boxed(ty)))
     }
 
     pub(super) fn params(&self, names: &[&str]) -> Vec<Parameter<'ast>> {
@@ -111,7 +98,7 @@ mod tests {
             ..FunctionSignature::default()
         };
         let return_stmt = synth.return_([synth.name_expr("n")]);
-        let function = synth.function_def_full([], signature, synth.block([], Some(return_stmt)));
+        let function = synth.function_def_full([], signature, synth.block([return_stmt]));
 
         let Expression::FunctionDef(function_def) = &function else {
             panic!("expected function def");
@@ -137,7 +124,7 @@ mod tests {
             "id",
             [synth.function_attribute("native")],
             signature,
-            synth.block([], None),
+            synth.block([]),
         );
 
         let Statement::LocalFunction(local_function) = &stmt else {
@@ -156,7 +143,7 @@ mod tests {
             vararg: Some(synth.vararg_param(None)),
             ..FunctionSignature::default()
         };
-        let function = synth.function_def_full([], signature, synth.block([], None));
+        let function = synth.function_def_full([], signature, synth.block([]));
 
         let Expression::FunctionDef(function_def) = &function else {
             panic!("expected function def");

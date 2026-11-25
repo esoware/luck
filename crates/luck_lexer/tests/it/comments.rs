@@ -1,7 +1,10 @@
+use luck_diagnostics::Diagnostic;
 use luck_lexer::lex;
-use luck_token::{Comment, CommentKind, CommentPosition, LuaVersion, SourceError, Span, TokenKind};
+use luck_token::{
+    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, TokenKind,
+};
 
-use crate::common::lex_lua51;
+use crate::common::{lex_lua51, token_texts};
 
 #[test]
 fn line_comment_after_a_token_trails_it() {
@@ -32,14 +35,14 @@ x --[[ block
 #[test]
 fn block_comment_closes_at_its_own_level() {
     let result = lex_lua51("x --[=[ block ]] ]=]");
-    assert_eq!(result.errors, Vec::<SourceError>::new());
+    assert_eq!(result.errors, Vec::<Diagnostic>::new());
     assert_eq!(result.comments.len(), 1);
     assert_eq!(result.comments[0].kind, CommentKind::SingleLineBlock);
     assert_eq!(result.comments[0].span, Span::new(2, 20));
 }
 
 /// A block comment with no closer is an error and still a comment, through
-/// the end of the source, and is listed as cut off.
+/// the end of the source, and the `Eof` token after it says it was cut off.
 #[test]
 fn unterminated_block_comment_is_a_comment_to_the_end_of_the_source() {
     for (source, start, kind, position) in [
@@ -65,7 +68,7 @@ y = 2
         };
         assert_eq!(
             result.errors,
-            [SourceError { span, message: "unterminated block comment".to_owned() }],
+            [Diagnostic::e008(span, "unterminated block comment")],
             "{source:?}"
         );
         assert_eq!(
@@ -75,19 +78,19 @@ y = 2
                 attached_to,
                 kind,
                 position,
-                is_preceded_by_newline: position == CommentPosition::Leading,
                 is_followed_by_newline: true,
+                content: CommentContent::Plain,
             }],
             "{source:?}"
         );
-        assert_eq!(result.unterminated, [span], "{source:?}");
+        assert!(eof.is_unterminated, "{source:?}");
     }
 }
 
 #[test]
-fn terminated_block_comment_is_not_listed_as_cut_off() {
+fn terminated_block_comment_leaves_the_end_whole() {
     let result = lex_lua51("x = [[a]] --[[ b ]]");
-    assert_eq!(result.unterminated, Vec::<Span>::new());
+    assert!(result.tokens.iter().all(|token| !token.is_unterminated), "{:?}", result.tokens);
 }
 
 #[test]
@@ -104,8 +107,8 @@ local x",
             attached_to: 19,
             kind: CommentKind::Shebang,
             position: CommentPosition::Leading,
-            is_preceded_by_newline: false,
             is_followed_by_newline: true,
+            content: CommentContent::Plain,
         }]
     );
 }
@@ -115,10 +118,9 @@ fn bom_then_shebang_is_skipped() {
     let source = "\
 \u{FEFF}#!/usr/bin/lua
 print(1)";
-    let result = lex(source, LuaVersion::Lua54);
+    let result = lex(source.as_bytes(), LuaVersion::Lua54);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let first = result.tokens[0];
-    assert_eq!((first.kind, first.text(source)), (TokenKind::Identifier, "print"));
+    assert_eq!(token_texts(&result, source)[0], (TokenKind::Identifier, "print"));
 }
 
 #[test]
@@ -135,7 +137,6 @@ fn trailing_comment_attaches_to_the_previous_token() {
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Trailing);
     assert_eq!(comment.attached_to, result.tokens[1].span.start);
-    assert!(!comment.is_preceded_by_newline);
 }
 
 #[test]
@@ -163,7 +164,6 @@ y",
     assert_eq!(result.comments.len(), 1);
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
-    assert!(comment.is_preceded_by_newline);
 }
 
 #[test]
@@ -188,7 +188,6 @@ fn comment_before_the_first_token_on_its_line_leads_it() {
     let comment = &result.comments[0];
     assert_eq!(comment.position, CommentPosition::Leading);
     assert_eq!(comment.attached_to, 10);
-    assert!(comment.is_preceded_by_newline);
     assert!(!comment.is_followed_by_newline);
 }
 
@@ -238,10 +237,8 @@ y",
     assert_eq!(result.comments.len(), 2);
     assert_eq!(result.comments[0].position, CommentPosition::Trailing);
     assert_eq!(result.comments[0].attached_to, 0);
-    assert!(!result.comments[0].is_preceded_by_newline);
     assert_eq!(result.comments[1].position, CommentPosition::Leading);
     assert_eq!(result.comments[1].attached_to, 15);
-    assert!(result.comments[1].is_preceded_by_newline);
 }
 
 #[test]
@@ -252,13 +249,12 @@ x --[[ a ]] -- c
 y",
     );
     assert_eq!(result.comments[1].position, CommentPosition::Trailing);
-    assert!(!result.comments[1].is_preceded_by_newline);
 }
 
 #[test]
 fn shebang_runs_past_a_carriage_return_to_the_line_feed() {
     for version in [LuaVersion::Lua54, LuaVersion::Luau] {
-        let result = lex("#!x\rprint(1)\n", version);
+        let result = lex(b"#!x\rprint(1)\n", version);
         assert_eq!(
             result.tokens.len(),
             1,
@@ -271,7 +267,7 @@ fn shebang_runs_past_a_carriage_return_to_the_line_feed() {
 #[test]
 fn luau_hash_first_line_without_bang_is_not_a_shebang() {
     let result = lex(
-        "\
+        b"\
 #x
 return 1",
         LuaVersion::Luau,
@@ -282,4 +278,52 @@ return 1",
         "Luau skips only a `#!` first line, so `#x` should stay code"
     );
     assert_eq!(result.tokens[0].kind, TokenKind::Hash);
+}
+
+#[test]
+fn each_comment_carries_what_it_tells_a_tool() {
+    let source = "--!strict
+-- luck: format off
+--[[ luck: allow(x) ]]
+-- luck: alow(x)
+-- prose
+local x";
+    let contents: Vec<CommentContent> = lex(source.as_bytes(), LuaVersion::Luau)
+        .comments
+        .iter()
+        .map(|comment| comment.content)
+        .collect();
+    assert_eq!(
+        contents,
+        [
+            CommentContent::HotComment,
+            CommentContent::FormatOff,
+            CommentContent::LintDirective,
+            CommentContent::InvalidDirective,
+            CommentContent::Plain,
+        ]
+    );
+}
+
+#[test]
+fn a_comment_or_a_shebang_holds_bytes_that_are_not_utf8_as_written() {
+    let source = b"#!/bin/lua \xE9\n-- caf\xE9\nx --[[ \xFF\n\xFE ]] y";
+    for version in [LuaVersion::Lua51, LuaVersion::Lua54] {
+        let result = lex(source, version);
+        assert!(result.errors.is_empty(), "{version:?}: {:?}", result.errors);
+        let comments: Vec<(&[u8], CommentKind)> = result
+            .comments
+            .iter()
+            .map(|comment| (comment.span.text(source), comment.kind))
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                (&b"#!/bin/lua \xE9"[..], CommentKind::Shebang),
+                (b"-- caf\xE9", CommentKind::Line),
+                (b"--[[ \xFF\n\xFE ]]", CommentKind::MultiLineBlock),
+            ],
+            "{version:?}"
+        );
+    }
 }

@@ -1,38 +1,40 @@
-use core::fmt::Write as _;
-use std::ffi::OsStr;
-use std::fs;
-use std::path::Path;
+use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
-use luck_testgen::{collect_fixture_files, detect_version, is_error_fixture};
+use luck_codegen::LiteralSpelling;
+use luck_testgen::{lua_fixtures, tree_shape};
 
 #[test]
 fn every_fixture_compacts_to_output_that_compacts_to_itself() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let mut report = String::new();
-    let mut round_trip_count = 0usize;
-    for path in collect_fixture_files(&root).expect("the fixture tree is readable") {
-        let relative = path.strip_prefix(&root).expect("a fixture is under the root");
-        if is_error_fixture(relative)
-            || !matches!(path.extension().and_then(OsStr::to_str), Some("lua" | "luau"))
-        {
+    let mut round_trip_count = 0;
+    for fixture in lua_fixtures() {
+        if fixture.is_error {
             continue;
         }
-        let source = fs::read_to_string(&path).expect("a fixture is readable");
-        let version = detect_version(relative);
+        let version = fixture.version;
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, &source, version);
+        let parsed = luck_parser::parse(&allocator, fixture.source.as_bytes(), version);
         if !parsed.errors.is_empty() {
             continue;
         }
-        let output = luck_codegen::compact(&parsed.block);
-        let reparsed = luck_parser::parse(&allocator, &output, version);
-        if let Some(error) = reparsed.errors.first() {
-            writeln!(report, "{}: {output}\n  {}", relative.display(), error.message).unwrap();
-        } else if luck_codegen::compact(&reparsed.block) == output {
-            round_trip_count += 1;
-        } else {
-            writeln!(report, "{}: compacting again changed {output}", relative.display()).unwrap();
+        let shape = tree_shape(&parsed.chunk);
+        for (label, spelling) in
+            [("as written", LiteralSpelling::AsWritten), ("shortest", LiteralSpelling::Shortest)]
+        {
+            let output = luck_codegen::compact(&parsed.chunk, spelling);
+            let reparsed = luck_parser::parse(&allocator, &output, version);
+            let text = String::from_utf8_lossy(&output);
+            let name = fixture.relative_path.display();
+            if let Some(error) = reparsed.errors.first() {
+                writeln!(report, "{name} {label}: {text}\n  {}", error.message).unwrap();
+            } else if tree_shape(&reparsed.chunk) != shape {
+                writeln!(report, "{name} {label}: {text} parses to a different tree").unwrap();
+            } else if luck_codegen::compact(&reparsed.chunk, spelling) == output {
+                round_trip_count += 1;
+            } else {
+                writeln!(report, "{name} {label}: compacting again changed {text}").unwrap();
+            }
         }
     }
     assert!(report.is_empty(), "{report}{round_trip_count} fixture(s) round-tripped");

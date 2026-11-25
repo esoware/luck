@@ -1,36 +1,44 @@
-use luck_ast::{Call, Expression, FunctionArgs};
-use luck_semantic::SemanticAnalysis;
+use luck_ast::{AstKind, AstType, Call, Expression, FunctionArgs, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_stdlib::SemanticAnalysis;
 use luck_token::BinOp;
 
 use crate::call::is_global_call;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{CallSite, LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags `type(x == "string")` written for `type(x) == "string"`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TypeCheckInsideCall;
 
-impl_rule!(
+declare_lint_rule!(
     TypeCheckInsideCall,
-    "type_check_inside_call",
     Correctness,
     Error,
     "type comparison is inside the call instead of outside"
 );
 
-impl NodeRule for TypeCheckInsideCall {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::FunctionCallStmt, NodeType::FunctionCallExpr])
-    }
-    fn on_call(&self, site: &CallSite<'_>, context: &LintContext<'_>, findings: &mut Vec<Finding>) {
-        let call = site.call;
-        findings.extend(check_call(call, context.semantic));
+impl Rule for TypeCheckInsideCall {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::SuffixedExpression(chain) = node.kind() else {
+            return;
+        };
+        for (_, call) in chain.calls() {
+            if let Some(finding) = check_call(call, context.semantic) {
+                context.diagnostic(finding);
+            }
+        }
     }
 }
 
 fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
-    if !is_global_call(call, "type", semantic) && !is_global_call(call, "typeof", semantic) {
+    let scoping = semantic.scoping();
+    let is_type_call = is_global_call(call, "type", scoping)
+        || (semantic.version().is_luau() && is_global_call(call, "typeof", scoping));
+    if !is_type_call {
         return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = call.args else {
@@ -52,61 +60,39 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&TypeCheckInsideCall, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_equality_inside_type_call() {
-        let diags = run("if type(x == \"string\") then end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_inequality_inside_typeof_call() {
-        let diags = run("local ok = typeof(x ~= \"Instance\")");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_method_call_on_a_table_named_type() {
-        let source = "\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 type = {}
 function type:f(v) return v end
-type:f(1 == 2)";
-        let diags = run(source);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_method_call_on_a_table_named_typeof() {
-        let diags = run("typeof:f(a == b)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_comparison_outside_call() {
-        let diags = run("local ok = type(x) == \"string\"");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_comparison_among_several_args() {
-        let diags = run("type(x == 1, y)");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_shadowed_type() {
-        let diags = run("\
+type:f(1 == 2)",
+            LuaTarget::Lua54,
+        ),
+        ("typeof:f(a == b)", LuaTarget::Luau),
+        (r#"local ok = type(x) == "string""#, LuaTarget::Lua54),
+        ("type(x == 1, y)", LuaTarget::Lua54),
+        (
+            "\
 local function type(v) return v end
-local ok = type(x == 1)");
-        assert!(diags.is_empty(), "{diags:?}");
+local ok = type(x == 1)",
+            LuaTarget::Lua54,
+        ),
+        // `typeof` isn't a Lua 5.4 builtin, so this one is the program's.
+        ("local ok = typeof(x ~= nil)", LuaTarget::Lua54),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (r#"if type(x == "string") then end"#, LuaTarget::Lua54),
+        (r#"local ok = typeof(x ~= "Instance")"#, LuaTarget::Luau),
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::TypeCheckInsideCall, PASS, FAIL).test_and_snapshot();
     }
 }

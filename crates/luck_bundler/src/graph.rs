@@ -1,9 +1,12 @@
-use std::path::Path;
+use std::ffi::OsString;
+use std::mem;
+use std::ops::{Index, IndexMut};
+use std::path::{Path, PathBuf};
 
-use luck_allocator::Allocator;
-use luck_core::Diagnostic;
-use luck_resolver::{Resolver, normalize_path};
-use luck_token::{LuaVersion, Span};
+use luck_allocator::ThreadAllocators;
+use luck_diagnostics::{Diagnostic, FileDiagnostics};
+use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver, to_slash_lossy};
+use luck_token::LuaVersion;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
@@ -35,122 +38,128 @@ pub struct DependencyGraph<'ast> {
     /// Leaves first, or discovery order when there's a cycle.
     pub topological_order: Vec<ModuleId>,
     pub entry_id: ModuleId,
-    pub warnings: Vec<Diagnostic>,
+    /// By module, in discovery order.
+    pub warnings: Vec<FileDiagnostics>,
 }
 
 impl<'ast> DependencyGraph<'ast> {
-    /// Reads and parses every module the entry reaches, each into the arena
-    /// of the thread that reads it.
+    /// Reads and parses every module the entry reaches, each on rayon's pool
+    /// into the arena of the thread that reads it.
     ///
-    /// Each arena backs a thread that reads modules and resolves requires,
-    /// the first the calling thread, which reads the entry. Another thread
-    /// starts only when more tasks are queued than the running threads can
-    /// take, so the calling thread does all the work when there's one arena
-    /// or one task at a time. The graph and its diagnostics are the same
-    /// however many arenas there are.
+    /// The calling thread keeps the graph. On a thread of the pool, it runs
+    /// queued modules while it waits, so a pool of one thread reads them all
+    /// there. The graph and its diagnostics are the same however many threads
+    /// read them.
     ///
     /// # Errors
     ///
     /// Returns every error found during discovery, such as unreadable,
     /// oversized, or unparsable files, the entry included, and unresolved or
     /// ambiguous requires.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `arenas` is empty.
     pub fn build(
-        arenas: &'ast mut [Allocator],
+        arenas: &'ast ThreadAllocators,
         entry_path: &Path,
         options: &BundleOptions<'_>,
-    ) -> Result<Self, Vec<Diagnostic>> {
-        build_graph(arenas, entry_path, options).1
+    ) -> Result<Self, Vec<FileDiagnostics>> {
+        // Emitted paths are made relative to this, so it must be canonical like
+        // the modules' paths.
+        let root = absolute_project_root(options.project_root);
+        let resolver = Resolver::new(ResolveOptions {
+            version: options.version,
+            search_paths: options.search_paths.to_vec(),
+            root: root.clone(),
+        });
+        let reader = Reader::new(options, &root, &resolver);
+        let entry =
+            FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
+        let found = discover_reachable(arenas, reader, &entry);
+        number_modules(arenas, reader, entry, found)
     }
 }
 
-/// [`DependencyGraph::build`], and the first of `arenas`, which the calling
-/// thread keeps.
-///
-/// # Panics
-///
-/// Panics if `arenas` is empty.
-pub(crate) fn build_graph<'ast>(
-    arenas: &'ast mut [Allocator],
-    entry_path: &Path,
-    options: &BundleOptions<'_>,
-) -> (&'ast Allocator, Result<DependencyGraph<'ast>, Vec<Diagnostic>>) {
-    #[expect(clippy::expect_used, reason = "the caller gives the calling thread an arena")]
-    let (first, spare_arenas) = arenas.split_first_mut().expect("an arena for the calling thread");
-    let allocator: &'ast Allocator = first;
-    // Emitted paths are made relative to this, so it must be absolute and
-    // normalized. `luck bundle main.lua` passes the entry's parent, which is
-    // empty for a bare file name.
-    let root = absolute_project_root(options.project_root);
-    let resolver = Resolver::new(options.version, options.search_paths, Path::new(&root));
-    let reader = Reader::new(options, &root, &resolver);
-    let entry = normalize_path(entry_path);
-    let mut found = discover_reachable(allocator, spare_arenas, reader, &entry);
-    let graph = number_modules(entry, &mut found, |path| reader.discover(allocator, path));
-    (allocator, graph)
+impl<'ast> Index<ModuleId> for DependencyGraph<'ast> {
+    type Output = ModuleInfo<'ast>;
+
+    fn index(&self, id: ModuleId) -> &ModuleInfo<'ast> {
+        &self.modules[id.0]
+    }
+}
+
+impl<'ast> IndexMut<ModuleId> for DependencyGraph<'ast> {
+    fn index_mut(&mut self, id: ModuleId) -> &mut ModuleInfo<'ast> {
+        &mut self.modules[id.0]
+    }
 }
 
 /// Numbers the modules breadth-first from `entry`, in require order.
 ///
 /// The diagnostics are gathered in that order too, so neither depends on how
-/// discovery was scheduled. A module that discovery skipped is discovered
-/// now. Stops with E009 at the module limit.
-///
-/// # Errors
-///
-/// Returns the errors discovery found.
+/// discovery was scheduled. A module that discovery skipped is read now, into
+/// this thread's arena. Stops with E009 at the module limit.
 fn number_modules<'ast>(
-    entry: String,
-    found: &mut FxHashMap<String, Discovered<'ast>>,
-    mut discover: impl FnMut(&str) -> Discovered<'ast>,
-) -> Result<DependencyGraph<'ast>, Vec<Diagnostic>> {
-    let mut ids: FxHashMap<String, ModuleId> = FxHashMap::default();
-    ids.insert(entry.clone(), ModuleId(0));
+    arenas: &'ast ThreadAllocators,
+    reader: Reader<'_>,
+    entry: PathBuf,
+    mut found: FxHashMap<OsString, Discovered<'ast>>,
+) -> Result<DependencyGraph<'ast>, Vec<FileDiagnostics>> {
+    // By canonical path, as text, as `discover_reachable` keys it.
+    let mut ids: FxHashMap<OsString, ModuleId> = FxHashMap::default();
+    ids.insert(entry.as_os_str().to_owned(), ModuleId(0));
     let mut paths = vec![entry];
     let mut modules: Vec<ModuleInfo<'ast>> = Vec::new();
     let mut errors = Vec::new();
-    let mut warnings = Vec::new();
+    // By module, so each holds what's found in its file.
+    let mut module_warnings: Vec<Vec<Diagnostic>> = Vec::new();
     let mut next = 0;
     while let Some(path) = paths.get(next) {
         if next >= MAX_MODULE_COUNT {
-            errors.push(Diagnostic::e009(path, Span::default(), MAX_MODULE_COUNT));
+            let diags = vec![Diagnostic::e009(MAX_MODULE_COUNT)];
+            errors.push(FileDiagnostics { path: path.clone(), diags });
             break;
         }
-        let Discovered { errors: module_errors, warnings: module_warnings, module } =
-            found.remove(path).unwrap_or_else(|| discover(path));
-        errors.extend(module_errors);
-        warnings.extend(module_warnings);
+        let Discovered { errors: found_errors, warnings: found_warnings, module } =
+            found.remove(path.as_os_str()).unwrap_or_else(|| reader.discover(arenas.get(), path));
+        if !found_errors.is_empty() {
+            errors.push(FileDiagnostics { path: path.clone(), diags: found_errors });
+        }
         if let Some(ResolvedModuleInfo { mut info, requires }) = module {
+            module_warnings.push(found_warnings);
             info.dependencies = requires
                 .into_iter()
-                .filter_map(|(site, resolved)| {
+                .filter_map(|(require, resolved)| {
                     let next_id = ModuleId(paths.len());
-                    let id = *ids.entry(resolved?).or_insert_with_key(|target| {
-                        paths.push(target.clone());
+                    let id = *ids.entry(resolved?.into_os_string()).or_insert_with_key(|target| {
+                        paths.push(PathBuf::from(target));
                         next_id
                     });
                     Some(Dependency {
-                        require_string: site.require_string,
+                        require_string: require.require_string,
                         target: id,
-                        call_span: site.call_span,
+                        call_span: require.call_span,
                     })
                 })
                 .collect();
             modules.push(info);
         }
-        next = next.saturating_add(1);
+        next += 1;
     }
     if !errors.is_empty() {
         return Err(errors);
     }
 
     // No errors, so every module was read and each index is its `ModuleId`.
-    let topological_order = topological_order(&modules, &mut warnings);
+    let topological_order = topological_order(&modules, &mut module_warnings);
     let entry_id = ModuleId(0);
-    warn_inert_hot_comments(&modules, entry_id, &mut warnings);
+    warn_inert_hot_comments(&modules, entry_id, &mut module_warnings);
+    let warnings = modules
+        .iter()
+        .zip(&mut module_warnings)
+        .filter(|(_, diags)| !diags.is_empty())
+        .map(|(module, diags)| FileDiagnostics {
+            path: module.path.clone(),
+            diags: mem::take(diags),
+        })
+        .collect();
     Ok(DependencyGraph { modules, topological_order, entry_id, warnings })
 }
 
@@ -160,14 +169,15 @@ fn number_modules<'ast>(
 fn warn_inert_hot_comments(
     modules: &[ModuleInfo<'_>],
     entry_id: ModuleId,
-    warnings: &mut Vec<Diagnostic>,
+    warnings: &mut [Vec<Diagnostic>],
 ) {
-    for (i, module) in modules.iter().enumerate() {
+    for ((i, module), module_warnings) in modules.iter().enumerate().zip(warnings) {
         if ModuleId(i) == entry_id {
             continue;
         }
         if let Some(span) = module.hot_comments.first() {
-            warnings.push(Diagnostic::w006(&module.path, *span, span.text(module.source)));
+            module_warnings
+                .push(Diagnostic::w006(*span, &String::from_utf8_lossy(span.text(module.source))));
         }
     }
 }
@@ -177,7 +187,10 @@ fn warn_inert_hot_comments(
 ///
 /// A deferred cycle works as in real Lua, and a load-time cycle fails at
 /// runtime the way the target version fails.
-fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>) -> Vec<ModuleId> {
+fn topological_order(
+    modules: &[ModuleInfo<'_>],
+    warnings: &mut [Vec<Diagnostic>],
+) -> Vec<ModuleId> {
     // Node `i` is `modules[i]`. Insertion order breaks toposort's ties, so the
     // edges go in require order.
     let mut graph: DiGraph<(), ()> = DiGraph::with_capacity(modules.len(), 0);
@@ -200,27 +213,19 @@ fn topological_order(modules: &[ModuleInfo<'_>], warnings: &mut Vec<Diagnostic>)
 
     let cycle = find_cycle(&graph, cycle_node);
     let cycle_paths: Vec<String> =
-        cycle.iter().filter_map(|id| modules.get(id.0)).map(|module| module.path.clone()).collect();
+        cycle.iter().map(|id| to_slash_lossy(&modules[id.0].path).into_owned()).collect();
 
     // The require that closes the cycle: the last module in the path requiring
     // the first.
-    let closing_require = match cycle.as_slice() {
-        [.., from, to] => modules.get(from.0).map(|module| (module, *to)),
-        [] | [_] => None,
+    let (reporting_id, closing_span) = match cycle.as_slice() {
+        [.., from, to] => {
+            let dependency = modules[from.0].dependencies.iter().find(|found| found.target == *to);
+            let closing_span = dependency.map(|found| found.call_span);
+            (*from, closing_span)
+        }
+        [] | [_] => (ModuleId(0), None),
     };
-    let (file_path, closing_span) = closing_require.map_or_else(
-        || (modules.first().map_or("", |module| module.path.as_str()), None),
-        |(module, to)| {
-            let closing_span = module
-                .dependencies
-                .iter()
-                .find(|dependency| dependency.target == to)
-                .map(|dependency| dependency.call_span);
-            (module.path.as_str(), closing_span)
-        },
-    );
-
-    warnings.push(Diagnostic::w003(file_path, closing_span.unwrap_or_default(), &cycle_paths));
+    warnings[reporting_id.0].push(Diagnostic::w003(closing_span, &cycle_paths));
     (0..modules.len()).map(ModuleId).collect()
 }
 

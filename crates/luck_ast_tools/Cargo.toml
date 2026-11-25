@@ -1,0 +1,21 @@
+[package]
+name                   = "luck_ast_tools"
+version.workspace      = true
+publish                = false
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description            = "Internal tool: writes luck_ast's visitors, node kinds, span accessors, content equality, builder, and layout assertions from its type definitions"
+
+[lints]
+workspace = true
+
+[[bin]]
+name    = "luck_ast_tools"
+doctest = false
+
+[dependencies]
+prettyplease = { workspace = true }
+proc-macro2  = { workspace = true }
+quote        = { workspace = true }
+syn          = { workspace = true }

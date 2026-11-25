@@ -1,0 +1,918 @@
+# Lua 5.1 standard library, verified against the 5.1 reference manual
+# (https://www.lua.org/manual/5.1/), plus the undocumented newproxy.
+# Entries that 5.1 already replaces, such as gcinfo and table.getn, are
+# marked deprecated.
+#
+# A std definition, in the format the luck_stdlib README describes, which
+# `just stdlib` generates the built-in catalog from. tests/it/drift.rs
+# keeps the files consistent.
+
+[globals._G]
+kind = "property"
+is_read_only = false
+
+[globals._VERSION]
+kind = "property"
+
+# Interactive-interpreter prompt overrides (manual section 6).
+[globals._PROMPT]
+kind = "property"
+is_read_only = false
+
+[globals._PROMPT2]
+kind = "property"
+is_read_only = false
+
+[globals.assert]
+kind = "function"
+params = [
+  { kind = "any" },
+  { kind = "string", is_required = false },
+  { kind = "vararg" },
+]
+
+[globals.collectgarbage]
+kind = "function"
+params = [
+  { kind = "constant", values = ["collect", "count", "restart", "setpause", "setstepmul", "step", "stop"], is_required = false },
+  { kind = "number", is_required = false },
+]
+
+[globals.dofile]
+kind = "function"
+params = [{ kind = "string", is_required = false }]
+
+[globals.error]
+kind = "function"
+params = [
+  { kind = "any", is_required = false },
+  { kind = "number", is_required = false },
+]
+
+# Already deprecated in 5.1 in favor of collectgarbage('count'); removed in 5.2.
+[globals.gcinfo]
+kind = "function"
+is_must_use = true
+# `gcinfo` counts whole kilobytes, and `collectgarbage('count')` a fraction too.
+deprecated = { message = "use collectgarbage('count') instead", replacement = { template = "collectgarbage('count')", is_exact = false } }
+
+[globals.getfenv]
+kind = "function"
+is_must_use = true
+params = [{ kind = "any", is_required = false }]
+
+[globals.getmetatable]
+kind = "function"
+is_must_use = true
+params = [{ kind = "any" }]
+
+[globals.ipairs]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "table" }]
+
+[globals.load]
+kind = "function"
+params = [
+  { kind = "function" },
+  { kind = "string", is_required = false },
+]
+
+[globals.loadfile]
+kind = "function"
+params = [{ kind = "string", is_required = false }]
+
+[globals.loadstring]
+kind = "function"
+params = [
+  { kind = "string" },
+  { kind = "string", is_required = false },
+]
+
+[globals.module]
+kind = "function"
+params = [
+  { kind = "string" },
+  { kind = "vararg" },
+]
+
+[globals.newproxy]
+kind = "function"
+is_must_use = true
+params = [{ kind = "bool", is_required = false }]
+
+[globals.next]
+kind = "function"
+params = [
+  { kind = "table" },
+  { kind = "any", is_required = false },
+]
+
+[globals.pairs]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "table" }]
+
+[globals.pcall]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "function" },
+  { kind = "vararg" },
+]
+
+[globals.print]
+kind = "function"
+params = [{ kind = "vararg" }]
+
+[globals.rawequal]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "any" }, { kind = "any" }]
+
+[globals.rawget]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "any" }, { kind = "any" }]
+
+[globals.rawset]
+kind = "function"
+params = [{ kind = "any" }, { kind = "any" }, { kind = "any" }]
+
+[globals.require]
+kind = "function"
+params = [{ kind = "string" }]
+
+[globals.select]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "any" },
+  { kind = "vararg" },
+]
+
+[globals.setfenv]
+kind = "function"
+params = [{ kind = "any" }, { kind = "table" }]
+
+[globals.setmetatable]
+kind = "function"
+params = [
+  { kind = "table" },
+  { kind = "table" },
+]
+
+[globals.tonumber]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "any" },
+  { kind = "number", is_required = false },
+]
+
+[globals.tostring]
+kind = "function"
+is_must_use = true
+params = [{ kind = "any" }]
+
+[globals.type]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "any" }]
+
+[globals.unpack]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "table" },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+]
+
+# 5.1's xpcall is strictly two args; the variadic form was added in 5.2.
+[globals.xpcall]
+kind = "function"
+is_must_use = true
+params = [{ kind = "function" }, { kind = "function" }]
+
+# ---- string namespace ----
+
+[globals.string]
+kind = "namespace"
+
+[globals.string.members.byte]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+]
+
+[globals.string.members.char]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "number", is_required = false },
+  { kind = "vararg" },
+]
+
+[globals.string.members.dump]
+kind = "function"
+is_must_use = true
+params = [{ kind = "function" }]
+
+[globals.string.members.find]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "number", is_required = false },
+  { kind = "bool", is_required = false },
+]
+
+[globals.string.members.format]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "vararg" },
+]
+returns = "string"
+
+[globals.string.members.gfind]
+kind = "function"
+is_must_use = true
+deprecated = { message = "use 'string.gmatch' instead", replacement = { template = "string.gmatch(%1, %2)", is_exact = true } }
+params = [{ kind = "string" }, { kind = "string" }]
+
+[globals.string.members.gmatch]
+kind = "function"
+is_must_use = true
+params = [{ kind = "string" }, { kind = "string" }]
+
+[globals.string.members.gsub]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "any" },
+  { kind = "number", is_required = false },
+]
+returns = "string"
+
+[globals.string.members.len]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "string" }]
+
+[globals.string.members.lower]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "string" }]
+returns = "string"
+
+[globals.string.members.match]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "string" },
+  { kind = "number", is_required = false },
+]
+
+[globals.string.members.rep]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "string" }, { kind = "number" }]
+returns = "string"
+
+[globals.string.members.reverse]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "string" }]
+returns = "string"
+
+[globals.string.members.sub]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "string" },
+  { kind = "number" },
+  { kind = "number", is_required = false },
+]
+returns = "string"
+
+[globals.string.members.upper]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "string" }]
+returns = "string"
+
+# ---- table namespace ----
+
+[globals.table]
+kind = "namespace"
+
+[globals.table.members.concat]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "table" },
+  { kind = "string", is_required = false },
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+]
+
+[globals.table.members.foreach]
+kind = "function"
+deprecated = { message = "use a 'for' loop with 'pairs()' instead" }
+params = [{ kind = "table" }, { kind = "function" }]
+
+[globals.table.members.foreachi]
+kind = "function"
+deprecated = { message = "use a 'for' loop with 'ipairs()' instead" }
+params = [{ kind = "table" }, { kind = "function" }]
+
+[globals.table.members.getn]
+kind = "function"
+is_must_use = true
+deprecated = { message = "use the '#' length operator instead", replacement = { template = "#%1", is_exact = true } }
+params = [{ kind = "table" }]
+
+[globals.table.members.insert]
+kind = "function"
+params = [
+  { kind = "table" },
+  { kind = "any" },
+  { kind = "any", is_required = false },
+]
+
+[globals.table.members.maxn]
+kind = "function"
+is_must_use = true
+params = [{ kind = "table" }]
+
+[globals.table.members.remove]
+kind = "function"
+params = [
+  { kind = "table" },
+  { kind = "number", is_required = false },
+]
+
+[globals.table.members.sort]
+kind = "function"
+params = [
+  { kind = "table" },
+  { kind = "function", is_required = false },
+]
+
+# ---- math namespace ----
+
+[globals.math]
+kind = "namespace"
+
+[globals.math.members.abs]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.acos]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.asin]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.atan]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.atan2]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.ceil]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.cos]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.cosh]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.deg]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.exp]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.floor]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.fmod]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.frexp]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.huge]
+kind = "constant"
+
+[globals.math.members.ldexp]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.log]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.log10]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.max]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "number" },
+  { kind = "vararg" },
+]
+
+[globals.math.members.min]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [
+  { kind = "number" },
+  { kind = "vararg" },
+]
+
+[globals.math.members.mod]
+kind = "function"
+is_pure = true
+is_must_use = true
+deprecated = { message = "use the '%' operator instead" }
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.modf]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.pi]
+kind = "constant"
+
+[globals.math.members.pow]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.math.members.rad]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.random]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "number", is_required = false },
+  { kind = "number", is_required = false },
+]
+
+[globals.math.members.randomseed]
+kind = "function"
+params = [{ kind = "number" }]
+
+[globals.math.members.sin]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.sinh]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.sqrt]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.tan]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+[globals.math.members.tanh]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }]
+
+# ---- io namespace ----
+
+[globals.io]
+kind = "namespace"
+
+[globals.io.members.close]
+kind = "function"
+params = [{ kind = "display", display = "file", is_required = false }]
+
+[globals.io.members.flush]
+kind = "function"
+
+# With an argument this also sets the default input file. PUC Lua returns
+# the current input file either way, so returns = "file" fits both forms.
+[globals.io.members.input]
+kind = "function"
+params = [{ kind = "display", display = "file", is_required = false }]
+returns = "file"
+
+# Read formats as extra arguments arrived in 5.2; 5.1 takes the
+# filename only.
+[globals.io.members.lines]
+kind = "function"
+params = [{ kind = "string", is_required = false }]
+
+[globals.io.members.open]
+kind = "function"
+params = [
+  { kind = "string" },
+  { kind = "constant", values = ["r", "rb", "w", "wb", "a", "ab", "r+", "rb+", "r+b", "w+", "wb+", "w+b", "a+", "ab+", "a+b"], is_required = false },
+]
+returns = "file"
+
+[globals.io.members.output]
+kind = "function"
+params = [{ kind = "display", display = "file", is_required = false }]
+returns = "file"
+
+[globals.io.members.popen]
+kind = "function"
+params = [
+  { kind = "string" },
+  { kind = "constant", values = ["r", "w"], is_required = false },
+]
+returns = "file"
+
+[globals.io.members.read]
+kind = "function"
+params = [{ kind = "vararg" }]
+
+[globals.io.members.stderr]
+kind = "property"
+shape = "file"
+
+[globals.io.members.stdin]
+kind = "property"
+shape = "file"
+
+[globals.io.members.stdout]
+kind = "property"
+shape = "file"
+
+[globals.io.members.tmpfile]
+kind = "function"
+returns = "file"
+
+[globals.io.members.type]
+kind = "function"
+is_must_use = true
+params = [{ kind = "any" }]
+
+[globals.io.members.write]
+kind = "function"
+params = [{ kind = "vararg" }]
+
+# ---- file handle shape (io.open and friends) ----
+
+# Read formats ("*l", "*n", "*a", or a byte count) stay a plain vararg,
+# since a constant set would reject numeric counts.
+[shapes.file.members.read]
+kind = "function"
+is_method = true
+params = [{ kind = "vararg" }]
+
+# 5.1 file:lines takes no formats; they arrived in 5.2.
+[shapes.file.members.lines]
+kind = "function"
+is_method = true
+is_must_use = true
+
+# 5.1 file:write returns nothing; the chainable file return is 5.2+.
+[shapes.file.members.write]
+kind = "function"
+is_method = true
+params = [{ kind = "vararg" }]
+
+[shapes.file.members.seek]
+kind = "function"
+is_method = true
+params = [
+  { kind = "constant", values = ["set", "cur", "end"], is_required = false },
+  { kind = "number", is_required = false },
+]
+
+[shapes.file.members.setvbuf]
+kind = "function"
+is_method = true
+params = [
+  { kind = "constant", values = ["no", "full", "line"] },
+  { kind = "number", is_required = false },
+]
+
+[shapes.file.members.close]
+kind = "function"
+is_method = true
+
+[shapes.file.members.flush]
+kind = "function"
+is_method = true
+
+# ---- os namespace ----
+
+[globals.os]
+kind = "namespace"
+
+[globals.os.members.clock]
+kind = "function"
+is_must_use = true
+
+[globals.os.members.date]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "string", is_required = false },
+  { kind = "number", is_required = false },
+]
+
+[globals.os.members.difftime]
+kind = "function"
+is_pure = true
+is_must_use = true
+params = [{ kind = "number" }, { kind = "number" }]
+
+[globals.os.members.execute]
+kind = "function"
+params = [{ kind = "string", is_required = false }]
+
+[globals.os.members.exit]
+kind = "function"
+params = [{ kind = "number", is_required = false }]
+
+[globals.os.members.getenv]
+kind = "function"
+is_must_use = true
+params = [{ kind = "string" }]
+
+[globals.os.members.remove]
+kind = "function"
+params = [{ kind = "string" }]
+
+[globals.os.members.rename]
+kind = "function"
+params = [{ kind = "string" }, { kind = "string" }]
+
+[globals.os.members.setlocale]
+kind = "function"
+params = [
+  { kind = "string", is_required = false },
+  { kind = "constant", values = ["all", "collate", "ctype", "monetary", "numeric", "time"], is_required = false },
+]
+
+[globals.os.members.time]
+kind = "function"
+is_must_use = true
+params = [{ kind = "table", is_required = false }]
+
+[globals.os.members.tmpname]
+kind = "function"
+is_must_use = true
+
+# ---- coroutine namespace ----
+
+[globals.coroutine]
+kind = "namespace"
+
+[globals.coroutine.members.create]
+kind = "function"
+is_must_use = true
+params = [{ kind = "function" }]
+
+[globals.coroutine.members.resume]
+kind = "function"
+params = [
+  { kind = "display", display = "coroutine" },
+  { kind = "vararg" },
+]
+
+[globals.coroutine.members.running]
+kind = "function"
+is_must_use = true
+
+[globals.coroutine.members.status]
+kind = "function"
+is_must_use = true
+params = [{ kind = "display", display = "coroutine" }]
+
+[globals.coroutine.members.wrap]
+kind = "function"
+is_must_use = true
+params = [{ kind = "function" }]
+
+[globals.coroutine.members.yield]
+kind = "function"
+params = [{ kind = "vararg" }]
+
+# ---- debug namespace ----
+
+[globals.debug]
+kind = "namespace"
+
+[globals.debug.members.debug]
+kind = "function"
+
+[globals.debug.members.getfenv]
+kind = "function"
+is_must_use = true
+params = [{ kind = "function" }]
+
+[globals.debug.members.gethook]
+kind = "function"
+is_must_use = true
+params = [{ kind = "any", is_required = false }]
+
+[globals.debug.members.getinfo]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "any" },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+]
+
+[globals.debug.members.getlocal]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "any" },
+  { kind = "any" },
+  { kind = "any", is_required = false },
+]
+
+[globals.debug.members.getmetatable]
+kind = "function"
+is_must_use = true
+params = [{ kind = "any" }]
+
+[globals.debug.members.getregistry]
+kind = "function"
+is_must_use = true
+
+[globals.debug.members.getupvalue]
+kind = "function"
+is_must_use = true
+params = [{ kind = "function" }, { kind = "number" }]
+
+[globals.debug.members.setfenv]
+kind = "function"
+params = [{ kind = "any" }, { kind = "table" }]
+
+[globals.debug.members.sethook]
+kind = "function"
+params = [
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+]
+
+[globals.debug.members.setlocal]
+kind = "function"
+params = [
+  { kind = "any" },
+  { kind = "any" },
+  { kind = "any" },
+  { kind = "any", is_required = false },
+]
+
+[globals.debug.members.setmetatable]
+kind = "function"
+params = [{ kind = "any" }, { kind = "table" }]
+
+[globals.debug.members.setupvalue]
+kind = "function"
+params = [{ kind = "function" }, { kind = "number" }, { kind = "string" }]
+
+[globals.debug.members.traceback]
+kind = "function"
+is_must_use = true
+params = [
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+  { kind = "any", is_required = false },
+]
+
+# ---- package namespace ----
+
+[globals.package]
+kind = "namespace"
+
+[globals.package.members.cpath]
+kind = "property"
+is_read_only = false
+
+[globals.package.members.loaded]
+kind = "property"
+is_read_only = false
+
+[globals.package.members.loaders]
+kind = "property"
+is_read_only = false
+
+[globals.package.members.loadlib]
+kind = "function"
+params = [{ kind = "string" }, { kind = "string" }]
+
+[globals.package.members.path]
+kind = "property"
+is_read_only = false
+
+[globals.package.members.preload]
+kind = "property"
+is_read_only = false
+
+[globals.package.members.seeall]
+kind = "function"
+params = [{ kind = "table" }]
+
+# Script argument vector populated by the standalone lua interpreter.
+[globals.arg]
+kind = "property"
+is_read_only = false

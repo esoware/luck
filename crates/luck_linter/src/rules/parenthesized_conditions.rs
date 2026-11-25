@@ -1,210 +1,139 @@
-use luck_ast::{Expression, Statement};
-use luck_token::{Span, offset_to_index};
+use luck_ast::{AstKind, AstType, Expression, GetSpan as _};
+use luck_semantic::{AstNode, AstTypesBitset};
+use luck_token::Span;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::fix::{Fix, TextEdit};
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::fix::{FixKind, TextEdit};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ParenthesizedConditions;
 
-impl_rule!(
+declare_lint_rule!(
     ParenthesizedConditions,
-    "parenthesized_conditions",
     Style,
     Warning,
-    "unnecessary parentheses around condition"
+    "unnecessary parentheses around condition",
+    fix = Fix
 );
 
-impl NodeRule for ParenthesizedConditions {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::IfStatement, NodeType::WhileLoop])
-    }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let source = context.source;
-        match stmt {
-            Statement::IfStatement(if_stmt) => {
-                findings.extend(
-                    check_condition(
-                        &if_stmt.condition,
-                        "unnecessary parentheses around `if` condition",
-                        if_stmt.span,
-                        source,
-                    )
-                    .map(|finding| {
-                        finding.with_help("Lua doesn't need parentheses around conditions")
-                    }),
-                );
-                for clause in &if_stmt.elseif_clauses {
-                    findings.extend(check_condition(
-                        &clause.condition,
-                        "unnecessary parentheses around `elseif` condition",
-                        clause.span,
-                        source,
-                    ));
-                }
-            }
-            Statement::WhileLoop(while_loop) => {
-                findings.extend(check_condition(
-                    &while_loop.condition,
-                    "unnecessary parentheses around `while` condition",
-                    while_loop.span,
-                    source,
-                ));
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::RepeatLoop(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
+impl Rule for ParenthesizedConditions {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+        AstType::IfStatement,
+        AstType::ElseIfClause,
+        AstType::WhileLoop,
+    ]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let kind = node.kind();
+        let found = if let AstKind::IfStatement(if_stmt) = kind {
+            check_condition(
+                &if_stmt.condition,
+                "unnecessary parentheses around `if` condition",
+                if_stmt.span,
+                context,
+            )
+            .map(|finding| finding.with_help("Lua doesn't need parentheses around conditions"))
+        } else if let AstKind::ElseIfClause(clause) = kind {
+            check_condition(
+                &clause.condition,
+                "unnecessary parentheses around `elseif` condition",
+                clause.span,
+                context,
+            )
+        } else if let AstKind::WhileLoop(while_loop) = kind {
+            check_condition(
+                &while_loop.condition,
+                "unnecessary parentheses around `while` condition",
+                while_loop.span,
+                context,
+            )
+        } else {
+            None
+        };
+        if let Some(finding) = found {
+            context.diagnostic(finding);
         }
     }
 }
 
-/// The fix deletes just those two tokens, so anything between them stays.
+/// The fix deletes just the outermost pair, so anything between them stays.
+/// A condition takes one value, so the parentheses that truncate a call to
+/// one change nothing there either.
 fn check_condition(
     condition: &Expression<'_>,
     message: &'static str,
     span: Span,
-    source: &str,
+    context: &LintContext<'_, '_>,
 ) -> Option<Finding> {
-    let Expression::Parenthesized(parenthesized) = condition else {
-        return None;
+    let Span { start, end } = if matches!(condition, Expression::Parenthesized(_)) {
+        context.extent(condition)
+    } else {
+        context.groupings.around(condition.span())?
     };
-    let Span { start, end } = parenthesized.span;
-    let bytes = source.as_bytes();
-    let before = offset_to_index(start).checked_sub(1).and_then(|i| bytes.get(i));
-    let after = bytes.get(offset_to_index(end));
-    Some(Finding::new(message, span).with_fix(Fix {
-        description: "remove unnecessary parentheses".to_owned(),
-        edits: vec![
-            TextEdit {
-                span: Span::new(start, start.saturating_add(1)),
-                replacement: replacement_beside(before),
-            },
-            TextEdit {
-                span: Span::new(end.saturating_sub(1), end),
-                replacement: replacement_beside(after),
-            },
-        ],
+    Some(Finding::new(message, span).with_fix(context, FixKind::Fix, |fixer| {
+        let bytes = context.source;
+        let before = bytes[..start as usize].last();
+        let after = bytes.get(end as usize);
+        fixer.fix(
+            "remove unnecessary parentheses",
+            [
+                TextEdit {
+                    span: Span::new(start, start + 1),
+                    replacement: replacement_beside(before).into(),
+                },
+                TextEdit {
+                    span: Span::new(end - 1, end),
+                    replacement: replacement_beside(after).into(),
+                },
+            ],
+        )
     }))
 }
 
 /// What a deleted parenthesis leaves: a space if the byte beside it would
 /// otherwise run into the condition.
-fn replacement_beside(neighbor: Option<&u8>) -> String {
+fn replacement_beside(neighbor: Option<&u8>) -> &'static [u8] {
     let is_word_byte = neighbor.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
-    if is_word_byte { " ".to_owned() } else { String::new() }
+    if is_word_byte { b" " } else { b"" }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::{fix_and_reparse, run_rule};
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&ParenthesizedConditions, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_each_parenthesized_condition() {
-        let diags = run("\
-local c = 1
-if (c) then elseif (c) then end
-while (c) do break end");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            [
-                "unnecessary parentheses around `if` condition",
-                "unnecessary parentheses around `elseif` condition",
-                "unnecessary parentheses around `while` condition",
-            ],
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_bare_and_partly_parenthesized_conditions() {
-        let diags = run("\
+    const PASS: &[&str] = &["\
 local a, b = 1, 2
 if a then end
-while (a) == b do break end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
+while (a) == b do break end
+if (a).b then end
+if (f)() then end"];
 
-    #[test]
-    fn flags_and_fixes_parenthesized_comparison() {
-        let source = "\
+    const FAIL: &[&str] = &[
+        "\
 local c = 1
-if (c == 1) then end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(
-            fixed,
-            "\
+if (c) then elseif (c) then end
+while (c) do break end",
+        "\
+if (f()) then end
+while ((c)) do break end",
+        "\
 local c = 1
-if c == 1 then end"
-        );
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_keywords_separated() {
-        let source = "if(x)then y() end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(fixed, "if x then y() end", "the fix should keep the tokens apart");
-    }
-
-    #[test]
-    fn flags_and_fixes_keeping_comment() {
-        let source = "if (--[[why]] x) then end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert!(fixed.contains("--[[why]]"), "the fix shouldn't delete the comment: {fixed}");
-    }
-
-    #[test]
-    fn flags_and_fixes_elseif_and_while_keywords_glued_to_parens() {
-        let source = "\
+if (c == 1) then end",
+        // The fix should keep the tokens apart.
+        "if(x)then y() end",
+        // The fix shouldn't delete the comment.
+        "if (--[[why]] x) then end",
+        "\
 local c = 1
 if c then elseif(c)then end
-while(c)do break end";
-        let diags = run(source);
-        assert_eq!(diags.len(), 2, "{diags:?}");
-        let fixed = fix_and_reparse(source, &diags, LuaVersion::Lua54);
-        assert_eq!(
-            fixed,
-            "\
-local c = 1
-if c then elseif c then end
-while c do break end"
-        );
+while(c)do break end",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::ParenthesizedConditions, PASS, FAIL).test_and_snapshot();
     }
 }

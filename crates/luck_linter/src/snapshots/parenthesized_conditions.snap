@@ -1,0 +1,115 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: unnecessary parentheses around `if` condition
+ --> Lua54:2:1
+1 | local c = 1
+2 | if (c) then elseif (c) then end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | while (c) do break end
+help: Lua doesn't need parentheses around conditions
+fix: remove unnecessary parentheses
+  | local c = 1
+  | if c then elseif (c) then end
+  | while (c) do break end
+
+warning: unnecessary parentheses around `elseif` condition
+ --> Lua54:2:13
+1 | local c = 1
+2 | if (c) then elseif (c) then end
+  |             ^^^^^^^^^^^^^^^^^^^
+3 | while (c) do break end
+fix: remove unnecessary parentheses
+  | local c = 1
+  | if (c) then elseif c then end
+  | while (c) do break end
+
+warning: unnecessary parentheses around `while` condition
+ --> Lua54:3:1
+2 | if (c) then elseif (c) then end
+3 | while (c) do break end
+  | ^^^^^^^^^^^^^^^^^^^^^^
+fix: remove unnecessary parentheses
+  | local c = 1
+  | if (c) then elseif (c) then end
+  | while c do break end
+
+all fixes:
+  | local c = 1
+  | if c then elseif c then end
+  | while c do break end
+
+warning: unnecessary parentheses around `if` condition
+ --> Lua54:1:1
+1 | if (f()) then end
+  | ^^^^^^^^^^^^^^^^^
+2 | while ((c)) do break end
+help: Lua doesn't need parentheses around conditions
+fix: remove unnecessary parentheses
+  | if f() then end
+  | while ((c)) do break end
+
+warning: unnecessary parentheses around `while` condition
+ --> Lua54:2:1
+1 | if (f()) then end
+2 | while ((c)) do break end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^
+fix: remove unnecessary parentheses
+  | if (f()) then end
+  | while (c) do break end
+
+all fixes:
+  | if f() then end
+  | while (c) do break end
+
+warning: unnecessary parentheses around `if` condition
+ --> Lua54:2:1
+1 | local c = 1
+2 | if (c == 1) then end
+  | ^^^^^^^^^^^^^^^^^^^^
+help: Lua doesn't need parentheses around conditions
+fix: remove unnecessary parentheses
+  | local c = 1
+  | if c == 1 then end
+
+warning: unnecessary parentheses around `if` condition
+ --> Lua54:1:1
+1 | if(x)then y() end
+  | ^^^^^^^^^^^^^^^^^
+help: Lua doesn't need parentheses around conditions
+fix: remove unnecessary parentheses
+  | if x then y() end
+
+warning: unnecessary parentheses around `if` condition
+ --> Lua54:1:1
+1 | if (--[[why]] x) then end
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: Lua doesn't need parentheses around conditions
+fix: remove unnecessary parentheses
+  | if --[[why]] x then end
+
+warning: unnecessary parentheses around `elseif` condition
+ --> Lua54:2:11
+1 | local c = 1
+2 | if c then elseif(c)then end
+  |           ^^^^^^^^^^^^^^^^^
+3 | while(c)do break end
+fix: remove unnecessary parentheses
+  | local c = 1
+  | if c then elseif c then end
+  | while(c)do break end
+
+warning: unnecessary parentheses around `while` condition
+ --> Lua54:3:1
+2 | if c then elseif(c)then end
+3 | while(c)do break end
+  | ^^^^^^^^^^^^^^^^^^^^
+fix: remove unnecessary parentheses
+  | local c = 1
+  | if c then elseif(c)then end
+  | while c do break end
+
+all fixes:
+  | local c = 1
+  | if c then elseif c then end
+  | while c do break end

@@ -79,11 +79,12 @@ export async function discoverServer(context: vscode.ExtensionContext): Promise<
 
 async function isExecutable(filePath: string): Promise<boolean> {
 	try {
+		const stats = await fs.promises.stat(filePath);
+		if (!stats.isFile()) {
+			return false;
+		}
 		if (process.platform === "win32") {
-			const stats = await fs.promises.stat(filePath);
-			return (
-				stats.isFile() && WINDOWS_EXECUTABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
-			);
+			return WINDOWS_EXECUTABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 		}
 		await fs.promises.access(filePath, fs.constants.X_OK);
 		return true;

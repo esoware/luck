@@ -1,12 +1,13 @@
-use core::fmt::Write as _;
+use std::fmt::Write as _;
 
 use luck_allocator::Allocator;
-use luck_ast::{Block, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_ast::{Chunk, MAX_NESTING_DEPTH, SpanCounter, Synth, block_nesting_depth};
+use luck_codegen::LiteralSpelling;
 use luck_minifier::TransformConfig;
-use luck_testgen::with_the_smallest_stack;
+use luck_testgen::{nested, with_the_smallest_stack};
 use luck_token::{LuaVersion, UnOp};
 
-use crate::common::{minify_lua54, reparses};
+use crate::common::{minify_bytes, minify_lua54, reparses};
 
 const MODULE_SOURCE: &str = r#"
 local M = {}
@@ -22,6 +23,18 @@ end
 local unused = 42
 return M
 "#;
+
+/// A string as written keeps the bytes that aren't UTF-8, and a value the
+/// minifier spells escapes them, so the output is UTF-8 only where the source
+/// was.
+#[test]
+fn strings_keep_the_bytes_that_are_not_utf8_as_written() {
+    let source = b"#!/bin/lua \xE9\n-- caf\xE9\nprint('caf\xE9', 'd\xE9j' .. '\xE0')\n";
+    assert_eq!(
+        minify_bytes(source, LuaVersion::Lua51, &TransformConfig::default()),
+        b"#!/bin/lua \xE9\nprint('caf\xE9',\"d\\233j\\224\")"
+    );
+}
 
 #[test]
 fn module_preserves_semantics() {
@@ -222,23 +235,19 @@ fn assert_minifies_within_the_depth_cap(source: &str) -> String {
     let output = minify_lua54(source);
     assert!(reparses(&output), "output must reparse");
     let allocator = Allocator::new();
-    let input = luck_parser::parse(&allocator, source, LuaVersion::Lua54).block;
-    let compact_input = luck_codegen::compact(&input);
+    let input = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54).chunk;
+    let compact_input = luck_codegen::compact(&input, LiteralSpelling::Shortest);
     assert!(output.len() <= compact_input.len(), "output must be no longer than the compact input");
     assert!(minify_lua54(&output) == output, "output must be a fixpoint");
     output
-}
-
-fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String {
-    format!("{}{innermost}{}", open.repeat(count), close.repeat(count))
 }
 
 #[test]
 fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
     with_the_smallest_stack(|| {
         // The initializer is 31 levels deep, and its one use sits 15 levels
-        // short of the cap.
-        let initializer = format!("{}#\"a\"{}", "#\"a\"+(".repeat(15), ")".repeat(15));
+        // short of the cap. An inexact power has no value to fold to.
+        let initializer = format!("{}.3^3{}", ".3^3+(".repeat(15), ")".repeat(15));
         let source = format!(
             "\
     local x = {initializer}
@@ -265,12 +274,12 @@ fn a_local_is_not_inlined_where_its_value_would_nest_past_the_cap() {
 fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
     with_the_smallest_stack(|| {
         let mut source = String::new();
-        for guard in 0..30u32 {
+        for guard in 0..30 {
             writeln!(source, "if a{guard} then return {{}} end").unwrap();
         }
-        let deep = nested("{", MAX_NESTING_DEPTH - 3, "1", "}");
+        let deep = nested("{", MAX_NESTING_DEPTH - 2, "1", "}");
         writeln!(source, "if deep then return {deep} end").unwrap();
-        for guard in 30..60u32 {
+        for guard in 30..60 {
             writeln!(source, "if a{guard} then return {{}} end").unwrap();
         }
         source.push_str("return 0\n");
@@ -285,11 +294,11 @@ fn an_if_return_run_stops_at_a_guard_whose_value_would_nest_past_the_cap() {
 fn if_return_chains_in_nested_functions_do_not_compound_past_the_cap() {
     // Each function's chain nests the function inside it 30 levels deeper.
     let mut guards = String::new();
-    for guard in 0..30u32 {
+    for guard in 0..30 {
         write!(guards, "if a{guard} then return 1 end ").unwrap();
     }
     let mut source = String::from("return 0");
-    for _ in 0..12u32 {
+    for _ in 0..12 {
         source = format!("{guards}if b then return function() {source} end end return 0");
     }
     assert_minifies_within_the_depth_cap(&source);
@@ -327,13 +336,13 @@ fn nested_negations<'ast>(
     allocator: &'ast Allocator,
     spans: &'ast SpanCounter,
     wraps: usize,
-) -> Block<'ast> {
+) -> Chunk<'ast> {
     let synth = Synth::new(allocator, spans);
     let mut expr = synth.name_expr("x");
     for _ in 0..wraps {
         expr = synth.unary_op(UnOp::Not, expr);
     }
-    synth.block([], Some(synth.return_([expr])))
+    Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([expr])]))
 }
 
 #[test]
@@ -341,12 +350,15 @@ fn a_tree_at_the_nesting_cap_minifies() {
     with_the_smallest_stack(|| {
         let wraps = MAX_NESTING_DEPTH - 1;
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
-        let mut block = nested_negations(&allocator, &spans, wraps);
-        assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
+        let mut chunk = nested_negations(&allocator, &spans, wraps);
+        assert_eq!(
+            block_nesting_depth(&chunk.block),
+            MAX_NESTING_DEPTH,
+            "the tree sits at the cap"
+        );
         let config = TransformConfig::default();
-        let output =
-            luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
-        assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps))));
+        let output = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new());
+        assert_eq!(output.ok(), Some(format!("return{} x", " not".repeat(wraps)).into_bytes()));
     });
 }
 
@@ -354,9 +366,9 @@ fn a_tree_at_the_nesting_cap_minifies() {
 fn a_tree_past_the_nesting_cap_is_an_error() {
     with_the_smallest_stack(|| {
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
-        let mut block = nested_negations(&allocator, &spans, MAX_NESTING_DEPTH);
+        let mut chunk = nested_negations(&allocator, &spans, MAX_NESTING_DEPTH);
         let config = TransformConfig::default();
-        let error = luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config)
+        let error = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new())
             .expect_err("the tree nests one level too deep");
         assert!(error.message.contains("maximum nesting depth exceeded"), "{error:?}");
     });
@@ -371,16 +383,17 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
             for _ in 0..MAX_NESTING_DEPTH {
                 expr = synth.unary_op(UnOp::Not, expr);
             }
-            let identity = synth.block([], Some(synth.return_([synth.name_expr("a")])));
-            let stmts = [
-                synth.local(&["x"], [synth.number("1")]),
+            let identity = synth.block([synth.return_([synth.name_expr("a")])]);
+            let block = synth.block([
+                synth.local(&["x"], [synth.number_i64(1)]),
                 synth.local_function("f", &["a"], identity),
                 synth.call_stmt(synth.call(synth.name_expr("f"), [synth.name_expr("x")])),
-            ];
-            synth.block(stmts, Some(synth.return_([expr])))
+                synth.return_([expr]),
+            ]);
+            Chunk::new(LuaVersion::Lua54, block)
         };
         let (allocator, spans) = (Allocator::new(), SpanCounter::new());
-        let mut block = past_the_cap(&allocator, &spans);
+        let mut chunk = past_the_cap(&allocator, &spans);
         let (expected_allocator, expected_spans) = (Allocator::new(), SpanCounter::new());
         let expected = past_the_cap(&expected_allocator, &expected_spans);
         let without_bindings = TransformConfig {
@@ -392,10 +405,9 @@ fn a_tree_past_the_nesting_cap_keeps_its_names_and_spans() {
             ..TransformConfig::default()
         };
         for config in [TransformConfig::default(), without_bindings] {
-            let result =
-                luck_minifier::minify_block(&allocator, &mut block, LuaVersion::Lua54, &config);
+            let result = luck_minifier::minify_chunk(&allocator, &mut chunk, &config, Vec::new());
             assert!(result.is_err(), "the tree nests one level too deep");
-            assert_eq!(block, expected, "the refused tree is as it was");
+            assert_eq!(chunk, expected, "the refused tree is as it was");
         }
     });
 }

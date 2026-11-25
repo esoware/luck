@@ -1,13 +1,8 @@
-//! Every rule walks the tree, and the driver runs them on rayon's threads, so
-//! those run on the smallest stack too.
-
 use luck_allocator::Allocator;
-use luck_ast::MIN_STACK_BYTES;
-use luck_core::LuaTarget;
-use luck_linter::{LintConfig, apply_fixes, lint_parsed};
+use luck_linter::{FixKind, LintConfig, Linter};
+use luck_stdlib::library_for;
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
-use luck_token::LuaVersion;
-use rayon::ThreadPoolBuilder;
+use luck_token::LuaTarget;
 
 fn every_rule() -> LintConfig {
     serde_json::from_str(
@@ -27,27 +22,13 @@ fn every_rule() -> LintConfig {
 #[test]
 fn linting_and_fixing_fit_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source, version| {
-        let pool =
-            ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build().expect("the pool starts");
-        let config = every_rule();
-        let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source, version);
-        for &target in targets(version) {
-            let diags = pool.install(|| lint_parsed(&parsed, target, &config));
-            if let Some(fixed) = apply_fixes(&allocator, source, &diags, version) {
-                assert!(fixed.errors.is_empty(), "{:?}", fixed.errors.first());
-            }
+        let linter = Linter::new(every_rule());
+        for target in LuaTarget::ALL.into_iter().filter(|target| target.version() == version) {
+            let allocator = Allocator::new();
+            let fixed = linter
+                .fix(&allocator, source.as_bytes(), library_for(target), FixKind::all(), None)
+                .expect("the fixes converge");
+            assert!(fixed.parse.errors.is_empty(), "{:?}", fixed.parse.errors.first());
         }
     });
-}
-
-const fn targets(version: LuaVersion) -> &'static [LuaTarget] {
-    match version {
-        LuaVersion::Lua51 => &[LuaTarget::Lua51],
-        LuaVersion::Lua52 => &[LuaTarget::Lua52],
-        LuaVersion::Lua53 => &[LuaTarget::Lua53],
-        LuaVersion::Lua54 => &[LuaTarget::Lua54],
-        LuaVersion::Lua55 => &[LuaTarget::Lua55],
-        LuaVersion::Luau => &[LuaTarget::Luau, LuaTarget::LuauRoblox],
-    }
 }

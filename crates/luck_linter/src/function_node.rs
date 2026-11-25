@@ -1,7 +1,6 @@
-use luck_ast::{Expression, FunctionBody, Statement, TypeDeclarationValue};
+use luck_ast::{AstKind, AstType, FunctionBody};
+use luck_semantic::{AstNode, AstNodes, AstTypesBitset};
 use luck_token::Span;
-
-use crate::node_type::{NodeType, NodeTypeSet};
 
 /// A `function`, `local function`, `global function`, or `type function`
 /// statement, or a function expression.
@@ -16,58 +15,27 @@ pub(crate) struct FunctionNode<'ast> {
 }
 
 impl<'ast> FunctionNode<'ast> {
-    pub(crate) const NODE_TYPES: NodeTypeSet = NodeTypeSet::from_types(&[
-        NodeType::FunctionDecl,
-        NodeType::LocalFunction,
-        NodeType::GlobalFunction,
-        NodeType::TypeDeclaration,
-        NodeType::FunctionDef,
-    ]);
+    /// Every function has one body, whose node finds it.
+    pub(crate) const NODE_TYPES: AstTypesBitset =
+        AstTypesBitset::from_types(&[AstType::FunctionBody]);
 
-    pub(crate) fn of_stmt(stmt: &'ast Statement<'ast>) -> Option<Self> {
-        let (body, span, name_span, is_method) = match stmt {
-            Statement::FunctionDecl(decl) => {
-                (&decl.body, decl.span, decl.name.span, decl.name.method.is_some())
-            }
-            Statement::LocalFunction(local_function) => {
-                (&local_function.body, local_function.span, local_function.name.span, false)
-            }
+    /// The function whose body is `node`.
+    pub(crate) fn of(node: &AstNode<'ast>, nodes: &AstNodes<'ast>) -> Option<Self> {
+        let body = node.kind().as_function_body()?;
+        let parent = nodes.parent_kind(node.id())?;
+        let (span, name_span, is_method) = if let AstKind::FunctionDecl(decl) = parent {
+            (decl.span, Some(decl.name.span), decl.name.method.is_some())
+        } else if let AstKind::LocalFunction(local_function) = parent {
+            (local_function.span, Some(local_function.name.span), false)
+        } else if let AstKind::GlobalFunction(global_function) = parent {
             // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                (&global_function.body, global_function.span, global_function.name.span, false)
-            }
+            (global_function.span, Some(global_function.name.span), false)
+        } else if let AstKind::TypeDeclaration(type_declaration) = parent {
             // Luau
-            Statement::TypeDeclaration(type_declaration) => {
-                let TypeDeclarationValue::TypeFunction(body) = &type_declaration.value else {
-                    return None;
-                };
-                (&**body, type_declaration.span, type_declaration.name.span, false)
-            }
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::Error(_) => return None,
+            (type_declaration.span, Some(type_declaration.name.span), false)
+        } else {
+            (parent.as_function_def()?.span, None, false)
         };
-        Some(Self { body, span, name_span: Some(name_span), is_method })
-    }
-
-    pub(crate) fn of_expr(expr: &'ast Expression<'ast>) -> Option<Self> {
-        let Expression::FunctionDef(function) = expr else {
-            return None;
-        };
-        Some(Self { body: &function.body, span: function.span, name_span: None, is_method: false })
+        Some(Self { body, span, name_span, is_method })
     }
 }

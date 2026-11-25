@@ -1,5 +1,5 @@
-use core::fmt::Write as _;
-use core::iter;
+use std::fmt::Write as _;
+use std::iter;
 
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, Suffix, SuffixedExpression, Var};
@@ -11,13 +11,13 @@ pub(crate) fn assert_no_errors(result: &ParseResult<'_>) {
 }
 
 pub(crate) fn parse_luau<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source, LuaVersion::Luau)
+    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Luau)
 }
 
 /// The last initializer of a `local ... = <expr>` first statement.
 pub(crate) fn local_value<'ast>(result: &'ast ParseResult<'ast>) -> &'ast Expression<'ast> {
-    let Some(Statement::LocalAssignment(local)) = result.block.stmts.first() else {
-        panic!("expected LocalAssignment, got {:?}", result.block.stmts);
+    let Some(Statement::LocalAssignment(local)) = result.chunk.block.stmts.first() else {
+        panic!("expected LocalAssignment, got {:?}", result.chunk.block.stmts);
     };
     local.exprs.last().expect("assignment has values")
 }
@@ -65,7 +65,7 @@ pub(crate) fn chain_shape(chain: &SuffixedExpression<'_>) -> String {
         format!("{:?}", chain.prefix)
     };
     for suffix in &chain.suffixes {
-        let _unused = match suffix {
+        let _ = match suffix {
             Suffix::Field(name) => write!(shape, ".{}", name.text),
             Suffix::Index { .. } => write!(shape, "[]"),
             Suffix::Call(_) => write!(shape, "()"),

@@ -1,22 +1,77 @@
-use alloc::sync::Arc;
+use std::num::NonZero;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use luck_allocator::Allocator;
-use luck_core::LuaTarget;
+use crossbeam_channel::unbounded;
+use ls_types::Uri;
+use luck_config::Project;
+use luck_formatter::FormatOptions;
+use luck_linter::{LintConfig, Linter};
+use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_stdlib::Stdlib;
+use luck_token::LuaTarget;
 
-use crate::document::{DocumentSettings, DocumentState};
-use crate::settings::ProjectSettings;
+use crate::analyzed::Arena;
+use crate::document::DocumentState;
+use crate::line_index::{LineIndex, PositionEncoding};
+use crate::session::Session;
+use crate::settings::{DocumentSettings, LoadedProject};
 
-/// `text` as an untitled document under the default settings.
+/// `text` as an untitled document with no `luck.json`, in UTF-16 positions,
+/// which a client that names no encoding gets.
 pub(crate) fn document(text: &str, target: LuaTarget) -> DocumentState {
-    document_under(text, target, ProjectSettings::default())
+    let project = Project::defaults(PathBuf::from("."));
+    let linter = project.linter_for(None);
+    document_with(text, target, project, linter, None)
 }
 
-pub(crate) fn document_under(
+/// `text` as the document of the file at `path` under `project`'s settings.
+pub(crate) fn document_at(
     text: &str,
     target: LuaTarget,
-    project: ProjectSettings,
+    project: Project,
+    path: &Path,
 ) -> DocumentState {
-    let settings =
-        DocumentSettings { path: None, project: Arc::new(project), target, is_included: true };
-    DocumentState::new([text], 1, Arc::new(settings), Allocator::new())
+    let linter = project.linter_for(Some(path));
+    document_with(text, target, project, linter, Some(FileSystemOs.canonicalize_existing(path)))
+}
+
+/// `text` as an untitled document linted under `lint`.
+pub(crate) fn document_linted_by(text: &str, target: LuaTarget, lint: LintConfig) -> DocumentState {
+    let linter = Arc::new(Linter::new(lint));
+    document_with(text, target, Project::defaults(PathBuf::from(".")), linter, None)
+}
+
+/// The URI the tests open their documents at.
+pub(crate) fn uri() -> Uri {
+    "file:///main.lua".parse().expect("valid URI")
+}
+
+/// A session with no workspace folders, in UTF-16 positions, whose tasks
+/// nothing reads.
+pub(crate) fn session() -> Session {
+    Session::new(PositionEncoding::Utf16, unbounded().0, NonZero::<usize>::MIN)
+}
+
+fn document_with(
+    text: &str,
+    target: LuaTarget,
+    project: Project,
+    linter: Arc<Linter>,
+    path: Option<PathBuf>,
+) -> DocumentState {
+    let settings = DocumentSettings {
+        path,
+        project: Arc::new(LoadedProject::new(project)),
+        stdlib: Stdlib::new(target),
+        linter,
+        format: FormatOptions::default(),
+        is_included: true,
+    };
+    DocumentState::new(
+        Arc::from(text),
+        Arc::new(settings),
+        Arc::new(LineIndex::new(text, PositionEncoding::Utf16)),
+        Arena::from_spare(&Arc::default()),
+    )
 }

@@ -1,0 +1,77 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: unused `allow` directive
+ --> Lua54:2:1
+1 | local a = 1
+2 | -- luck: allow(undefined_variable)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | print(a)
+tag: unnecessary
+help: no rule it names reports anything where it applies
+fix: remove the unused directive
+  | local a = 1
+  | print(a)
+
+warning: unused `undefined_variable` in this `allow`
+ --> Lua54:1:16
+1 | -- luck: allow(undefined_variable, setting_global)
+  |                ^^^^^^^^^^^^^^^^^^
+2 | x = 1
+tag: unnecessary
+help: the rule reports nothing where it applies
+fix: remove `undefined_variable` from the directive
+  | -- luck: allow(setting_global)
+  | x = 1
+
+warning: unused `allow` directive
+ --> Lua54:1:13
+1 | local a = 1 -- luck: allow(undefined_variable)
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | print(a)
+tag: unnecessary
+help: no rule it names reports anything where it applies
+fix: remove the unused directive
+  | local a = 1
+  | print(a)
+
+warning: unused `allow` directive
+ --> Lua54:1:9
+1 | print(1)--[[ luck: allow(undefined_variable) ]]print(2)
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag: unnecessary
+help: no rule it names reports anything where it applies
+fix: remove the unused directive
+  | print(1) print(2)
+
+warning: unused `allow` directive
+ --> Lua54:1:10
+1 | print(1) --[[ luck: allow(undefined_variable) ]] print(2)
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag: unnecessary
+help: no rule it names reports anything where it applies
+fix: remove the unused directive
+  | print(1) print(2)
+
+warning: unused `allow` directive
+ --> Lua54:1:1
+1 | -- luck: allow(undefined_variable) start
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | local a = 1
+tag: unnecessary
+help: no rule it names reports anything where it applies
+fix: remove the unused directive
+  | local a = 1
+  | -- luck: allow(setting_global) end
+  | print(a)
+
+warning: unused `allow` directive
+ --> Lua54:1:1
+1 | -- luck: allow(*)
+  | ^^^^^^^^^^^^^^^^^
+2 | local a = 1
+tag: unnecessary
+help: no rule it names reports anything where it applies
+fix: remove the unused directive
+  | local a = 1
+  | print(a)

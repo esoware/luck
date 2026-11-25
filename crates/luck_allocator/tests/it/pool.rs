@@ -1,7 +1,8 @@
 use std::thread;
 
 use luck_allocator::{AllocatorGuard, AllocatorPool};
-use oxc_data_structures::types::implements;
+
+use crate::common::{AutoTraits, Fallback as _};
 
 #[test]
 fn a_returned_allocator_comes_back_reset_with_its_memory() {
@@ -45,8 +46,10 @@ fn serves_several_threads() {
 
 #[test]
 fn auto_traits_keep_each_allocator_on_one_thread() {
-    assert!(implements!(AllocatorPool: Send));
-    assert!(implements!(AllocatorPool: Sync));
-    assert!(implements!(AllocatorGuard: Send));
-    assert!(implements!(AllocatorGuard: !Sync));
+    const {
+        assert!(AutoTraits::<AllocatorPool>::IS_SEND);
+        assert!(AutoTraits::<AllocatorPool>::IS_SYNC);
+        assert!(AutoTraits::<AllocatorGuard<'_>>::IS_SEND);
+        assert!(!AutoTraits::<AllocatorGuard<'_>>::IS_SYNC);
+    }
 }

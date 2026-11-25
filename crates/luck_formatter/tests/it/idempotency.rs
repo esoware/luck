@@ -130,9 +130,9 @@ return M -- done
 
 #[test]
 fn comment_inside_stmt_then_blank_line() {
-    // No emitter claims a comment between a callee and its argument list, so
-    // the call goes out verbatim, and the blank line after it has to survive
-    // the second pass.
+    // A comment between a callee and its argument list goes inside the
+    // parentheses, and the blank line after the call has to survive the
+    // second pass.
     assert_format(
         "\
 goto l x
@@ -143,9 +143,10 @@ c = x
 ",
         "\
 goto l
-x
---
-(\"\")
+x(
+\t--
+\t\"\"
+)
 
 c = x
 ",
@@ -178,7 +179,7 @@ fn nested_table_calls(levels: usize) -> String {
 /// [`nested_table_calls`] formatted, where no call is short enough to stay
 /// on one line.
 fn broken_table_calls(levels: usize) -> String {
-    let innermost = levels.saturating_sub(1);
+    let innermost = levels - 1;
     let mut output = String::from("return f({\n");
     for depth in 1..innermost {
         output.push_str(&"\t".repeat(depth));
@@ -200,7 +201,7 @@ fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
         // `f{...}` gains parentheses by default, so a bare table argument has to
         // count toward the cap as the parenthesized one it prints as does. Each
         // call and its table are two levels under the chunk's block.
-        let fitting = (MAX_NESTING_DEPTH - 1).div_euclid(2);
+        let fitting = (MAX_NESTING_DEPTH - 1) / 2;
         for levels in [100, fitting - 1, fitting] {
             assert_format(&nested_table_calls(levels), &broken_table_calls(levels));
         }
@@ -208,7 +209,8 @@ fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
             let source = nested_table_calls(levels);
             let allocator = Allocator::new();
             let options = FormatOptions::default();
-            let result = luck_formatter::format(&allocator, &source, LuaVersion::Lua54, &options);
+            let result =
+                luck_formatter::format(&allocator, source.as_bytes(), LuaVersion::Lua54, &options);
             let [error] = result.errors.as_slice() else {
                 panic!("{levels} levels: {:?}", result.errors);
             };

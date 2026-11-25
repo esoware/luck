@@ -1,10 +1,11 @@
-use core::mem;
+use std::mem;
 
-use luck_semantic::{ReferenceId, ReferenceKind, Symbol, SymbolId, SymbolKind};
+use luck_ast::Expression;
+use luck_semantic::{ReferenceId, ReferenceKind, ScopeId, Symbol, SymbolId, SymbolKind};
 use luck_token::{MAX_ACTIVE_LOCALS, Span};
 
 use crate::cfg::{FlowGraph, LocalDeclaration};
-use crate::rule::LintContext;
+use crate::context::ContextHost;
 
 #[derive(Debug, Default)]
 pub(crate) struct LocalFlow {
@@ -17,43 +18,39 @@ pub(crate) struct LocalFlow {
 }
 
 impl LocalFlow {
-    pub(crate) fn compute(context: &LintContext<'_>) -> Self {
-        let tree = context.semantic.scope_tree();
+    pub(crate) fn compute(host: &ContextHost<'_>) -> Self {
+        let tree = host.scoping();
         let mut tracked: Vec<&Symbol> = tree
             .symbols()
             .iter()
             .filter(|symbol| {
                 !tree.name(symbol.name).starts_with('_')
-                    && (context.nodes.uninitialized_locals().contains(symbol)
+                    && (is_uninitialized(symbol, host)
                         || (symbol.kind == SymbolKind::Local
                             && symbol.is_modified
                             && !symbol.is_upvalue))
             })
             .collect();
         tracked.sort_unstable_by_key(|symbol| symbol.definition_span.start);
+        let mut functions: Vec<ScopeId> =
+            tracked.iter().map(|symbol| host.function_of(symbol.scope)).collect();
+        functions.sort_unstable();
+        functions.dedup();
 
         let mut flow = Self::default();
-        for &function_block in context.nodes.function_blocks() {
-            let span = function_block.span;
-            let first_inside =
-                tracked.partition_point(|symbol| symbol.definition_span.start < span.start);
-            if tracked
-                .get(first_inside)
-                .is_none_or(|symbol| symbol.definition_span.start >= span.end)
-            {
+        for function in functions {
+            let Some(graph) = host.cfg(function) else {
                 continue;
-            }
-            let graph = FlowGraph::of_block(function_block, context.semantic);
+            };
             if exceeds_local_limit(graph.locals()) {
                 continue;
             }
-            let mut walk = GraphWalk::new(&graph);
+            let mut walk = GraphWalk::new(graph);
             for local in graph.locals() {
                 if let Ok(index) = tracked.binary_search_by_key(&local.name_span.start, |symbol| {
                     symbol.definition_span.start
-                }) && let Some(symbol) = tracked.get(index)
-                {
-                    flow.add_local(symbol, local, &mut walk, context);
+                }) {
+                    flow.add_local(tracked[index], local, &mut walk, host);
                 }
             }
         }
@@ -65,9 +62,9 @@ impl LocalFlow {
         symbol: &Symbol,
         local: &LocalDeclaration,
         walk: &mut GraphWalk<'_>,
-        context: &LintContext<'_>,
+        host: &ContextHost<'_>,
     ) {
-        let tree = context.semantic.scope_tree();
+        let tree = host.scoping();
         let graph = walk.graph;
         let reference_ids = tree.resolved_references(symbol.id);
         let mut uses = Vec::with_capacity(reference_ids.len());
@@ -86,7 +83,7 @@ impl LocalFlow {
             });
         }
 
-        let is_uninitialized = context.nodes.uninitialized_locals().contains(symbol);
+        let is_uninitialized = is_uninitialized(symbol, host);
         if is_uninitialized && let Some(reference_id) = walk.first_unassigned_use(&uses, local) {
             self.first_unassigned_uses.push((symbol.id, reference_id));
         }
@@ -98,11 +95,11 @@ impl LocalFlow {
             walk.mark_next_uses(&uses, local);
             // The declaration's node runs on past it, so a use there comes
             // next.
-            let is_initializer_overwritten =
-                uses.iter().find(|used| used.node == local.node).map_or_else(
-                    || walk.is_overwritten_unread(graph.successors(local.node)),
-                    |next| !next.kind.is_read(),
-                );
+            let next_use = uses.iter().find(|used| used.node == local.node);
+            let is_initializer_overwritten = match next_use {
+                Some(next) => !next.kind.is_read(),
+                None => walk.is_overwritten_unread(graph.successors(local.node)),
+            };
             if !is_uninitialized && is_initializer_overwritten {
                 self.overwritten_values.push((symbol.id, symbol.definition_span));
             }
@@ -110,18 +107,27 @@ impl LocalFlow {
                 if !used.kind.is_write() {
                     continue;
                 }
-                let next_in_node =
-                    uses.get(i.saturating_add(1)).filter(|next| next.node == used.node);
-                let is_overwritten = next_in_node.map_or_else(
-                    || walk.is_overwritten_unread(graph.successors(used.node)),
-                    |next| !next.kind.is_read(),
-                );
+                let next_in_node = uses.get(i + 1).filter(|next| next.node == used.node);
+                let is_overwritten = match next_in_node {
+                    Some(next) => !next.kind.is_read(),
+                    None => walk.is_overwritten_unread(graph.successors(used.node)),
+                };
                 if is_overwritten {
                     self.overwritten_values.push((symbol.id, used.span));
                 }
             }
         }
     }
+}
+
+/// Whether `symbol` is a local its `local` statement gives no value, as the
+/// `x` of `local x` or the `b` of `local a, b = 1`.
+fn is_uninitialized(symbol: &Symbol, host: &ContextHost<'_>) -> bool {
+    let Some((local, position)) = host.local_declaration(symbol) else {
+        return false;
+    };
+    // A call or `...` last can fill every name after it.
+    !local.exprs.last().is_some_and(Expression::is_multi_value) && position >= local.exprs.len()
 }
 
 /// Whether more `local` names are active at once somewhere in the function
@@ -165,16 +171,15 @@ impl NodeSet {
     }
 
     const fn clear(&mut self) {
-        self.current = self.current.saturating_add(1);
+        self.current += 1;
     }
 
     fn insert(&mut self, node: usize) -> bool {
-        let current = self.current;
-        self.stamps.get_mut(node).is_some_and(|stamp| mem::replace(stamp, current) != current)
+        mem::replace(&mut self.stamps[node], self.current) != self.current
     }
 
     fn contains(&self, node: usize) -> bool {
-        self.stamps.get(node) == Some(&self.current)
+        self.stamps[node] == self.current
     }
 }
 
@@ -267,9 +272,7 @@ impl<'graph> GraphWalk<'graph> {
                     let first_edge =
                         edges_by_successor.partition_point(|&(successor, _)| successor < node);
                     stack.extend(
-                        edges_by_successor
-                            .get(first_edge..)
-                            .unwrap_or_default()
+                        edges_by_successor[first_edge..]
                             .iter()
                             .take_while(|&&(successor, _)| successor == node)
                             .map(|&(_, predecessor)| predecessor)

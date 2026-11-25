@@ -1,55 +1,93 @@
-use std::path::{MAIN_SEPARATOR_STR, Path, PathBuf};
+use std::borrow::Cow;
+use std::path::{Component, Path, PathBuf};
 
-/// The bundler keys modules on this form, and it displays the same on every
-/// platform.
-#[must_use]
-pub fn normalize_path(path: &Path) -> String {
-    canonical_path(path).unwrap_or_else(|| slashed(path))
-}
-
-/// [`normalize_path`], or `None` when the OS can't canonicalize `path`.
-pub(crate) fn canonical_path(path: &Path) -> Option<String> {
-    path.canonicalize().ok().map(|canonical| slashed(&canonical))
-}
-
-fn slashed(path: &Path) -> String {
-    let slashed = path.to_string_lossy().replace('\\', "/");
-    // Windows extended-length prefixes after backslash replacement:
-    //   \\?\C:\x          -> //?/C:/x          -> C:/x
-    //   \\?\UNC\srv\sh    -> //?/UNC/srv/sh    -> //srv/sh (network path!)
-    //   \\?\Volume{id}\x  -> //?/Volume{id}/x  -> kept, nothing shorter is absolute
-    if let Some(unc) = slashed.strip_prefix("//?/UNC/") {
-        return format!("//{unc}");
+/// `path` with forward slashes on every platform, the form luck writes a path
+/// out in, with any name that isn't Unicode lossily converted.
+pub fn to_slash_lossy(path: &Path) -> Cow<'_, str> {
+    let lossy = path.to_string_lossy();
+    #[cfg(windows)]
+    if lossy.contains('\\') {
+        return Cow::Owned(lossy.replace('\\', "/"));
     }
-    if let Some(local) = slashed.strip_prefix("//?/")
-        && local.as_bytes().get(1) == Some(&b':')
-    {
-        return local.to_owned();
+    lossy
+}
+
+/// `path` with each `.` dropped and each `..` taking off the name before it,
+/// without reading the disk.
+pub fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    push_lexically(&mut normalized, path.components());
+    normalized
+}
+
+pub(crate) fn push_lexically<'path>(
+    path: &mut PathBuf,
+    components: impl IntoIterator<Item = Component<'path>>,
+) {
+    for component in components {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            named @ (Component::Normal(_) | Component::Prefix(_) | Component::RootDir) => {
+                path.push(named);
+            }
+        }
     }
-    slashed
 }
 
-#[must_use]
-pub fn native_path(path: &str) -> PathBuf {
-    PathBuf::from(path.replace('/', MAIN_SEPARATOR_STR))
+/// `path` without the `\\?\` that Windows' `canonicalize` puts before it,
+/// when the path it marks is one a shorter form names too.
+#[cfg(windows)]
+pub(crate) fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    use std::ffi::OsString;
+    use std::path::Prefix;
+
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path;
+    };
+    let mut plain = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut unc = OsString::from(r"\\");
+            unc.push(server);
+            unc.push(r"\");
+            unc.push(share);
+            PathBuf::from(unc)
+        }
+        // A volume GUID path is kept, since nothing shorter is absolute.
+        Prefix::Verbatim(_) | Prefix::DeviceNS(_) | Prefix::UNC(..) | Prefix::Disk(_) => {
+            return path;
+        }
+    };
+    plain.push(components.as_path());
+    plain
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     #[test]
-    fn normalize_path_gives_an_absolute_forward_slash_path_for_an_existing_file() {
-        let directory = tempfile::tempdir().expect("create temp dir");
-        let source_directory = directory.path().join("src");
-        fs::create_dir_all(&source_directory).expect("create parent directories");
-        fs::write(source_directory.join("main.lua"), "return {}").expect("write file");
-        let normalized = normalize_path(&source_directory.join("main.lua"));
-        assert!(!normalized.contains('\\'), "{normalized}");
-        assert!(!normalized.starts_with("//?/"), "{normalized}");
-        assert!(Path::new(&normalized).is_absolute(), "{normalized}");
-        assert!(normalized.ends_with("/src/main.lua"), "{normalized}");
+    fn strip_verbatim_prefix_gives_the_plain_form() {
+        for (verbatim, plain) in [
+            (r"\\?\C:\Users\user\main.lua", r"C:\Users\user\main.lua"),
+            (r"\\?\C:\", r"C:\"),
+            (r"\\?\UNC\server\share\main.lua", r"\\server\share\main.lua"),
+            (r"C:\Users\user\main.lua", r"C:\Users\user\main.lua"),
+            (r"\\server\share\main.lua", r"\\server\share\main.lua"),
+        ] {
+            assert_eq!(strip_verbatim_prefix(PathBuf::from(verbatim)).as_os_str(), plain);
+        }
+    }
+
+    #[test]
+    fn strip_verbatim_prefix_keeps_a_volume_guid_path() {
+        let volume_path = r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\src\main.lua";
+        let stripped = strip_verbatim_prefix(PathBuf::from(volume_path));
+        assert_eq!(stripped.as_os_str(), volume_path);
+        assert!(stripped.is_absolute());
     }
 }

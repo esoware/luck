@@ -6,11 +6,11 @@ use luck_token::{BinOp, LuaVersion, UnOp};
 use crate::common::{assert_no_errors, local_value, run_operands, run_ops};
 
 fn parse_lua53<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source, LuaVersion::Lua53)
+    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua53)
 }
 
 #[test]
-fn bitwise_and_or_precedence() {
+fn bitwise_and_binds_tighter_than_or() {
     let allocator = Allocator::new();
     // `&` binds tighter than `|`, so `a & b | c` is `(a & b) | c`.
     let result = parse_lua53(&allocator, "local x = a & b | c");
@@ -21,7 +21,7 @@ fn bitwise_and_or_precedence() {
 }
 
 #[test]
-fn unary_bitwise_not() {
+fn tilde_before_an_operand_is_bitwise_not() {
     let allocator = Allocator::new();
     let result = parse_lua53(&allocator, "local x = ~y");
     assert_no_errors(&result);
@@ -34,7 +34,7 @@ fn unary_bitwise_not() {
 }
 
 #[test]
-fn floor_division() {
+fn double_slash_is_floor_division() {
     let allocator = Allocator::new();
     let result = parse_lua53(&allocator, "local x = a // b");
     assert_no_errors(&result);
@@ -42,7 +42,7 @@ fn floor_division() {
 }
 
 #[test]
-fn left_shift() {
+fn double_less_is_a_left_shift() {
     let allocator = Allocator::new();
     let result = parse_lua53(&allocator, "local x = a << 3");
     assert_no_errors(&result);
@@ -50,7 +50,7 @@ fn left_shift() {
 }
 
 #[test]
-fn shift_and_bitwise_precedence() {
+fn shift_binds_tighter_than_bitwise_and() {
     let allocator = Allocator::new();
     // `>>` (level 7) binds tighter than `&` (level 6), so `a >> b & c`
     // parses as `(a >> b) & c`.
@@ -62,7 +62,7 @@ fn shift_and_bitwise_precedence() {
 }
 
 #[test]
-fn bitwise_xor() {
+fn tilde_between_operands_is_bitwise_xor() {
     let allocator = Allocator::new();
     let result = parse_lua53(&allocator, "local x = a ~ b");
     assert_no_errors(&result);
@@ -74,5 +74,5 @@ fn goto_and_labels_parse_in_lua53() {
     let allocator = Allocator::new();
     let result = parse_lua53(&allocator, "goto done ::done::");
     assert_no_errors(&result);
-    assert_eq!(result.block.stmts.len(), 2);
+    assert_eq!(result.chunk.block.stmts.len(), 2);
 }

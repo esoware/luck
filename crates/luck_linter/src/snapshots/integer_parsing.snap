@@ -1,0 +1,20 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+warning: hex literal `0xFFFFFFFFFFFFFFFFFF` exceeds the 64-bit integer range, so it wraps around to a different value
+ --> Lua53:1:11
+1 | local x = 0xFFFFFFFFFFFFFFFFFF
+  |           ^^^^^^^^^^^^^^^^^^^^
+help: use a smaller value or split across two values
+
+warning: integer literal `9007199254740993` exceeds 2^53, so it loses precision when stored as a double
+ --> Lua51:1:11
+1 | local x = 9007199254740993
+  |           ^^^^^^^^^^^^^^^^
+help: use a smaller value or store as a string
+
+warning: decimal integer `99999999999999999999` exceeds 2^63-1, so it will be parsed as a float and lose precision
+ --> Lua54:1:11
+1 | local x = 99999999999999999999
+  |           ^^^^^^^^^^^^^^^^^^^^
+help: use a hex literal or split into smaller values

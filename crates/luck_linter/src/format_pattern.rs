@@ -6,8 +6,8 @@
 //! the first [`PatternError`] it finds. Callers map the error's offset back
 //! into source.
 
-use core::error::Error;
-use core::fmt;
+use std::error::Error;
+use std::fmt;
 
 use luck_token::LuaVersion;
 
@@ -230,7 +230,7 @@ impl<'pattern> Cursor<'pattern> {
     }
 
     const fn remaining_length(&self) -> usize {
-        self.pattern.len().saturating_sub(self.offset)
+        self.pattern.len() - self.offset
     }
 
     fn peek(&self) -> Option<u8> {
@@ -245,7 +245,7 @@ impl<'pattern> Cursor<'pattern> {
     }
 
     fn skip_bytes(&mut self, count: usize) {
-        self.offset = self.offset.saturating_add(count).min(self.pattern.len());
+        self.offset = (self.offset + count).min(self.pattern.len());
     }
 
     fn take_while(&mut self, mut is_included: impl FnMut(u8) -> bool) -> &'pattern str {
@@ -253,7 +253,7 @@ impl<'pattern> Cursor<'pattern> {
         while self.peek().is_some_and(&mut is_included) {
             self.skip_bytes(1);
         }
-        self.pattern.get(start..self.offset).unwrap_or_default()
+        &self.pattern[start..self.offset]
     }
 
     fn skip_digits(&mut self) -> usize {
@@ -275,12 +275,9 @@ impl<'pattern> Cursor<'pattern> {
     }
 }
 
-/// # Errors
-///
-/// The first malformed specifier, as a [`PatternError`].
 pub(crate) fn validate_format(pattern: &str, version: LuaVersion) -> Result<usize, PatternError> {
     let mut cursor = Cursor::new(pattern);
-    let mut specifier_count = 0usize;
+    let mut specifier_count = 0;
 
     while let Some(byte) = cursor.peek() {
         let percent_offset = cursor.offset();
@@ -302,7 +299,7 @@ pub(crate) fn validate_format(pattern: &str, version: LuaVersion) -> Result<usiz
             }
             None => return Err(PatternError::TruncatedSpecifier { offset: percent_offset }),
         }
-        specifier_count = specifier_count.saturating_add(1);
+        specifier_count += 1;
     }
 
     Ok(specifier_count)
@@ -310,10 +307,6 @@ pub(crate) fn validate_format(pattern: &str, version: LuaVersion) -> Result<usiz
 
 /// Reads the text between a `%` and its conversion character the way the
 /// target's `getformat` or `scanformat` does, and returns it.
-///
-/// # Errors
-///
-/// A [`PatternError`] for too many flags or digits.
 fn scan_format_modifiers<'pattern>(
     cursor: &mut Cursor<'pattern>,
     version: LuaVersion,
@@ -332,7 +325,7 @@ fn scan_format_modifiers<'pattern>(
     let flags = cursor.take_while(|b| matches!(b, b'-' | b'+' | b' ' | b'#' | b'0'));
     // `scanformat` rejects `sizeof(FLAGS)`, six, or more flag bytes.
     if let Some(character) = flags.chars().nth(5) {
-        return Err(PatternError::BadFlag { offset: start.saturating_add(5), character });
+        return Err(PatternError::BadFlag { offset: start + 5, character });
     }
 
     let width_start = cursor.offset();
@@ -346,15 +339,11 @@ fn scan_format_modifiers<'pattern>(
             return Err(PatternError::BadPrecision { offset: precision_start });
         }
     }
-    Ok(cursor.pattern.get(start..cursor.offset()).unwrap_or_default())
+    Ok(&cursor.pattern[start..cursor.offset()])
 }
 
 /// Checks the conversion character at the cursor against the target, and
 /// on Lua 5.4+ the `modifiers` before it.
-///
-/// # Errors
-///
-/// A [`PatternError`] for a conversion or modifier the target rejects.
 fn scan_format_conversion(
     cursor: &mut Cursor<'_>,
     percent_offset: usize,
@@ -381,8 +370,8 @@ fn scan_format_conversion(
         && let Some(rejected_index) = rejected_modifier(modifiers.as_bytes(), conversion)
     {
         return Err(PatternError::BadModifier {
-            offset: cursor.offset().saturating_sub(modifiers.len()).saturating_add(rejected_index),
-            modifier: modifiers.chars().nth(rejected_index).unwrap_or('?'),
+            offset: cursor.offset() - modifiers.len() + rejected_index,
+            modifier: char::from(modifiers.as_bytes()[rejected_index]),
             conversion: char::from(conversion),
         });
     }
@@ -406,14 +395,7 @@ fn rejected_modifier(modifiers: &[u8], conversion: u8) -> Option<usize> {
         _ => (b"-", true),
     };
     let after_two_digits = |from: usize| {
-        let digit_count = modifiers
-            .get(from..)
-            .unwrap_or_default()
-            .iter()
-            .take(2)
-            .take_while(|b| b.is_ascii_digit())
-            .count();
-        from.saturating_add(digit_count)
+        from + modifiers[from..].iter().take(2).take_while(|b| b.is_ascii_digit()).count()
     };
 
     let mut index = modifiers.iter().take_while(|b| flags.contains(b)).count();
@@ -421,15 +403,12 @@ fn rejected_modifier(modifiers: &[u8], conversion: u8) -> Option<usize> {
     if modifiers.get(index) != Some(&b'0') {
         index = after_two_digits(index);
         if has_precision && modifiers.get(index) == Some(&b'.') {
-            index = after_two_digits(index.saturating_add(1));
+            index = after_two_digits(index + 1);
         }
     }
     (index < modifiers.len()).then_some(index)
 }
 
-/// # Errors
-///
-/// The first malformed construct, as a [`PatternError`].
 pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
     let mut cursor = Cursor::new(pattern);
     // One entry per capture so far, true once its `)` has been read.
@@ -467,10 +446,6 @@ pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError>
 }
 
 /// Scans a `%` escape with the cursor on the `%`.
-///
-/// # Errors
-///
-/// A [`PatternError`] for a truncated or malformed escape.
 fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<(), PatternError> {
     let start = cursor.offset();
     cursor.skip_bytes(1);
@@ -484,9 +459,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<(), Pattern
         // Back-references. `check_capture` rejects `%0`, an unseen capture,
         // and one still open.
         b'0'..=b'9' => {
-            let capture = usize::from(escape.saturating_sub(b'0'))
-                .checked_sub(1)
-                .and_then(|i| captures.get(i));
+            let capture = usize::from(escape - b'0').checked_sub(1).and_then(|i| captures.get(i));
             if capture.is_some_and(|&is_closed| is_closed) {
                 Ok(())
             } else {
@@ -517,10 +490,6 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<(), Pattern
 
 /// Scans a `[set]` with the cursor on the opening `[`, leaving it just past
 /// the closing `]`.
-///
-/// # Errors
-///
-/// A [`PatternError`] for an empty, unterminated, or truncated set.
 fn scan_set(cursor: &mut Cursor<'_>) -> Result<(), PatternError> {
     let start = cursor.offset();
     debug_assert_eq!(cursor.peek(), Some(b'['), "a set opens with `[`");
@@ -580,18 +549,14 @@ enum PackOption {
 
 /// `is_packsize` also rejects the variable-length options, whose size
 /// `string.packsize` can't know.
-///
-/// # Errors
-///
-/// The first malformed option, as a [`PatternError`].
 pub(crate) fn validate_pack_format(
     pattern: &str,
     is_packsize: bool,
 ) -> Result<usize, PatternError> {
     let mut cursor = Cursor::new(pattern);
-    let mut value_count = 0usize;
+    let mut value_count = 0;
     // `initheader` starts every format at 1.
-    let mut max_alignment = 1u32;
+    let mut max_alignment = 1;
 
     while cursor.peek().is_some() {
         let option_offset = cursor.offset();
@@ -619,7 +584,7 @@ pub(crate) fn validate_pack_format(
             return Err(PatternError::BadPackAlignment { offset: option_offset });
         }
         if has_value {
-            value_count = value_count.saturating_add(1);
+            value_count += 1;
         }
     }
 
@@ -628,10 +593,6 @@ pub(crate) fn validate_pack_format(
 
 /// The alignment of the option that an `X` just read aligns to, as
 /// `getdetails` takes it from `getoption`.
-///
-/// # Errors
-///
-/// A [`PatternError`] when nothing follows, or the option takes no alignment.
 fn scan_x_alignment(cursor: &mut Cursor<'_>) -> Result<u32, PatternError> {
     let offset = cursor.offset();
     let character = cursor.peek_char();
@@ -650,10 +611,6 @@ fn scan_x_alignment(cursor: &mut Cursor<'_>) -> Result<u32, PatternError> {
 ///
 /// A size the build decides reads as its smallest, so a size-dependent error
 /// never fires on only one platform.
-///
-/// # Errors
-///
-/// A [`PatternError`] for an unknown option or an out-of-limits size.
 fn scan_pack_option(cursor: &mut Cursor<'_>) -> Result<PackOption, PatternError> {
     let option_offset = cursor.offset();
     let character = cursor.peek_char();
@@ -692,10 +649,6 @@ const fn fixed_size(size: u32) -> PackOption {
 }
 
 /// `getnumlimit`: reads an optional size from 1 to 16, or returns `default`.
-///
-/// # Errors
-///
-/// A [`PatternError`] for a size outside those limits.
 fn scan_limited_size(cursor: &mut Cursor<'_>, default: u32) -> Result<u32, PatternError> {
     let start = cursor.offset();
     let digits = cursor.take_while(|b| b.is_ascii_digit());
@@ -712,10 +665,6 @@ fn scan_limited_size(cursor: &mut Cursor<'_>, default: u32) -> Result<u32, Patte
 /// `capture_count` is `None` when the pattern isn't a literal, which
 /// disables the index check. `%0` is the whole match, and with zero captures
 /// so is `%1`, so only indices above `max(captures, 1)` are flagged.
-///
-/// # Errors
-///
-/// The first invalid `%` sequence, as a [`PatternError`].
 pub(crate) fn validate_gsub_replacement(
     body: &str,
     capture_count: Option<usize>,
@@ -744,7 +693,7 @@ pub(crate) fn validate_gsub_replacement(
             continue;
         }
         if let Some(known_capture_count) = capture_count
-            && usize::from(next.saturating_sub(b'0')) > known_capture_count.max(1)
+            && usize::from(next - b'0') > known_capture_count.max(1)
         {
             return Err(PatternError::CaptureIndexOutOfRange { offset: next_index });
         }
@@ -757,10 +706,6 @@ pub(crate) fn validate_gsub_replacement(
 ///
 /// Builds differ in the set they accept, so every specifier that exists on
 /// any platform of the dialect passes.
-///
-/// # Errors
-///
-/// The first invalid character, as a [`PatternError`].
 pub(crate) fn validate_os_date(body: &str, version: LuaVersion) -> Result<(), PatternError> {
     if !version.has_checked_date_format() || body.strip_prefix('!').unwrap_or(body) == "*t" {
         return Ok(());

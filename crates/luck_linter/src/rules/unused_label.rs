@@ -1,154 +1,61 @@
-use luck_ast::{Block, FunctionBody, Statement, Visitor};
-use luck_token::Span;
+use luck_diagnostics::Tag;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-/// A `goto` can't leave its function, so each function body, and the chunk
-/// itself, is checked on its own.
-#[derive(Debug, Clone, Copy)]
+/// Semantic analysis resolves each `goto` to the label it jumps to, as
+/// `lparser.c` does, so a label is used exactly when one reaches it.
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct UnusedLabel;
 
-impl_rule!(
+declare_lint_rule!(
     UnusedLabel,
-    "unused_label",
     Style,
     Warning,
     "label declared but never targeted by a `goto` in the same function"
 );
 
-impl WholeRule for UnusedLabel {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut findings = Vec::new();
-        if context.nodes.contains_any(NodeTypeSet::from_types(&[NodeType::Label])) {
-            check_scope(context.block, &mut findings);
-        }
-        findings
-    }
-}
-
-fn check_scope(block: &Block<'_>, findings: &mut Vec<Finding>) {
-    let mut scope = LabelScope::default();
-    scope.visit_block(block);
-
-    for (name, span) in &scope.labels {
-        // Any `goto` with this name in the same function counts. The parser
-        // already enforces label visibility, so matching by name alone
-        // avoids false positives on jumps between blocks.
-        if !scope.goto_names.iter().any(|goto_name| goto_name == name) {
-            findings.push(
-                Finding::new(format!("label `{name}` is never targeted by a `goto`"), *span)
-                    .with_help("remove the label or add a `goto` that targets it"),
+impl Rule for UnusedLabel {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
+        for label in tree.labels().iter().filter(|label| !label.is_used) {
+            context.diagnostic(
+                Finding::new(
+                    format!("label `{}` is never targeted by a `goto`", tree.name(label.name)),
+                    label.span,
+                )
+                .with_tag(Tag::Unnecessary)
+                .with_help("remove the label or add a `goto` that targets it"),
             );
         }
-    }
-
-    for body in scope.nested_bodies {
-        check_scope(&body.block, findings);
-    }
-}
-
-#[derive(Default)]
-struct LabelScope<'ast> {
-    labels: Vec<(&'ast str, Span)>,
-    goto_names: Vec<&'ast str>,
-    nested_bodies: Vec<&'ast FunctionBody<'ast>>,
-}
-
-impl<'ast> Visitor<'ast> for LabelScope<'ast> {
-    fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
-        match stmt {
-            // Lua 5.2+
-            Statement::Label(label) => self.labels.push((label.name.text.as_str(), label.span)),
-            // Lua 5.2+
-            Statement::Goto(goto) => self.goto_names.push(goto.name.text.as_str()),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::DoBlock(_)
-            | Statement::WhileLoop(_)
-            | Statement::RepeatLoop(_)
-            | Statement::IfStatement(_)
-            | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => {}
-        }
-        self.walk_stmt(stmt);
-    }
-
-    // A nested function gets its own `check_scope` pass.
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-        self.nested_bodies.push(body);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    const PASS: &[&str] = &[
+        "do ::a:: print(1) goto a end",
+        "do ::a:: do print() goto a end end",
+        "::start:: print(1) goto start",
+    ];
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&UnusedLabel, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn ignores_label_with_matching_goto() {
-        let diags = run("do ::a:: print(1) goto a end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_label_with_no_goto() {
-        let diags = run("do ::a:: print(1) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`a`"), "{diags:?}");
-    }
+    const FAIL: &[&str] = &[
+        "do ::a:: print(1) end",
+        // `g`'s `goto` takes its own label, since a `goto` can't leave its
+        // function, and no `goto` takes `f`'s.
+        "function f() ::a:: print() end function g() ::a:: goto a end",
+        "::start:: print(1)",
+        // No label is visible across functions, so the inner `goto` takes the inner
+        // label and the outer one stays unused.
+        "::a:: local f = function() ::a:: goto a end",
+    ];
 
     #[test]
-    fn flags_label_in_different_function() {
-        // g's goto targets g's own label (a cross-function goto would
-        // not parse); f's label has no goto anywhere.
-        let diags = run("function f() ::a:: print() end function g() ::a:: goto a end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_goto_in_inner_block() {
-        let diags = run("do ::a:: do print() goto a end end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_unused_top_level_label() {
-        let diags = run("::start:: print(1)");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_top_level_label_used() {
-        let diags = run("::start:: print(1) goto start");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn flags_label_unreachable_from_inner_function() {
-        // The inner goto binds to the inner function's own label; the
-        // outer label stays unused (labels are not visible across
-        // function boundaries).
-        let diags = run("::a:: local f = function() ::a:: goto a end");
-        assert_eq!(diags.len(), 1, "outer label is unreachable from inner function: {diags:?}");
+    fn test() {
+        Tester::new(RuleId::UnusedLabel, PASS, FAIL).test_and_snapshot();
     }
 }

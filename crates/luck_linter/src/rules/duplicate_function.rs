@@ -1,54 +1,58 @@
-use luck_ast::{FunctionName, Statement};
+use std::collections::hash_map::Entry;
+
+use luck_ast::{AstKind, AstType, FunctionName, Statement};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::Span;
 use rustc_hash::FxHashMap;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DuplicateFunction;
 
-impl_rule!(
+declare_lint_rule!(
     DuplicateFunction,
-    "duplicate_function",
     Suspicious,
     Warning,
     "function with the same name is defined twice in the same block"
 );
 
-impl WholeRule for DuplicateFunction {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let mut findings = Vec::new();
+impl Rule for DuplicateFunction {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::Block(block) = node.kind() else {
+            return;
+        };
         let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
-        for block in context.nodes.blocks() {
-            definitions.clear();
-            for stmt in &block.stmts {
-                // `redefining_local` covers local functions.
-                let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
-                    (full_name(&decl.name), decl.name.span)
-                } else if let Statement::GlobalFunction(function) = stmt {
-                    // Lua 5.5
-                    (Some(function.name.text.as_str().to_owned()), function.name.span)
-                } else {
-                    continue;
-                };
-                let Some(name) = declared_name else {
-                    continue;
-                };
-                if let Some(first_span) = definitions.get(&name) {
-                    let line = context.line_index().line(first_span.start);
-                    findings.push(Finding::new(
-                        format!(
-                            "duplicate function definition `{name}`, also defined on line {line}"
-                        ),
+        for stmt in &block.stmts {
+            // `redefining_local` covers local functions.
+            let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
+                (full_name(&decl.name), decl.name.span)
+            } else if let Statement::GlobalFunction(function) = stmt {
+                // Lua 5.5
+                (Some(function.name.text.as_str().to_owned()), function.name.span)
+            } else {
+                continue;
+            };
+            let Some(name) = declared_name else {
+                continue;
+            };
+            match definitions.entry(name) {
+                Entry::Occupied(first) => context.diagnostic(
+                    Finding::new(
+                        format!("duplicate function definition `{}`", first.key()),
                         name_span,
-                    ));
-                } else {
-                    definitions.insert(name, name_span);
+                    )
+                    .with_label(*first.get(), "first defined here"),
+                ),
+                Entry::Vacant(slot) => {
+                    slot.insert(name_span);
                 }
             }
         }
-        findings
     }
 }
 
@@ -69,118 +73,94 @@ fn full_name(function_name: &FunctionName<'_>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
+    use luck_token::LuaTarget;
 
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&DuplicateFunction, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_duplicate_plain_function() {
-        let diags = run("\
-function f() end
-function f() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`f`"));
-        assert!(diags[0].message.contains("line 1"));
-    }
-
-    #[test]
-    fn flags_duplicate_dotted_function() {
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local t = {}
 function t.m() end
-function t.m() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`t.m`"));
-        assert!(diags[0].message.contains("line 2"));
-    }
+function t:m() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+function f() end
+function g() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local function f() end
+local function f() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+do function f() end end
+do function f() end end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
-    #[test]
-    fn flags_duplicate_method() {
-        let diags = run("\
+    const FAIL: &[(&str, LuaTarget)] = &[
+        (
+            "\
+function f() end
+function f() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local t = {}
+function t.m() end
+function t.m() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local t = {}
 function t:m() end
-function t:m() end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("`t:m`"));
-    }
-
-    #[test]
-    fn flags_duplicates_in_nested_block() {
-        let diags = run("\
+function t:m() end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 do
 function f() end
 function f() end
-end");
-        assert_eq!(diags.len(), 1, "got: {diags:?}");
-        assert!(diags[0].message.contains("line 2"));
-    }
-
-    #[test]
-    fn flags_each_later_duplicate() {
-        let diags = run("\
+end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 function f() end
 function f() end
-function f() end");
-        assert_eq!(diags.len(), 2, "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_same_name_with_dot_and_colon() {
-        let diags = run("\
-local t = {}
-function t.m() end
-function t:m() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_different_names() {
-        let diags = run("\
-function f() end
-function g() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_functions() {
-        let diags = run("\
-local function f() end
-local function f() end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_sibling_blocks() {
-        let diags = run("\
-do function f() end end
-do function f() end end");
-        assert!(diags.is_empty(), "got: {diags:?}");
-    }
-
-    #[test]
-    fn flags_duplicate_global_function() {
-        let source = "\
+function f() end",
+            LuaTarget::Lua54,
+        ),
+        // Both statements define `f` in one block.
+        (
+            "\
 global function f() end
-global function f() end";
-        let diags = run_rule(&DuplicateFunction, source, LuaVersion::Lua55);
-        assert_eq!(diags.len(), 1, "both statements define `f` in one block: {diags:?}");
-    }
+global function f() end",
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
+function m.f0() end
+function m.f1() end
+function m.f0() end
+function m.f1() end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn flags_each_repeat_in_a_long_block() {
-        let mut functions = String::new();
-        for i in 0..2_000u32 {
-            let _unused = writeln!(functions, "function m.f{i}() end");
-        }
-        let diags = run(&format!("{functions}{functions}"));
-        assert_eq!(diags.len(), 2_000, "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::DuplicateFunction, PASS, FAIL).test_and_snapshot();
     }
 }

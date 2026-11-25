@@ -7,7 +7,7 @@ use std::path::Path;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 const UNINDENTED: &str = "\
 local function f()
@@ -143,7 +143,7 @@ fn glob_that_matches_nothing_is_an_error_beside_one_that_matches() {
     luck_in(root)
         .args(["fmt", "--check", "src", "srcc/**/*.lua"])
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("no `.lua` or `.luau` files matched `srcc/**/*.lua`"));
     assert_eq!(
         listed(root, &["src", "srcc/**/*.lua", "--no-error-on-unmatched-pattern"]),
@@ -201,14 +201,14 @@ fn no_matching_file_is_a_usage_error() {
         luck_in(root)
             .arg(command)
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains("no `.lua` or `.luau` files matched `.`"));
         luck_in(root)
             .args([command, "src/*.lua"])
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains("matched `src/*.lua`"));
-        luck_in(root).args([command, "--no-error-on-unmatched-pattern"]).assert().code(0i32);
+        luck_in(root).args([command, "--no-error-on-unmatched-pattern"]).assert().code(0);
     }
 }
 
@@ -218,6 +218,69 @@ fn missing_path_without_a_wildcard_is_not_a_glob() {
     luck_in(project.path())
         .args(["check", "missing.lua"])
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("path not found: `missing.lua`"));
+}
+
+#[test]
+fn lint_counts_a_file_reached_twice_once() {
+    let directory = TempDir::new().unwrap();
+    write_file(
+        directory.path(),
+        "main.lua",
+        "\
+local unused = 1
+return 1
+",
+    );
+
+    let output = run(directory.path(), &["lint", ".", "main.lua", "--max-warnings", "1"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "one warning is within `--max-warnings 1` however many arguments reach the file:\n{}",
+        stderr_text(&output)
+    );
+}
+
+#[cfg(windows)]
+fn set_directory_listing(directory: &Path, is_allowed: bool) {
+    use std::process::Command;
+
+    const EVERYONE: &str = "*S-1-1-0";
+    let mut command = Command::new("icacls");
+    command.arg(directory);
+    if is_allowed {
+        command.args(["/remove:d", EVERYONE]);
+    } else {
+        command.args(["/deny", &format!("{EVERYONE}:(OI)(CI)(RX)")]);
+    }
+    assert!(command.output().expect("icacls runs").status.success(), "icacls must apply the ACL");
+}
+
+#[cfg(unix)]
+fn set_directory_listing(directory: &Path, is_allowed: bool) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = if is_allowed { 0o755 } else { 0o000 };
+    fs::set_permissions(directory, fs::Permissions::from_mode(mode)).expect("chmod");
+}
+
+#[test]
+fn check_fails_when_a_directory_cannot_be_walked() {
+    let directory = TempDir::new().unwrap();
+    let locked = directory.path().join("locked");
+    fs::create_dir_all(&locked).unwrap();
+    write_file(&locked, "bad.lua", "local = 1\n");
+    write_file(directory.path(), "ok.lua", "return 1\n");
+
+    set_directory_listing(&locked, false);
+    let output = run(directory.path(), &["check"]);
+    set_directory_listing(&locked, true);
+
+    assert!(
+        !output.status.success(),
+        "a directory that can't be read leaves files unchecked, so the run must fail:\n{}",
+        stderr_text(&output)
+    );
 }

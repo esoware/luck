@@ -1,23 +1,21 @@
 use luck_allocator::Allocator;
-use luck_ast::Block;
+use luck_ast::Chunk;
+use luck_codegen::LiteralSpelling;
 use luck_token::LuaVersion;
 
-use crate::bind::bind;
-use crate::binding::Bindings;
+use crate::binding::{NameIndexes, analyze};
 use crate::compress::{Compressor, compress};
-use crate::name_table::NameTable;
 use crate::transform_config::TransformConfig;
 
 /// Every pass off, for a test to turn on the ones it covers.
 pub(crate) const NO_PASSES: TransformConfig = TransformConfig {
+    strip_types: false,
     remove_dead_code: false,
     simplify_statements: false,
     fold_constants: false,
     inline_locals: false,
     merge_locals: false,
     simplify_indexes: false,
-    shorten_strings: false,
-    shorten_numbers: false,
     simplify_parens: false,
     rename_locals: false,
     lift_locals: false,
@@ -31,21 +29,22 @@ pub(crate) fn parse<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     version: LuaVersion,
-) -> Block<'ast> {
-    let result = luck_parser::parse(allocator, source, version);
+) -> Chunk<'ast> {
+    let result = luck_parser::parse(allocator, source.as_bytes(), version);
     assert!(result.errors.is_empty(), "parse failed: {:?}\n{source}", result.errors);
-    result.block
+    result.chunk
 }
 
 /// Minifies `source` with `config`, and checks that the output reparses and
 /// minifies to itself.
 pub(crate) fn minify_with(source: &str, version: LuaVersion, config: &TransformConfig) -> String {
     let allocator = Allocator::new();
-    let output = crate::minify(&allocator, source, version, config)
+    let minified = crate::minify(&allocator, source.as_bytes(), version, config)
         .unwrap_or_else(|errors| panic!("parse failed: {errors:?}\n{source}"));
-    let again = crate::minify(&allocator, &output, version, config)
+    let output = String::from_utf8(minified).expect("a source that's UTF-8 minifies as UTF-8");
+    let again = crate::minify(&allocator, output.as_bytes(), version, config)
         .unwrap_or_else(|errors| panic!("output must reparse: {errors:?}\n{output}"));
-    assert_eq!(again, output, "minifying the output again changed it\n{source}");
+    assert_eq!(again, output.as_bytes(), "minifying the output again changed it\n{source}");
     output
 }
 
@@ -69,27 +68,25 @@ pub(crate) fn assert_lua55_renames(cases: &[(&str, &str)]) {
     }
 }
 
-/// One compression walk of `source`, after the bind walk, printed.
+/// One compression pass of `source`, printed.
 pub(crate) fn walk_once(source: &str, config: TransformConfig) -> String {
     let allocator = Allocator::new();
-    let mut block = parse(&allocator, source, LuaVersion::Lua54);
-    let mut bindings = Bindings::default();
-    let names = &mut NameTable::default();
-    bind(&mut block, LuaVersion::Lua54, &mut bindings, names);
-    Compressor::new(&allocator, LuaVersion::Lua54, config, &mut bindings).walk(&mut block);
-    luck_codegen::compact(&block)
+    let result = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+    let mut chunk = result.chunk;
+    let mut scoping = analyze(&chunk, result.counts, None);
+    Compressor::new(&allocator, config, &mut scoping).pass(&mut chunk.block);
+    String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::Shortest)).unwrap()
 }
 
-/// Binds and compresses `source` as a minify does, without renaming.
+/// Compresses `source` as a minify does, without renaming.
 pub(crate) fn compressed<'ast>(
     allocator: &'ast Allocator,
     source: &'ast str,
     config: TransformConfig,
-) -> Block<'ast> {
-    let mut block = parse(allocator, source, LuaVersion::Lua54);
-    let mut bindings = Bindings::default();
-    let names = &mut NameTable::default();
-    bind(&mut block, LuaVersion::Lua54, &mut bindings, names);
-    compress(allocator, LuaVersion::Lua54, config, &mut bindings, &mut block);
-    block
+) -> Chunk<'ast> {
+    let result = luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua54);
+    let mut chunk = result.chunk;
+    let mut name_indexes = NameIndexes::new(result.counts.names);
+    compress(allocator, &mut chunk, result.counts, config, &mut name_indexes);
+    chunk
 }

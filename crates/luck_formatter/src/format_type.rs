@@ -1,16 +1,20 @@
 //! Types format from the [`Type`] tree alone, never from source, so synthetic
 //! types format the same as parsed ones.
 
-use luck_ast::{FunctionTypeParam, GenericTypeList, Type, TypeField};
+use luck_ast::{
+    FunctionTypeParam, GenericTypeList, GenericTypeParam, GetSpan as _, Type, TypeArgs, TypeField,
+};
+use luck_token::TokenKind;
 
-use crate::ir::Formatter;
+use crate::ir::{Formatter, LineMode};
 
 /// Where an alternation stands, which decides the lines its members take
 /// when it breaks.
 #[derive(Debug, Clone, Copy)]
 enum Placement {
     /// After other text on its line, such as `type T =` or `name:`. The
-    /// members move to the lines after it, one indent deeper.
+    /// members move to the lines after it, one indent deeper, and the
+    /// comments leading the alternation go first there.
     AfterText,
     /// Where a list or a table that breaks opens a line for it. The members
     /// start on that line, at its indent, and `should_lead` keeps the leading
@@ -39,21 +43,26 @@ fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
             | Type::True(_)
             | Type::False(_)
             | Type::StringLiteral(_)
-            | Type::Number(_)
             | Type::Variadic(_)
             | Type::Error(_) => return None,
         };
     }
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the formatter is one type with its node families split by file"
-)]
 impl<'ast> Formatter<'ast> {
+    /// An alternation places its own leading comments, after the line break
+    /// it may open with.
     pub(crate) fn write_type(&mut self, ty: &Type<'ast>) {
+        if matches!(ty, Type::Union(_) | Type::Intersection(_)) {
+            self.node_placing_leading_comments(|| ty.span(), |f| f.write_type_content(ty));
+        } else {
+            self.node(|| ty.span(), |f| f.write_type_content(ty));
+        }
+    }
+
+    fn write_type_content(&mut self, ty: &Type<'ast>) {
         match ty {
-            Type::Name(name) => self.name(**name),
+            Type::Name(name) => self.ascii(name.text.as_bytes()),
             // Qualification and generics are tight against the name.
             Type::Named(named) => {
                 if let Some(module) = &named.prefix {
@@ -62,22 +71,35 @@ impl<'ast> Formatter<'ast> {
                 }
                 self.name(named.name);
                 if let Some(generics) = &named.generics {
-                    self.write_delimited_types("<", ">", &generics.args);
+                    self.write_type_args(("<", ">"), generics, generics.span.end);
                 }
             }
             Type::Typeof(typeof_type) => {
                 self.token("typeof");
                 self.token("(");
                 self.write_expr(&typeof_type.expr);
+                self.write_closing_comments(typeof_type.span.end);
                 self.token(")");
             }
-            Type::Table(table) => self.write_table_type(&table.fields),
+            Type::Table(table) => self.write_table_type(&table.fields, table.span.end),
             // The parameter list breaks like a call argument list.
             Type::Function(function) => {
                 if let Some(generics) = &function.generics {
                     self.write_generic_type_list(generics);
                 }
-                self.write_delimited("(", ")", &function.params, Self::write_function_type_param);
+                // The tree keeps no span for the parentheses.
+                let open = function
+                    .generics
+                    .as_ref()
+                    .map_or(function.span.start, |generics| generics.span.end);
+                let last_end = function.params.last().map_or(open, |param| param.span().end);
+                let closer = self.comments().closer_offset(last_end, TokenKind::RightParen);
+                self.write_delimited(
+                    ("(", ")"),
+                    &function.params,
+                    closer,
+                    Self::write_function_type_param,
+                );
                 self.space();
                 self.token("->");
                 self.space();
@@ -89,21 +111,25 @@ impl<'ast> Formatter<'ast> {
                     self.token("?");
                 }
             }
-            Type::Union(union) => self.write_alternation(&union.types, "|", Placement::AfterText),
+            Type::Union(union) => {
+                self.write_alternation(&union.types, "|", Placement::AfterText);
+            }
             Type::Intersection(intersection) => {
                 self.write_alternation(&intersection.types, "&", Placement::AfterText);
             }
             Type::Parenthesized(parenthesized) => {
                 self.token("(");
                 self.write_type(&parenthesized.ty);
+                self.write_closing_comments(parenthesized.span.end);
                 self.token(")");
             }
-            Type::Pack(pack) => self.write_delimited_types("(", ")", &pack.types),
+            Type::Pack(pack) => {
+                self.write_delimited(("(", ")"), &pack.types, pack.span.end, Self::write_list_type);
+            }
             Type::Nil(_) => self.token("nil"),
             Type::True(_) => self.token("true"),
             Type::False(_) => self.token("false"),
-            Type::StringLiteral(literal) => self.write_string(literal.text),
-            Type::Number(literal) => self.ascii(literal.text),
+            Type::StringLiteral(literal) => self.write_string(literal),
             // Luau: `...T`.
             Type::Variadic(variadic) => {
                 self.token("...");
@@ -121,11 +147,10 @@ impl<'ast> Formatter<'ast> {
 
     /// When the group breaks, each field gets its own line and a trailing
     /// comma, except the array shorthand `{ T }`, since Luau's grammar has no
-    /// `{ T, }`.
-    fn write_table_type(&mut self, fields: &[TypeField<'ast>]) {
+    /// `{ T, }`. `closer` is where the `}` is.
+    fn write_table_type(&mut self, fields: &[TypeField<'ast>], closer: u32) {
         if fields.is_empty() {
-            self.token("{");
-            self.token("}");
+            self.write_dangling_list(("{", "}"), closer, LineMode::SoftOrSpace);
             return;
         }
 
@@ -146,6 +171,7 @@ impl<'ast> Formatter<'ast> {
                 if !is_array_shorthand {
                     indented.if_group_breaks(group_id, |f| f.token(","));
                 }
+                indented.write_closing_comments(closer);
             });
             grouped.soft_line_or_space();
             grouped.token("}");
@@ -153,44 +179,50 @@ impl<'ast> Formatter<'ast> {
     }
 
     fn write_type_field(&mut self, field: &TypeField<'ast>) {
-        match field {
-            TypeField::Named { access, name, value, .. } => {
-                // Luau `read`/`write` access modifier sits before the name.
-                if let Some(modifier) = access {
-                    self.token(modifier.as_str());
-                    self.space();
+        self.node(
+            || field.span(),
+            |f| match field {
+                TypeField::Named { access, name, value, .. } => {
+                    // Luau `read`/`write` access modifier sits before the name.
+                    if let Some(modifier) = access {
+                        f.token(modifier.as_str());
+                        f.space();
+                    }
+                    f.name(*name);
+                    f.token(":");
+                    f.space();
+                    f.write_type(value);
                 }
-                self.name(*name);
-                self.token(":");
-                self.space();
-                self.write_type(value);
-            }
-            TypeField::Indexer { access, key, value, .. } => {
-                if let Some(modifier) = access {
-                    self.token(modifier.as_str());
-                    self.space();
+                TypeField::Indexer { access, key, value, .. } => {
+                    if let Some(modifier) = access {
+                        f.token(modifier.as_str());
+                        f.space();
+                    }
+                    let closer =
+                        f.comments().closer_offset(key.span().end, TokenKind::RightBracket);
+                    f.token("[");
+                    f.write_type(key);
+                    f.write_closing_comments(closer);
+                    f.token("]");
+                    f.token(":");
+                    f.space();
+                    f.write_type(value);
                 }
-                self.token("[");
-                self.write_type(key);
-                self.token("]");
-                self.token(":");
-                self.space();
-                self.write_type(value);
-            }
-            TypeField::Array { access: Some(modifier), value, .. } => {
-                self.token(modifier.as_str());
-                self.space();
-                self.write_type(value);
-            }
-            TypeField::Array { access: None, value, .. } => {
-                // A `read` or `write` that opens the field would read back
-                // as its access modifier, so the leading operator that keeps
-                // it from opening the field stays.
-                let should_lead =
-                    flat_leading_name(value).is_some_and(|name| matches!(name, "read" | "write"));
-                self.write_at_line_start(value, should_lead);
-            }
-        }
+                TypeField::Array { access: Some(modifier), value, .. } => {
+                    f.token(modifier.as_str());
+                    f.space();
+                    f.write_type(value);
+                }
+                TypeField::Array { access: None, value, .. } => {
+                    // A `read` or `write` that opens the field would read back
+                    // as its access modifier, so the leading operator that keeps
+                    // it from opening the field stays.
+                    let should_lead = flat_leading_name(value)
+                        .is_some_and(|name| matches!(name, "read" | "write"));
+                    f.write_at_line_start(value, should_lead);
+                }
+            },
+        );
     }
 
     /// Flat reads `A | B | C`.
@@ -198,18 +230,21 @@ impl<'ast> Formatter<'ast> {
     /// Broken, each member gets its own line and a leading `| ` (or `& `), as
     /// Prettier does for TypeScript unions. The break decision alone places
     /// the leading operator, so the AST's `has_leading_pipe` and
-    /// `has_leading_ampersand` are ignored.
+    /// `has_leading_ampersand` are ignored. A comment that ends its line before
+    /// a member goes above its operator.
     fn write_alternation(&mut self, items: &[Type<'ast>], op: &'static str, placement: Placement) {
         let group_id = self.group_id();
-        let separator = |f: &mut Self| {
-            f.soft_line_or_space();
+        let leading_op = |f: &mut Self| {
             f.token(op);
             f.space();
         };
         let members = |f: &mut Self| {
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
-                    separator(f);
+                    f.soft_line_or_space();
+                    f.write_hoisted_comments(item.span().start);
+                    f.token(op);
+                    f.space();
                 }
                 f.write_type(item);
             }
@@ -217,21 +252,21 @@ impl<'ast> Formatter<'ast> {
         match placement {
             Placement::AfterText => self.group_with_id(group_id, |grouped| {
                 grouped.indent(|f| {
-                    f.if_group_breaks(group_id, separator);
+                    f.if_group_breaks(group_id, Self::soft_line_or_space);
+                    if let Some(first) = items.first() {
+                        f.write_leading_comments(first.span().start);
+                    }
+                    f.if_group_breaks(group_id, leading_op);
                     members(f);
                 });
             }),
             Placement::LineStart { should_lead: true } => self.group_with_id(group_id, |f| {
-                f.token(op);
-                f.space();
+                leading_op(f);
                 members(f);
             }),
             Placement::LineStart { should_lead: false } => {
                 self.group_with_id(group_id, |grouped| {
-                    grouped.if_group_breaks(group_id, |f| {
-                        f.token(op);
-                        f.space();
-                    });
+                    grouped.if_group_breaks(group_id, leading_op);
                     members(grouped);
                 });
             }
@@ -242,9 +277,14 @@ impl<'ast> Formatter<'ast> {
     fn write_at_line_start(&mut self, ty: &Type<'ast>, should_lead: bool) {
         let placement = Placement::LineStart { should_lead };
         if let Type::Union(union) = ty {
-            self.write_alternation(&union.types, "|", placement);
+            self.node(|| union.span, |f| f.write_alternation(&union.types, "|", placement));
         } else if let Type::Intersection(intersection) = ty {
-            self.write_alternation(&intersection.types, "&", placement);
+            self.node(
+                || intersection.span,
+                |f| {
+                    f.write_alternation(&intersection.types, "&", placement);
+                },
+            );
         } else {
             self.write_type(ty);
         }
@@ -255,60 +295,87 @@ impl<'ast> Formatter<'ast> {
     }
 
     pub(crate) fn write_generic_type_list(&mut self, generics: &GenericTypeList<'ast>) {
-        self.write_delimited("<", ">", &generics.params, |f, param| {
-            f.name(param.name);
-            // Luau: `T...` marks a generic pack parameter.
-            if param.is_pack {
-                f.token("...");
-            }
-            // `= T` default - only legal in `type` declarations.
-            if let Some(default) = &param.default {
-                f.space();
-                f.token("=");
-                f.space();
-                f.write_type(default);
-            }
-        });
+        self.node(
+            || generics.span,
+            |f| {
+                let closer = generics.span.end;
+                f.write_delimited(
+                    ("<", ">"),
+                    &generics.params,
+                    closer,
+                    Self::write_generic_type_param,
+                );
+            },
+        );
+    }
+
+    fn write_generic_type_param(&mut self, param: &GenericTypeParam<'ast>) {
+        self.node(
+            || param.span,
+            |f| {
+                f.name(param.name);
+                // Luau: `T...` marks a generic pack parameter.
+                if param.is_pack {
+                    f.token("...");
+                }
+                // `= T` default - only legal in `type` declarations.
+                if let Some(default) = &param.default {
+                    f.space();
+                    f.token("=");
+                    f.space();
+                    f.write_type(default);
+                }
+            },
+        );
     }
 
     fn write_function_type_param(&mut self, param: &FunctionTypeParam<'ast>) {
-        if let Some(name) = &param.name {
-            self.name(*name);
-            self.token(":");
-            self.space();
-            self.write_type(&param.ty);
-        } else {
-            self.write_list_type(&param.ty);
-        }
+        self.node(
+            || param.span(),
+            |f| {
+                if let Some(name) = &param.name {
+                    f.name(*name);
+                    f.token(":");
+                    f.space();
+                    f.write_type(&param.ty);
+                } else {
+                    f.write_list_type(&param.ty);
+                }
+            },
+        );
     }
 
-    /// Type arguments, `<T, U>`, and a Luau instantiation's doubled
-    /// `<<T, U>>`.
-    pub(crate) fn write_delimited_types(
+    /// Type arguments, `<T, U>`, or a Luau instantiation's doubled
+    /// `<<T, U>>`, whose last `>` is at `closer`.
+    ///
+    /// An instantiation's arguments are `<T, U>` between an outer `<` and
+    /// `>`, and the comments between the doubled delimiters go inside them.
+    pub(crate) fn write_type_args(
         &mut self,
-        open: &'static str,
-        close: &'static str,
-        types: &[Type<'ast>],
+        delimiters: (&'static str, &'static str),
+        type_args: &TypeArgs<'ast>,
+        closer: u32,
     ) {
-        self.write_delimited(open, close, types, Self::write_list_type);
+        self.write_delimited(delimiters, &type_args.args, closer, Self::write_list_type);
     }
 
     /// A broken list opens a line for each item, where `write_item` writes it.
+    /// `closer` is where the closing delimiter is.
     ///
     /// Nested angle brackets close with adjacent `>` tokens. The lexer reads
     /// them as one `>>`, which the parser splits again.
     fn write_delimited<T>(
         &mut self,
-        open: &'static str,
-        close: &'static str,
+        delimiters: (&'static str, &'static str),
         items: &[T],
+        closer: u32,
         write_item: impl Fn(&mut Self, &T),
     ) {
         if items.is_empty() {
-            self.token(open);
-            self.token(close);
+            self.write_dangling_list(delimiters, closer, LineMode::Soft);
             return;
         }
+        let (open, close) = delimiters;
         self.group(|grouped| {
             grouped.token(open);
             grouped.indent(|f| {
@@ -320,6 +387,7 @@ impl<'ast> Formatter<'ast> {
                     }
                     write_item(f, item);
                 }
+                f.write_closing_comments(closer);
             });
             grouped.soft_line();
             grouped.token(close);

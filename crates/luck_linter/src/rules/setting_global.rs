@@ -1,22 +1,21 @@
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SettingGlobal;
 
-impl_rule!(
+declare_lint_rule!(
     SettingGlobal,
-    "setting_global",
     Correctness,
     Warning,
     "implicit global variable assignment (missing `local`?)"
 );
 
-impl WholeRule for SettingGlobal {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
+impl Rule for SettingGlobal {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
         let semantic = context.semantic;
-        let tree = semantic.scope_tree();
-        let mut findings = Vec::new();
+        let tree = semantic.scoping();
 
         for reference in tree.global_references() {
             if !reference.kind.is_write() {
@@ -32,7 +31,7 @@ impl WholeRule for SettingGlobal {
                 continue;
             }
 
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!("setting global variable `{name}` (missing `local`?)"),
                     reference.span,
@@ -40,79 +39,62 @@ impl WholeRule for SettingGlobal {
                 .with_help("add `local` before the first assignment"),
             );
         }
-
-        findings
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&SettingGlobal, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_assignment_to_undeclared_name() {
-        let diags = run("counter = 1");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`counter`"), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_declared_global_and_its_writes() {
-        for source in [
-            "global x = 1",
+    const PASS: &[(&str, LuaTarget)] = &[
+        ("global x = 1", LuaTarget::Lua55),
+        (
             "\
 global x
 x = 1",
+            LuaTarget::Lua55,
+        ),
+        (
             "\
 global function f() end
 f = nil",
-        ] {
-            let diags = run_rule(&SettingGlobal, source, LuaVersion::Lua55);
-            assert!(diags.is_empty(), "{source}: {diags:?}");
-        }
-    }
-
-    #[test]
-    fn ignores_known_global_and_discard() {
-        let diags = run("\
+            LuaTarget::Lua55,
+        ),
+        (
+            "\
 print = print
-_ = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_local_assignment() {
-        let diags = run("\
+_ = 1",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local counter
-counter = 1");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_write_through_local_env() {
-        let diags = run("\
+counter = 1",
+            LuaTarget::Lua54,
+        ),
+        // `x` is a field of the local `_ENV`.
+        (
+            "\
 local _ENV = {}
-x = 1");
-        assert!(diags.is_empty(), "`x` is a field of the local `_ENV`: {diags:?}");
-    }
-
-    #[test]
-    fn ignores_write_after_global_star() {
-        let diags = run_rule(
-            &SettingGlobal,
+x = 1",
+            LuaTarget::Lua54,
+        ),
+        // `global *` declares every free name.
+        (
             "\
 global *
 x = 1",
-            LuaVersion::Lua55,
-        );
-        assert!(diags.is_empty(), "`global *` declares every free name: {diags:?}");
+            LuaTarget::Lua55,
+        ),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[("counter = 1", LuaTarget::Lua54)];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::SettingGlobal, PASS, FAIL).test_and_snapshot();
     }
 }

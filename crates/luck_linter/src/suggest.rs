@@ -1,7 +1,7 @@
 //! Each rule sets its own threshold, since what counts as a plausible typo
 //! differs by domain.
 
-use core::mem;
+use std::mem;
 
 /// The inputs are short names, so the quadratic cost doesn't matter.
 fn levenshtein(left: &str, right: &str) -> usize {
@@ -19,8 +19,8 @@ fn levenshtein(left: &str, right: &str) -> usize {
         for ((right_byte, &diagonal), &above) in
             right_bytes.iter().zip(&previous_row).zip(previous_row.iter().skip(1))
         {
-            let edit = above.min(distance).saturating_add(1);
-            let substitution = diagonal.saturating_add(usize::from(left_byte != *right_byte));
+            let edit = above.min(distance) + 1;
+            let substitution = diagonal + usize::from(left_byte != *right_byte);
             distance = edit.min(substitution);
             current_row.push(distance);
         }

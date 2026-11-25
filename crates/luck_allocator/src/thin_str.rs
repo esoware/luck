@@ -1,28 +1,21 @@
+#![expect(unsafe_code, reason = "a thin str reads its bytes as UTF-8 without checking them again")]
+
 use std::{
     fmt::{self, Debug, Display, Formatter},
-    marker::PhantomData,
-    ops::Deref,
-    ptr::NonNull,
-    slice, str,
+    ops::{Deref, Range},
+    str,
 };
 
-/// A `&str` in 12 bytes, aligned to 4: a pointer and a 32-bit length, packed so that a node holding
-/// one can put a 4-byte field beside it where a `&str` would leave 4 bytes of padding.
+use crate::ThinBytes;
+
+/// A `&str` in 12 bytes, aligned to 4, as [`ThinBytes`] is a `&[u8]`.
 ///
 /// It derefs to its `str`, and [`as_str`](ThinStr::as_str) gives the `&'a str` back.
 #[derive(Clone, Copy)]
-#[repr(C, packed(4))]
+#[repr(transparent)]
 pub struct ThinStr<'a> {
-    ptr: NonNull<u8>,
-    len: u32,
-    marker: PhantomData<&'a str>,
+    bytes: ThinBytes<'a>,
 }
-
-/// SAFETY: A `ThinStr` is a `&str`, which is `Send`.
-unsafe impl Send for ThinStr<'_> {}
-
-/// SAFETY: A `ThinStr` is a `&str`, which is `Sync`.
-unsafe impl Sync for ThinStr<'_> {}
 
 impl<'a> ThinStr<'a> {
     /// # Panics
@@ -31,19 +24,77 @@ impl<'a> ThinStr<'a> {
     #[must_use]
     #[inline]
     pub const fn new(text: &'a str) -> Self {
-        assert!(text.len() <= u32::MAX as usize, "a thin str holds under 4 GiB");
-        #[expect(clippy::cast_possible_truncation, reason = "checked above")]
-        let len = text.len() as u32;
-        Self { ptr: NonNull::from_ref(text).cast(), len, marker: PhantomData }
+        Self { bytes: ThinBytes::new(text.as_bytes()) }
+    }
+
+    /// `bytes` as text, when they're ASCII, as a name or a numeral is. Checking for ASCII costs
+    /// less than validating UTF-8.
+    #[must_use]
+    #[inline]
+    pub fn from_ascii(bytes: &'a [u8]) -> Option<Self> {
+        is_ascii(bytes).then(|| Self { bytes: ThinBytes::new(bytes) })
     }
 
     #[must_use]
     #[inline]
     pub const fn as_str(self) -> &'a str {
-        let (ptr, len) = (self.ptr, self.len);
-        // SAFETY: `ptr` and `len` came from a `&'a str` in `new`, and `u32` fits in `usize` on
-        // every target luck builds for.
-        unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr.as_ptr(), len as usize)) }
+        // SAFETY: `new` took the bytes from a `&'a str`, and `from_ascii` and
+        // `AsciiBytes::new` checked they're ASCII.
+        unsafe { str::from_utf8_unchecked(self.bytes.as_bytes()) }
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn as_bytes(self) -> &'a [u8] {
+        self.bytes.as_bytes()
+    }
+}
+
+/// Bytes checked once to be ASCII, as a whole source can be, so any range of
+/// them is text with no check of its own.
+#[derive(Clone, Copy, Debug)]
+pub struct AsciiBytes<'a>(&'a [u8]);
+
+impl<'a> AsciiBytes<'a> {
+    #[must_use]
+    #[inline]
+    pub fn new(bytes: &'a [u8]) -> Option<Self> {
+        bytes.is_ascii().then_some(Self(bytes))
+    }
+
+    /// Empty if `range` is out of the bytes.
+    #[must_use]
+    #[inline]
+    pub fn text(self, range: Range<usize>) -> ThinStr<'a> {
+        ThinStr { bytes: ThinBytes::new(self.0.get(range).unwrap_or_default()) }
+    }
+}
+
+/// `[u8]::is_ascii`, but a slice of at most 16 bytes, as nearly every name
+/// and numeral is, is tested as two overlapping words of one width, which
+/// measured faster on them.
+#[inline]
+fn is_ascii(bytes: &[u8]) -> bool {
+    match bytes.len() {
+        8..=16 => {
+            let (Some(head), Some(tail)) = (bytes.first_chunk(), bytes.last_chunk()) else {
+                return false;
+            };
+            (u64::from_ne_bytes(*head) | u64::from_ne_bytes(*tail)) & 0x8080_8080_8080_8080 == 0
+        }
+        4..=7 => {
+            let (Some(head), Some(tail)) = (bytes.first_chunk(), bytes.last_chunk()) else {
+                return false;
+            };
+            (u32::from_ne_bytes(*head) | u32::from_ne_bytes(*tail)) & 0x8080_8080 == 0
+        }
+        2 | 3 => {
+            let (Some(head), Some(tail)) = (bytes.first_chunk(), bytes.last_chunk()) else {
+                return false;
+            };
+            (u16::from_ne_bytes(*head) | u16::from_ne_bytes(*tail)) & 0x8080 == 0
+        }
+        _ => bytes.is_ascii(),
     }
 }
 

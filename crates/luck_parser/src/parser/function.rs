@@ -1,19 +1,20 @@
-use core::mem;
+use std::mem;
 
 use luck_allocator::{Box, List};
-use luck_ast::{FunctionBody, Name, Parameter, Type, VarArgParam};
-use luck_token::TokenKind;
+use luck_ast::{FunctionBody, GetSpan as _, Name, Parameter, Type, VarArgParam};
+use luck_token::{Span, TokenKind};
 
+use super::recovery::Closer;
 use super::types::GenericsOwner;
-use super::{Closer, FunctionScope, Parser};
+use super::{FunctionScope, Parser};
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the parser is one type with its grammar split by file"
-)]
 impl<'ast> Parser<'ast> {
-    /// `None` when the body or its block would pass the depth cap.
-    pub(super) fn parse_function_body(&mut self) -> Option<FunctionBody<'ast>> {
+    /// The body after the `function` keyword at `function_span`, or `None`
+    /// when the body or its block would pass the depth cap.
+    pub(super) fn parse_function_body(
+        &mut self,
+        function_span: Span,
+    ) -> Option<FunctionBody<'ast>> {
         if !self.enter_depth() {
             return None;
         }
@@ -30,11 +31,14 @@ impl<'ast> Parser<'ast> {
 
         self.open(Closer::Paren);
         let (params, vararg) = self.parse_params();
-        self.expect_closer(TokenKind::RightParen, Closer::Paren);
+        self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
 
         // Luau: optional return type annotation after `)`.
-        let return_type = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
-            .then(|| self.parse_return_type());
+        let return_type =
+            (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
+                let ty = self.parse_return_type();
+                self.alloc(ty)
+            });
 
         // A loop around the function doesn't make `break` or `continue` valid
         // inside it, and `...` needs this function's own vararg parameter.
@@ -47,10 +51,9 @@ impl<'ast> Parser<'ast> {
         self.exit_depth();
         let block = parsed_block?;
 
-        self.close(Closer::BlockEnd);
-        let end_span = self.expect(TokenKind::End);
+        let end_span = self.expect_closer(TokenKind::End, Closer::BlockEnd, function_span);
         let span = start_span.merge(end_span);
-        Some(FunctionBody { span, generics, params, vararg, return_type, block })
+        Some(FunctionBody::new(span, generics, params, vararg, return_type, block))
     }
 
     /// Parse the parameter list between a function's parens, stopping before
@@ -61,7 +64,7 @@ impl<'ast> Parser<'ast> {
         if self.is_at(TokenKind::DotDotDot) {
             return (List::new(), Some(self.parse_vararg_param()));
         }
-        if !self.is_at_identifier() {
+        if !self.is_at_name() {
             return (List::new(), None);
         }
         let start = self.scratch.params.len();
@@ -85,26 +88,33 @@ impl<'ast> Parser<'ast> {
     /// Finish a function parameter or a for-loop variable whose `name` was
     /// just consumed, taking a Luau `: T` annotation if one follows.
     pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
-        self.counts.declarations = self.counts.declarations.wrapping_add(1);
-        Parameter { name, type_annotation: self.try_parse_type_annotation() }
+        self.counts.declarations += 1;
+        Parameter::new(name, self.try_parse_type_annotation())
     }
 
     /// Parse `... [name] [: type]`; `...` must be the current token.
     fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
         let dots = self.advance();
+        // Lua 5.1: a vararg function binds its extra arguments' table to `arg`.
+        if self.version.has_implicit_vararg_table() {
+            self.counts.declarations += 1;
+        }
         // Lua 5.5: named varargs `...name`.
-        let name = (self.version.has_named_varargs() && self.is_at_identifier()).then(|| {
-            self.counts.declarations = self.counts.declarations.wrapping_add(1);
+        let name = (self.version.has_named_varargs() && self.is_at_name()).then(|| {
+            self.counts.declarations += 1;
             self.advance_name()
         });
         // Luau: vararg type annotation `...: type` or `...: T...`.
-        let type_annotation = (self.version.has_type_syntax() && self.eat(TokenKind::Colon))
-            .then(|| self.parse_vararg_type());
+        let type_annotation =
+            (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
+                let ty = self.parse_vararg_type();
+                self.alloc(ty)
+            });
         let end_span = type_annotation
-            .as_ref()
+            .as_deref()
             .map(Type::span)
             .or_else(|| name.map(|vararg_name| vararg_name.span))
             .unwrap_or(dots);
-        self.alloc(VarArgParam { span: dots.merge(end_span), name, type_annotation })
+        VarArgParam::boxed(dots.merge(end_span), name, type_annotation, self.allocator)
     }
 }

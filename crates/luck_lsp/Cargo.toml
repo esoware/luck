@@ -15,25 +15,29 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-luck_allocator = { workspace = true }
-luck_ast       = { workspace = true }
-luck_config    = { workspace = true }
-luck_core      = { workspace = true }
-luck_formatter = { workspace = true }
-luck_linter    = { workspace = true }
-luck_parser    = { workspace = true }
-luck_resolver  = { workspace = true }
-luck_semantic  = { workspace = true }
-luck_token     = { workspace = true }
+luck_allocator   = { workspace = true }
+luck_ast         = { workspace = true }
+luck_config      = { workspace = true }
+luck_diagnostics = { workspace = true }
+luck_formatter   = { workspace = true }
+luck_linter      = { workspace = true }
+luck_parser      = { workspace = true }
+luck_resolver    = { workspace = true }
+luck_semantic    = { workspace = true }
+luck_stdlib      = { workspace = true }
+luck_token       = { workspace = true }
 
-memchr           = { workspace = true }
-rustc-hash       = { workspace = true }
-serde_json       = { workspace = true }
-tokio            = { workspace = true, features = ["io-std", "io-util", "net", "rt", "sync"] }
-tower-lsp-server = { workspace = true }
+crossbeam-channel = { workspace = true }
+ls-types          = { workspace = true }
+lsp-server        = { workspace = true }
+memchr            = { workspace = true }
+parking_lot       = { workspace = true }
+rustc-hash        = { workspace = true }
+self_cell         = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
 
 [dev-dependencies]
 luck_testgen = { workspace = true }
 
 tempfile = { workspace = true }
-tokio    = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

@@ -4,15 +4,16 @@ The whole luck toolchain behind one dependency, for a build tool or editor that 
 
 ## Features
 
-The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::core`. Every other stage is behind a feature of its name, and none is on by default.
+The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::diagnostics`. Every other stage is behind a feature of its name, and none is on by default.
 
 | Feature | Adds |
 | --- | --- |
 | `codegen` | `luck::codegen`, the compact printer |
 | `minifier` | `luck::minifier` |
 | `formatter` | `luck::formatter` |
-| `semantic` | `luck::semantic`, scope analysis and the stdlib catalogs |
-| `linter` | `luck::linter`, and `semantic` |
+| `semantic` | `luck::semantic`, scoping, compile-time checks, the node table, and `require` sites, in one pass |
+| `stdlib` | `luck::stdlib`, each target's standard library, the std definitions that layer a host's library over one, and what a chunk reaches in it, and `semantic` |
+| `linter` | `luck::linter`, and `stdlib` |
 | `resolver` | `luck::resolver`, module resolution and source reading |
 | `bundler` | `luck::bundler`, and `resolver` and `minifier` |
 | `config` | `luck::config`, `luck.json` and `.editorconfig` loading, and the stages it configures |
@@ -22,14 +23,14 @@ The language server is not part of it. `luck::VERSION` is the toolchain's versio
 
 ## Usage
 
-A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the source it was parsed from, so both outlive it. Every stage that builds nodes takes the arena first. `reset` frees everything in it at once and keeps the memory, so one arena serves file after file, and threads each take an arena from an `AllocatorPool`. The bundler takes a slice of arenas and reads modules on one thread per arena.
+A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the source it was parsed from, so both outlive it. Every stage that builds nodes takes the arena first. `reset` frees everything in it at once and keeps the memory, so one arena serves file after file, and threads each take an arena from an `AllocatorPool`. The bundler reads modules on rayon's pool, each into the arena its thread gets from a `ThreadAllocators`.
 
 ```rust
 use luck::allocator::Allocator;
 use luck::token::LuaVersion;
 
 let mut allocator = Allocator::new();
-for source in ["local x = 1", "return x"] {
+for source in [&b"local x = 1"[..], b"return x"] {
     let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
     assert!(parsed.errors.is_empty());
     // The parse borrows the arena, so it goes first.
@@ -47,6 +48,6 @@ use luck::token::LuaVersion;
 
 let allocator = Allocator::new();
 let formatted =
-    luck::formatter::format(&allocator, "local x=1", LuaVersion::Lua54, &FormatOptions::default());
-assert_eq!(formatted.output, "local x = 1\n");
+    luck::formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+assert_eq!(formatted.output, b"local x = 1\n");
 ```

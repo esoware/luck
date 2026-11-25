@@ -26,8 +26,8 @@ luck_linter          = { workspace = true }
 luck_minifier        = { workspace = true }
 luck_parser          = { workspace = true }
 luck_semantic        = { workspace = true }
+luck_stdlib          = { workspace = true }
 
 humansize     = { workspace = true }
 mimalloc-safe = { workspace = true }
-rayon         = { workspace = true }
 saphyr        = { workspace = true }

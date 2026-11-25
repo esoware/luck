@@ -1,0 +1,92 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: duplicate key `a` in table constructor
+ --> Lua54:1:27
+1 | local t = { a = 1, b = 2, a = 3 }
+  |                           ^
+  |             - first defined here
+
+error: duplicate key `a` in table constructor
+ --> Lua54:1:21
+1 | local t = { a = 1, ["a"] = 2 }
+  |                     ^^^
+  |             - first defined here
+
+error: duplicate key `a` in table constructor
+ --> Lua54:1:21
+1 | local t = { a = 1, ["\97"] = 2 }
+  |                     ^^^^^
+  |             - first defined here
+
+error: duplicate key `a` in table constructor
+ --> Lua54:1:20
+1 | local t = { a = 1, a = 2, a = 3 }
+  |                    ^
+  |             - first defined here
+
+error: duplicate key `a` in table constructor
+ --> Lua54:1:27
+1 | local t = { a = 1, a = 2, a = 3 }
+  |                           ^
+  |             - first defined here
+
+error: duplicate key `a` in table constructor
+ --> Lua54:1:13
+1 | foo{ a = 1, a = 2 }
+  |             ^
+  |      - first defined here
+
+error: duplicate key `1` in table constructor
+ --> Lua54:1:25
+1 | local t = { [1] = "a", [1] = "b" }
+  |                         ^
+  |              - first defined here
+
+error: duplicate key `1` in table constructor
+ --> Lua54:1:25
+1 | local t = { [1] = "a", [1.0] = "b", [-2] = "c", [-2.0] = "d" }
+  |                         ^^^
+  |              - first defined here
+
+error: duplicate key `-2` in table constructor
+ --> Lua54:1:50
+1 | local t = { [1] = "a", [1.0] = "b", [-2] = "c", [-2.0] = "d" }
+  |                                                  ^^^^
+  |                                      -- first defined here
+
+error: duplicate key `2` in table constructor
+ --> Lua54:1:23
+1 | local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }
+  |                       ^^^^^
+  |              - first defined here
+
+error: duplicate key `0` in table constructor
+ --> Lua54:1:45
+1 | local t = { [2] = 1, [1 + 1] = 2, [0] = 3, [-0.0] = 4, [0/0] = 5, [0/0] = 6 }
+  |                                             ^^^^
+  |                                    - first defined here
+
+error: duplicate key `9007199254740992` in table constructor
+ --> Lua51:1:38
+1 | local t = { [9007199254740993] = 1, [9007199254740992] = 2 }
+  |                                      ^^^^^^^^^^^^^^^^
+  |              ---------------- first defined here
+
+error: duplicate key `16` in table constructor
+ --> Lua54:1:26
+1 | local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }
+  |                          ^^^^
+  |              ---- first defined here
+
+error: duplicate key `x` in table constructor
+ --> Lua54:1:46
+1 | local t = { [0x10] = 1, [16.0] = 2, x = 3, [ [[x]] ] = 4 }
+  |                                              ^^^^^
+  |                                     - first defined here
+
+error: duplicate key `a` in table constructor
+ --> Lua54:1:20
+1 | local t = { a = 1, a = 2 }
+  |                    ^
+  |             - first defined here

@@ -1,10 +1,9 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use luck_token::Span;
 use tempfile::TempDir;
 
-use crate::ResolveRequest;
+use crate::file_system::{FileSystem as _, FileSystemOs};
 
 pub(crate) fn project_with(files: &[(&str, &str)]) -> TempDir {
     let directory = TempDir::new().expect("create temp dir");
@@ -30,9 +29,6 @@ pub(crate) fn luau_project() -> TempDir {
     ])
 }
 
-pub(crate) fn request<'request>(
-    module: &'request str,
-    from_file: &'request str,
-) -> ResolveRequest<'request> {
-    ResolveRequest { module, from_file, span: Span::new(0, 10) }
+pub(crate) fn canonical(project: &TempDir, relative_path: &str) -> PathBuf {
+    FileSystemOs.canonicalize(&project.path().join(relative_path)).expect("canonicalize")
 }

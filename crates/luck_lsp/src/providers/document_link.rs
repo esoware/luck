@@ -1,240 +1,141 @@
 //! A `require("path")` string becomes a clickable link resolved through
-//! [`luck_resolver`], the resolver the bundler uses.
+//! [`luck_resolver`], the resolver the bundler uses, which the project keeps
+//! for every request until the file watcher clears it.
 //!
-//! Links follow Lua template search paths, Luau relative and `@alias` imports,
-//! and the `init` parent-parent rule exactly as a build does.
+//! The strings are the requires of the document's record, which leave out a
+//! local `require`, a local `_ENV`, a rebound global, and a standard
+//! library's name, since none loads a file and a build leaves each alone
+//! too. Links follow Lua template search paths, Luau relative and `@alias`
+//! imports, and the `init` parent-parent rule exactly as a build does.
 
-use std::path::Path;
+use ls_types::{DocumentLink, Position, Uri};
 
-use luck_ast::{Block, Call, Expression, FunctionArgs, Visitor};
-use luck_resolver::{ResolveRequest, Resolver, normalize_path};
-use luck_token::decode_string;
-use tower_lsp_server::ls_types::{DocumentLink, Position, Uri};
+use crate::document::DocumentState;
+use crate::module_record::Require;
 
-use crate::document::{DocumentState, file_path};
-use crate::providers::cursor::{statements_touching, touches};
-
-pub(crate) fn document_links(document: &DocumentState, document_uri: &Uri) -> Vec<DocumentLink> {
-    collect_links(document, document_uri, None)
+pub(crate) fn document_links(document: &DocumentState) -> Vec<DocumentLink> {
+    links(document, |_| true)
 }
 
-pub(crate) fn target_at(
-    document: &DocumentState,
-    document_uri: &Uri,
-    position: Position,
-) -> Option<Uri> {
-    collect_links(document, document_uri, Some(position)).into_iter().find_map(|link| link.target)
+/// The module the `require` string at `position` links to, either end
+/// included.
+pub(crate) fn target_at(document: &DocumentState, position: Position) -> Option<Uri> {
+    let is_at =
+        |require: &Require| require.range.start <= position && position <= require.range.end;
+    links(document, is_at).into_iter().find_map(|link| link.target)
 }
 
-fn collect_links(
-    document: &DocumentState,
-    document_uri: &Uri,
-    position: Option<Position>,
-) -> Vec<DocumentLink> {
-    let Some(document_path) = file_path(document_uri) else {
-        return Vec::new();
-    };
-    let settings = &document.settings().project;
-    // Lua templates resolve against the project root; with no config, fall
-    // back to the requiring file's own directory so bare siblings still link.
-    let project_root = settings
-        .root
-        .as_deref()
-        .or_else(|| document_path.parent())
-        .unwrap_or_else(|| Path::new("."));
-    let mut collector = LinkCollector {
-        document,
-        position,
-        offset: position.map(|at| document.offset(at)),
-        from_file: normalize_path(&document_path),
-        resolver: Resolver::new(document.lua_version(), &settings.search_paths, project_root),
-        links: Vec::new(),
-    };
-    collector.visit_block(&document.parse().block);
-    collector.links
-}
-
-struct LinkCollector<'document> {
-    document: &'document DocumentState,
-    position: Option<Position>,
-    /// Where `position` falls, which every link at it touches, so the walk
-    /// reads only what does.
-    offset: Option<u32>,
-    from_file: String,
-    resolver: Resolver<'document>,
-    links: Vec<DocumentLink>,
-}
-
-impl<'ast> Visitor<'ast> for LinkCollector<'_> {
-    fn visit_block(&mut self, block: &'ast Block<'ast>) {
-        let Some(offset) = self.offset else {
-            self.walk_block(block);
-            return;
-        };
-        for stmt in statements_touching(block, offset) {
-            self.visit_stmt(stmt);
-        }
-        if let Some(last) = &block.last_stmt
-            && touches(last.span(), offset)
-        {
-            self.visit_last_stmt(last);
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
-        if self.offset.is_none_or(|offset| touches(expr.span(), offset)) {
-            self.walk_expr(expr);
-        }
-    }
-
-    fn visit_call(&mut self, call: Call<'ast>) {
-        self.try_record(call);
-        self.walk_call(call);
-    }
-}
-
-impl LinkCollector<'_> {
-    fn try_record(&mut self, call: Call<'_>) {
-        if call.method.is_some() {
-            return;
-        }
-        let Some(name) = call.callee.as_name() else {
-            return;
-        };
-        // A local `require`, a local `_ENV`, or a rebound global isn't the
-        // module loader, so a build leaves the call alone too.
-        if name.text != "require" || !self.document.tree().reaches_host_global(name) {
-            return;
-        }
-        let literal = match call.args {
-            FunctionArgs::Parenthesized { args, .. } => {
-                let [Expression::StringLiteral(literal)] = &**args else {
-                    return;
-                };
-                &**literal
-            }
-            FunctionArgs::StringLiteral(literal) => literal,
-            FunctionArgs::TableConstructor(_) | FunctionArgs::Error(_) => return,
-        };
-
-        let range = self.document.range(literal.span);
-        if self.position.is_some_and(|position| position < range.start || position > range.end) {
-            return;
-        }
-        let Some(module) = decode_string(literal.text, self.document.lua_version())
-            .and_then(|decoded| String::from_utf8(decoded.into_owned()).ok())
-            .filter(|module| !module.is_empty())
-        else {
-            return;
-        };
-        let Ok(resolved) = self.resolver.resolve(&ResolveRequest {
-            module: &module,
-            from_file: &self.from_file,
-            span: literal.span,
-        }) else {
-            return;
-        };
-        let Some(target) = Uri::from_file_path(&resolved.path) else {
-            return;
-        };
-        self.links.push(DocumentLink {
-            range,
-            target: Some(target),
-            tooltip: Some(module),
-            data: None,
-        });
-    }
+/// The links of the requires `is_wanted` keeps.
+fn links(document: &DocumentState, is_wanted: impl Fn(&Require) -> bool) -> Vec<DocumentLink> {
+    document
+        .record()
+        .requires()
+        .iter()
+        .filter(|require| is_wanted(require))
+        .filter_map(|require| {
+            // A document with no `luck.json` above it is under the defaults
+            // rooted at its own directory, so bare siblings link as they
+            // bundle.
+            let resolution = document.resolve(require)?.ok()?;
+            Some(DocumentLink {
+                range: require.range,
+                target: Some(Uri::from_file_path(&resolution.path)?),
+                tooltip: Some(require.module.to_string()),
+                data: None,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
-    use luck_core::LuaTarget;
+    use luck_config::Project;
+    use luck_token::LuaTarget;
 
     use super::*;
-    use crate::fixtures::{document, document_under};
-    use crate::settings::ProjectSettings;
+    use crate::fixtures::document_at;
 
-    /// The unrooted fallback, driven from settings the test owns. Going
+    /// `text` as `main.lua` under the defaults rooted at `directory`.
+    ///
+    /// That's what a document with no `luck.json` above it gets. Going
     /// through `SettingsCache` instead would let discovery walk above the
     /// temp directory and pick up whatever `luck.json` sits there.
+    fn main_beside(text: &str, directory: &Path) -> DocumentState {
+        let main_path = directory.join("main.lua");
+        fs::write(&main_path, text).expect("write main.lua");
+        let project = Project::defaults(directory.to_path_buf());
+        document_at(text, LuaTarget::Lua54, project, &main_path)
+    }
+
     #[test]
     fn bare_sibling_resolves_against_the_requiring_file() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
-        let main_path = directory.path().join("main.lua");
-        let text = "local foo = require(\"foo\")\n";
-        fs::write(&main_path, text).expect("write main.lua");
-        let uri = Uri::from_file_path(&main_path).expect("file path URI");
-
-        let document = document(text, LuaTarget::Lua54);
-        assert!(document.settings().project.root.is_none(), "the fallback needs no project root");
-
-        let links = document_links(&document, &uri);
+        let links =
+            document_links(&main_beside("local foo = require(\"foo\")\n", directory.path()));
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
         assert!(target.path().as_str().ends_with("foo.lua"), "{}", target.as_str());
     }
 
     #[test]
-    fn empty_search_paths_link_like_a_build() {
+    fn links_follow_the_project_s_search_paths_from_its_root() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("dep.lua"), "return {}\n").expect("write dep.lua");
-        let main_path = directory.path().join("main.lua");
+        fs::create_dir_all(directory.path().join("lib")).expect("mkdir lib");
+        fs::create_dir_all(directory.path().join("src")).expect("mkdir src");
+        fs::write(directory.path().join("lib/dep.lua"), "return {}\n").expect("write dep.lua");
+        fs::write(directory.path().join("luck.json"), r#"{ "search_paths": ["lib/?.lua"] }"#)
+            .expect("write luck.json");
+        let main_path = directory.path().join("src/main.lua");
         let text = "local dep = require(\"dep\")\n";
         fs::write(&main_path, text).expect("write main.lua");
-        let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
-        let settings = ProjectSettings {
-            search_paths: Vec::new(),
-            root: Some(directory.path().to_path_buf()),
-            ..ProjectSettings::default()
-        };
-        let document = document_under(text, LuaTarget::Lua54, settings);
-
-        let links = document_links(&document, &uri);
+        let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+        let links = document_links(&document_at(text, LuaTarget::Lua54, project, &main_path));
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");
-        assert!(target.path().as_str().ends_with("dep.lua"), "{}", target.as_str());
+        assert!(target.path().as_str().ends_with("lib/dep.lua"), "{}", target.as_str());
     }
 
     #[test]
     fn target_at_resolves_the_require_string_under_the_position() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
-        let main_path = directory.path().join("main.lua");
         let text = "\
 local foo = require(\"foo\")
 local x = 1
 ";
-        fs::write(&main_path, text).expect("write main.lua");
-        let uri = Uri::from_file_path(&main_path).expect("file path URI");
-        let document = document(text, LuaTarget::Lua54);
+        let document = main_beside(text, directory.path());
 
         // Both ends of the string count.
         for utf16_column in [20, 25] {
-            let target = target_at(&document, &uri, Position::new(0, utf16_column))
+            let target = target_at(&document, Position::new(0, utf16_column))
                 .expect("the require string resolves");
             assert!(target.path().as_str().ends_with("foo.lua"), "{}", target.as_str());
         }
-        assert_eq!(target_at(&document, &uri, Position::new(0, 19)), None);
-        assert_eq!(target_at(&document, &uri, Position::new(1, 6)), None);
+        assert_eq!(target_at(&document, Position::new(0, 19)), None);
+        assert_eq!(target_at(&document, Position::new(1, 6)), None);
     }
 
     fn links_beside_foo(text: &str) -> Vec<DocumentLink> {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
-        let main_path = directory.path().join("main.lua");
-        fs::write(&main_path, text).expect("write main.lua");
-        let uri = Uri::from_file_path(&main_path).expect("file path URI");
-        document_links(&document(text, LuaTarget::Lua54), &uri)
+        document_links(&main_beside(text, directory.path()))
     }
 
     #[test]
     fn a_statement_level_require_links() {
         let links = links_beside_foo("require(\"foo\")\n");
         assert_eq!(links.len(), 1, "a side-effect `require` resolves like any other: {links:?}");
+    }
+
+    #[test]
+    fn a_require_through_the_global_table_links() {
+        let links = links_beside_foo("local m = _G.require(\"foo\")\n");
+        assert_eq!(links.len(), 1, "a build bundles `_G.require(\"foo\")`: {links:?}");
     }
 
     #[test]
@@ -262,5 +163,14 @@ local m = require(\"foo\")
         // The bundler decodes escapes, so this requires `foo`.
         let links = links_beside_foo("local m = require(\"\\x66oo\")\n");
         assert_eq!(links.len(), 1, "`\"\\x66oo\"` is the string `foo`: {links:?}");
+    }
+
+    #[test]
+    fn a_standard_library_does_not_link() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("string.lua"), "return {}\n").expect("write string.lua");
+        let links =
+            document_links(&main_beside("local s = require(\"string\")\n", directory.path()));
+        assert!(links.is_empty(), "`require` returns the standard library: {links:?}");
     }
 }

@@ -38,16 +38,14 @@ return x
 }
 
 #[test]
-fn keeps_length_of_a_string_literal() {
-    // #"str" must not be folded: escape sequences make the raw length
-    // unreliable.
+fn folds_the_length_of_a_string_literal_by_its_value() {
     let result = minify_lua54(
         "\
-local x = #\"hello\"
+local x = #\"h\\101llo\"
 return x
 ",
     );
-    assert!(result.contains('#'), "Got: {result}");
+    assert_eq!(result, "return 5");
 }
 
 #[test]
@@ -65,22 +63,22 @@ return x
 fn folds_exponentiation() {
     let result = minify_lua54(
         "\
-local x = 2 ^ 10
+local x = 2 ^ 5
 return x
 ",
     );
-    assert!(result.contains("1024"), "2^10 should be folded to 1024, got: {result}");
+    assert!(result.contains("32"), "2^5 should be folded to 32, got: {result}");
 }
 
 #[test]
-fn keeps_multiplication_that_overflows_to_infinity() {
+fn folds_multiplication_that_overflows_to_infinity() {
     let result = minify_lua54(
         "\
 local x = 1e308 * 10
 return x
 ",
     );
-    assert!(result.contains('*'), "Should not fold to inf: {result}");
+    assert_eq!(result, "return 1e999");
 }
 
 #[test]
@@ -103,10 +101,10 @@ fn inlining_keeps_operand_grouping_through_the_pipeline() {
     let cases = [
         (
             "\
-local s = 1 / 0
+local s = 2 ^ 0.5 / 2
 return 3 % s
 ",
-            "return 3%(1/0)",
+            "return 3%(2^.5/2)",
         ),
         (
             "\
@@ -224,19 +222,15 @@ return x
 }
 
 #[test]
-fn keeps_parens_around_function_call() {
-    // Parens around a call truncate its multiple returns.
-    let result = minify_lua54(
-        "\
-local x = (foo())
-return x
-",
-    );
-    let paren_count = result.matches('(').count();
-    assert!(
-        paren_count >= 2,
-        "Should keep wrapping parens (expected >=2 '(' chars), got {paren_count} in: {result}"
-    );
+fn keeps_parens_around_a_call_only_where_they_truncate_its_values() {
+    // Parens around a call truncate its multiple returns, which a single
+    // name takes only the first of anyway.
+    for (source, expected) in [
+        ("local x = (foo()) return x", "local e=foo()return e"),
+        ("local x, y = (foo()) return x, y", "local e,t=(foo())return e,t"),
+    ] {
+        assert_eq!(minify_lua54(source), expected, "source: {source}");
+    }
 }
 
 #[test]

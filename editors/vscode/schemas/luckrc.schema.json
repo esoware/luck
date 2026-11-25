@@ -16,21 +16,25 @@
       ]
     },
     "entries": {
+      "description": "Several builds in place of `entry`, each with its own output.",
       "type": [
         "array",
         "null"
       ],
       "items": {
         "$ref": "#/$defs/EntryConfig"
-      }
+      },
+      "minItems": 1
     },
     "entry": {
+      "description": "The file `luck build` bundles, relative to the `luck.json` directory.",
       "type": [
         "string",
         "null"
       ]
     },
     "exclude": {
+      "description": "Globs of files to leave out, even when `include` takes them.",
       "type": [
         "array",
         "null"
@@ -40,6 +44,7 @@
       }
     },
     "extends": {
+      "description": "Configs this one builds on, relative to its directory. A later one\noverrides an earlier one, and this file overrides them all.",
       "type": [
         "array",
         "null"
@@ -59,6 +64,7 @@
       ]
     },
     "include": {
+      "description": "Globs of the files `lint`, `fmt`, and `check` take, relative to the\n`luck.json` directory (default every `.lua` and `.luau` file). `*`\nstops at `/`, and `**/` crosses directories.",
       "type": [
         "array",
         "null"
@@ -78,44 +84,67 @@
       ]
     },
     "lua": {
-      "description": "Dialect for `.lua` files (default `lua54`). Any dialect is accepted:\nRoblox and Rojo trees that keep Luau in `.lua` files set\n`\"lua\": \"roblox\"` or `\"lua\": \"luau\"`.",
-      "type": [
-        "string",
-        "null"
+      "description": "Dialect of every file but a `.luau` one (default `lua54`). Either key\ncan name any dialect, so a Roblox or Rojo tree that keeps Luau in\n`.lua` files sets `\"lua\": \"roblox\"`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LuaTarget"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "luau": {
-      "description": "Dialect for `.luau` files (default `luau`). Any dialect is accepted.",
-      "type": [
-        "string",
-        "null"
+      "description": "Dialect of `.luau` files (default `luau`).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LuaTarget"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "luck_preamble": {
+      "description": "Whether `luck build` names luck and its version at the top of each\nbundle (default `false`).",
       "type": [
         "boolean",
         "null"
       ]
     },
     "minify": {
+      "description": "Whether `luck build` minifies its bundles (default `false`).",
       "type": [
         "boolean",
         "null"
       ]
     },
     "output": {
+      "description": "The file `luck build` writes the bundle of `entry` to, in place of one\nin `output_dir`.",
       "type": [
         "string",
         "null"
       ]
     },
     "output_dir": {
+      "description": "The directory `luck build` writes the bundle of `entry` to, under the\nentry's file name.",
       "type": [
         "string",
         "null"
       ]
     },
+    "overrides": {
+      "description": "Settings for the files some globs match, each over the ones before it.\nAn `extends` chain lists the overrides of the files it extends first,\nand every glob matches relative to the `luck.json` directory.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/OverrideConfig"
+      }
+    },
     "preamble": {
+      "description": "A comment `luck build` writes at the top of each bundle.",
       "type": [
         "string",
         "null"
@@ -131,12 +160,24 @@
       }
     },
     "root": {
+      "description": "Keeps the `extends` chain inside this file's directory.",
       "type": [
         "boolean",
         "null"
       ]
     },
     "search_paths": {
+      "description": "The Lua search path templates a `require` tries in order, relative to\nthe `luck.json` directory (default `?.lua` and `?/init.lua`). Luau\nresolves relative and `@alias` requires instead.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "std": {
+      "description": "Std definition files, relative to this file's directory, that layer\na host's globals, fields, and functions, such as LOVE's or Neovim's,\nover each dialect's standard library, in order. Each is TOML in the\nformat of luck's own `stdlib_data`, which\n<https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>\ndescribes.",
       "type": [
         "array",
         "null"
@@ -281,7 +322,7 @@
       ]
     },
     "CyclomaticComplexityOptions": {
-      "description": "Options of the `cyclomatic_complexity` rule.",
+      "description": "Options of the `cyclomatic_complexity` rule, which reports nothing until\nthey set `max`.",
       "type": "object",
       "properties": {
         "max": {
@@ -436,7 +477,7 @@
           ]
         },
         "sort_requires": {
-          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name, where the\nrequire takes a string or a dotted path such as `script.Parent.Module`.\nA blank line ends a run. Defaults to `true`.",
+          "description": "When true, sorts each run of consecutive `local NAME = require(...)`\nor `local NAME = game:GetService(...)` statements by name, where the\nrequire takes a string or a dotted path such as `script.Parent.Module`.\nA blank line ends a run. Defaults to `false`, because a module's body\nruns at its first `require`, so sorting can change what a program does.",
           "type": [
             "boolean",
             "null"
@@ -515,6 +556,73 @@
       },
       "additionalProperties": false
     },
+    "LuaTarget": {
+      "description": "A Lua dialect: Lua 5.1 to 5.5, Luau, or Luau on Roblox.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "lua51",
+            "lua52",
+            "lua53",
+            "lua54",
+            "lua55",
+            "luau"
+          ]
+        },
+        {
+          "description": "Luau on Roblox: the same syntax as `Luau`, with the Roblox stdlib.",
+          "type": "string",
+          "const": "roblox"
+        }
+      ]
+    },
+    "OverrideConfig": {
+      "description": "Settings for the files some globs match, over the rest of the config.",
+      "type": "object",
+      "properties": {
+        "exclude_files": {
+          "description": "Globs of files this leaves alone, even when `files` takes them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "description": "Globs of the files this applies to, matched as `include` is.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "description": "Formatter settings over the `format` section's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FormatConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lint": {
+          "description": "Linter settings over the `lint` section's, which merge as `extends`\nmerges them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LintConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files"
+      ]
+    },
     "ProfileOverrides": {
       "description": "A build profile, selected with `luck build --profile <name>`.\n\nIts `minify` and `transforms` replace the top-level ones. `--release` and\n`--dev` select the `release` and `dev` profiles.",
       "type": "object",
@@ -563,7 +671,7 @@
       ]
     },
     "RestrictedModulePathsOptions": {
-      "description": "Options of the `restricted_module_paths` rule.",
+      "description": "Options of the `restricted_module_paths` rule, which reports nothing\nuntil they list `paths`.",
       "type": "object",
       "properties": {
         "paths": {
@@ -635,35 +743,275 @@
       ]
     },
     "RuleSettings": {
-      "description": "A level per rule, keyed by rule name. Only the rules listed here take\noptions.",
+      "description": "A setting per rule, keyed by rule name.",
       "type": "object",
       "properties": {
+        "accessing_uninitialized": {
+          "description": "local is read before any value is assigned to it",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "almost_swapped": {
+          "description": "looks like a failed variable swap; use `a, b = b, a`",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "ambiguous_newline_call": {
+          "description": "call arguments open on a new line, which reads ambiguously",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "bad_string_escape": {
+          "description": "invalid backslash escape in string literal",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "builtin_global_write": {
+          "description": "overwriting a standard-library global or one of its fields",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "comment_directive": {
+          "description": "invalid or misplaced `--!` comment directive",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "compare_nan": {
+          "description": "comparison with NaN (`0/0`) always has the same result",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "comparison_precedence": {
+          "description": "chained comparison or `not` operand that doesn't parse the way it reads",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "constant_table_comparison": {
+          "description": "comparison with a table literal, which compares by identity",
+          "$ref": "#/$defs/RuleLevel"
+        },
         "cyclomatic_complexity": {
-          "description": "Reports nothing until its options set `max`.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting_CyclomaticComplexityOptions"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "description": "function exceeds the configured cyclomatic complexity threshold",
+          "$ref": "#/$defs/RuleSetting_CyclomaticComplexityOptions"
+        },
+        "deprecated": {
+          "description": "use of a deprecated standard library function, argument, or value",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "divide_by_zero": {
+          "description": "division or modulo by a constant zero",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "duplicate_conditions": {
+          "description": "`if`/`elseif` chain has duplicate conditions",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "duplicate_function": {
+          "description": "function with the same name is defined twice in the same block",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "duplicate_keys": {
+          "description": "table constructor has duplicate keys",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "duplicate_parameter": {
+          "description": "function declares two parameters with the same name",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "empty_block": {
+          "description": "block body is empty",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "for_range": {
+          "description": "numeric `for` range can't iterate or is off by one",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "format_string": {
+          "description": "malformed format, pattern, pack, or date literal, or wrong argument count",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "global_usage": {
+          "description": "use of the global environment tables `_G` or `shared`",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "global_used_as_local": {
+          "description": "global variable is only used inside one function; use a local",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "if_same_then_else": {
+          "description": "`if` and `else` branches have identical bodies",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "implicit_return": {
+          "description": "function returns on some paths but falls through on others",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "incorrect_stdlib_use": {
+          "description": "wrong argument count or invalid constant in a standard library call",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "integer_parsing": {
+          "description": "integer literal the target Lua version can't represent exactly",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "invalid_lint_filter": {
+          "description": "malformed `luck:` directive, or a rule name in one that no rule has",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "loop_executes_once": {
+          "description": "loop body always exits on the first iteration",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "manual_table_clone": {
+          "description": "manual table copy; use `table.clone` or `table.move`",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "merge_adjacent_locals": {
+          "description": "adjacent simple `local` declarations can be merged",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "misleading_and_or": {
+          "description": "`and`/`or` ternary with a falsy middle operand always returns the right-hand value",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "mismatched_arg_count": {
+          "description": "call passes more arguments than the called function accepts",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "mixed_table": {
+          "description": "table constructor mixes positional and record-style fields",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "multiple_statements_per_line": {
+          "description": "multiple statements on the same line",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "must_use": {
+          "description": "return value of a must-use function is discarded",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "mutating_uninitialized": {
+          "description": "field or index assignment on an uninitialized local",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "no_implicit_globals": {
+          "description": "implicit global reference, including standard-library globals",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "parenthesized_conditions": {
+          "description": "unnecessary parentheses around condition",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "placeholder_read": {
+          "description": "use of `_` as a value; convention reserves it for ignored bindings",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "redefining_local": {
+          "description": "local redeclared with the same name in the same block",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "redundant_native_attribute": {
+          "description": "`@native` attribute is redundant in a `--!native` module",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "redundant_nil_init": {
+          "description": "local variable initialized to `nil` (the default value)",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "redundant_return": {
+          "description": "trailing bare `return` has no effect",
+          "$ref": "#/$defs/RuleLevel"
         },
         "restricted_module_paths": {
-          "description": "Reports nothing until its options list `paths`.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting_RestrictedModulePathsOptions"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "description": "`require` of a module listed in `restricted_module_paths`",
+          "$ref": "#/$defs/RuleSetting_RestrictedModulePathsOptions"
+        },
+        "reversed_for_loop": {
+          "description": "numeric `for` loop counts down without a negative step",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "roblox_incorrect_color3_new_bounds": {
+          "description": "`Color3.new` component outside the 0 to 1 range",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "roblox_manual_fromscale_or_fromoffset": {
+          "description": "`UDim2.new` that could be `UDim2.fromScale` or `UDim2.fromOffset`",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "roblox_suspicious_udim2_new": {
+          "description": "`UDim2.new` called with fewer components than expected",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "roblox_unknown_enum_member": {
+          "description": "unknown Roblox enum type, item, or item member",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "set_but_never_read": {
+          "description": "local is written to but its value is never read",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "setting_global": {
+          "description": "implicit global variable assignment (missing `local`?)",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "shadowing": {
+          "description": "variable shadows an outer variable with the same name",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "string_index_to_field": {
+          "description": "use of string-key index for an identifier-safe key; prefer dot syntax",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "table_operations": {
+          "description": "misuse of `table.insert`, `table.remove`, `table.move`, or `table.create`",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "type_check_inside_call": {
+          "description": "type comparison is inside the call instead of outside",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unbalanced_assignment": {
+          "description": "assignment has a different number of targets and values",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "undefined_variable": {
+          "description": "use of undefined variable",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unknown_type": {
+          "description": "`type()` or `typeof()` result compared against an unknown type name",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unnecessary_assert": {
+          "description": "`assert` on a constant value always passes or always errors",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unnecessary_negation": {
+          "description": "negated comparison that could use the opposite operator",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unreachable_code": {
+          "description": "code that no path through its function reaches",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unused_argument": {
+          "description": "function parameter is declared but never referenced",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unused_label": {
+          "description": "label declared but never targeted by a `goto` in the same function",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unused_lint_filter": {
+          "description": "`allow` directive that silences nothing",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unused_loop_variable": {
+          "description": "for-loop variable is declared but never read in the loop body",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "unused_variable": {
+          "description": "variable is declared but never read",
+          "$ref": "#/$defs/RuleLevel"
+        },
+        "value_overwritten_before_read": {
+          "description": "value assigned to a local is overwritten before it is read",
+          "$ref": "#/$defs/RuleLevel"
         }
       },
-      "additionalProperties": {
-        "$ref": "#/$defs/RuleLevel"
-      }
+      "additionalProperties": false
     },
     "SpaceAfterFunction": {
       "description": "Where a space goes before the `(` of a function definition or call.",
@@ -723,14 +1071,6 @@
           "type": "boolean",
           "default": true
         },
-        "shorten_numbers": {
-          "type": "boolean",
-          "default": true
-        },
-        "shorten_strings": {
-          "type": "boolean",
-          "default": true
-        },
         "simplify_indexes": {
           "type": "boolean",
           "default": true
@@ -740,6 +1080,11 @@
           "default": true
         },
         "simplify_statements": {
+          "type": "boolean",
+          "default": true
+        },
+        "strip_types": {
+          "description": "Luau: drop every type annotation, cast, instantiation, and `type`\ndeclaration before the other passes run. Types never run, so this\nchanges no behavior, but a typed library's users lose its types.",
           "type": "boolean",
           "default": true
         }

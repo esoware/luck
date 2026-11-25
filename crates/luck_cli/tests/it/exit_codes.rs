@@ -1,21 +1,21 @@
 //! These spawn the real `luck` binary, so they reach `main.rs`'s worker thread
 //! and clap's own usage-error exit, which unit tests can't.
 
-use core::time::Duration;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 #[test]
 fn lint_clean_file_exits_success() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "clean.lua", "print(\"hello world\")\n");
 
-    luck_in(directory.path()).args(["lint", "clean.lua"]).assert().code(0i32);
+    luck_in(directory.path()).args(["lint", "clean.lua"]).assert().code(0);
 }
 
 #[test]
@@ -27,8 +27,21 @@ fn lint_undefined_variable_exits_failure() {
     luck_in(directory.path())
         .args(["lint", "bad.lua"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("undefined_variable"));
+}
+
+#[test]
+fn threads_takes_a_count_of_one_or_more() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "bad.lua", "return missingglobal\n");
+
+    luck_in(directory.path()).args(["--threads", "1", "lint", "bad.lua"]).assert().code(1);
+    luck_in(directory.path())
+        .args(["lint", "bad.lua", "--threads", "0"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--threads"));
 }
 
 #[test]
@@ -36,7 +49,7 @@ fn check_parse_error_exits_failure() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "broken.lua", "local x = 1 +\n");
 
-    luck_in(directory.path()).args(["check", "broken.lua"]).assert().code(1i32);
+    luck_in(directory.path()).args(["check", "broken.lua"]).assert().code(1);
 }
 
 #[test]
@@ -51,7 +64,7 @@ return x
 ",
     );
 
-    luck_in(directory.path()).args(["check", "ok.lua"]).assert().code(0i32);
+    luck_in(directory.path()).args(["check", "ok.lua"]).assert().code(0);
 }
 
 #[test]
@@ -59,7 +72,7 @@ fn fmt_check_unformatted_exits_failure() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "messy.lua", "local    x=1\n");
 
-    luck_in(directory.path()).args(["fmt", "--check", "messy.lua"]).assert().code(1i32);
+    luck_in(directory.path()).args(["fmt", "--check", "messy.lua"]).assert().code(1);
 }
 
 #[test]
@@ -69,10 +82,10 @@ fn fmt_check_formatted_exits_success() {
 
     // Format with luck first, so the check doesn't depend on the formatter's
     // style choices.
-    luck_in(directory.path()).args(["fmt", "tidy.lua"]).assert().code(0i32);
+    luck_in(directory.path()).args(["fmt", "tidy.lua"]).assert().code(0);
     assert!(fs::read_to_string(&path).unwrap().contains("local x = 1"));
 
-    luck_in(directory.path()).args(["fmt", "--check", "tidy.lua"]).assert().code(0i32);
+    luck_in(directory.path()).args(["fmt", "--check", "tidy.lua"]).assert().code(0);
 }
 
 #[test]
@@ -82,7 +95,7 @@ fn unknown_subcommand_exits_usage() {
     luck_in(directory.path())
         .arg("frobnicate")
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("frobnicate"));
 }
 
@@ -94,28 +107,27 @@ fn invalid_flag_exits_usage() {
     luck_in(directory.path())
         .args(["lint", "--nonexistent-flag", "clean.lua"])
         .assert()
-        .code(2i32)
+        .code(2)
         .stderr(predicate::str::contains("--nonexistent-flag"));
 }
 
 #[test]
 fn invalid_config_unknown_key_exits_usage() {
     let directory = TempDir::new().unwrap();
-    // `deny_unknown_fields` turns any unrecognized top-level key into a hard
-    // config error, which the CLI maps to `Exit::Usage`.
     write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
     write_file(directory.path(), "clean.lua", "print(\"hi\")\n");
 
     luck_in(directory.path())
         .args(["check", "clean.lua"])
         .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("error: "));
+        .code(2)
+        .stderr(predicate::str::contains("E014"))
+        .stderr(predicate::str::contains("unknown field `not_a_real_key`"))
+        .stderr(predicate::str::contains("luck.json:1:3"));
 }
 
-/// Target resolution has to happen before the parallel section, because a
-/// worker reporting the error would deadlock on the stdio locks the main
-/// thread holds there.
+/// Every config loads before the parallel section, because a worker reporting
+/// an error would deadlock on the stdio locks the main thread holds there.
 ///
 /// The timeout turns that hang into a failure.
 fn write_bad_dialect_project(directory: &Path) {
@@ -134,8 +146,8 @@ fn fmt_bad_dialect_with_multiple_files_exits_usage() {
         .args(["fmt", "--check"])
         .timeout(Duration::from_secs(60))
         .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("invalid target `lua99`"));
+        .code(2)
+        .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
 #[test]
@@ -147,8 +159,8 @@ fn lint_bad_dialect_with_multiple_files_exits_usage() {
         .arg("lint")
         .timeout(Duration::from_secs(60))
         .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("invalid target `lua99`"));
+        .code(2)
+        .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
 #[test]
@@ -160,59 +172,8 @@ fn check_bad_dialect_with_multiple_files_exits_usage() {
         .arg("check")
         .timeout(Duration::from_secs(60))
         .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("invalid target `lua99`"));
-}
-
-/// `--fix` over stdin re-lints the fixed text, so spans index that text.
-///
-/// A fix that grows the file pushes spans past the end of the original, and a
-/// renderer panic also exits 1, so the rendered location is the proof.
-#[test]
-fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
-    let directory = TempDir::new().unwrap();
-
-    luck_in(directory.path())
-        .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
-        .write_stdin(
-            "\
-local unused = 1
-return missingglobal",
-        )
-        .assert()
-        .code(1i32)
-        .stdout(
-            "\
-local _unused = 1
-return missingglobal",
-        )
-        .stderr(predicate::str::contains("buffer.lua:2:8"));
-}
-
-/// A fix that shrinks the file keeps every span in bounds of the original, so
-/// rendering against the original misplaces the snippet without any panic.
-#[test]
-fn lint_stdin_fix_renders_spans_against_the_shortened_text() {
-    let directory = TempDir::new().unwrap();
-
-    luck_in(directory.path())
-        .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
-        .args(["-W", "redundant_nil_init"])
-        .write_stdin(
-            "\
-local a = nil
-return a, missingglobal
-",
-        )
-        .assert()
-        .code(1i32)
-        .stdout(
-            "\
-local a
-return a, missingglobal
-",
-        )
-        .stderr(predicate::str::contains("buffer.lua:2:11"));
+        .code(2)
+        .stderr(predicate::str::contains("unknown variant `lua99`"));
 }
 
 /// An empty `entries` list is a config error, not a panic or a silent exit 0.
@@ -224,61 +185,47 @@ fn build_empty_entries_exits_usage() {
     luck_in(directory.path())
         .arg("build")
         .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("`entries` in `luck.json` is empty"));
+        .code(2)
+        .stderr(predicate::str::contains("`entries` is empty"));
 
     luck_in(directory.path())
         .args(["build", "--quiet"])
         .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("`entries` in `luck.json` is empty"));
+        .code(2)
+        .stderr(predicate::str::contains("`entries` is empty"));
 }
 
 #[test]
-fn fmt_range_formats_only_covered_stmt() {
+fn build_rejects_release_with_dev() {
     let directory = TempDir::new().unwrap();
-    // Two unformatted statements; the range covers only the second line.
-    let path = write_file(
+    write_file(directory.path(), "main.lua", "return 1\n");
+    write_file(
         directory.path(),
-        "partial.lua",
-        "\
-local    a=1
-local    b=2
-",
+        "luck.json",
+        r#"{"entry":"main.lua","output":"bundle.lua","profiles":{"dev":{},"release":{}}}"#,
     );
 
-    luck_in(directory.path())
-        .args(["fmt", "--range-start", "13", "partial.lua"])
-        .assert()
-        .code(0i32);
-    let contents = fs::read_to_string(&path).unwrap();
-    assert!(contents.contains("local    a=1"), "{contents}");
-    assert!(contents.contains("local b = 2"), "{contents}");
+    let output = run(directory.path(), &["build", "--release", "--dev", "--dry-run"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the shorthands select contradictory profiles, as `--profile` given twice does"
+    );
 }
 
 #[test]
-fn fmt_range_with_multiple_files_exits_usage() {
+fn minify_missing_input_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "a.lua", "local a = 1\n");
-    write_file(directory.path(), "b.lua", "local b = 2\n");
 
-    luck_in(directory.path())
-        .args(["fmt", "--range-start", "0", "a.lua", "b.lua"])
-        .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("exactly one input file"));
-}
+    let output = run(directory.path(), &["minify", "missing.lua"]);
 
-#[test]
-fn fmt_range_reversed_bounds_exits_usage() {
-    let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "a.lua", "local a = 1\n");
-
-    luck_in(directory.path())
-        .args(["fmt", "--range-start", "9", "--range-end", "2", "a.lua"])
-        .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("invalid format range"));
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a path that doesn't exist exits 2, as it does for every other command:\n{}",
+        stderr_text(&output)
+    );
 }
 
 #[test]
@@ -291,23 +238,11 @@ fn bad_target_flag_is_reported_before_the_config() {
         luck_in(directory.path())
             .args([command, "main.lua", "-t", "lua99"])
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"))
             .stderr(predicate::str::contains("invalid target `lua99`"))
             .stderr(predicate::str::contains("not_a_real_key").not());
     }
-}
-
-#[test]
-fn bad_init_target_exits_usage_and_writes_nothing() {
-    let directory = TempDir::new().unwrap();
-
-    luck_in(directory.path())
-        .args(["init", "-t", "lua99"])
-        .assert()
-        .code(2i32)
-        .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"));
-    assert!(!directory.path().join("luck.json").exists());
 }
 
 #[test]
@@ -320,7 +255,7 @@ fn bad_dynamic_require_flag_is_reported_before_the_config() {
         luck_in(directory.path())
             .args([command, "main.lua", "--dynamic-require", "maybe"])
             .assert()
-            .code(2i32)
+            .code(2)
             .stderr(predicate::str::contains(
                 "invalid value 'maybe' for '--dynamic-require <MODE>'",
             ))
@@ -347,7 +282,7 @@ return helper.value + require(name).value
     let assert = luck_in(directory.path())
         .args(["bundle", "main.lua"])
         .assert()
-        .code(0i32)
+        .code(0)
         .stderr(predicate::str::contains("W007"));
     let bundle = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     assert!(bundle.contains("__luck_dynamic("), "{bundle}");
@@ -370,7 +305,7 @@ return helper.value + require(name).value
     luck_in(directory.path())
         .args(["bundle", "main.lua", "--dynamic-require", "error"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("E002"));
 
     // The project setting reaches the one-shot command too.
@@ -378,7 +313,7 @@ return helper.value + require(name).value
     luck_in(directory.path())
         .args(["bundle", "main.lua"])
         .assert()
-        .code(1i32)
+        .code(1)
         .stderr(predicate::str::contains("E002"));
 }
 
@@ -399,7 +334,7 @@ return helper.value
 ",
     );
 
-    let assert = luck_in(directory.path()).args(["bundle", "main.lua"]).assert().code(0i32);
+    let assert = luck_in(directory.path()).args(["bundle", "main.lua"]).assert().code(0);
     let bundle = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
     let native_root = directory.path().to_string_lossy().to_string();

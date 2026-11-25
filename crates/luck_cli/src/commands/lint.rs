@@ -1,26 +1,25 @@
-use alloc::borrow::Cow;
-use core::fmt::Write as _;
 use std::fs;
-use std::io::{self, BufWriter, Write as _};
-use std::path::{self, Path, PathBuf};
+use std::io::{self, Write as _};
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, ValueEnum};
 use luck_allocator::Allocator;
-use luck_config::LuckConfig;
-use luck_core::{Diagnostic, LuaTarget};
-use luck_linter::{Category, LintConfig, LintDiagnostic, RuleLevel, Severity};
-use luck_resolver::{normalize_path, read_source_file};
-use luck_token::{LineIndex, LuaVersion};
+use luck_config::Project;
+use luck_diagnostics::{Diagnostic, Severity};
+use luck_linter::{
+    Category, FixError, FixKind, Fixed, LintConfig, Linter, Message, RuleId, RuleLevel, RuleTimings,
+};
+use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_stdlib::StdlibLibrary;
 
 use crate::exit::{Exit, operation_error, usage_error};
-use crate::output::{OUTPUT_BUFFER_BYTES, read_stdin_source};
-use crate::project::{
-    config_for_one_shot, for_each_outcome_in_order, project_files, resolve_project,
-};
-use crate::render::{line_and_column, render_document_diags};
+use crate::output::{read_stdin_source, write_output};
+use crate::project::{ProjectFile, one_shot_project, project_files, working_project};
+use crate::reporter::{DefaultReporter, GithubReporter, JsonReporter, Reporter, SourceFile};
+use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum)]
 enum LintFormat {
     Default,
     /// One JSON object per finding, a line each.
@@ -29,43 +28,91 @@ enum LintFormat {
     Github,
 }
 
-/// Each flag's id and long name, short name, level, and help.
-const LEVEL_FLAGS: [(&str, char, RuleLevel, &str); 3] = [
-    (
-        "allow",
-        'A',
-        RuleLevel::Off,
-        "Turn off a rule or a category (repeatable). -A, -W, and -D apply in the order given, \
-         and a rule's own level wins over its category's",
-    ),
-    (
-        "warn",
-        'W',
-        RuleLevel::Warn,
-        "Report a rule, or every rule in a category, as a warning (repeatable)",
-    ),
-    (
-        "deny",
-        'D',
-        RuleLevel::Error,
-        "Report a rule, or every rule in a category, as an error (repeatable)",
-    ),
+impl LintFormat {
+    fn reporter(self) -> &'static dyn Reporter {
+        match self {
+            Self::Default => &DefaultReporter,
+            Self::Json => &JsonReporter,
+            Self::Github => &GithubReporter,
+        }
+    }
+
+    /// People read the default format on stderr, and tools read the others
+    /// on stdout.
+    const fn is_for_tools(self) -> bool {
+        match self {
+            Self::Default => false,
+            Self::Json | Self::Github => true,
+        }
+    }
+}
+
+/// A `-A`, `-W`, or `-D` flag, whose long name is also its id.
+struct LevelFlag {
+    id: &'static str,
+    short: char,
+    level: RuleLevel,
+    help: &'static str,
+}
+
+const LEVEL_FLAGS: [LevelFlag; 3] = [
+    LevelFlag {
+        id: "allow",
+        short: 'A',
+        level: RuleLevel::Off,
+        help: "Turn off a rule or a category (repeatable). -A, -W, and -D apply in the order \
+               given, and a rule's own level wins over its category's",
+    },
+    LevelFlag {
+        id: "warn",
+        short: 'W',
+        level: RuleLevel::Warn,
+        help: "Report a rule, or every rule in a category, as a warning (repeatable)",
+    },
+    LevelFlag {
+        id: "deny",
+        short: 'D',
+        level: RuleLevel::Error,
+        help: "Report a rule, or every rule in a category, as an error (repeatable)",
+    },
 ];
 
-/// The `-A`, `-W`, and `-D` flags in command-line order, which a derived
-/// `Vec` per flag would lose.
-struct LevelFlags(Vec<(RuleLevel, String)>);
+/// What a `-A`, `-W`, or `-D` flag names.
+#[derive(Debug, Clone, Copy)]
+enum Leveled {
+    Category(Category),
+    Rule(RuleId),
+}
+
+fn leveled(name: &str) -> Result<Leveled, String> {
+    match Category::from_name(name) {
+        Some(category) => Ok(Leveled::Category(category)),
+        None => name.parse().map(Leveled::Rule),
+    }
+}
+
+/// The levels the `-A`, `-W`, and `-D` flags set, applied in command-line
+/// order, which a derived `Vec` per flag would lose, so the last flag to name
+/// a rule or a category decides it.
+struct LevelFlags(LintConfig);
 
 impl FromArgMatches for LevelFlags {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
-        let mut flags: Vec<(usize, RuleLevel, String)> = Vec::new();
-        for (id, _, level, _) in LEVEL_FLAGS {
+        let mut flags: Vec<(usize, RuleLevel, Leveled)> = Vec::new();
+        for LevelFlag { id, level, .. } in LEVEL_FLAGS {
             let indices = matches.indices_of(id).into_iter().flatten();
-            let names = matches.get_many::<String>(id).into_iter().flatten();
-            flags.extend(indices.zip(names).map(|(index, name)| (index, level, name.clone())));
+            let names = matches.get_many::<Leveled>(id).into_iter().flatten();
+            flags.extend(indices.zip(names).map(|(index, name)| (index, level, *name)));
         }
         flags.sort_by_key(|(index, ..)| *index);
-        Ok(Self(flags.into_iter().map(|(_, level, name)| (level, name)).collect()))
+        let mut levels = LintConfig::default();
+        for (_, level, name) in flags {
+            match name {
+                Leveled::Category(category) => levels.categories.set_level(category, level),
+                Leveled::Rule(rule) => levels.rules.set_level(rule, level),
+            }
+        }
+        Ok(Self(levels))
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
@@ -76,12 +123,13 @@ impl FromArgMatches for LevelFlags {
 
 impl Args for LevelFlags {
     fn augment_args(cmd: clap::Command) -> clap::Command {
-        LEVEL_FLAGS.into_iter().fold(cmd, |augmented, (id, short, _, help)| {
+        LEVEL_FLAGS.into_iter().fold(cmd, |augmented, LevelFlag { id, short, help, .. }| {
             augmented.arg(
                 Arg::new(id)
                     .short(short)
                     .long(id)
                     .value_name("NAME")
+                    .value_parser(leveled)
                     .action(ArgAction::Append)
                     .help(help),
             )
@@ -94,7 +142,6 @@ impl Args for LevelFlags {
 }
 
 #[derive(Args)]
-#[expect(clippy::struct_excessive_bools, reason = "clap derive needs one bool field per flag")]
 pub(crate) struct LintArgs {
     /// Files, directories, or globs to lint, and `!` globs to leave out
     /// [default: current directory].
@@ -112,9 +159,14 @@ pub(crate) struct LintArgs {
     #[arg(long = "global", value_name = "NAME")]
     globals: Vec<String>,
 
-    /// Apply auto-fixes and write them back to source files.
+    /// Apply fixes until none is left, and write them back to source files.
     #[arg(long)]
     fix: bool,
+
+    /// Like --fix, but apply suggestions too, which may change what the code
+    /// does, as renaming an unused variable to `_x` does.
+    #[arg(long)]
+    fix_suggestions: bool,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = LintFormat::Default)]
@@ -136,9 +188,13 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     no_error_on_unmatched_pattern: bool,
 
-    /// Print the registered rule names and categories, then exit.
+    /// Print the registered rule names, categories, and fix kinds, then exit.
     #[arg(long)]
     rules: bool,
+
+    /// Print how long each rule took over the run, slowest first.
+    #[arg(long)]
+    timings: bool,
 
     /// Print the lint configuration of the one path or --stdin-filepath given,
     /// or else of the current directory, as JSON, then exit.
@@ -152,13 +208,6 @@ pub(crate) struct LintArgs {
     stdin_filepath: Option<String>,
 }
 
-enum Rendered {
-    /// ariadne output, for stderr.
-    Pretty(Vec<u8>),
-    /// A machine-readable format, one finding per line, for stdout.
-    Lines(String),
-}
-
 /// Per-file lint result, buffered so parallel workers never interleave output.
 struct LintOutcome {
     error_count: usize,
@@ -166,157 +215,155 @@ struct LintOutcome {
     is_fixed: bool,
     /// A file that couldn't be read or written back, for stderr.
     note: Option<String>,
-    rendered: Option<Rendered>,
+    /// The findings in the run's format.
+    rendered: Vec<u8>,
 }
 
 impl LintArgs {
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad config, rule name, or path, or when
-    /// no file matches, and [`Exit::Failure`] when a file can't be read or
-    /// written back, or the findings fail the run under the exit-code policy.
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         if self.rules {
             print_lint_rules();
             return Ok(());
         }
 
+        let overlay = self.lint_overlay();
         if self.print_config {
             let config_path = self.config.as_deref();
-            let config = match (self.stdin_filepath.as_deref(), self.paths.as_slice()) {
-                (Some(path), _) => config_for_one_shot(config_path, path)?,
-                (None, [path]) => config_for_one_shot(config_path, path)?,
-                (None, []) => resolve_project(config_path)?.config,
+            let path = match (self.stdin_filepath.as_deref(), self.paths.as_slice()) {
+                (Some(path), _) => Some(Path::new(path)),
+                (None, [path]) => Some(Path::new(path)),
+                (None, []) => None,
                 (None, _) => return Err(usage_error("`--print-config` takes at most one path")),
             };
-            print_lint_config(&self.lint_config(&config)?);
+            let mut project = match path {
+                Some(file) => one_shot_project(config_path, file)?,
+                None => working_project(config_path)?,
+            };
+            project.overlay_lint(&overlay);
+            print_lint_config(project.linter_for(path).config());
             return Ok(());
         }
 
-        let is_quiet = verbosity == Verbosity::Quiet;
+        let timings = self.timings.then(RuleTimings::new);
 
         // Stdin mode ignores positional paths.
         if let Some(stdin_path) = self.stdin_filepath.as_deref() {
-            let config = config_for_one_shot(self.config.as_deref(), stdin_path)?;
-            let lint_config = self.lint_config(&config)?;
-            return self.run_stdin(stdin_path, &lint_config, &config, is_quiet);
+            let mut project = one_shot_project(self.config.as_deref(), Path::new(stdin_path))?;
+            project.overlay_lint(&overlay);
+            let status = self.run_stdin(stdin_path, &project, timings.as_ref(), verbosity);
+            if let Some(rule_timings) = &timings {
+                print_rule_timings(rule_timings);
+            }
+            return status;
         }
 
         let files = project_files(
             self.config.as_deref(),
             &self.paths,
             self.no_error_on_unmatched_pattern,
-            |config| self.lint_config(config),
+            Some(&overlay),
         )?;
 
-        let mut total_errors = 0usize;
-        let mut total_warnings = 0usize;
-        let mut total_fixed = 0usize;
-        {
-            // One lock and one flush per stream for the whole run.
-            let mut stderr = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stderr().lock());
-            let mut stdout = BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, io::stdout().lock());
-            for_each_outcome_in_order(
-                &files,
-                |file, allocator| {
-                    self.lint_file(
-                        allocator,
-                        &file.path,
-                        file.target,
-                        &file.project.settings,
-                        is_quiet,
-                    )
-                },
-                |outcome| {
-                    if let Some(note) = &outcome.note {
-                        let _unused = writeln!(stderr, "{note}");
-                    }
-                    let _unused = match &outcome.rendered {
-                        Some(Rendered::Pretty(pretty)) => stderr.write_all(pretty),
-                        Some(Rendered::Lines(lines)) => stdout.write_all(lines.as_bytes()),
-                        None => Ok(()),
-                    };
-                    total_errors = total_errors.saturating_add(outcome.error_count);
-                    total_warnings = total_warnings.saturating_add(outcome.warning_count);
-                    total_fixed = total_fixed.saturating_add(usize::from(outcome.is_fixed));
-                    Ok(())
-                },
-            )
-        }?;
+        let mut total_errors = 0;
+        let mut total_warnings = 0;
+        let mut total_fixed = 0;
+        for_each_outcome_in_order(
+            &files,
+            |file, allocator| self.lint_file(allocator, file, timings.as_ref(), verbosity),
+            |outcome, output| {
+                if let Some(note) = &outcome.note {
+                    let _ = writeln!(output.stderr, "{note}");
+                }
+                let _ = if self.format.is_for_tools() {
+                    output.stdout.write_all(&outcome.rendered)
+                } else {
+                    output.stderr.write_all(&outcome.rendered)
+                };
+                total_errors += outcome.error_count;
+                total_warnings += outcome.warning_count;
+                total_fixed += usize::from(outcome.is_fixed);
+                Ok(())
+            },
+        )?;
 
-        if !self.silent && self.fix && total_fixed > 0 && !is_quiet {
-            eprintln!("Fixed {total_fixed} file(s)");
+        if !self.silent && verbosity != Verbosity::Quiet {
+            if total_fixed > 0 {
+                eprintln!("Fixed {total_fixed} file(s)");
+            }
+            if total_errors > 0 || total_warnings > 0 {
+                eprintln!(
+                    "{total_errors} error(s), {total_warnings} warning(s) in {} file(s)",
+                    files.len()
+                );
+            }
+        }
+        if let Some(rule_timings) = &timings {
+            print_rule_timings(rule_timings);
         }
 
-        if !self.silent && !is_quiet && (total_errors > 0 || total_warnings > 0) {
-            eprintln!(
-                "{total_errors} error(s), {total_warnings} warning(s) in {} file(s)",
-                files.len()
-            );
-        }
-
-        self.exit_status(total_errors, total_warnings, is_quiet)
+        self.exit_status(total_errors, total_warnings, verbosity)
     }
 
     /// `--fix` writes the fixed source to stdout, never to disk, and findings
     /// to stderr whatever their format, because stdout is the new file content.
     /// Otherwise output formats and the exit-code policy match the file walk.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Exit::Usage`] on a bad dialect, and [`Exit::Failure`] when
-    /// stdin can't be read or the findings fail the run under the exit-code
-    /// policy.
     fn run_stdin(
         &self,
         stdin_path: &str,
-        lint_config: &LintConfig,
-        luck_config: &LuckConfig,
-        is_quiet: bool,
+        project: &Project,
+        timings: Option<&RuleTimings>,
+        verbosity: Verbosity,
     ) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
-        let target = luck_config.target_for_path(Path::new(stdin_path)).map_err(usage_error)?;
-        let version = target.lua_version();
+        let path = Some(Path::new(stdin_path));
+        let (stdlib, linter) = (project.stdlib_for(path).library(), project.linter_for(path));
         let allocator = Allocator::new();
-        let mut diags = luck_linter::lint(&allocator, &source, target, lint_config);
-        let mut current_source = source.as_str();
+        let fixes = self.fixes();
+        let (current_source, messages, fix_error) =
+            fixed_or_linted(&linter, &allocator, &source, stdlib, fixes, timings);
 
-        if self.fix {
-            if let Some(fixed) = luck_linter::apply_fixes(&allocator, &source, &diags, version) {
-                diags = luck_linter::lint_parsed(&fixed, target, lint_config);
-                current_source = fixed.source;
-            }
+        if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
             // pipelines take stdout as the new file content.
-            print!("{current_source}");
+            write_output(None, current_source)?;
+        }
+        if let Some(error) = &fix_error {
+            eprintln!("error: cannot fix `{stdin_path}`: {error}");
         }
 
-        let (total_errors, total_warnings) = severity_counts(&diags);
+        let (finding_errors, total_warnings) = severity_counts(&messages);
+        let total_errors = finding_errors + usize::from(fix_error.is_some());
+        let version = stdlib.target.version();
 
-        if let Some(rendered) = self.rendered(stdin_path, current_source, diags, version, is_quiet)
-        {
-            match rendered {
-                Rendered::Pretty(pretty) => {
-                    let _unused = io::stderr().write_all(&pretty);
-                }
-                Rendered::Lines(lines) if self.fix => eprint!("{lines}"),
-                Rendered::Lines(lines) => print!("{lines}"),
-            }
-        }
+        let source_file = SourceFile { label: stdin_path, text: Some(current_source), version };
+        let diags = messages.into_iter().map(|message| message.diagnostic);
+        let rendered = self.rendered(source_file, diags, verbosity);
+        let _ = if self.format.is_for_tools() && fixes.is_empty() {
+            io::stdout().write_all(&rendered)
+        } else {
+            io::stderr().write_all(&rendered)
+        };
 
-        self.exit_status(total_errors, total_warnings, is_quiet)
+        self.exit_status(total_errors, total_warnings, verbosity)
     }
 
-    /// # Errors
-    ///
-    /// Returns [`Exit::Failure`] on any error, and on warnings under
-    /// `--deny-warnings` or when they exceed `--max-warnings`.
+    /// The kinds of fix the run applies.
+    const fn fixes(&self) -> FixKind {
+        if self.fix_suggestions {
+            FixKind::all()
+        } else if self.fix {
+            FixKind::Fix
+        } else {
+            FixKind::empty()
+        }
+    }
+
     fn exit_status(
         &self,
         total_errors: usize,
         total_warnings: usize,
-        is_quiet: bool,
+        verbosity: Verbosity,
     ) -> Result<(), Exit> {
         if total_errors > 0 {
             return Err(Exit::Failure);
@@ -326,7 +373,7 @@ impl LintArgs {
             && total_warnings > limit
         {
             // `--quiet` printed none of the warnings that fail the run.
-            return Err(if is_quiet && !self.silent {
+            return Err(if verbosity == Verbosity::Quiet && !self.silent {
                 operation_error(format!("{total_warnings} warning(s) exceed the limit of {limit}"))
             } else {
                 Exit::Failure
@@ -338,229 +385,190 @@ impl LintArgs {
     fn lint_file(
         &self,
         allocator: &Allocator,
-        file_path: &Path,
-        target: LuaTarget,
-        lint_config: &LintConfig,
-        is_quiet: bool,
+        file: &ProjectFile,
+        timings: Option<&RuleTimings>,
+        verbosity: Verbosity,
     ) -> LintOutcome {
-        let source = match read_source_file(file_path) {
-            Ok(text) => text,
+        let file_path = file.path.as_path();
+        let label = file_path.to_string_lossy();
+        let source = match FileSystemOs.read(file_path) {
+            Ok(bytes) => bytes,
             Err(error) => {
+                let version = file.project.target_for(Some(file_path)).version();
+                let source_file = SourceFile { label: &label, text: None, version };
+                let diag = Diagnostic::e010(&label, &error);
                 // A skipped file fails the run, so CI can't pass with files
                 // left unlinted.
                 return LintOutcome {
                     error_count: 1,
                     warning_count: 0,
                     is_fixed: false,
-                    note: Some(format!("error: cannot read `{}`: {error}", file_path.display())),
-                    rendered: None,
+                    note: None,
+                    rendered: self.rendered(source_file, [diag], verbosity),
                 };
             }
         };
 
-        let version = target.lua_version();
-        let mut diags = luck_linter::lint(allocator, &source, target, lint_config);
-        let mut current_source = source.as_str();
+        let stdlib = file.project.stdlib_for(Some(file_path)).library();
+        let linter = file.project.linter_for(Some(file_path));
+        let (fixed, fixed_messages, fix_error) =
+            fixed_or_linted(&linter, allocator, &source, stdlib, self.fixes(), timings);
+        let mut note =
+            fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
-        let mut note = None;
+        let (current_source, messages) = if fixed == source {
+            (fixed, fixed_messages)
+        } else if let Err(error) = fs::write(file_path, fixed) {
+            note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
+            (source.as_slice(), linted(&linter, allocator, &source, stdlib, timings))
+        } else {
+            is_fixed = true;
+            (fixed, fixed_messages)
+        };
 
-        if self.fix
-            && let Some(fixed) = luck_linter::apply_fixes(allocator, &source, &diags, version)
-        {
-            if let Err(error) = fs::write(file_path, fixed.source) {
-                note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-            } else {
-                is_fixed = true;
-                diags = luck_linter::lint_parsed(&fixed, target, lint_config);
-                current_source = fixed.source;
-            }
-        }
-
-        let (finding_errors, warning_count) = severity_counts(&diags);
-        let rendered =
-            self.rendered(&file_path.to_string_lossy(), current_source, diags, version, is_quiet);
-        // A fix that couldn't be written fails the run, as an unread file does.
-        let error_count = finding_errors.saturating_add(usize::from(note.is_some()));
+        let (finding_errors, warning_count) = severity_counts(&messages);
+        let version = stdlib.target.version();
+        let source_file = SourceFile { label: &label, text: Some(current_source), version };
+        let diags = messages.into_iter().map(|message| message.diagnostic);
+        let rendered = self.rendered(source_file, diags, verbosity);
+        // Fixes that couldn't be made or written fail the run, as an unread
+        // file does.
+        let error_count = finding_errors + usize::from(note.is_some());
         LintOutcome { error_count, warning_count, is_fixed, note, rendered }
     }
 
-    /// What the run prints for `diags`, if anything. `--quiet` drops the
-    /// warnings from the output only: they still count toward the exit code.
+    /// What the run prints for `diags`, all in `file`, in its format.
+    /// `--quiet` drops the warnings from the output only: they still count
+    /// toward the exit code.
     fn rendered(
         &self,
-        file_label: &str,
-        source: &str,
-        mut diags: Vec<LintDiagnostic>,
-        version: LuaVersion,
-        is_quiet: bool,
-    ) -> Option<Rendered> {
-        if is_quiet {
-            diags.retain(|diag| diag.severity == Severity::Error);
+        file: SourceFile<'_>,
+        diags: impl IntoIterator<Item = Diagnostic>,
+        verbosity: Verbosity,
+    ) -> Vec<u8> {
+        let mut rendered = Vec::new();
+        if self.silent {
+            return rendered;
         }
-        (!diags.is_empty() && !self.silent).then(|| self.render(file_label, source, diags, version))
+        let shown: Vec<Diagnostic> = diags
+            .into_iter()
+            .filter(|diag| verbosity != Verbosity::Quiet || diag.is_error())
+            .collect();
+        self.format.reporter().render(file, &shown, &mut rendered);
+        rendered
     }
 
-    fn render(
-        &self,
-        file_label: &str,
-        source: &str,
-        diags: Vec<LintDiagnostic>,
-        version: LuaVersion,
-    ) -> Rendered {
-        match self.format {
-            LintFormat::Default => {
-                let renderable_diags: Vec<Diagnostic> = diags
-                    .into_iter()
-                    .map(|diag| Diagnostic {
-                        code: diag.rule,
-                        message: diag.message.into_owned(),
-                        severity: diag.severity,
-                        file_path: file_label.to_owned(),
-                        span: diag.span,
-                        help: diag.help.map(Cow::into_owned),
-                    })
-                    .collect();
-                Rendered::Pretty(render_document_diags(
-                    file_label.to_owned(),
-                    source,
-                    &renderable_diags,
-                    version,
-                ))
-            }
-            LintFormat::Json => {
-                let line_index = LineIndex::new(source, version);
-                let mut lines = String::new();
-                for diag in &diags {
-                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
-                    let (end_line, end_column) =
-                        line_and_column(&line_index, source, diag.span.end);
-                    let json_value = serde_json::json!({
-                        "file": file_label,
-                        "rule": diag.rule,
-                        "severity": diag.severity.name(),
-                        "message": diag.message,
-                        "help": diag.help,
-                        "start": diag.span.start,
-                        "end": diag.span.end,
-                        "line": line,
-                        "column": column,
-                        "end_line": end_line,
-                        "end_column": end_column,
-                    });
-                    lines.push_str(&json_value.to_string());
-                    lines.push('\n');
-                }
-                Rendered::Lines(lines)
-            }
-            LintFormat::Github => {
-                let line_index = LineIndex::new(source, version);
-                // The runner resolves a relative path from the workspace root,
-                // not the working directory, and makes an absolute one
-                // relative to the workspace.
-                let label = Path::new(file_label);
-                let absolute = path::absolute(label).unwrap_or_else(|_| label.to_path_buf());
-                let file = annotation_property(&normalize_path(&absolute));
-                let mut lines = String::new();
-                for diag in &diags {
-                    let (line, column) = line_and_column(&line_index, source, diag.span.start);
-                    let (end_line, end_column) =
-                        line_and_column(&line_index, source, diag.span.end);
-                    let message = diag.help.as_ref().map_or_else(
-                        || diag.message.clone(),
-                        |help| format!("{}\nhelp: {help}", diag.message).into(),
-                    );
-                    let _unused = writeln!(
-                        lines,
-                        "::{} file={file},line={line},endLine={end_line},col={column},\
-                         endColumn={end_column},title={}::{}",
-                        diag.severity.name(),
-                        annotation_property(diag.rule),
-                        annotation_data(&message),
-                    );
-                }
-                Rendered::Lines(lines)
-            }
-        }
-    }
-
-    /// # Errors
-    ///
-    /// Reports the failure and returns [`Exit::Usage`] on an unknown rule
-    /// name.
-    fn lint_config(&self, luck_config: &LuckConfig) -> Result<LintConfig, Exit> {
-        let mut lint_config = luck_config.lint.clone().unwrap_or_default();
-
-        // Flags win over the config and apply in command-line order, so the
-        // last one to name a rule or a category decides it.
-        for (level, name) in &self.levels.0 {
-            match Category::from_name(name) {
-                Some(category) => lint_config.categories.set_level(category, *level),
-                None => lint_config.rules.set_level(name, *level),
-            }
-        }
-
-        lint_config.extra_globals.extend(self.globals.iter().cloned());
-
-        // Check rule names from both the config and the CLI, since an unknown one
-        // would otherwise be ignored silently.
-        let unknown_names = luck_linter::unknown_rule_names(&lint_config);
-        if !unknown_names.is_empty() {
-            let quoted_names: Vec<String> =
-                unknown_names.iter().map(|name| format!("`{name}`")).collect();
-            return Err(usage_error(format!(
-                "unknown lint rule name(s): {}",
-                quoted_names.join(", ")
-            )));
-        }
-
-        Ok(lint_config)
+    /// What the flags layer over every file's lint settings, the config's
+    /// overrides included.
+    fn lint_overlay(&self) -> LintConfig {
+        LintConfig { extra_globals: self.globals.clone(), ..self.levels.0.clone() }
     }
 }
 
-/// The message of a GitHub workflow command, escaped the way the runner
-/// unescapes it.
-fn annotation_data(text: &str) -> String {
-    text.replace('%', "%25").replace('\r', "%0D").replace('\n', "%0A")
+/// `source` with its fixes of the kinds `fixes` holds applied, the fixed
+/// text's messages, and why fixing failed, if it did.
+///
+/// A failure leaves `source` as it was, with its own messages. Each lint's
+/// rules are timed into `timings` when given.
+fn fixed_or_linted<'ast>(
+    linter: &Linter,
+    allocator: &'ast Allocator,
+    source: &'ast [u8],
+    stdlib: &StdlibLibrary<'_>,
+    fixes: FixKind,
+    timings: Option<&RuleTimings>,
+) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
+    let fix_error = if fixes.is_empty() {
+        None
+    } else {
+        match linter.fix(allocator, source, stdlib, fixes, timings) {
+            Ok(Fixed { parse, messages }) => return (parse.source, messages, None),
+            Err(error) => Some(error),
+        }
+    };
+    (source, linted(linter, allocator, source, stdlib, timings), fix_error)
 }
 
-/// A property value of a GitHub workflow command, where `:` and `,` delimit
-/// too.
-fn annotation_property(text: &str) -> String {
-    annotation_data(text).replace(':', "%3A").replace(',', "%2C")
+/// `source`'s messages, parsed into `allocator` as `stdlib`'s target.
+fn linted(
+    linter: &Linter,
+    allocator: &Allocator,
+    source: &[u8],
+    stdlib: &StdlibLibrary<'_>,
+    timings: Option<&RuleTimings>,
+) -> Vec<Message> {
+    let parse = luck_parser::parse(allocator, source, stdlib.target.version());
+    linter.run(&parse, stdlib, FixKind::empty(), timings)
 }
 
-/// Count `diags` by severity, as `(errors, warnings)`.
-fn severity_counts(diags: &[LintDiagnostic]) -> (usize, usize) {
-    let count = |severity: Severity| diags.iter().filter(|diag| diag.severity == severity).count();
+/// Count `messages` by severity, as `(errors, warnings)`.
+fn severity_counts(messages: &[Message]) -> (usize, usize) {
+    let count =
+        |severity: Severity| messages.iter().filter(|message| message.severity == severity).count();
     (count(Severity::Error), count(Severity::Warning))
 }
 
+/// One line per rule: its name, its category, and the kinds its fixes come
+/// in, comma-separated and empty for a rule with none.
 fn print_lint_rules() {
-    let mut rules: Vec<(&str, &str)> =
-        luck_linter::rules().map(|rule| (rule.name(), rule.category().name())).collect();
-    rules.sort_unstable();
-    for (name, category) in rules {
-        println!("{name}\t{category}");
+    let mut rules = RuleId::ALL;
+    rules.sort_unstable_by_key(|rule| rule.name());
+    for rule in rules {
+        let kinds: Vec<&str> = [(FixKind::Fix, "fix"), (FixKind::Suggestion, "suggestion")]
+            .into_iter()
+            .filter(|&(kind, _)| rule.fix_kind().contains(kind))
+            .map(|(_, kind_name)| kind_name)
+            .collect();
+        println!("{}\t{}\t{}", rule.name(), rule.category().name(), kinds.join(","));
     }
+}
+
+/// Writes `timings` to stderr as oxlint's `--debug timings` does.
+///
+/// Each rule the run called gets a row, slowest first, with its time, its
+/// share of every rule's, and how many times the linter called it.
+fn print_rule_timings(timings: &RuleTimings) {
+    let rows = timings.sorted();
+    let rule_width = rows.iter().map(|row| row.rule.name().len()).fold("Rule".len(), usize::max);
+    let calls_width =
+        rows.iter().map(|row| row.calls.to_string().len()).fold("Calls".len(), usize::max);
+    let total_seconds: f64 = rows.iter().map(|row| row.duration.as_secs_f64()).sum();
+    let mut lines = vec![
+        "Rule timings:".to_owned(),
+        format!(
+            "{:<rule_width$}  {:>10}  {:>8}  {:>calls_width$}",
+            "Rule", "Time (ms)", "Relative", "Calls"
+        ),
+        format!("{:-<rule_width$}  {:-<10}  {:-<8}  {:-<calls_width$}", "", "", "", ""),
+    ];
+    lines.extend(rows.iter().map(|row| {
+        let (name, seconds, calls) = (row.rule.name(), row.duration.as_secs_f64(), row.calls);
+        let millis = seconds * 1000.0;
+        let percent: f64 = if total_seconds > 0.0 { seconds / total_seconds * 100.0 } else { 0.0 };
+        format!("{name:<rule_width$}  {millis:>10.3}  {percent:>7.1}%  {calls:>calls_width$}")
+    }));
+    eprintln!("{}", lines.join("\n"));
 }
 
 /// Prints `lint_config` as a `luck.json` `lint` section.
 fn print_lint_config(lint_config: &LintConfig) {
-    // The config holds only strings, numbers, and string-keyed maps, which
-    // always serialize.
-    if let Ok(json) = serde_json::to_string_pretty(lint_config) {
-        println!("{json}");
-    }
+    let json = serde_json::to_string_pretty(lint_config)
+        .expect("a lint config holds only strings, numbers, and string-keyed maps");
+    println!("{json}");
 }
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::sync::Arc;
 
     use clap::Parser as _;
+    use clap::error::ErrorKind;
+    use luck_stdlib::library_for;
+    use luck_token::{LuaTarget, LuaVersion};
 
     use super::*;
-    use crate::cli::{Cli, Command};
+    use crate::cli::Cli;
+    use crate::commands::Command;
 
     fn lint_args(flags: &[&str]) -> LintArgs {
         let command_line = ["luck", "lint"].iter().chain(flags);
@@ -580,25 +588,13 @@ mod tests {
     }
 
     fn resolved_lint_config(args: &LintArgs) -> LintConfig {
-        let project = resolve_project(args.config.as_deref()).expect("config resolves");
-        args.lint_config(&project.config).expect("lint config resolves")
+        let mut project = working_project(args.config.as_deref()).expect("config resolves");
+        project.overlay_lint(&args.lint_overlay());
+        project.linter_for(None).config().clone()
     }
 
-    fn lint_source(
-        source: &str,
-        target: LuaTarget,
-        lint_config: &LintConfig,
-    ) -> Vec<LintDiagnostic> {
-        luck_linter::lint(&Allocator::new(), source, target, lint_config)
-    }
-
-    fn rendered_lines(format: &str, file_label: &str, source: &str) -> String {
-        let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
-        let args = lint_args(&["--format", format]);
-        match args.render(file_label, source, diags, LuaVersion::Lua54) {
-            Rendered::Lines(lines) => lines,
-            Rendered::Pretty(_) => panic!("{format} is a line format"),
-        }
+    fn lint_source(source: &str, target: LuaTarget, linter: &Linter) -> Vec<Message> {
+        linted(linter, &Allocator::new(), source.as_bytes(), library_for(target), None)
     }
 
     #[test]
@@ -617,20 +613,15 @@ mod tests {
             "luck.json",
         ]);
         assert_eq!(paths, vec!["src".to_owned(), "main.lua".to_owned()]);
-        assert_eq!(
-            levels.0,
-            [
-                (RuleLevel::Error, "undefined_variable".to_owned()),
-                (RuleLevel::Off, "style".to_owned()),
-                (RuleLevel::Warn, "shadowing".to_owned()),
-            ]
-        );
+        assert_eq!(levels.0.rules.level(RuleId::UndefinedVariable), Some(RuleLevel::Error));
+        assert_eq!(levels.0.categories.level(Category::Style), Some(RuleLevel::Off));
+        assert_eq!(levels.0.rules.level(RuleId::Shadowing), Some(RuleLevel::Warn));
         assert!(fix);
         assert_eq!(config, Some(PathBuf::from("luck.json")));
     }
 
     #[test]
-    fn lint_long_flag_aliases_parse() {
+    fn lint_long_flags_parse() {
         let LintArgs {
             levels,
             max_warnings,
@@ -639,15 +630,16 @@ mod tests {
             no_error_on_unmatched_pattern,
             rules,
             print_config,
+            timings,
             format,
             ..
         } = lint_args(&[
             "--deny",
-            "x",
+            "shadowing",
             "--allow",
-            "y",
+            "perf",
             "--warn",
-            "z",
+            "empty_block",
             "--config",
             "c.json",
             "--max-warnings",
@@ -657,25 +649,30 @@ mod tests {
             "--no-error-on-unmatched-pattern",
             "--rules",
             "--print-config",
+            "--timings",
             "--format",
             "json",
         ]);
-        assert_eq!(
-            levels.0,
-            [
-                (RuleLevel::Error, "x".to_owned()),
-                (RuleLevel::Off, "y".to_owned()),
-                (RuleLevel::Warn, "z".to_owned()),
-            ]
-        );
+        assert_eq!(levels.0.rules.level(RuleId::Shadowing), Some(RuleLevel::Error));
+        assert_eq!(levels.0.categories.level(Category::Performance), Some(RuleLevel::Off));
+        assert_eq!(levels.0.rules.level(RuleId::EmptyBlock), Some(RuleLevel::Warn));
         assert_eq!(max_warnings, Some(3));
         assert!(deny_warnings);
         assert!(silent);
         assert!(no_error_on_unmatched_pattern);
         assert!(rules);
         assert!(print_config);
+        assert!(timings);
         assert!(matches!(format, LintFormat::Json));
         assert!(matches!(lint_args(&["-f", "github"]).format, LintFormat::Github));
+    }
+
+    #[test]
+    fn fix_flags_pick_the_kinds_of_fix_to_apply() {
+        assert_eq!(lint_args(&[]).fixes(), FixKind::empty());
+        assert_eq!(lint_args(&["--fix"]).fixes(), FixKind::Fix);
+        assert_eq!(lint_args(&["--fix-suggestions"]).fixes(), FixKind::all());
+        assert_eq!(lint_args(&["--fix", "--fix-suggestions"]).fixes(), FixKind::all());
     }
 
     #[test]
@@ -692,7 +689,7 @@ mod tests {
             project_with_config(r#"{"lua":"lua54","lint":{"rules":{"empty_block":"error"}}}"#);
 
         let lint_config = resolved_lint_config(&lint_args(&["-c", &config_arg]));
-        assert_eq!(lint_config.rules.level("empty_block"), Some(RuleLevel::Error));
+        assert_eq!(lint_config.rules.level(RuleId::EmptyBlock), Some(RuleLevel::Error));
     }
 
     #[test]
@@ -709,7 +706,7 @@ mod tests {
             "-W",
             "style",
         ]));
-        assert_eq!(lint_config.rules.level("empty_block"), Some(RuleLevel::Off));
+        assert_eq!(lint_config.rules.level(RuleId::EmptyBlock), Some(RuleLevel::Off));
         assert_eq!(lint_config.categories.level(Category::Style), Some(RuleLevel::Warn));
     }
 
@@ -731,7 +728,7 @@ mod tests {
         let level_after = |flags: &[&str]| {
             let command_line: Vec<&str> =
                 ["-c", config_arg.as_str()].iter().chain(flags).copied().collect();
-            resolved_lint_config(&lint_args(&command_line)).rules.level("empty_block")
+            resolved_lint_config(&lint_args(&command_line)).rules.level(RuleId::EmptyBlock)
         };
 
         assert_eq!(level_after(&["-D", "empty_block", "-A", "empty_block"]), Some(RuleLevel::Off));
@@ -746,11 +743,17 @@ mod tests {
     }
 
     #[test]
-    fn lint_config_rejects_an_unknown_rule_name() {
-        let (_directory, config_arg) = project_with_config(r#"{"lua":"lua54"}"#);
-        let args = lint_args(&["-c", &config_arg, "-D", "not_a_real_rule"]);
-        let project = resolve_project(args.config.as_deref()).expect("config resolves");
-        assert_eq!(args.lint_config(&project.config).unwrap_err(), Exit::Usage);
+    fn level_flags_reject_a_name_no_rule_or_category_has() {
+        let Err(error) = Cli::try_parse_from(["luck", "lint", "-D", "unsued_variable"]) else {
+            panic!("an unknown rule must not parse");
+        };
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        assert!(
+            error
+                .to_string()
+                .contains("unknown lint rule `unsued_variable`, did you mean `unused_variable`?"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -758,76 +761,56 @@ mod tests {
         let source = "\
 local unused = 1
 print(undefined_var)";
-        let diags = lint_source(source, LuaTarget::Lua54, &LintConfig::default());
+        let diags = lint_source(source, LuaTarget::Lua54, &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
-        let lines_when = |is_quiet: bool| match args.rendered(
-            "a.lua",
-            source,
-            diags.clone(),
-            LuaVersion::Lua54,
-            is_quiet,
-        ) {
-            Some(Rendered::Lines(lines)) => lines,
-            Some(Rendered::Pretty(_)) | None => panic!("json renders lines"),
+        let file = SourceFile {
+            label: "a.lua",
+            text: Some(source.as_bytes()),
+            version: LuaVersion::Lua54,
+        };
+        let lines_when = |verbosity: Verbosity| {
+            let shown = diags.iter().map(|message| message.diagnostic.clone());
+            let rendered = args.rendered(file, shown, verbosity);
+            String::from_utf8(rendered).expect("JSON is UTF-8")
         };
 
-        let all_lines = lines_when(false);
+        let all_lines = lines_when(Verbosity::Normal);
         assert_eq!(all_lines.lines().count(), 2, "{all_lines}");
-        let quiet_lines = lines_when(true);
+        let quiet_lines = lines_when(Verbosity::Quiet);
         assert_eq!(quiet_lines.lines().count(), 1, "{quiet_lines}");
         assert!(quiet_lines.contains(r#""severity":"error""#), "{quiet_lines}");
     }
 
     #[test]
-    fn json_format_gives_the_line_and_column_of_a_finding() {
-        let lines = rendered_lines(
-            "json",
-            "src/a.lua",
-            "\
-local a = 1
-local unused = 2
-print(a)",
-        );
-        let finding: serde_json::Value = serde_json::from_str(lines.trim()).expect("one finding");
-        assert_eq!(finding["rule"], "unused_variable");
-        let number = |key: &str| finding[key].as_u64().expect("a number");
-        assert_eq!((number("start"), number("end")), (18, 24));
-        assert_eq!((number("line"), number("column")), (2, 7));
-        assert_eq!((number("end_line"), number("end_column")), (2, 13));
+    fn a_silent_run_renders_nothing() {
+        let linter = Linter::new(LintConfig::default());
+        let diags = lint_source("print(undefined_var)", LuaTarget::Lua54, &linter);
+        assert!(!diags.is_empty(), "{diags:?}");
+        let file = SourceFile {
+            label: "a.lua",
+            text: Some(b"print(undefined_var)"),
+            version: LuaVersion::Lua54,
+        };
+        let shown = diags.into_iter().map(|message| message.diagnostic);
+        let rendered = lint_args(&["--silent"]).rendered(file, shown, Verbosity::Normal);
+        assert!(rendered.is_empty(), "{}", String::from_utf8_lossy(&rendered));
     }
 
-    /// The path is absolute, since the runner would resolve a relative one
-    /// from the workspace root even when lint runs in a subdirectory.
+    /// The format's own output carries the failure, so tools reading the json
+    /// or github format see it too.
     #[test]
-    fn github_format_writes_one_annotation_per_finding() {
-        let lines = rendered_lines(
-            "github",
-            r"src\a.lua",
-            "\
-local a = 1
-local unused = 2
-print(a)",
-        );
-        let (file, rest) = lines
-            .strip_prefix("::warning file=")
-            .and_then(|annotation| annotation.split_once(','))
-            .expect("one warning annotation");
-        let working_directory = env::current_dir().expect("current directory");
-        assert_eq!(
-            file,
-            annotation_property(&normalize_path(&working_directory.join("src/a.lua")))
-        );
-        assert_eq!(
-            rest,
-            "line=2,endLine=2,col=7,endColumn=13,title=unused_variable::unused variable \
-             `unused`%0Ahelp: prefix with `_` to suppress this warning\n"
-        );
-    }
+    fn an_unreadable_file_reports_e010_in_the_run_format() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let file = ProjectFile { path: directory.path().join("gone.lua"), project };
 
-    #[test]
-    fn annotation_escapes_what_the_runner_would_parse() {
-        assert_eq!(annotation_data("50% of a\r\nb"), "50%25 of a%0D%0Ab");
-        assert_eq!(annotation_property("C:/a,b.lua"), "C%3A/a%2Cb.lua");
+        let outcome =
+            lint_args(&["-f", "json"]).lint_file(&Allocator::new(), &file, None, Verbosity::Normal);
+
+        assert_eq!((outcome.error_count, outcome.note), (1, None));
+        let rendered = String::from_utf8(outcome.rendered).expect("JSON is UTF-8");
+        assert_eq!(rendered.lines().count(), 1, "{rendered}");
+        assert!(rendered.contains(r#""code":"E010""#), "{rendered}");
     }
 
     #[test]
@@ -837,21 +820,20 @@ print(a)",
         let (directory, config_arg) = project_with_config(r#"{"luau":"roblox"}"#);
 
         let args = lint_args(&["-c", &config_arg]);
-        let project = resolve_project(args.config.as_deref()).expect("config resolves");
-        let lint_config = args.lint_config(&project.config).expect("lint config resolves");
-
+        let project = working_project(args.config.as_deref()).expect("config resolves");
         let luau_file = directory.path().join("main.luau");
-        let target = project.config.target_for_path(&luau_file).expect("luau target resolves");
+        let linter = project.linter_for(Some(&luau_file));
+        let target = project.target_for(Some(&luau_file));
         assert_eq!(target, LuaTarget::LuauRoblox);
 
-        let diags = lint_source("print(game)", target, &lint_config);
+        let diags = lint_source("print(game)", target, &linter);
         assert!(
-            diags.iter().all(|diag| diag.rule != "undefined_variable"),
+            diags.iter().all(|diag| diag.code != "undefined_variable"),
             "roblox global `game` should not be undefined"
         );
 
         // Standalone Luau (the default) does flag it; that contrast is the point.
-        let standalone_diags = lint_source("print(game)", LuaTarget::Luau, &lint_config);
-        assert!(standalone_diags.iter().any(|diag| diag.rule == "undefined_variable"));
+        let standalone_diags = lint_source("print(game)", LuaTarget::Luau, &linter);
+        assert!(standalone_diags.iter().any(|diag| diag.code == "undefined_variable"));
     }
 }

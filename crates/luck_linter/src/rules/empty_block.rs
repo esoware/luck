@@ -1,158 +1,86 @@
-use luck_ast::{Block, Statement};
-use luck_token::Span;
+use luck_ast::{AstKind, AstType};
+use luck_semantic::{AstNode, AstTypesBitset};
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct EmptyBlock;
 
-impl_rule!(EmptyBlock, "empty_block", Suspicious, Warning, "block body is empty");
+declare_lint_rule!(EmptyBlock, Suspicious, Warning, "block body is empty");
 
-impl NodeRule for EmptyBlock {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[
-            NodeType::IfStatement,
-            NodeType::WhileLoop,
-            NodeType::DoBlock,
-            NodeType::NumericFor,
-            NodeType::GenericFor,
-            NodeType::RepeatLoop,
-        ])
-    }
-    fn on_stmt(
-        &self,
-        stmt: &Statement<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let (block, message, span) = match stmt {
-            Statement::IfStatement(if_stmt) => {
-                findings.extend(check_body(&if_stmt.block, "empty `if` block", if_stmt.span));
-                for clause in &if_stmt.elseif_clauses {
-                    findings.extend(check_body(&clause.block, "empty `elseif` block", clause.span));
-                }
-                if let Some(else_clause) = &if_stmt.else_clause {
-                    findings.extend(check_body(
-                        &else_clause.block,
-                        "empty `else` block",
-                        else_clause.span,
-                    ));
-                }
-                return;
-            }
-            Statement::WhileLoop(node) => (&node.block, "empty `while` loop body", node.span),
-            Statement::DoBlock(node) => (&node.block, "empty `do` block", node.span),
-            Statement::NumericFor(node) => {
-                (&node.block, "empty numeric `for` loop body", node.span)
-            }
-            Statement::GenericFor(node) => {
-                (&node.block, "empty generic `for` loop body", node.span)
-            }
-            Statement::RepeatLoop(node) => (&node.block, "empty `repeat` loop body", node.span),
-            Statement::Assignment(_)
-            | Statement::FunctionCall(_)
-            | Statement::FunctionDecl(_)
-            | Statement::LocalFunction(_)
-            | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
-            | Statement::Break(_)
-            | Statement::CompoundAssignment(_)
-            | Statement::TypeDeclaration(_)
-            | Statement::Error(_) => return,
+impl Rule for EmptyBlock {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[
+        AstType::IfStatement,
+        AstType::ElseIfClause,
+        AstType::ElseClause,
+        AstType::WhileLoop,
+        AstType::DoBlock,
+        AstType::NumericFor,
+        AstType::GenericFor,
+        AstType::RepeatLoop,
+    ]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let kind = node.kind();
+        let (block, message, span) = if let AstKind::IfStatement(if_stmt) = kind {
+            (&if_stmt.block, "empty `if` block", if_stmt.span)
+        } else if let AstKind::ElseIfClause(clause) = kind {
+            (&clause.block, "empty `elseif` block", clause.span)
+        } else if let AstKind::ElseClause(clause) = kind {
+            (&clause.block, "empty `else` block", clause.span)
+        } else if let AstKind::WhileLoop(while_loop) = kind {
+            (&while_loop.block, "empty `while` loop body", while_loop.span)
+        } else if let AstKind::DoBlock(do_block) = kind {
+            (&do_block.block, "empty `do` block", do_block.span)
+        } else if let AstKind::NumericFor(numeric_for) = kind {
+            (&numeric_for.block, "empty numeric `for` loop body", numeric_for.span)
+        } else if let AstKind::GenericFor(generic_for) = kind {
+            (&generic_for.block, "empty generic `for` loop body", generic_for.span)
+        } else if let AstKind::RepeatLoop(repeat_loop) = kind {
+            (&repeat_loop.block, "empty `repeat` loop body", repeat_loop.span)
+        } else {
+            return;
         };
-        findings.extend(check_body(block, message, span));
+        if block.stmts.is_empty() {
+            context.diagnostic(Finding::new(message, span));
+        }
     }
-}
-
-/// A `;` is no statement, so a body of only `;` is as empty as one of
-/// nothing, and the formatter prints it as one.
-fn check_body(block: &Block<'_>, message: &'static str, span: Span) -> Option<Finding> {
-    let is_empty = block.last_stmt.is_none()
-        && block.stmts.iter().all(|stmt| matches!(stmt, Statement::EmptyStatement(_)));
-    is_empty.then(|| Finding::new(message, span))
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&EmptyBlock, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_each_empty_if_branch() {
-        let diags = run("\
+    const PASS: &[&str] = &[
+        "do return end",
+        "\
 local c = 1
-if c then elseif c then else end");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            ["empty `if` block", "empty `elseif` block", "empty `else` block"],
-            "{diags:?}"
-        );
-    }
+if c then print(1) else print(2) end
+while c do break end",
+    ];
 
-    #[test]
-    fn flags_empty_loop_and_do_bodies() {
-        let diags = run("\
+    const FAIL: &[&str] = &[
+        "\
+local c = 1
+if c then elseif c then else end",
+        "\
 local c = 1
 while c do end
 do end
 for i = 1, 2 do end
 for k in pairs({}) do end
-repeat until c");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            [
-                "empty `while` loop body",
-                "empty `do` block",
-                "empty numeric `for` loop body",
-                "empty generic `for` loop body",
-                "empty `repeat` loop body",
-            ],
-            "{diags:?}"
-        );
-    }
-
-    #[test]
-    fn flags_body_of_only_semicolons() {
-        let diags = run("\
+repeat until c",
+        "\
 local c = 1
 if c then ; else ;; end
-do ; end");
-        let messages: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-        assert_eq!(
-            messages,
-            ["empty `if` block", "empty `else` block", "empty `do` block"],
-            "{diags:?}"
-        );
-    }
+do ; end",
+    ];
 
     #[test]
-    fn ignores_block_with_only_a_return() {
-        let diags = run("do return end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_non_empty_blocks() {
-        let diags = run("\
-local c = 1
-if c then print(1) else print(2) end
-while c do break end");
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::EmptyBlock, PASS, FAIL).test_and_snapshot();
     }
 }

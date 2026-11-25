@@ -1,33 +1,27 @@
-use luck_ast::Expression;
+use luck_ast::{AstKind, AstType, Expression};
+use luck_semantic::{AstNode, AstTypesBitset};
 use luck_token::BinOp;
 
 use crate::binary::operator_pairs;
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::node_type::{NodeType, NodeTypeSet};
-use crate::rule::{LintContext, NodeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ConstantTableComparison;
 
-impl_rule!(
+declare_lint_rule!(
     ConstantTableComparison,
-    "constant_table_comparison",
     Correctness,
     Error,
     "comparison with a table literal, which compares by identity"
 );
 
-impl NodeRule for ConstantTableComparison {
-    fn node_types(&self) -> NodeTypeSet {
-        NodeTypeSet::from_types(&[NodeType::BinaryOp])
-    }
-    fn on_expr(
-        &self,
-        expr: &Expression<'_>,
-        _context: &LintContext<'_>,
-        findings: &mut Vec<Finding>,
-    ) {
-        let Expression::BinaryOp(run) = expr else {
+impl Rule for ConstantTableComparison {
+    const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::BinaryOp]);
+
+    fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
+        let AstKind::BinaryOp(run) = node.kind() else {
             return;
         };
         if !run.links.first().op.is_comparison() {
@@ -40,10 +34,10 @@ impl NodeRule for ConstantTableComparison {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne)
                 && (is_table(pair.lhs) || is_table(pair.rhs))
             {
-                findings.push(
+                context.diagnostic(
                     Finding::new(
                         "tables compare by identity, so a table literal never equals another value",
-                        pair.span(),
+                        pair.span(context),
                     )
                     .with_help("compare table contents instead"),
                 );
@@ -54,33 +48,23 @@ impl NodeRule for ConstantTableComparison {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
-
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&ConstantTableComparison, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_equality_with_table_literal() {
-        let diags = run("local same = x == {}");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn flags_inequality_with_table_literal_on_left() {
-        let diags = run("local differs = {1} ~= x");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_comparison_of_table_variables() {
-        let diags = run("\
+    const PASS: &[&str] = &["\
 local t = {}
-local same = x == t");
-        assert!(diags.is_empty(), "{diags:?}");
+local same = x == t"];
+
+    const FAIL: &[&str] = &[
+        "local same = x == {}",
+        "local differs = {1} ~= x",
+        "\
+local x = {}
+if x == {} then end",
+    ];
+
+    #[test]
+    fn test() {
+        Tester::new(RuleId::ConstantTableComparison, PASS, FAIL).test_and_snapshot();
     }
 }

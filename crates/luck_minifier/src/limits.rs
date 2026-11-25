@@ -7,12 +7,14 @@ use luck_ast::FunctionBody;
 /// `MAXSTACK` is 250, and `luaK_checkstack` rejects reaching it.
 pub(crate) const MAX_REGISTERS: usize = 249;
 
-/// A numeric `for` loop's hidden locals, before its variable.
-pub(crate) const NUMERIC_FOR_STATE_LOCALS: usize = 3;
+/// The most registers a numeric `for` loop's state takes besides its
+/// variable's on any target: the three hidden locals of 5.1 to 5.4, or
+/// Luau's limit, step, and index.
+pub(crate) const NUMERIC_FOR_STATE_REGISTERS: usize = 3;
 
-/// A generic `for` loop's hidden locals, before its variables: 5.4's four,
-/// the most any target holds.
-pub(crate) const GENERIC_FOR_STATE_LOCALS: usize = 4;
+/// The most registers a generic `for` loop's state takes besides its
+/// variables' on any target: 5.4's four hidden locals.
+pub(crate) const GENERIC_FOR_STATE_REGISTERS: usize = 4;
 
 /// Registers one assignment target can hold until the statement stores it:
 /// its value, and on 5.4 `_ENV` and the key of a global whose name is past
@@ -24,11 +26,11 @@ const REGISTERS_PER_ASSIGNMENT_TARGET: usize = 3;
 /// This is well under the 200 C levels `restassign` recurses through, so the
 /// target count needs no limit of its own.
 pub(crate) const fn assignment_target_limit(live_registers: usize) -> usize {
-    MAX_REGISTERS.saturating_sub(live_registers).div_euclid(REGISTERS_PER_ASSIGNMENT_TARGET)
+    MAX_REGISTERS.saturating_sub(live_registers) / REGISTERS_PER_ASSIGNMENT_TARGET
 }
 
 /// A `:` method's `self` and a named vararg aren't all visible from the body
 /// alone, so both are assumed present.
 pub(crate) fn parameter_locals(body: &FunctionBody<'_>) -> usize {
-    body.params.len().saturating_add(2)
+    body.params.len() + 2
 }

@@ -3,7 +3,7 @@ use std::fs;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 const MISTYPED_TYPE_CHECK: &str = "\
 local x = 1
@@ -31,7 +31,11 @@ fn lint_json_carries_a_rules_help() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let finding: serde_json::Value =
         serde_json::from_str(stdout.lines().next().expect("one finding")).expect("a JSON object");
-    assert_eq!(finding["rule"], "unknown_type", "{stdout}");
+    assert_eq!(finding["code"], "unknown_type", "{stdout}");
+    assert!(
+        finding["url"].as_str().is_some_and(|url| url.ends_with("/rules/unknown_type.rs")),
+        "{stdout}"
+    );
     assert_eq!(finding["help"], "did you mean `string`?", "{stdout}");
 }
 
@@ -44,38 +48,38 @@ fn lint_json_help_is_null_for_a_rule_with_none() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let finding: serde_json::Value =
         serde_json::from_str(stdout.lines().next().expect("one finding")).expect("a JSON object");
-    assert_eq!(finding["rule"], "parse_error", "{stdout}");
+    assert_eq!(finding["code"], "E008", "{stdout}");
     assert!(finding["help"].is_null(), "{stdout}");
 }
 
+/// Lua reads a source as bytes, so a byte that isn't UTF-8 outside a string
+/// is a parse error, shown in the file as a one-byte encoding shows it.
 #[test]
-fn unreadable_dependency_reports_e010_without_a_debug_line() {
+fn a_dependency_that_is_not_utf8_reports_its_parse_error_in_place() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", "return require(\"dep\")\n");
-    fs::write(directory.path().join("dep.lua"), [0xFFu8, 0xFE]).unwrap();
+    fs::write(directory.path().join("dep.lua"), b"return \xFF\n").unwrap();
 
     luck_in(directory.path())
         .args(["bundle", "main.lua", "-t", "54"])
         .assert()
-        .code(1i32)
-        .stderr(predicate::str::contains("[E010] error: cannot read file"))
-        .stderr(predicate::str::contains("help: check that the file exists and is readable"))
+        .code(1)
+        .stderr(predicate::str::contains("unexpected byte 0xFF"))
+        .stderr(predicate::str::contains("dep.lua:1:8"))
         .stderr(predicate::str::contains("CacheMiss").not())
         .stderr(predicate::str::contains("Unable to fetch").not());
 }
 
 #[test]
-fn unreadable_entry_reports_e010_without_a_debug_line() {
+fn an_entry_that_is_not_utf8_bundles_its_bytes_as_written() {
     let directory = TempDir::new().unwrap();
-    fs::write(directory.path().join("main.lua"), [0xFFu8, 0xFE]).unwrap();
+    fs::write(directory.path().join("main.lua"), b"-- caf\xE9\nreturn '\xFF\xFE'\n").unwrap();
 
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "-t", "54"])
+        .args(["bundle", "main.lua", "-t", "51"])
         .assert()
-        .code(1i32)
-        .stderr(predicate::str::contains("[E010] error: cannot read file"))
-        .stderr(predicate::str::contains("CacheMiss").not())
-        .stderr(predicate::str::contains("Unable to fetch").not());
+        .success()
+        .stdout(b"-- caf\xE9\nreturn '\xFF\xFE'\n".as_slice());
 }
 
 #[test]
@@ -90,8 +94,7 @@ return value
 ",
     );
 
-    let assert =
-        luck_in(directory.path()).args(["minify", "main.lua", "--stats"]).assert().code(0i32);
+    let assert = luck_in(directory.path()).args(["minify", "main.lua", "--stats"]).assert().code(0);
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.is_ascii() && stderr.contains(" -> "), "{stderr}");
 }
@@ -113,10 +116,25 @@ return value
         r#"{ "entry": "main.lua", "output": "out.lua", "minify": true }"#,
     );
 
-    let assert = luck_in(directory.path()).arg("build").assert().code(0i32);
+    let assert = luck_in(directory.path()).arg("build").assert().code(0);
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.is_ascii(), "{stderr}");
     assert!(stderr.contains("->") && stderr.contains("done in"), "{stderr}");
+}
+
+#[test]
+fn build_reports_a_size_increase_without_a_double_minus() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.lua", "return 1\n");
+    write_file(
+        directory.path(),
+        "luck.json",
+        r#"{"entry":"main.lua","output":"bundle.lua","minify":true,"preamble":"a preamble long enough to outweigh the code"}"#,
+    );
+
+    let stderr = stderr_text(&run(directory.path(), &["build"]));
+
+    assert!(!stderr.contains("(--"), "a grown bundle must not report `(--N%)`:\n{stderr}");
 }
 
 #[test]
@@ -125,7 +143,7 @@ fn failed_build_reports_a_lowercase_error() {
     write_file(directory.path(), "main.lua", "local =\n");
     write_file(directory.path(), "luck.json", r#"{ "entry": "main.lua", "output": "out.lua" }"#);
 
-    let assert = luck_in(directory.path()).arg("build").assert().code(1i32);
+    let assert = luck_in(directory.path()).arg("build").assert().code(1);
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(stderr.contains("error:\u{1b}[0m build failed"), "{stderr}");
     assert!(!stderr.contains('\u{2717}'), "{stderr}");

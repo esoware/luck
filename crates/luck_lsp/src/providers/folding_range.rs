@@ -1,13 +1,13 @@
-use luck_ast::{FunctionBody, Statement, TableConstructor, Visitor};
+use ls_types::FoldingRange;
+use luck_ast::{FunctionBody, GetSpan as _, Statement, TableConstructor, Visit};
 use luck_token::Span;
-use tower_lsp_server::ls_types::FoldingRange;
 
 use crate::document::DocumentState;
 use crate::line_index::Positions;
 
 pub(crate) fn folding_ranges(document: &DocumentState) -> Vec<FoldingRange> {
     let mut folder = Folder { document, starts: document.positions(), ranges: Vec::new() };
-    folder.visit_block(&document.parse().block);
+    folder.visit_block(&document.parse().chunk.block);
     folder.ranges
 }
 
@@ -37,7 +37,7 @@ impl Folder<'_> {
     }
 }
 
-impl<'ast> Visitor<'ast> for Folder<'_> {
+impl<'ast> Visit<'ast> for Folder<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
         match stmt {
             Statement::DoBlock(_)
@@ -51,13 +51,14 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
             | Statement::FunctionDecl(_)
             | Statement::LocalFunction(_)
             | Statement::LocalAssignment(_)
-            | Statement::EmptyStatement(_)
+            | Statement::Return(_)
             | Statement::Goto(_)
             | Statement::Label(_)
             | Statement::GlobalDeclaration(_)
             | Statement::GlobalFunction(_)
             | Statement::GlobalStar(_)
             | Statement::Break(_)
+            | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => {}
@@ -67,20 +68,20 @@ impl<'ast> Visitor<'ast> for Folder<'_> {
 
     // Every function form reaches this: declarations, `local` and `global`
     // functions, Luau type functions, and anonymous functions.
-    fn visit_function_body(&mut self, body: &'ast FunctionBody<'ast>) {
-        self.push(body.span);
-        self.walk_function_body(body);
+    fn visit_function_body(&mut self, function_body: &'ast FunctionBody<'ast>) {
+        self.push(function_body.span);
+        self.walk_function_body(function_body);
     }
 
-    fn visit_table_constructor(&mut self, table: &'ast TableConstructor<'ast>) {
-        self.push(table.span);
-        self.walk_table_constructor(table);
+    fn visit_table_constructor(&mut self, table_constructor: &'ast TableConstructor<'ast>) {
+        self.push(table_constructor.span);
+        self.walk_table_constructor(table_constructor);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_core::LuaTarget;
+    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;

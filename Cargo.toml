@@ -17,11 +17,13 @@ rust-version = "1.91"
 [workspace.dependencies]
 luck_allocator       = { version = "0.6.0", path = "crates/luck_allocator" }
 luck_ast             = { version = "0.6.0", path = "crates/luck_ast" }
+luck_ast_macros      = { version = "0.6.0", path = "crates/luck_ast_macros" }
 luck_benchmark_files = { path = "crates/luck_benchmark_files" }
 luck_bundler         = { version = "0.6.0", path = "crates/luck_bundler" }
 luck_codegen         = { version = "0.6.0", path = "crates/luck_codegen" }
 luck_config          = { version = "0.6.0", path = "crates/luck_config" }
-luck_core            = { version = "0.6.0", path = "crates/luck_core" }
+luck_data_structures = { version = "0.6.0", path = "crates/luck_data_structures" }
+luck_diagnostics     = { version = "0.6.0", path = "crates/luck_diagnostics" }
 luck_formatter       = { version = "0.6.0", path = "crates/luck_formatter" }
 luck_lexer           = { version = "0.6.0", path = "crates/luck_lexer" }
 luck_linter          = { version = "0.6.0", path = "crates/luck_linter" }
@@ -30,41 +32,51 @@ luck_minifier        = { version = "0.6.0", path = "crates/luck_minifier" }
 luck_parser          = { version = "0.6.0", path = "crates/luck_parser" }
 luck_resolver        = { version = "0.6.0", path = "crates/luck_resolver" }
 luck_semantic        = { version = "0.6.0", path = "crates/luck_semantic" }
+luck_simd            = { version = "0.6.0", path = "crates/luck_simd" }
+luck_stdlib          = { version = "0.6.0", path = "crates/luck_stdlib" }
 luck_testgen         = { path = "crates/luck_testgen" }
 luck_token           = { version = "0.6.0", path = "crates/luck_token" }
+luck_value           = { version = "0.6.0", path = "crates/luck_value" }
 
 ariadne               = "0.6"
 assert_cmd            = "2"
+bitflags              = "2"
 clap                  = { version = "4", features = ["derive"] }
 criterion2            = { version = "3", default-features = false }
+crossbeam-channel     = "0.5"
 flate2                = "1"
 globset               = { version = "0.4", default-features = false }
+hashbrown             = { version = "0.17", default-features = false, features = ["inline-more"] }
 humansize             = "2"
 ignore                = "0.4"
 insta                 = "1"
-itoa                  = "1"
 json5                 = "1.3"
+ls-types              = "0.0.6"
+lsp-server            = "0.10"
 memchr                = "2"
 mimalloc-safe         = "0.1.70"
+mlua                  = { version = "0.12", features = ["vendored"] }
 notify-debouncer-mini = "0.7"
-oxc_data_structures   = { version = "0.159", features = ["types"] }
 parking_lot           = "0.12"
 petgraph              = { version = "0.8", default-features = false, features = ["std"] }
 predicates            = { version = "3", default-features = false }
+prettyplease          = "0.3"
+proc-macro2           = "1"
 quickcheck            = { version = "1.1", default-features = false }
+quote                 = "1"
 rayon                 = "1"
 rustc-hash            = "2"
-ryu                   = "1"
 saphyr                = "0.3"
 schemars              = "1"
+self_cell             = "1.3"
 serde                 = { version = "1", features = ["derive"] }
 serde_json            = "1"
-simdutf8              = { version = "0.1.5", features = ["aarch64_neon"] }
+similar               = "2"
+syn                   = { version = "3", default-features = false, features = ["full", "parsing", "printing"] }
 tar                   = "0.4"
 tempfile              = "3"
-tokio                 = "1"
+thread_local          = "1.1"
 toml                  = { version = "1.2", default-features = false, features = ["parse", "serde", "std"] }
-tower-lsp-server      = "0.23"
 unicode-width         = { version = "0.2", default-features = false }
 ureq                  = "3"
 
@@ -104,94 +116,139 @@ inherits = "release"
 lto = false
 codegen-units = 256
 
-[workspace.lints.rust]
-# Every warn-by-default rustc lint fails the build. Allow-by-default lints
-# have no group, so the ones we want are listed one by one.
-warnings = { level = "deny", priority = -1 }
-rust_2018_idioms = { level = "deny", priority = -1 }
+# For `just conformance`: optimized without the fat LTO, with every debug
+# assertion and overflow check on, and with panics that unwind, so a stage
+# that panics on one suite file is reported for that file and the run goes on.
+[profile.conformance]
+inherits = "release"
+lto = false
+codegen-units = 256
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
 
-absolute_paths_not_starting_with_crate = "deny"
-ambiguous_negative_literals = "deny"
-closure_returning_async_block = "deny"
-deprecated_in_future = "deny"
-explicit_outlives_requirements = "deny"
-ffi_unwind_calls = "deny"
-impl_trait_redundant_captures = "deny"
-keyword_idents = "deny"
-let_underscore_drop = "deny"
-macro_use_extern_crate = "deny"
-meta_variable_misuse = "deny"
-missing_copy_implementations = "deny"
-missing_debug_implementations = "deny"
-non_ascii_idents = "deny"
-raw_borrows_via_references = "deny"
-redundant_imports = "deny"
-redundant_lifetimes = "deny"
-single_use_lifetimes = "deny"
-trivial_casts = "deny"
-trivial_numeric_casts = "deny"
-unit_bindings = "deny"
-unnameable_types = "deny"
-unreachable_pub = "deny"
-# Deny, not forbid, so the justified sites in luck_token, luck_lexer,
-# luck_resolver, luck_lsp, luck_benchmark, and luck_allocs can #[expect] it.
-unsafe_code = "deny"
-unsafe_op_in_unsafe_fn = "deny"
-unused_extern_crates = "deny"
-unused_import_braces = "deny"
-unused_lifetimes = "deny"
-unused_macro_rules = "deny"
-unused_qualifications = "deny"
-variant_size_differences = "deny"
+# Every level here is a warning. `just lint` and `cargo doc` turn warnings into
+# errors through `build.warnings`, so a build or a test run mid-edit still goes
+# through.
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+ambiguous_negative_literals = "warn"
+deprecated_in_future = "warn"
+ffi_unwind_calls = "warn"
+impl_trait_redundant_captures = "warn"
+macro_use_extern_crate = "warn"
+meta_variable_misuse = "warn"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+non_ascii_idents = "warn"
+raw_borrows_via_references = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unit_bindings = "warn"
+unnameable_types = "warn"
+unreachable_pub = "warn"
+unsafe_code = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_qualifications = "warn"
 
 [workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
-cargo = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-pedantic = { level = "deny", priority = -1 }
-restriction = { level = "deny", priority = -1 }
-
-# Fires on enabling the restriction group, which is the point of this table.
-blanket_clippy_restriction_lints = "allow"
-
-# Each of these contradicts the lint named beside it, so one side of every
-# pair is off.
-implicit_return = "allow"                 # needless_return
-pattern_type_mismatch = "allow"           # ref_patterns
-pub_with_shorthand = "allow"              # pub_without_shorthand
-redundant_pub_crate = "allow"             # unreachable_pub
-rest_pattern_accessible_field = "allow"   # unneeded_field_pattern
-self_named_module_files = "allow"         # mod_module_files
-unseparated_literal_suffix = "allow"      # separated_literal_suffix
+cargo = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 
 # Third-party dependencies pull in more than one version of syn, hashbrown,
 # bitflags, windows-sys, and others.
 multiple_crate_versions = "allow"
 
-# #[non_exhaustive] would force `_ =>` arms in other crates, and AGENTS.md
-# forbids those.
-exhaustive_enums = "allow"
-exhaustive_structs = "allow"
+# `#[must_use]` goes where dropping the result is a bug, not on every pure fn.
+must_use_candidate = "allow"
+# Every bool struct it flagged here was a set of independent flags.
+struct_excessive_bools = "allow"
+# Length alone isn't a reason to split a function into single-caller helpers.
+too_many_lines = "allow"
 
-# AGENTS.md defaults to no comments.
-missing_docs_in_private_items = "allow"
+# Nursery and restriction lints are opted into one at a time. Each one here
+# flags a bug, a performance trap, a confusing construct, or a break from an
+# AGENTS.md rule, and its fix is never worse code. Lints that only pick one of
+# two equally good spellings, or whose fixes clippy documents as sometimes
+# worse, stay off.
+as_ptr_cast_mut = "warn"
+clear_with_drain = "warn"
+coerce_container_to_any = "warn"
+collection_is_never_read = "warn"
+debug_assert_with_mut_call = "warn"
+fallible_impl_from = "warn"
+iter_with_drain = "warn"
+large_stack_frames = "warn"
+literal_string_with_formatting_args = "warn"
+needless_collect = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_type_cast = "warn"
+non_send_fields_in_send_ty = "warn"
+or_fun_call = "warn"
+path_buf_push_overwrite = "warn"
+read_zero_byte_vec = "warn"
+redundant_clone = "warn"
+search_is_some = "warn"
+significant_drop_in_scrutinee = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+tuple_array_conversions = "warn"
+type_repetition_in_bounds = "warn"
+uninhabited_references = "warn"
+unnecessary_struct_initialization = "warn"
+unused_peekable = "warn"
+unused_rounding = "warn"
+useless_let_if_seq = "warn"
+volatile_composites = "warn"
 
-# AGENTS.md puts public-API tests in tests/, outside any test module.
-tests_outside_test_module = "allow"
-
-# Integration-test helpers live in tests/it/common/mod.rs. mod_module_files keeps every other
-# module in a self-named file.
-definition_in_module_root = "allow"
-
-# The luck facade is nothing but re-exports.
-pub_use = "allow"
-
-# Field order is observable: clap prints flags in declaration order, and the
-# config structs set the schema's order.
-arbitrary_source_item_ordering = "allow"
-
-# Not contradictions, just not worth their cost here.
-missing_inline_in_public_items = "allow"
-missing_trait_methods = "allow"
-question_mark_used = "allow"
-single_call_fn = "allow"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+as_underscore = "warn"
+cfg_not_test = "warn"
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+default_union_representation = "warn"
+empty_drop = "warn"
+error_impl_error = "warn"
+exit = "warn"
+fn_to_numeric_cast_any = "warn"
+get_unwrap = "warn"
+infinite_loop = "warn"
+iter_over_hash_type = "warn"
+large_include_file = "warn"
+map_with_unused_argument_over_ranges = "warn"
+min_ident_chars = "warn"
+missing_assert_message = "warn"
+mixed_read_write_in_expression = "warn"
+mod_module_files = "warn"
+multiple_unsafe_ops_per_block = "warn"
+non_ascii_literal = "warn"
+non_zero_suggestions = "warn"
+precedence_bits = "warn"
+# The language server speaks its protocol over stdout.
+print_stderr = "warn"
+print_stdout = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+same_name_method = "warn"
+shadow_unrelated = "warn"
+string_lit_chars_any = "warn"
+suspicious_xor_used_as_pow = "warn"
+todo = "warn"
+try_err = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+unnecessary_rest_pattern = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unused_result_ok = "warn"
+unwrap_used = "warn"
+use_debug = "warn"
+verbose_file_reads = "warn"
+wildcard_enum_match_arm = "warn"

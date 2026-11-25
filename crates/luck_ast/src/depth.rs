@@ -1,14 +1,15 @@
-use core::mem;
+use std::mem;
 
 use luck_token::Span;
 
 use crate::expr::Expression;
+use crate::generated::Visit;
+use crate::span::GetSpan as _;
 use crate::stmt::{Block, Statement};
 use crate::types::Type;
-use crate::visitor::Visitor;
 
 /// The deepest tree `luck_parser` builds, in every dialect, in the levels
-/// [`Visitor::descend`] counts.
+/// [`Visit::descend`] counts.
 ///
 /// Luau's parser counts a level for each statement in a block and each
 /// expression, and stops past 1,000, and Lua's stops at 200. Nesting a
@@ -23,17 +24,16 @@ pub const MAX_NESTING_DEPTH: usize = 2001;
 
 /// The stack a thread needs to run any luck stage on any input.
 ///
-/// That's about six times the most any stage was measured to take on a tree
-/// [`MAX_NESTING_DEPTH`] deep in an optimized build, on Linux and Windows,
-/// and two and a half times in an unoptimized one. A main thread starts with
-/// the platform's stack, 1 MiB on Windows, and a spawned Rust thread with
-/// 2 MiB, so give this to every thread that parses, prints, formats,
-/// minifies, analyzes, lints, or bundles, with
-/// `std::thread::Builder::stack_size`. The linter runs a large file's rules
-/// on rayon's pool, so build that with `ThreadPoolBuilder::stack_size` too.
-/// `luck_lsp` serves requests on the thread that polls it and on tokio's
-/// blocking pool, which takes it from `Builder::thread_stack_size`.
-/// `luck_bundler` starts its own threads with it.
+/// That's at least six times the most any stage was measured to take on a
+/// tree [`MAX_NESTING_DEPTH`] deep in an optimized build, and two and a half
+/// times in an unoptimized one, with Cargo's default full debuginfo or with
+/// line tables only. A main thread starts with the platform's stack, 1 MiB
+/// on Windows, and a spawned Rust thread with 2 MiB, so give this to every
+/// thread that parses, prints, formats, minifies, analyzes, lints, or
+/// bundles, with `std::thread::Builder::stack_size`. `luck_bundler` reads
+/// modules on rayon's pool, so build that with
+/// `ThreadPoolBuilder::stack_size` too. `luck_lsp` starts its own workers
+/// with it.
 ///
 /// A stack is reserved address space, and a thread takes memory only for the
 /// pages it touches.
@@ -43,9 +43,8 @@ pub const MIN_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
-#[must_use]
 pub fn block_nesting_depth(block: &Block<'_>) -> usize {
-    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    let mut meter = DepthMeter::default();
     meter.visit_block(block);
     meter.deepest
 }
@@ -54,9 +53,8 @@ pub fn block_nesting_depth(block: &Block<'_>) -> usize {
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a tree of any depth.
-#[must_use]
 pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
-    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    let mut meter = DepthMeter::default();
     meter.visit_expr(expr);
     meter.deepest
 }
@@ -65,9 +63,8 @@ pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
 /// `MAX_NESTING_DEPTH + 1` for anything deeper.
 ///
 /// The walk stops there, so it is safe on a type of any depth.
-#[must_use]
 pub fn type_nesting_depth(ty: &Type<'_>) -> usize {
-    let mut meter = DepthMeter { depth: 0, deepest: 0 };
+    let mut meter = DepthMeter::default();
     meter.visit_type(ty);
     meter.deepest
 }
@@ -77,27 +74,27 @@ pub fn type_nesting_depth(ty: &Type<'_>) -> usize {
 /// [`MAX_NESTING_DEPTH`]: one for each construct the cap refuses.
 ///
 /// The walk stops at the cap, so it is safe on a tree of any depth.
-#[must_use]
 pub fn spans_past_nesting_cap(block: &Block<'_>, depth: usize) -> Vec<Span> {
     let mut finder = OverflowFinder { depth, node: block.span, spans: Vec::new() };
     finder.visit_block(block);
     finder.spans
 }
 
+#[derive(Default)]
 struct DepthMeter {
     depth: usize,
     deepest: usize,
 }
 
-impl Visitor<'_> for DepthMeter {
+impl Visit<'_> for DepthMeter {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         self.deepest = self.deepest.max(self.depth);
         self.depth <= MAX_NESTING_DEPTH
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 }
 
@@ -108,9 +105,9 @@ struct OverflowFinder {
     spans: Vec<Span>,
 }
 
-impl<'ast> Visitor<'ast> for OverflowFinder {
+impl<'ast> Visit<'ast> for OverflowFinder {
     fn descend(&mut self) -> bool {
-        self.depth = self.depth.saturating_add(1);
+        self.depth += 1;
         let fits = self.depth <= MAX_NESTING_DEPTH;
         if !fits {
             self.spans.push(self.node);
@@ -119,7 +116,7 @@ impl<'ast> Visitor<'ast> for OverflowFinder {
     }
 
     fn ascend(&mut self) {
-        self.depth = self.depth.saturating_sub(1);
+        self.depth -= 1;
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Statement<'ast>) {
@@ -143,17 +140,14 @@ impl<'ast> Visitor<'ast> for OverflowFinder {
 
 #[cfg(test)]
 mod tests {
-    use luck_allocator::Box;
     use luck_token::{BinOp, UnOp};
 
     use super::*;
-    use crate::expr::{BinaryLink, BinaryOp, UnaryOp};
     use crate::fixtures::Fixture;
-    use crate::one_or_more::OneOrMore;
     use crate::synth::{FunctionSignature, Synth};
 
     fn return_depth<'ast>(synth: Synth<'ast>, expr: Expression<'ast>) -> usize {
-        block_nesting_depth(&synth.block([], Some(synth.return_([expr]))))
+        block_nesting_depth(&synth.block([synth.return_([expr])]))
     }
 
     #[test]
@@ -161,7 +155,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         assert_eq!(expr_nesting_depth(&synth.name_expr("x")), 0);
-        assert_eq!(expr_nesting_depth(&synth.number("1")), 0);
+        assert_eq!(expr_nesting_depth(&synth.number_i64(1)), 0);
         assert_eq!(return_depth(synth, synth.name_expr("x")), 1);
     }
 
@@ -171,7 +165,7 @@ mod tests {
         let synth = fixture.synth();
         let leaf = || synth.name_expr("x");
         for (label, expr) in [
-            ("parentheses", synth.parenthesized(leaf())),
+            ("parentheses", synth.single_value(synth.vararg())),
             ("unary operator", synth.unary_op(UnOp::Not, leaf())),
             ("binary operator", synth.binary_op(leaf(), BinOp::Add, leaf())),
             ("call", synth.call(leaf(), [leaf()])),
@@ -200,7 +194,7 @@ mod tests {
     fn a_function_adds_its_body_and_its_block() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let function = synth.function_def(&[], synth.block([], None));
+        let function = synth.function_def(&[], synth.block([]));
         assert_eq!(expr_nesting_depth(&function), 2);
     }
 
@@ -208,8 +202,8 @@ mod tests {
     fn siblings_count_the_deepest_one_only() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let deep = synth.parenthesized(synth.parenthesized(synth.name_expr("x")));
-        let shallow = synth.parenthesized(synth.name_expr("y"));
+        let deep = synth.unary_op(UnOp::Not, synth.unary_op(UnOp::Not, synth.name_expr("x")));
+        let shallow = synth.unary_op(UnOp::Not, synth.name_expr("y"));
         assert_eq!(expr_nesting_depth(&synth.binary_op(shallow, BinOp::Add, deep)), 3);
     }
 
@@ -220,8 +214,8 @@ mod tests {
         let mut sum = synth.name_expr("x");
         let mut path = synth.name_expr("t");
         let mut concat = synth.name_expr("s");
-        for _ in 0..300u32 {
-            sum = synth.binary_op(sum, BinOp::Sub, synth.number("1"));
+        for _ in 0..300 {
+            sum = synth.binary_op(sum, BinOp::Sub, synth.number_i64(1));
             path = synth.method_call(synth.field(path, "a"), "m", []);
             concat = synth.binary_op(synth.name_expr("s"), BinOp::Concat, concat);
         }
@@ -240,21 +234,12 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_run_nested_in_a_run_counts_its_own_level() {
-        // `(a .. b) .. c` built with no parentheses prints `a .. b .. c`,
-        // which reads back as one run, so the tree is never shallower than
-        // what it prints.
+    fn a_run_in_a_run_at_its_level_counts_its_own_level() {
+        // `(a .. b) .. c`, which prints with its parentheses.
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let allocator = fixture.allocator();
-        let run = |first, operand| {
-            let links = OneOrMore::new(BinaryLink { op: BinOp::Concat, operand }, allocator);
-            Expression::BinaryOp(Box::new_in(
-                BinaryOp { span: Span::default(), first, links },
-                allocator,
-            ))
-        };
-        let nested = run(run(synth.name_expr("a"), synth.name_expr("b")), synth.name_expr("c"));
+        let head = fixture.unspliced_run(synth.name_expr("a"), BinOp::Concat, synth.name_expr("b"));
+        let nested = fixture.unspliced_run(head, BinOp::Concat, synth.name_expr("c"));
         assert_eq!(expr_nesting_depth(&nested), 2);
     }
 
@@ -273,28 +258,28 @@ mod tests {
     fn spans_past_the_cap_name_each_construct_it_refuses() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let groups = |count: usize| {
+        let negations = |count: usize| {
             let mut expr = synth.name_expr("x");
             for _ in 0..count {
-                expr = synth.parenthesized(expr);
+                expr = synth.unary_op(UnOp::Not, expr);
             }
             expr
         };
-        // The `level`th group from the outside.
-        let group_span = |expr: &Expression<'_>, level: usize| {
+        // The `level`th negation from the outside.
+        let negation_span = |expr: &Expression<'_>, level: usize| {
             let mut current = expr;
             for _ in 1..level {
-                if let Expression::Parenthesized(parenthesized) = current {
-                    current = &parenthesized.expr;
+                if let Expression::UnaryOp(negation) = current {
+                    current = &negation.operand;
                 }
             }
             current.span()
         };
-        let (deep, deeper) = (groups(10), groups(12));
-        let expected = [group_span(&deep, 8), group_span(&deeper, 8)];
+        let (deep, deeper) = (negations(10), negations(12));
+        let expected = [negation_span(&deep, 8), negation_span(&deeper, 8)];
         let pair = synth.call(synth.name_expr("f"), [deep, deeper]);
-        let block = synth.block([synth.call_stmt(pair)], None);
-        // The block and the call take two levels, so seven groups of each
+        let block = synth.block([synth.call_stmt(pair)]);
+        // The block and the call take two levels, so seven negations of each
         // argument fit under the cap from nine levels below it.
         assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 9), expected);
         assert_eq!(spans_past_nesting_cap(&block, MAX_NESTING_DEPTH - 14), []);
@@ -304,9 +289,9 @@ mod tests {
     fn nested_blocks_count_one_level_each() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let mut block = synth.block([], None);
-        for _ in 0..9u32 {
-            block = synth.block([synth.do_block(block)], None);
+        let mut block = synth.block([]);
+        for _ in 0..9 {
+            block = synth.block([synth.do_block(block)]);
         }
         assert_eq!(block_nesting_depth(&block), 10);
     }
@@ -321,9 +306,8 @@ mod tests {
             chain = synth.unary_op(UnOp::Not, chain);
         }
         assert_eq!(expr_nesting_depth(&chain), MAX_NESTING_DEPTH);
-        for _ in 0..50_000u32 {
-            let unary_op = UnaryOp { span: Span::default(), op: UnOp::Not, operand: chain };
-            chain = Expression::UnaryOp(Box::new_in(unary_op, allocator));
+        for _ in 0..50_000 {
+            chain = Expression::new_unary_op(Span::default(), UnOp::Not, chain, allocator);
         }
         assert_eq!(expr_nesting_depth(&chain), MAX_NESTING_DEPTH + 1);
     }
@@ -334,11 +318,8 @@ mod tests {
         let synth = fixture.synth();
         let nested = synth.array([synth.array([synth.array([])])]);
         let attribute = synth.function_attribute_with_args("deprecated", [nested]);
-        let function = synth.function_def_full(
-            [attribute],
-            FunctionSignature::default(),
-            synth.block([], None),
-        );
+        let function =
+            synth.function_def_full([attribute], FunctionSignature::default(), synth.block([]));
         assert_eq!(expr_nesting_depth(&function), 4);
     }
 }

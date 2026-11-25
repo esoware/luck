@@ -2,20 +2,29 @@ use luck_lexer::{LexResult, lex};
 use luck_token::{LuaVersion, TokenKind};
 
 pub(crate) fn lex_lua51(source: &str) -> LexResult {
-    lex(source, LuaVersion::Lua51)
+    lex(source.as_bytes(), LuaVersion::Lua51)
+}
+
+/// Every token's kind and text in `source`, which `result` lexed, but the
+/// closing `Eof`'s, errors or not.
+pub(crate) fn token_texts<'source>(
+    result: &LexResult,
+    source: &'source str,
+) -> Vec<(TokenKind, &'source str)> {
+    result
+        .tokens
+        .iter()
+        .filter(|token| token.kind != TokenKind::Eof)
+        .map(|token| (token.kind, str::from_utf8(token.text(source.as_bytes())).unwrap()))
+        .collect()
 }
 
 /// Every token's kind and text but the closing `Eof`'s, after asserting
 /// `source` lexes clean under `version`.
 pub(crate) fn tokens_in(source: &str, version: LuaVersion) -> Vec<(TokenKind, &str)> {
-    let result = lex(source, version);
+    let result = lex(source.as_bytes(), version);
     assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
-    result
-        .tokens
-        .into_iter()
-        .filter(|token| token.kind != TokenKind::Eof)
-        .map(|token| (token.kind, token.text(source)))
-        .collect()
+    token_texts(&result, source)
 }
 
 pub(crate) fn tokens(source: &str) -> Vec<(TokenKind, &str)> {
@@ -29,9 +38,7 @@ pub(crate) fn kinds_in(source: &str, version: LuaVersion) -> Vec<TokenKind> {
 }
 
 pub(crate) fn first_kind_in(source: &str, version: LuaVersion) -> TokenKind {
-    let mut token_kinds = kinds_in(source, version);
-    assert!(!token_kinds.is_empty(), "no tokens produced");
-    token_kinds.swap_remove(0)
+    kinds_in(source, version)[0]
 }
 
 pub(crate) fn kinds(source: &str) -> Vec<TokenKind> {

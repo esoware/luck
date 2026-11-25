@@ -1,34 +1,32 @@
-mod comment;
 mod expr;
 mod function;
-mod identifier;
 mod literal;
 mod stmt;
 mod types;
 
-pub use comment::SyntheticComment;
 pub use expr::FieldSpec;
 pub use function::FunctionSignature;
-pub use identifier::{
-    is_valid_identifier, is_valid_identifier_in, sanitize_identifier, sanitize_identifier_in,
-};
 pub use literal::InterpolatedStringPart;
 pub use types::TypeFieldSpec;
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use std::slice;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use luck_allocator::{Allocator, Box, List, ThinStr};
 use luck_token::{LuaVersion, Span};
 
-use crate::leaf::{Literal, Name};
+use crate::identifier::is_valid_identifier_in;
+use crate::leaf::Name;
 
 /// Node constructors for trees built without source text.
 ///
 /// They're built for tools that emit a tree directly, such as decompilers,
 /// so they also take on the output-validity work such a tool would otherwise
-/// reimplement. Nodes go in the [`Allocator`] the synthesizer is given, and
-/// every name and literal is copied into it. Lists come in as arrays or as
-/// iterators of known length.
+/// reimplement. They build every node with the tree's generated
+/// constructors, such as [`Expression::new_binary_op`](crate::Expression::new_binary_op),
+/// which take each field as given and check nothing. Nodes go in the
+/// [`Allocator`] the synthesizer is given, and every name and string is
+/// copied into it. Lists come in as arrays or as iterators of known length.
 ///
 /// `Synth` is `Copy`, and its methods take `&self`, so calls nest:
 /// `synth.call(synth.name_expr("f"), [synth.nil()])`.
@@ -52,36 +50,25 @@ use crate::leaf::{Literal, Name};
 ///
 /// # What the constructors guarantee
 ///
-/// - **Operator precedence.** [`Synth::binary_op`], [`Synth::unary_op`], and
-///   [`Synth::type_cast`] parenthesize their operands whenever the printed
-///   form would re-parse differently: precedence and associativity for
-///   nested binary operators, `(-a)^b`, greedy Luau if-expressions,
-///   `(a + b) :: T`, chained casts (`(a :: T) :: U`), and casts printed
-///   before `<`, `&`, or `|`, which the type grammar would otherwise
-///   swallow (`(a :: T) < b`).
+/// The printers write the parentheses an expression needs where it goes, so
+/// no constructor adds any: `(a + b) * c`, `(-a)^b`, `("s"):rep(2)`, and
+/// `(a :: T) < b` print right from a tree built any way.
+///
 /// - **Type composition.** [`Synth::ty_optional`], [`Synth::ty_union`], and
 ///   [`Synth::ty_intersection`] parenthesize union, intersection, and
 ///   function members. That keeps their meaning and respects Luau's ban on
 ///   mixing `|` and `&` (or `?` and `&`) without parentheses.
-/// - **Prefix positions.** Call callees, method receivers, and index and
-///   field prefixes are wrapped unless they're already a var, call,
-///   parenthesized expression, or type instantiation: `("s"):rep(2)`,
-///   `({}).x`, `(function() end)()`.
-/// - **Escaping.** [`Synth::string`] and [`Synth::string_bytes`] produce the
-///   quoted literal text. Decimal escapes are always three digits, so a
-///   following literal digit can't extend them. Interpolated-string text
-///   escapes `` ` ``, `{`, and `\`. [`Synth::long_string`] falls back to the
-///   quoted form for carriage returns and NUL bytes.
-/// - **Numeric literals.** [`Synth::number_f64`] and [`Synth::number_i64`]
-///   render any value, including those with no literal form: negatives
-///   (unary minus node), infinities (`1/0`), NaN (`0/0`), and `i64::MIN`
-///   (hex, which wraps to the intended integer on Lua 5.3+). Integral floats
-///   get a `.0` suffix so they stay floats on 5.3+, and exponent form
-///   replaces the plain one whenever it's shorter (`1e300`). On a version
-///   pinned to a single-number dialect (5.1, 5.2, Luau), integral floats
-///   drop the `.0`, `i64::MIN` becomes an exact negated decimal literal, and
-///   other integers may round to the nearest double. NaN sign and payload
-///   aren't preserved.
+/// - **Literals from values.** A string literal holds its value, any bytes,
+///   and a number literal its [`LuaNumber`](luck_token::LuaNumber), and the
+///   printers spell each, escaping what needs it and keeping a float a float
+///   on Lua 5.3+. [`Synth::long_string`] also keeps a long-bracket spelling,
+///   which the formatter prints as is.
+/// - **Numbers no literal holds.** [`Synth::number_f64`] and
+///   [`Synth::number_i64`] build any value: a negative one as a unary minus,
+///   NaN as `0/0`, and `i64::MIN` as a literal on Lua 5.3+, which prints as
+///   the hex that wraps to it. On a version pinned to a single-number dialect
+///   (5.1, 5.2, Luau), every number is a float, and an integer may round to
+///   the nearest double. NaN sign and payload aren't preserved.
 /// - **Loud failure on invalid names.** [`Synth::name`] asserts, in release
 ///   builds too, that its argument is an identifier, so hostile input such
 ///   as bytecode debug info or obfuscated names fails fast instead of
@@ -89,10 +76,13 @@ use crate::leaf::{Literal, Name};
 ///   name goes through it and says so under `# Panics`.
 /// - **Runs.** A run of suffixes, or of binary operators at one level, is one
 ///   level of nesting however long it gets, and the constructors join a run
-///   they extend rather than nest it. Extending a run at its end takes
-///   amortized constant time and arena space, and extending a
-///   right-associative one (`..` or `^`) at its start shifts every link it
-///   holds.
+///   they extend where it groups the same, rather than nest it. Extending a
+///   run at its end takes amortized constant time and arena space, and
+///   extending a right-associative one (`..` or `^`) at its start shifts
+///   every link it holds.
+/// - **Block ends.** [`Synth::block`] puts a `return`, a `continue`, or a
+///   `break` that the dialect takes only at the end of a block, but that has
+///   statements after it, in a `do ... end` of its own.
 ///
 /// # What the caller still owes
 ///
@@ -103,22 +93,22 @@ use crate::leaf::{Literal, Name};
 /// - **Version gating.** Nothing stops you from synthesizing, say, a Lua 5.4
 ///   attribute for a Luau target, so pick constructors that match the
 ///   dialect. [`Synth::with_version`] pins name validity, field-name safety,
-///   and number rendering to one dialect, but deliberately doesn't gate
-///   constructs.
+///   number subtypes, and block ends to one dialect, but deliberately
+///   doesn't gate constructs.
 /// - **Identifier validity.** For names that may not be identifiers (such as
 ///   bytecode debug info), build fields with [`Synth::field_or_index`] and
 ///   table keys with [`Synth::record`], which fall back to the bracketed
 ///   string form. Other name positions (locals, params, labels, function and
 ///   method names) have no bracketed spelling, so rewrite those names with
-///   [`sanitize_identifier`] / [`sanitize_identifier_in`], or check them with
-///   [`is_valid_identifier`] / [`is_valid_identifier_in`] and rename them
-///   yourself. Sanitized names are deterministic but can collide, so
-///   deduplication is up to the caller.
-/// - **Raw text.** [`Synth::number`] and [`Synth::integer_literal`] take
-///   numeral text as written. The printers print each leaf as the tree holds
-///   it, so text that isn't one numeral prints output that doesn't read back
-///   as the tree. The same goes for a node built by hand, with spans from
-///   [`Synth::next_span`].
+///   [`sanitize_identifier`](crate::sanitize_identifier) /
+///   [`sanitize_identifier_in`](crate::sanitize_identifier_in), or check them
+///   with [`is_valid_identifier`](crate::is_valid_identifier) /
+///   [`is_valid_identifier_in`] and rename them yourself. Sanitized names are
+///   deterministic but can collide, so deduplication is up to the caller.
+/// - **Spellings.** A literal built with its own constructor, with spans
+///   from [`Synth::next_span`], may carry a spelling, which the printers
+///   print unchecked, so one that doesn't spell its value prints output that
+///   doesn't read back as the tree.
 /// - **Type names.** A type reads a bare `typeof` as the start of
 ///   `typeof(expr)`, so [`Synth::ty_named`] or [`Synth::ty_generic`] given
 ///   `typeof` prints a type that doesn't read back. Don't build one: a type
@@ -131,11 +121,13 @@ use crate::leaf::{Literal, Name};
 ///   and [`expr_nesting_depth`](crate::expr_nesting_depth) measure a tree of
 ///   any depth without recursing past the cap.
 ///
-/// To format the result, pass it to `luck_formatter::format_block`, with any
-/// [`SyntheticComment`]s wrapped in `Comments::synthetic`. For compact
-/// output, call `luck_codegen::compact`. Both print each leaf as the tree
-/// holds it. `format_block` returns an error for a tree nested past the cap,
-/// and `compact` prints it as it is, output the parser refuses.
+/// To print the result, put its block in a [`Chunk`](crate::Chunk) with the
+/// version it's written in, which the printers spell its numbers for, and
+/// pass that to `luck_formatter::format_chunk`, with any of its
+/// `SyntheticComment`s wrapped in `Comments::synthetic`, or to
+/// `luck_codegen::compact` for compact output. `format_chunk` returns an
+/// error for a tree nested past the cap, and `compact` prints it as it is,
+/// output the parser refuses.
 ///
 /// # Usage
 ///
@@ -147,14 +139,13 @@ use crate::leaf::{Literal, Name};
 /// let allocator = Allocator::new();
 /// let spans = SpanCounter::new();
 /// let synth = Synth::new(&allocator, &spans);
-/// // total = a + b * 2 -- precedence handled, no manual parens.
 /// let sum = synth.binary_op(
 ///     synth.name_expr("a"),
 ///     BinOp::Add,
 ///     synth.binary_op(synth.name_expr("b"), BinOp::Mul, synth.number_i64(2)),
 /// );
 /// let stmt = synth.assign([synth.name_var("total")], [sum]);
-/// let block = synth.block([stmt], None);
+/// let block = synth.block([stmt]);
 /// assert_eq!(block.stmts.len(), 1);
 /// ```
 #[derive(Debug, Clone, Copy)]
@@ -174,14 +165,12 @@ pub struct SpanCounter {
 }
 
 impl SpanCounter {
-    #[must_use]
     pub const fn new() -> Self {
         Self { next_offset: AtomicU64::new(0) }
     }
 
     /// A counter whose spans start at `offset`, for splicing nodes into a
     /// parsed tree without colliding with its byte offsets.
-    #[must_use]
     pub fn starting_at(offset: u32) -> Self {
         Self { next_offset: AtomicU64::new(u64::from(offset)) }
     }
@@ -198,25 +187,20 @@ impl SpanCounter {
     }
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "the synthesizer is one type with its constructors split by node family"
-)]
 impl<'ast> Synth<'ast> {
-    #[must_use]
     pub const fn new(allocator: &'ast Allocator, spans: &'ast SpanCounter) -> Self {
         Self { allocator, spans, version: None }
     }
 
-    /// Pins name handling and number rendering to one dialect.
+    /// Pins name handling, number subtypes, and block ends to one dialect.
     ///
     /// [`Synth::name`] checks names against that dialect's keywords instead
     /// of only the ones every dialect reserves. [`Synth::field_or_index`] and
     /// [`Synth::record`] use the dot or named form for any name that's an
     /// identifier there (`t.goto` on Luau) instead of falling back to
-    /// brackets. [`Synth::number_f64`] and [`Synth::number_i64`] render for
-    /// that dialect's number model. It deliberately doesn't gate which
-    /// constructs you can build.
+    /// brackets. [`Synth::number_i64`] builds a float where every number is
+    /// one, and [`Synth::block`] leaves a `break` that dialect takes anywhere
+    /// as it is. It deliberately doesn't gate which constructs you can build.
     #[must_use]
     pub const fn with_version(mut self, version: LuaVersion) -> Self {
         self.version = Some(version);
@@ -224,8 +208,8 @@ impl<'ast> Synth<'ast> {
     }
 
     /// A fresh single-point span, distinct from every earlier one the counter
-    /// gave out until it reaches `u32::MAX`, for a node built by hand.
-    #[must_use]
+    /// gave out until it reaches `u32::MAX`, for a node built with its own
+    /// constructor.
     pub fn next_span(&self) -> Span {
         self.spans.next_span()
     }
@@ -234,33 +218,32 @@ impl<'ast> Synth<'ast> {
     /// loudly instead of producing output that won't re-parse. Names that may
     /// not be identifiers belong in [`Synth::field_or_index`],
     /// [`Synth::record`], or [`Synth::string`], or need
-    /// [`sanitize_identifier`] / [`sanitize_identifier_in`] first.
+    /// [`sanitize_identifier`](crate::sanitize_identifier) /
+    /// [`sanitize_identifier_in`](crate::sanitize_identifier_in) first.
     ///
     /// # Panics
     ///
     /// Panics if `text` isn't an identifier under the pinned version, or in
     /// any dialect when none is pinned.
-    #[must_use]
     pub fn name(&self, text: &str) -> Name<'ast> {
-        let is_valid = self.version.map_or_else(
-            || is_valid_identifier(text),
-            |version| is_valid_identifier_in(text, version),
-        );
+        let is_valid = self.versions().iter().any(|&version| is_valid_identifier_in(text, version));
         assert!(is_valid, "synth: {text:?} is not a valid identifier");
-        Name {
-            text: ThinStr::new(self.allocator.alloc_str(text)),
-            index: None,
-            span: self.next_span(),
+        Name::new(ThinStr::new(self.allocator.alloc_str(text)), None, self.next_span())
+    }
+
+    /// The dialects the synthesizer builds for: the pinned one, or every one
+    /// when none is pinned.
+    fn versions(&self) -> &[LuaVersion] {
+        match &self.version {
+            Some(version) => slice::from_ref(version),
+            None => &LuaVersion::ALL,
         }
     }
 
     /// Whether `name` works as a `.name` field or `name =` key: an identifier
-    /// in the pinned dialect, or in every dialect when none is pinned.
+    /// in every dialect the synthesizer builds for.
     fn is_safe_field_name(&self, name: &str) -> bool {
-        self.version.map_or_else(
-            || LuaVersion::ALL.iter().all(|&version| is_valid_identifier_in(name, version)),
-            |version| is_valid_identifier_in(name, version),
-        )
+        self.versions().iter().all(|&version| is_valid_identifier_in(name, version))
     }
 
     fn list<T, Items>(&self, items: Items) -> List<'ast, T>
@@ -274,16 +257,11 @@ impl<'ast> Synth<'ast> {
     fn boxed<T>(&self, value: T) -> Box<'ast, T> {
         Box::new_in(value, self.allocator)
     }
-
-    /// `text` copied into the arena, at a fresh span.
-    fn literal(&self, text: &str) -> Literal<'ast> {
-        Literal { text: self.allocator.alloc_str(text), span: self.next_span() }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::iter::repeat_with;
+    use std::iter::repeat_with;
     use std::thread;
 
     use rustc_hash::FxHashSet;
@@ -291,21 +269,22 @@ mod tests {
     use super::*;
     use crate::expr::{Expression, FunctionArgs, Suffix};
     use crate::fixtures::Fixture;
-    use crate::stmt::LastStatement;
+    use crate::span::GetSpan as _;
+    use crate::stmt::Statement;
 
     #[test]
-    fn spans_are_monotonic() {
+    fn each_node_takes_a_later_span() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let first = synth.nil();
         let second = synth.nil();
-        let third = synth.number("3");
+        let third = synth.number_i64(3);
         assert!(second.span().start > first.span().start);
         assert!(third.span().start > second.span().start);
     }
 
     #[test]
-    fn starting_at_offsets_spans() {
+    fn a_counter_started_at_an_offset_gives_spans_from_it() {
         let allocator = Allocator::new();
         let spans = SpanCounter::starting_at(1000);
         assert_eq!(Synth::new(&allocator, &spans).nil().span().start, 1000);
@@ -372,9 +351,9 @@ mod tests {
                 .collect();
             workers.into_iter().map(|worker| worker.join().unwrap()).collect()
         });
-        let tree = synth.block([], Some(synth.return_(pieces)));
+        let tree = synth.block([synth.return_(pieces)]);
         let mut offsets = Vec::new();
-        let Some(LastStatement::Return(returned)) = &tree.last_stmt else {
+        let [Statement::Return(returned)] = &*tree.stmts else {
             panic!("expected a return");
         };
         for piece in &returned.exprs {
@@ -391,18 +370,6 @@ mod tests {
         let unique: FxHashSet<u32> = offsets.iter().copied().collect();
         assert_eq!(unique.len(), offsets.len());
         assert_eq!(offsets.len(), 4 * 251);
-    }
-
-    #[test]
-    fn with_version_pins_field_names() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth().with_version(LuaVersion::Luau);
-        // `goto` is an identifier only under the pinned Luau dialect, so the
-        // dot form proves the pin.
-        let Expression::Suffixed(chain) = synth.field_or_index(synth.name_expr("t"), "goto") else {
-            panic!("expected a field");
-        };
-        assert!(matches!(chain.suffixes.last(), Suffix::Field(_)));
     }
 
     #[test]

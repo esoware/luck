@@ -1,0 +1,21 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: tables compare by identity, so a table literal never equals another value
+ --> Lua54:1:14
+1 | local same = x == {}
+  |              ^^^^^^^
+help: compare table contents instead
+
+error: tables compare by identity, so a table literal never equals another value
+ --> Lua54:1:17
+1 | local differs = {1} ~= x
+  |                 ^^^^^^^^
+help: compare table contents instead
+
+error: tables compare by identity, so a table literal never equals another value
+ --> Lua54:2:4
+1 | local x = {}
+2 | if x == {} then end
+  |    ^^^^^^^
+help: compare table contents instead

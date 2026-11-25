@@ -1,53 +1,25 @@
-//! Nothing here touches the filesystem.
+//! One `luck.json` as written, before `extends` and validation. Nothing here
+//! touches the filesystem.
 
-use core::hash::Hash;
-use std::path::Path;
+use std::fmt;
+use std::path::PathBuf;
 
 use luck_bundler::DynamicRequire;
-use luck_core::LuaTarget;
+use luck_formatter::FormatConfig;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use rustc_hash::{FxHashMap, FxHashSet};
+use luck_token::LuaTarget;
+use rustc_hash::FxHashMap;
+use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 
-use crate::filter::ProjectFilter;
-use crate::format_config::FormatConfig;
-
-/// One of the two `luck.json` keys that name a dialect by file extension.
-///
-/// A key names a dialect, not a language family, so `"lua": "roblox"` is how
-/// a Roblox or Rojo tree says its `.lua` files are Luau.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DialectKey {
-    /// `lua`, for every file but a `.luau` one.
-    Lua,
-    /// `luau`, for `.luau` files.
-    Luau,
-}
-
-impl DialectKey {
-    #[must_use]
-    pub fn for_path(path: &Path) -> Self {
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some("luau") => Self::Luau,
-            _ => Self::Lua,
-        }
-    }
-
-    #[must_use]
-    pub const fn default_target(self) -> LuaTarget {
-        match self {
-            Self::Lua => LuaTarget::Lua54,
-            Self::Luau => LuaTarget::Luau,
-        }
-    }
-}
+use crate::glob::Glob;
 
 /// One entry of a multi-entry build: the file to bundle and where to write
 /// the bundle, both relative to the `luck.json` directory.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct EntryConfig {
+pub(crate) struct EntryConfig {
     pub entry: String,
     pub output: String,
 }
@@ -56,104 +28,131 @@ pub struct EntryConfig {
 ///
 /// Its `minify` and `transforms` replace the top-level ones. `--release` and
 /// `--dev` select the `release` and `dev` profiles.
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct ProfileOverrides {
+pub(crate) struct ProfileOverrides {
     pub minify: Option<bool>,
     pub transforms: Option<TransformConfig>,
+}
+
+/// Settings for the files some globs match, over the rest of the config.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OverrideConfig {
+    /// Globs of the files this applies to, matched as `include` is.
+    #[cfg_attr(test, schemars(with = "Vec<String>"))]
+    pub files: Vec<Glob>,
+    /// Globs of files this leaves alone, even when `files` takes them.
+    #[serde(default)]
+    #[cfg_attr(test, schemars(with = "Vec<String>"))]
+    pub exclude_files: Vec<Glob>,
+    /// Formatter settings over the `format` section's.
+    pub format: Option<FormatConfig>,
+    /// Linter settings over the `lint` section's, which merge as `extends`
+    /// merges them.
+    pub lint: Option<LintConfig>,
 }
 
 /// Top-level luck.json configuration.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct LuckConfig {
-    /// Dialect for `.lua` files (default `lua54`). Any dialect is accepted:
-    /// Roblox and Rojo trees that keep Luau in `.lua` files set
-    /// `"lua": "roblox"` or `"lua": "luau"`.
-    pub lua: Option<String>,
-    /// Dialect for `.luau` files (default `luau`). Any dialect is accepted.
-    pub luau: Option<String>,
+pub(crate) struct LuckConfig {
+    /// Dialect of every file but a `.luau` one (default `lua54`). Either key
+    /// can name any dialect, so a Roblox or Rojo tree that keeps Luau in
+    /// `.lua` files sets `"lua": "roblox"`.
+    pub lua: Option<LuaTarget>,
+    /// Dialect of `.luau` files (default `luau`).
+    pub luau: Option<LuaTarget>,
+    /// Std definition files, relative to this file's directory, that layer
+    /// a host's globals, fields, and functions, such as LOVE's or Neovim's,
+    /// over each dialect's standard library, in order. Each is TOML in the
+    /// format of luck's own `stdlib_data`, which
+    /// <https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>
+    /// describes.
+    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
+    pub std: Option<Vec<PathBuf>>,
+    /// Keeps the `extends` chain inside this file's directory.
     pub root: Option<bool>,
+    /// Configs this one builds on, relative to its directory. A later one
+    /// overrides an earlier one, and this file overrides them all.
     pub extends: Option<Vec<String>>,
-    pub include: Option<Vec<String>>,
-    pub exclude: Option<Vec<String>>,
+    /// Globs of the files `lint`, `fmt`, and `check` take, relative to the
+    /// `luck.json` directory (default every `.lua` and `.luau` file). `*`
+    /// stops at `/`, and `**/` crosses directories.
+    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
+    pub include: Option<Vec<Glob>>,
+    /// Globs of files to leave out, even when `include` takes them.
+    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
+    pub exclude: Option<Vec<Glob>>,
+    /// The file `luck build` bundles, relative to the `luck.json` directory.
     pub entry: Option<String>,
+    /// The directory `luck build` writes the bundle of `entry` to, under the
+    /// entry's file name.
     pub output_dir: Option<String>,
+    /// The file `luck build` writes the bundle of `entry` to, in place of one
+    /// in `output_dir`.
     pub output: Option<String>,
-    pub entries: Option<Vec<EntryConfig>>,
+    /// Several builds in place of `entry`, each with its own output.
+    #[cfg_attr(test, schemars(with = "Option<Vec<EntryConfig>>", length(min = 1)))]
+    pub entries: Option<Entries>,
+    /// Whether `luck build` minifies its bundles (default `false`).
     pub minify: Option<bool>,
     /// How the bundler treats a `require` whose argument isn't a string
     /// literal: `"error"`, `"warn"` (default), or `"allow"`.
     pub dynamic_require: Option<DynamicRequire>,
+    /// The Lua search path templates a `require` tries in order, relative to
+    /// the `luck.json` directory (default `?.lua` and `?/init.lua`). Luau
+    /// resolves relative and `@alias` requires instead.
     pub search_paths: Option<Vec<String>>,
     pub transforms: Option<TransformConfig>,
     pub profiles: Option<FxHashMap<String, ProfileOverrides>>,
+    /// A comment `luck build` writes at the top of each bundle.
     pub preamble: Option<String>,
+    /// Whether `luck build` names luck and its version at the top of each
+    /// bundle (default `false`).
     pub luck_preamble: Option<bool>,
     pub format: Option<FormatConfig>,
     pub lint: Option<LintConfig>,
+    /// Settings for the files some globs match, each over the ones before it.
+    /// An `extends` chain lists the overrides of the files it extends first,
+    /// and every glob matches relative to the `luck.json` directory.
+    pub overrides: Option<Vec<OverrideConfig>>,
 }
 
 impl LuckConfig {
-    /// # Errors
+    /// `self` layered on `base`, as a file is on the files it `extends`.
     ///
-    /// Returns a message when `key` names no known target.
-    pub fn target(&self, key: DialectKey) -> Result<LuaTarget, String> {
-        let (name, setting) = match key {
-            DialectKey::Lua => ("lua", &self.lua),
-            DialectKey::Luau => ("luau", &self.luau),
-        };
-        setting.as_ref().map_or_else(
-            || Ok(key.default_target()),
-            |dialect| dialect.parse::<LuaTarget>().map_err(|e| format!("`{name}`: {e}")),
-        )
-    }
-
-    /// Only that key is validated.
-    ///
-    /// # Errors
-    ///
-    /// Returns a message when the selected key names no known target.
-    pub fn target_for_path(&self, path: &Path) -> Result<LuaTarget, String> {
-        self.target(DialectKey::for_path(path))
-    }
-
-    /// # Errors
-    ///
-    /// Returns a message naming the first invalid glob pattern.
-    pub fn project_filter(&self, root: &Path) -> Result<ProjectFilter, String> {
-        ProjectFilter::new(root, self.include.as_deref(), self.exclude.as_deref())
-    }
-
-    /// `include`, `exclude`, and `search_paths` concatenate base-first without
-    /// repeats, `format` and `lint` merge field by field, and `extends` is
-    /// cleared.
-    /// Every other key, including `entries`, `profiles`, and `transforms`,
-    /// comes whole from `self` when set there and from `base` otherwise.
-    #[must_use]
+    /// `format` and `lint` merge field by field. `std`, `include`, `exclude`,
+    /// `search_paths`, and `overrides` list `base`'s items and then
+    /// `self`'s, without an item that comes again later. Every other key,
+    /// `entries`, `profiles`, and `transforms` among them, comes whole from
+    /// `self` when set there and from `base` otherwise.
     pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
             lua: self.lua.or(base.lua),
             luau: self.luau.or(base.luau),
+            std: merge_with(self.std, base.std, layer),
             root: self.root.or(base.root),
-            extends: None, // already resolved; don't re-expand
-            include: merge_with(self.include, base.include, concat),
-            exclude: merge_with(self.exclude, base.exclude, concat),
+            extends: None,
+            include: merge_with(self.include, base.include, layer),
+            exclude: merge_with(self.exclude, base.exclude, layer),
             entry: self.entry.or(base.entry),
             output_dir: self.output_dir.or(base.output_dir),
             output: self.output.or(base.output),
             entries: self.entries.or(base.entries),
             minify: self.minify.or(base.minify),
             dynamic_require: self.dynamic_require.or(base.dynamic_require),
-            search_paths: merge_with(self.search_paths, base.search_paths, concat),
+            search_paths: merge_with(self.search_paths, base.search_paths, layer),
             transforms: self.transforms.or(base.transforms),
             profiles: self.profiles.or(base.profiles),
             preamble: self.preamble.or(base.preamble),
             luck_preamble: self.luck_preamble.or(base.luck_preamble),
             format: merge_with(self.format, base.format, FormatConfig::merge_onto),
             lint: merge_with(self.lint, base.lint, LintConfig::merge_onto),
+            overrides: merge_with(self.overrides, base.overrides, layer),
         }
     }
 }
@@ -163,29 +162,80 @@ where
     Merge: FnOnce(T, T) -> T,
 {
     match (child, base) {
-        (Some(child_value), Some(base_value)) => Some(merge(child_value, base_value)),
-        (child_value, base_value) => child_value.or(base_value),
+        (Some(child), Some(base)) => Some(merge(child, base)),
+        (child, base) => child.or(base),
     }
 }
 
-/// `base` followed by the items of `child` it lacks, so a file layered twice
-/// through `extends` can't double a list.
-fn concat<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
+/// `base` and then `child`, without an item of `base` that `child` repeats,
+/// so a file reached twice through `extends` doesn't double a list, and an
+/// order the child gives wins.
+fn layer<T>(child: Vec<T>, mut base: Vec<T>) -> Vec<T>
 where
-    T: Eq + Hash,
+    T: PartialEq,
 {
-    let present: FxHashSet<&T> = base.iter().collect();
-    let added: Vec<T> = child.into_iter().filter(|item| !present.contains(item)).collect();
-    base.extend(added);
+    base.retain(|item| !child.contains(item));
+    base.extend(child);
     base
+}
+
+/// The `entries` of a multi-entry build, at least one.
+#[derive(Debug, Clone)]
+pub(crate) struct Entries(pub Vec<EntryConfig>);
+
+// The error comes from inside the list, so a format that tracks positions
+// places it on the list.
+impl<'de> Deserialize<'de> for Entries {
+    fn deserialize<Source>(deserializer: Source) -> Result<Self, Source::Error>
+    where
+        Source: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(EntriesVisitor).map(Self)
+    }
+}
+
+struct EntriesVisitor;
+
+impl<'de> Visitor<'de> for EntriesVisitor {
+    type Value = Vec<EntryConfig>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a list of entries")
+    }
+
+    fn visit_seq<Access>(self, mut seq: Access) -> Result<Self::Value, Access::Error>
+    where
+        Access: SeqAccess<'de>,
+    {
+        let mut entries = Vec::new();
+        while let Some(entry) = seq.next_element()? {
+            entries.push(entry);
+        }
+        if entries.is_empty() {
+            return Err(Error::custom("`entries` is empty, so list at least one entry to build"));
+        }
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
 
+    use luck_formatter::{
+        BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, HexCase, IndentStyle,
+        LineEndings, QuoteStyle, SpaceAfterFunction,
+    };
+    use luck_linter::RuleId;
+
     use super::*;
-    use crate::load::parse_luck_config;
+    use crate::fixtures::parsed;
+    use crate::parse::parse;
+
+    /// The message `json` fails to parse with.
+    fn parse_error(json: &str) -> String {
+        parse(json).expect_err("config doesn't parse").message.to_string()
+    }
 
     const COMMITTED_SCHEMA_PATH: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../../editors/vscode/schemas/luckrc.schema.json");
@@ -222,15 +272,25 @@ mod tests {
     }
 
     #[test]
+    fn schema_names_every_dialect_the_config_takes() {
+        let schema = serde_json::to_value(schemars::schema_for!(LuckConfig)).expect("schema");
+        let dialects = serde_json::to_string(&schema["$defs"]["LuaTarget"]).expect("JSON");
+        for name in ["lua51", "lua52", "lua53", "lua54", "lua55", "luau", "roblox"] {
+            assert!(dialects.contains(&format!("\"{name}\"")), "{name}: {dialects}");
+        }
+    }
+
+    #[test]
     fn parses_dialect_and_build_keys() {
-        let json = r#"{
+        let config = parsed(
+            r#"{
             "lua": "lua54",
             "entry": "src/main.lua",
             "output_dir": "dist",
             "search_paths": ["src/?.lua", "lib/?.lua"]
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        assert_eq!(config.lua.as_deref(), Some("lua54"));
+        }"#,
+        );
+        assert_eq!(config.lua, Some(LuaTarget::Lua54));
         assert_eq!(config.entry.as_deref(), Some("src/main.lua"));
         assert_eq!(config.output_dir.as_deref(), Some("dist"));
         assert_eq!(
@@ -240,220 +300,51 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_minimal_luau_config() {
-        let json = r#"{"luau": "luau", "entry": "main.luau", "output_dir": "out"}"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        assert_eq!(config.luau.as_deref(), Some("luau"));
-        assert_eq!(config.entry.as_deref(), Some("main.luau"));
-        assert!(config.search_paths.is_none());
-        assert!(config.minify.is_none());
-    }
-
-    #[test]
-    fn parses_entries() {
-        let json = r#"{
-            "lua": "lua54",
+    fn parses_entries_and_profiles() {
+        let config = parsed(
+            r#"{
             "entries": [
                 {"entry": "src/main.lua", "output": "dist/main.lua"},
                 {"entry": "src/other.lua", "output": "dist/other.lua"}
-            ]
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        let entries = config.entries.expect("entries present");
+            ],
+            "profiles": { "release": { "minify": true } }
+        }"#,
+        );
+        let Entries(entries) = config.entries.expect("entries present");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry, "src/main.lua");
         assert_eq!(entries[0].output, "dist/main.lua");
-    }
-
-    #[test]
-    fn parses_profiles() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "src/main.lua",
-            "output_dir": "dist",
-            "profiles": {
-                "release": {
-                    "minify": true
-                }
-            }
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
         let profiles = config.profiles.expect("profiles present");
-        let release = profiles.get("release").expect("release profile present");
-        assert_eq!(release.minify, Some(true));
-    }
-
-    #[test]
-    fn parses_output() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "src/main.lua",
-            "output": "dist/bundle.lua"
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        assert_eq!(config.output.as_deref(), Some("dist/bundle.lua"));
-    }
-
-    #[test]
-    fn leaves_unset_keys_none() {
-        let json = r#"{"lua": "lua51"}"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        assert_eq!(config.lua.as_deref(), Some("lua51"));
-        assert!(config.entry.is_none());
-        assert!(config.output.is_none());
-        assert!(config.output_dir.is_none());
-        assert!(config.entries.is_none());
-        assert!(config.minify.is_none());
-        assert!(config.search_paths.is_none());
-        assert!(config.transforms.is_none());
-        assert!(config.profiles.is_none());
-        assert!(config.preamble.is_none());
-        assert!(config.luck_preamble.is_none());
-        assert!(config.lint.is_none());
-    }
-
-    #[test]
-    fn rejects_unknown_top_level_keys() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "main.lua",
-            "output_dir": "dist",
-            "unknown_key": true,
-            "also_unknown": 42
-        }"#;
-        let result = parse_luck_config(json);
-        assert!(result.is_err(), "unknown top-level keys must error");
-        let error = result.unwrap_err();
-        assert!(
-            error.contains("unknown_key") || error.contains("unknown field"),
-            "error should name the offending key: {error}"
-        );
+        assert_eq!(profiles.get("release").and_then(|release| release.minify), Some(true));
     }
 
     #[test]
     fn parses_profile_transforms_apart_from_top_level_ones() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "main.lua",
-            "output_dir": "dist",
+        let config = parsed(
+            r#"{
             "minify": false,
-            "transforms": {
-                "fold_constants": true,
-                "rename_locals": false
-            },
+            "transforms": { "fold_constants": true, "rename_locals": false },
             "profiles": {
                 "release": {
                     "minify": true,
-                    "transforms": {
-                        "fold_constants": false,
-                        "rename_locals": true
-                    }
+                    "transforms": { "fold_constants": false, "rename_locals": true }
                 }
             }
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-
-        assert_eq!(config.minify, Some(false));
-        let base_transforms = config.transforms.as_ref().expect("test config has transforms");
+        }"#,
+        );
+        let base_transforms = config.transforms.expect("test config has transforms");
         assert!(base_transforms.fold_constants);
         assert!(!base_transforms.rename_locals);
-
-        let profiles = config.profiles.as_ref().expect("test config has profiles");
+        let profiles = config.profiles.expect("test config has profiles");
         let release = profiles.get("release").expect("test config has release profile");
-        assert_eq!(release.minify, Some(true));
-        let release_transforms =
-            release.transforms.as_ref().expect("release profile has transforms");
+        let release_transforms = release.transforms.expect("release profile has transforms");
         assert!(!release_transforms.fold_constants);
         assert!(release_transforms.rename_locals);
     }
 
-    /// The conflict is reported when the build resolves, not at parse time.
-    #[test]
-    fn parses_entry_and_entries_together() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "main.lua",
-            "entries": [{"entry": "a.lua", "output": "b.lua"}],
-            "output_dir": "dist"
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        assert!(config.entry.is_some());
-        assert!(config.entries.is_some());
-    }
-
-    #[test]
-    fn parses_preamble_and_luck_preamble() {
-        let json = r#"{
-            "lua": "lua54",
-            "entry": "main.lua",
-            "output_dir": "dist",
-            "preamble": "-- Generated by luck",
-            "luck_preamble": true
-        }"#;
-        let config = parse_luck_config(json).expect("deserialize failed");
-        assert_eq!(config.preamble.as_deref(), Some("-- Generated by luck"));
-        assert_eq!(config.luck_preamble, Some(true));
-    }
-
-    #[test]
-    fn parses_dialect_and_scope_keys() {
-        let json = r#"{ "lua":"lua53","luau":"roblox","root":true,
-            "extends":["base.json"],"include":["src/**/*.lua"],"exclude":["**/gen/**"] }"#;
-        let config = parse_luck_config(json).expect("parse");
-        assert_eq!(config.lua.as_deref(), Some("lua53"));
-        assert_eq!(config.luau.as_deref(), Some("roblox"));
-        assert_eq!(config.root, Some(true));
-        assert_eq!(config.extends, Some(vec!["base.json".to_owned()]));
-        assert_eq!(config.include.as_deref().unwrap().len(), 1);
-        assert_eq!(config.exclude.as_deref().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn target_for_path_picks_the_key_by_extension() {
-        let config = parse_luck_config(r#"{ "lua":"lua53","luau":"roblox" }"#).unwrap();
-        assert_eq!(config.target_for_path(Path::new("a.lua")).unwrap(), LuaTarget::Lua53);
-        assert_eq!(config.target_for_path(Path::new("a.luau")).unwrap(), LuaTarget::LuauRoblox);
-    }
-
-    #[test]
-    fn target_defaults_an_unset_key_and_names_an_invalid_one() {
-        let config = parse_luck_config("{}").unwrap();
-        assert_eq!(config.target_for_path(Path::new("a.lua")).unwrap(), LuaTarget::Lua54);
-        assert_eq!(config.target_for_path(Path::new("a.luau")).unwrap(), LuaTarget::Luau);
-        let unknown_version =
-            parse_luck_config(r#"{ "lua":"lua99" }"#).unwrap().target(DialectKey::Lua).unwrap_err();
-        assert!(unknown_version.starts_with("`lua`:"), "{unknown_version}");
-        let nonsense_dialect = parse_luck_config(r#"{ "luau":"nonsense" }"#)
-            .unwrap()
-            .target(DialectKey::Luau)
-            .unwrap_err();
-        assert!(nonsense_dialect.starts_with("`luau`:"), "{nonsense_dialect}");
-    }
-
-    /// Extension and dialect are independent, so a Roblox or Rojo tree that
-    /// keeps Luau in `.lua` files can say so.
-    #[test]
-    fn lua_extension_can_name_a_luau_dialect() {
-        let roblox_lua = parse_luck_config(r#"{ "lua":"roblox" }"#).unwrap();
-        assert_eq!(
-            roblox_lua.target_for_path(Path::new("src/init.lua")).unwrap(),
-            LuaTarget::LuauRoblox
-        );
-        // `.luau` files keep their own default and don't follow `lua`.
-        assert_eq!(
-            roblox_lua.target_for_path(Path::new("src/init.luau")).unwrap(),
-            LuaTarget::Luau
-        );
-
-        let swapped = parse_luck_config(r#"{ "lua":"luau","luau":"lua51" }"#).unwrap();
-        assert_eq!(swapped.target_for_path(Path::new("a.lua")).unwrap(), LuaTarget::Luau);
-        assert_eq!(swapped.target_for_path(Path::new("a.luau")).unwrap(), LuaTarget::Lua51);
-    }
-
     #[test]
     fn omitted_transform_keys_keep_their_defaults() {
-        let config = parse_luck_config(r#"{ "transforms": { "fold_constants": false } }"#)
-            .expect("deserialize failed");
+        let config = parsed(r#"{ "transforms": { "fold_constants": false } }"#);
         let transforms = config.transforms.expect("transforms present");
         assert!(!transforms.fold_constants);
         assert!(transforms.rename_locals);
@@ -461,21 +352,137 @@ mod tests {
     }
 
     #[test]
-    fn merge_onto_concatenates_lint_lists_and_keeps_unset_base_keys() {
-        let base = parse_luck_config(
-            r#"{ "lua":"lua54","lint":{"extra_globals":["a"],
-            "rules":{"x":"off"}} }"#,
-        )
-        .unwrap();
-        let child = parse_luck_config(
-            r#"{ "lint":{"extra_globals":["b"],
-            "rules":{"y":"error"}} }"#,
-        )
-        .unwrap();
+    fn parses_overrides() {
+        let config = parsed(
+            r#"{ "overrides": [{
+                "files": ["spec/**"],
+                "exclude_files": ["spec/fixtures/**"],
+                "format": { "line_width": 80 },
+                "lint": { "rules": { "shadowing": "off" } }
+            }] }"#,
+        );
+        let overrides = config.overrides.expect("overrides present");
+        let [spec] = overrides.as_slice() else { panic!("one override: {overrides:?}") };
+        assert_eq!(spec.files.iter().map(Glob::pattern).collect::<Vec<_>>(), ["spec/**"]);
+        assert_eq!(spec.exclude_files.len(), 1);
+        assert_eq!(spec.format.and_then(|format| format.line_width), Some(80));
+        assert!(spec.lint.is_some());
+    }
+
+    #[test]
+    fn merge_onto_layers_lists_and_keeps_unset_base_keys() {
+        let base = parsed(
+            r#"{ "lua": "lua54", "search_paths": ["a/?.lua", "b/?.lua"],
+            "lint": { "extra_globals": ["a"], "rules": { "shadowing": "off" } } }"#,
+        );
+        let child = parsed(
+            r#"{ "search_paths": ["c/?.lua", "a/?.lua"],
+            "lint": { "extra_globals": ["b"], "rules": { "empty_block": "error" } } }"#,
+        );
         let merged = child.merge_onto(base);
+        assert_eq!(merged.lua, Some(LuaTarget::Lua54));
+        assert_eq!(merged.search_paths.unwrap(), ["b/?.lua", "c/?.lua", "a/?.lua"]);
         let lint = merged.lint.unwrap();
-        assert_eq!(lint.extra_globals, vec!["a".to_owned(), "b".to_owned()]);
-        assert_eq!(lint.rules.names().collect::<Vec<_>>(), ["x", "y"]);
-        assert_eq!(merged.lua.as_deref(), Some("lua54"));
+        assert_eq!(lint.extra_globals, ["a", "b"]);
+        let rules: Vec<&str> = lint.rules.rules().map(RuleId::name).collect();
+        assert_eq!(rules, ["empty_block", "shadowing"]);
+    }
+
+    #[test]
+    fn merge_onto_lists_the_base_overrides_first() {
+        let base = parsed(r#"{ "overrides": [{ "files": ["a/**"] }, { "files": ["b/**"] }] }"#);
+        let child = parsed(r#"{ "overrides": [{ "files": ["c/**"] }, { "files": ["a/**"] }] }"#);
+        let overrides = child.merge_onto(base).overrides.unwrap();
+        let files: Vec<&str> = overrides.iter().map(|layer| layer.files[0].pattern()).collect();
+        assert_eq!(files, ["b/**", "c/**", "a/**"]);
+    }
+
+    #[test]
+    fn parses_every_format_option() {
+        let json = r#"{
+            "format": {
+                "line_width": 120,
+                "indent_style": "spaces",
+                "indent_width": 4,
+                "quote_style": "double",
+                "hexadecimal_case": "upper",
+                "call_parentheses": "input",
+                "collapse_simple_statement": "conditional_only",
+                "line_endings": "windows",
+                "block_newline_gaps": "preserve",
+                "sort_requires": true,
+                "space_after_function_names": "calls",
+                "magic_trailing_comma": true
+            }
+        }"#;
+        let format = parsed(json).format.expect("format should be present");
+        assert_eq!(format.line_width, Some(120));
+        assert_eq!(format.indent_style, Some(IndentStyle::Spaces));
+        assert_eq!(format.indent_width, Some(4));
+        assert_eq!(format.quote_style, Some(QuoteStyle::Double));
+        assert_eq!(format.hexadecimal_case, Some(HexCase::Upper));
+        assert_eq!(format.call_parentheses, Some(CallParentheses::Input));
+        assert_eq!(
+            format.collapse_simple_statement,
+            Some(CollapseSimpleStatement::ConditionalOnly)
+        );
+        assert_eq!(format.line_endings, Some(LineEndings::Windows));
+        assert_eq!(format.block_newline_gaps, Some(BlockNewlineGaps::Preserve));
+        assert_eq!(format.sort_requires, Some(true));
+        assert_eq!(format.space_after_function_names, Some(SpaceAfterFunction::Calls));
+        assert_eq!(format.magic_trailing_comma, Some(true));
+    }
+
+    #[test]
+    fn leaves_unset_format_options_none() {
+        let config = parsed(r#"{ "format": {} }"#);
+        let FormatConfig {
+            line_width,
+            indent_style,
+            indent_width,
+            quote_style,
+            hexadecimal_case,
+            call_parentheses,
+            collapse_simple_statement,
+            line_endings,
+            block_newline_gaps,
+            sort_requires,
+            space_after_function_names,
+            magic_trailing_comma,
+        } = config.format.expect("format should be present");
+        assert!(line_width.is_none());
+        assert!(indent_style.is_none());
+        assert!(indent_width.is_none());
+        assert!(quote_style.is_none());
+        assert!(hexadecimal_case.is_none());
+        assert!(call_parentheses.is_none());
+        assert!(collapse_simple_statement.is_none());
+        assert!(line_endings.is_none());
+        assert!(block_newline_gaps.is_none());
+        assert!(sort_requires.is_none());
+        assert!(space_after_function_names.is_none());
+        assert!(magic_trailing_comma.is_none());
+    }
+
+    #[test]
+    fn rejects_an_unknown_format_key() {
+        let error =
+            parse_error(r#"{ "format": { "line_width": 100, "not_a_real_option": true } }"#);
+        assert!(error.contains("unknown field `not_a_real_option`"), "{error}");
+    }
+
+    #[test]
+    fn rejects_an_unknown_quote_style() {
+        let error = parse_error(r#"{ "format": { "quote_style": "bogus" } }"#);
+        assert!(error.contains("unknown variant `bogus`"), "{error}");
+    }
+
+    #[test]
+    fn rejects_the_function_collapse_modes() {
+        for mode in ["function_only", "always"] {
+            let json = format!(r#"{{ "format": {{ "collapse_simple_statement": "{mode}" }} }}"#);
+            let error = parse_error(&json);
+            assert!(error.contains(mode), "error should name the offending value: {error}");
+        }
     }
 }

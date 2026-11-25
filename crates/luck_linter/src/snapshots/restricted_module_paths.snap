@@ -1,0 +1,56 @@
+---
+source: crates/luck_linter/src/fixtures.rs
+---
+error: `require` of restricted module `forbidden.lib`
+ --> Lua54:1:9
+1 | require("forbidden.lib")
+  |         ^^^^^^^^^^^^^^^
+help: `forbidden.lib` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden.lib`
+ --> Lua54:1:8
+1 | require"forbidden.lib"
+  |        ^^^^^^^^^^^^^^^
+help: `forbidden.lib` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden.lib`
+ --> Lua54:1:12
+1 | _G.require("forbidden.lib")
+  |            ^^^^^^^^^^^^^^^
+help: `forbidden.lib` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden.lib`
+ --> Lua54:1:17
+1 | _ENV["require"]("forbidden.lib")
+  |                 ^^^^^^^^^^^^^^^
+help: `forbidden.lib` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden`
+ --> Lua54:1:9
+1 | require("forbidden")
+  |         ^^^^^^^^^^^
+help: `forbidden.*` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden.sub`
+ --> Lua54:1:9
+1 | require("forbidden.sub")
+  |         ^^^^^^^^^^^^^^^
+help: `forbidden.*` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden.sub`
+ --> Lua54:1:9
+1 | require("forbidden\46sub")
+  |         ^^^^^^^^^^^^^^^^^
+help: `forbidden.*` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden`
+ --> Lua54:1:8
+1 | require[[forbidden]]
+  |        ^^^^^^^^^^^^^
+help: `forbidden.*` is listed in `restricted_module_paths`
+
+error: `require` of restricted module `forbidden`
+ --> Lua54:1:8
+1 | require'\x66orbidden'
+  |        ^^^^^^^^^^^^^^
+help: `forbidden.*` is listed in `restricted_module_paths`

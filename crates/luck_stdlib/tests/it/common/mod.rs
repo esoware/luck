@@ -1,0 +1,49 @@
+use luck_allocator::Allocator;
+use luck_ast::Chunk;
+use luck_stdlib::{StdlibLibrary, expand_replace_template, library_for};
+use luck_token::{LuaTarget, LuaVersion};
+
+/// `source`'s tree, which must parse cleanly, kept in `allocator` so it
+/// outlives the analysis that borrows it.
+pub(crate) fn parse<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast str,
+    version: LuaVersion,
+) -> &'ast Chunk<'ast> {
+    let parsed = luck_parser::parse(allocator, source.as_bytes(), version);
+    assert!(parsed.errors.is_empty(), "{source}: {:?}", parsed.errors);
+    allocator.alloc(parsed.chunk)
+}
+
+/// `template` expanded with `args`, which the tests spell as text.
+pub(crate) fn expand(template: &str, args: &[&str]) -> String {
+    let arg_bytes: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
+    String::from_utf8(expand_replace_template(template, &arg_bytes)).expect("text expands to text")
+}
+
+pub(crate) const NUMBERED_VERSIONS: [LuaVersion; 5] =
+    [LuaVersion::Lua51, LuaVersion::Lua52, LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55];
+
+pub(crate) fn standalone_library(version: LuaVersion) -> &'static StdlibLibrary<'static> {
+    library_for(version.into())
+}
+
+pub(crate) fn luau() -> &'static StdlibLibrary<'static> {
+    standalone_library(LuaVersion::Luau)
+}
+
+pub(crate) fn roblox() -> &'static StdlibLibrary<'static> {
+    library_for(LuaTarget::LuauRoblox)
+}
+
+pub(crate) fn all_libraries() -> [(&'static str, &'static StdlibLibrary<'static>); 7] {
+    [
+        ("lua51", standalone_library(LuaVersion::Lua51)),
+        ("lua52", standalone_library(LuaVersion::Lua52)),
+        ("lua53", standalone_library(LuaVersion::Lua53)),
+        ("lua54", standalone_library(LuaVersion::Lua54)),
+        ("lua55", standalone_library(LuaVersion::Lua55)),
+        ("luau", luau()),
+        ("luau_roblox", roblox()),
+    ]
+}

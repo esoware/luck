@@ -168,10 +168,18 @@ fn paren_stmt_after_a_call_keeps_its_semicolon_guard() {
     // The `;` in the input is what makes these parse as two statements;
     // without it the parser reads one chained call.
     assert_format(
+        "f();(g or h)()",
+        "\
+f()
+;(g or h)()
+",
+    );
+    // Parentheses around a name group nothing, so they and the guard go.
+    assert_format(
         "f();(g)()",
         "\
 f()
-;(g)()
+g()
 ",
     );
 }
@@ -414,15 +422,15 @@ fn global_declaration_with_initializer() {
 }
 
 #[test]
-fn leading_attribute_formats_as_distributed_trailing() {
-    // 5.5 manual section 3.3.7: a leading attribute applies to every name,
-    // and the formatter rewrites it into the per-name trailing form.
-    assert_format_with(
-        "local <const> x, y = 1, 2\n",
-        "local x <const>, y <const> = 1, 2\n",
-        LuaVersion::Lua55,
-        &FormatOptions::default(),
-    );
+fn leading_attribute_stays_before_the_names() {
+    // 5.5 manual section 3.3.7: a leading attribute applies to every name
+    // without one of its own.
+    for (source, expected) in [
+        ("local<const>x,y<close> =1,2\n", "local <const> x, y <close> = 1, 2\n"),
+        ("global<const>x,y=1,2\n", "global <const> x, y = 1, 2\n"),
+    ] {
+        assert_format_with(source, expected, LuaVersion::Lua55, &FormatOptions::default());
+    }
 }
 
 #[test]
@@ -443,6 +451,40 @@ end
 
 fn narrow() -> FormatOptions {
     FormatOptions { line_width: 30, ..FormatOptions::default() }
+}
+
+#[test]
+fn a_loop_header_breaks_its_call_when_do_overflows_the_line() {
+    // `for _, v in ipairs(someLongName)` is 32 columns, and ` do` makes it 35.
+    assert_format_with(
+        "for _, v in ipairs(someLongName) do print(v) end\n",
+        "\
+for _, v in ipairs(
+\tsomeLongName
+) do
+\tprint(v)
+end
+",
+        LuaVersion::Lua54,
+        &FormatOptions { line_width: 34, ..FormatOptions::default() },
+    );
+}
+
+#[test]
+fn a_target_stays_flat_when_a_trailing_comma_keeps_its_value_beside_it() {
+    // The table breaks for width and gains a trailing comma, which the
+    // second format reads as one that forces the break.
+    assert_format_with(
+        "t[{ k }] = \"a string that is long\" .. f({ alpha, beta, gamma })\n",
+        "\
+t[{ k }] = \"a string that is long\"
+\t.. f({
+\t\talpha, beta, gamma,
+\t})
+",
+        LuaVersion::Lua54,
+        &narrow(),
+    );
 }
 
 #[test]

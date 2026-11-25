@@ -3,64 +3,65 @@
 //! Language Server Protocol implementation for the luck toolchain.
 //!
 //! Capabilities:
-//! - text document sync (open, change, save, close)
-//! - lint diagnostics on open, change, and save, backed by [`luck_linter`]
+//! - text document sync (open, change, close)
+//! - lint diagnostics on open and change, backed by [`luck_linter`], and
+//!   each `require` that doesn't resolve, as `luck build` reports it
 //! - formatting + range formatting, backed by [`luck_formatter`]
 //! - hover, completion, signature help, go-to-definition, references,
 //!   rename, document and workspace symbols, code actions (per-diagnostic
 //!   fixes, `source.fixAll.luck`, and rule-disable comments), semantic
 //!   tokens, document highlights, folding ranges, selection ranges, and
 //!   document links
+//! - definition, references, and rename of a module's members across the
+//!   workspace folders
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
+//! - positions in UTF-8, UTF-16, or UTF-32, whichever `positionEncoding`
+//!   settles
 //!
-//! Each open document is parsed and analyzed once per version, in an arena
-//! of its own that is freed when the version is replaced or closed, and
-//! every request reads that version's tree and analysis.
+//! One main loop takes the client's messages in order and touches no tree.
+//! Each version of an open document is parsed and analyzed once, in an arena
+//! of its own, by the first job on the worker pool that needs it, and every
+//! request runs on that pool against the version current when it arrived.
+//! A version an edit or a close replaces stops its lint, and a request the
+//! client cancels before it starts never runs. Each project keeps one
+//! resolver per scheme, which the client's file watcher clears.
 //!
-//! `luck lsp` serves it over stdio, or over TCP with `--socket <port>` for
-//! debugging.
+//! A request at a position finds the innermost node there in the analysis's
+//! [`luck_semantic::AstNodes`] and walks up through its parents, and a name
+//! finds the local it declares or refers to by its symbol and reference.
+//!
+//! The workspace is the client's folders. Each file's record holds what the
+//! other files see of it: the modules it requires, through the semantic
+//! analysis's `require` sites and its project's resolver, and where it names
+//! a member of a module's table, the one it returns or one it requires. An
+//! open document's record comes from its analysis, and every other file's
+//! is read from disk once, as idle workers walk the folders ahead of the
+//! first request that needs them, until the file watcher says it changed. A
+//! cross-file request reads every record, between which it stops once the
+//! client cancels it.
+//!
+//! [`serve_stdio`] serves over stdio, as `luck lsp` does, [`serve_socket`]
+//! over TCP for debugging, and [`serve`] over any `lsp_server` connection.
 //!
 //! # Usage
 //!
-//! Requests are served on the thread that polls the server, on tokio's
-//! blocking pool, and, for a large file's lint, on rayon's pool, so each
-//! needs [`luck_ast::MIN_STACK_BYTES`]:
-//!
-//! ```no_run
-//! use std::thread;
-//!
-//! use luck_ast::MIN_STACK_BYTES;
-//!
-//! let runtime = tokio::runtime::Builder::new_multi_thread()
-//!     .thread_stack_size(MIN_STACK_BYTES)
-//!     .enable_all()
-//!     .build()?;
-//! let server = thread::Builder::new()
-//!     .stack_size(MIN_STACK_BYTES)
-//!     .spawn(move || runtime.block_on(luck_lsp::serve_stdio()))?;
-//! server.join().expect("the server doesn't panic");
-//! # Ok::<(), std::io::Error>(())
-//! ```
-
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
+//! The server runs every job on the workers it starts, as many as its caller
+//! asks for, each with [`luck_ast::MIN_STACK_BYTES`] of stack.
 
 mod analyzed;
-mod backend;
+mod capabilities;
 mod document;
 #[cfg(test)]
 mod fixtures;
 mod line_index;
+mod module_record;
+mod pool;
 mod providers;
+mod server;
+mod session;
 mod settings;
 mod transport;
+mod workspace;
 
-pub use backend::{Backend, Notifier};
+pub use server::serve;
 pub use transport::{serve_socket, serve_stdio};

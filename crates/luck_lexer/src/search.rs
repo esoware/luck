@@ -7,10 +7,6 @@ impl ByteMatchTable {
     }
 
     #[inline]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "a u8 can't index past 256 entries, and this is the per-byte scan"
-    )]
     fn matches(&self, byte: u8) -> bool {
         self.0[usize::from(byte)]
     }
@@ -20,7 +16,10 @@ impl ByteMatchTable {
 /// value at compile time.
 macro_rules! byte_match_table {
     (|$byte:ident| $test:expr) => {{
-        #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::indexing_slicing, reason = "runs at compile time with index < 256, and the checked conversions aren't const")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "`i` stays below 256, and `u8::try_from` isn't const"
+        )]
         const TABLE: [bool; 256] = {
             let mut table = [false; 256];
             let mut i = 0;
@@ -60,7 +59,7 @@ pub(crate) fn find_match(bytes: &[u8], table: &ByteMatchTable) -> usize {
         remaining = after_batch;
     }
     let tail_length = remaining.iter().take_while(|&&b| !table.matches(b)).count();
-    bytes.len().saturating_sub(remaining.len()).saturating_add(tail_length)
+    bytes.len() - remaining.len() + tail_length
 }
 
 static NOT_NAME_CONTINUE: ByteMatchTable =
@@ -75,15 +74,14 @@ const LOW_BITS: u64 = 0x7F7F_7F7F_7F7F_7F7F;
 /// `chunk` with its first byte lowest, so the first set high bit marks the
 /// first byte that answers.
 #[inline]
-#[expect(clippy::little_endian_bytes, reason = "the first byte has to be the lowest")]
 const fn word(chunk: [u8; 8]) -> u64 {
     u64::from_le_bytes(chunk)
 }
 
 /// The index of the byte whose high bit is the lowest one set in `answers`.
 #[inline]
-fn first_answer(answers: u64) -> usize {
-    usize::try_from(answers.trailing_zeros() >> 3u32).unwrap_or_default()
+const fn first_answer(answers: u64) -> usize {
+    (answers.trailing_zeros() >> 3) as usize
 }
 
 /// The high bit of each byte of `word` that equals `byte`.
@@ -117,22 +115,18 @@ const fn name_bytes(word: u64) -> u64 {
     (digits | letters | underscores) & !word & HIGH_BITS
 }
 
-/// How many bytes of name open `bytes`. Every byte it counts is ASCII, which
-/// [`Cursor::eat_name`](crate::cursor::Cursor::eat_name) relies on.
+/// How many bytes of name open `bytes`.
 #[inline]
 pub(crate) fn name_length(bytes: &[u8]) -> usize {
     let mut remaining = bytes;
     while let Some((&chunk, after_chunk)) = remaining.split_first_chunk::<8>() {
         let stops = !name_bytes(word(chunk)) & HIGH_BITS;
         if stops != 0 {
-            return bytes.len().wrapping_sub(remaining.len()).wrapping_add(first_answer(stops));
+            return bytes.len() - remaining.len() + first_answer(stops);
         }
         remaining = after_chunk;
     }
-    bytes
-        .len()
-        .wrapping_sub(remaining.len())
-        .wrapping_add(find_match(remaining, &NOT_NAME_CONTINUE))
+    bytes.len() - remaining.len() + find_match(remaining, &NOT_NAME_CONTINUE)
 }
 
 /// How many bytes open `bytes` before a `quote`, a `\`, or a line break, the
@@ -143,9 +137,9 @@ pub(crate) fn name_length(bytes: &[u8]) -> usize {
 #[inline]
 pub(crate) fn short_string_length(bytes: &[u8], quote: u8) -> usize {
     const WORD_SCAN_LENGTH: usize = 32;
-    let mut length = 0usize;
+    let mut length = 0;
     while length < WORD_SCAN_LENGTH
-        && let Some(&chunk) = bytes.get(length..).and_then(<[u8]>::first_chunk::<8>)
+        && let Some(&chunk) = bytes[length..].first_chunk::<8>()
     {
         let word = word(chunk);
         let stops = bytes_equal(word, quote)
@@ -153,16 +147,16 @@ pub(crate) fn short_string_length(bytes: &[u8], quote: u8) -> usize {
             | bytes_equal(word, b'\n')
             | bytes_equal(word, b'\r');
         if stops != 0 {
-            return length.wrapping_add(first_answer(stops));
+            return length + first_answer(stops);
         }
-        length = length.wrapping_add(8);
+        length += 8;
     }
-    let rest = bytes.get(length..).unwrap_or_default();
+    let rest = &bytes[length..];
     // Stopping at LF bounds an unterminated string to its line, and the
     // second scan finds any CR before that stop.
     let end = memchr::memchr3(quote, b'\\', b'\n', rest).unwrap_or(rest.len());
     let (line, _) = rest.split_at(end);
-    length.wrapping_add(memchr::memchr(b'\r', line).unwrap_or(end))
+    length + memchr::memchr(b'\r', line).unwrap_or(end)
 }
 
 #[cfg(test)]

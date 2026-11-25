@@ -1,10 +1,10 @@
-#[cfg(test)]
+// Puts the shared helpers under clippy.toml's `allow-unwrap-in-tests`, which
+// otherwise reaches only the `#[test]` functions of an integration test binary.
+#![cfg(test)]
+
 mod common;
 
-#[cfg(test)]
 mod bugs;
 mod bundle;
-#[cfg(test)]
 mod depth;
-#[cfg(test)]
 mod stack;

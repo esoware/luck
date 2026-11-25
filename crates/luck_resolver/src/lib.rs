@@ -1,9 +1,9 @@
 //! # `luck_resolver`
 //!
-//! Maps the string argument of a `require()` call to a filesystem path.
+//! Maps the string a `require()` call names to the file it loads.
 //!
 //! Lua 5.x searches path templates. `require("foo.bar")` substitutes `foo/bar`
-//! into each template (`./?.lua`, `./?/init.lua`, and so on) and returns the
+//! into each template (`?.lua`, `?/init.lua`, and so on) and returns the
 //! first candidate that exists, taking relative templates from the project
 //! root.
 //!
@@ -11,56 +11,53 @@
 //! file's directory, and `@alias` prefixes from the `.luaurc` files found up
 //! the directory tree.
 //!
-//! A [`Resolver`] lists each directory a require looks in, and caches those
-//! listings, what each Lua require string resolves to, `.luaurc` aliases, and
-//! Luau's file probes, and never invalidates them, so create one per build to
-//! see edits. Its threads share one.
+//! A [`ResolverGeneric`] reads through a [`FileSystem`], the OS's own in a
+//! [`Resolver`], so a caller can resolve against files only it holds. It
+//! caches the directory listings it reads, what each Lua require string
+//! resolved to, `.luaurc` aliases, and Luau's file probes, which its threads
+//! share, until [`ResolverGeneric::clear_cache`]. A require that names no
+//! file, or more than one, gets a [`ResolveError`] saying why, which
+//! [`ResolveError::to_diagnostic`] turns into the diagnostic luck reports it
+//! with, and [`Resolution::to_diagnostic`] gives the warning of a `@self`
+//! that shadows a `.luaurc` alias.
 //!
-//! This is the lowest crate that touches the filesystem, so it also holds what
-//! every file-reading consumer shares: [`read_source_file`], and the path form
-//! modules are keyed on, [`normalize_path`] and [`native_path`].
+//! This is the lowest crate that touches the file system, so the crates above
+//! it read Lua sources and canonicalize paths through its [`FileSystemOs`].
+//! Paths stay paths inside luck, [`lexically_normalized`] resolves a path's
+//! `.` and `..` without reading the disk, and [`to_slash_lossy`] gives the
+//! form luck writes one out in.
 //!
 //! # Usage
 //!
 //! ```no_run
-//! use std::path::Path;
+//! use std::path::{Path, PathBuf};
 //!
-//! use luck_resolver::{ResolveRequest, Resolver};
-//! use luck_token::{LuaVersion, Span};
+//! use luck_resolver::{ResolveOptions, Resolver};
+//! use luck_token::LuaVersion;
 //!
-//! let search_paths = ["./?.lua".to_owned()];
-//! let resolver = Resolver::new(LuaVersion::Lua54, &search_paths, Path::new("."));
-//! let resolved = resolver
-//!     .resolve(&ResolveRequest {
-//!         module: "foo",
-//!         from_file: "main.lua",
-//!         span: Span::new(0, 3),
-//!     })
-//!     .unwrap();
-//! assert!(resolved.path.ends_with(".lua"));
+//! let resolver = Resolver::new(ResolveOptions {
+//!     version: LuaVersion::Lua54,
+//!     search_paths: vec!["?.lua".to_owned()],
+//!     root: PathBuf::from("."),
+//! });
+//! let resolution = resolver.resolve(Path::new("main.lua"), "foo").unwrap();
+//! assert!(resolution.path.ends_with("foo.lua"));
 //! ```
 
-#![cfg_attr(
-    test,
-    expect(
-        clippy::missing_panics_doc,
-        reason = "a test panics to fail, so a Panics section says nothing"
-    )
-)]
-
-extern crate alloc;
-
+mod aliases;
+mod error;
 mod file_system;
 #[cfg(test)]
 mod fixtures;
+mod fs_cache;
 mod lua;
 mod luau;
 mod luaurc;
 mod path;
 mod resolver;
 mod shared_cache;
-mod source_io;
 
-pub use path::{native_path, normalize_path};
-pub use resolver::{ResolveRequest, ResolvedModule, Resolver};
-pub use source_io::read_source_file;
+pub use error::ResolveError;
+pub use file_system::{DirEntry, FileMetadata, FileSystem, FileSystemOs};
+pub use path::{lexically_normalized, to_slash_lossy};
+pub use resolver::{Resolution, ResolveOptions, Resolver, ResolverGeneric};

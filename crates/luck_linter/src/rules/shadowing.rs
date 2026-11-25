@@ -1,113 +1,104 @@
 use luck_semantic::SymbolKind;
 
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
-use crate::rule::{LintContext, WholeRule, impl_rule};
+use crate::rule::{Rule, declare_lint_rule};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Shadowing;
 
-impl_rule!(
+declare_lint_rule!(
     Shadowing,
-    "shadowing",
     Style,
     Warning,
     "variable shadows an outer variable with the same name"
 );
 
-impl WholeRule for Shadowing {
-    fn check(&self, context: &LintContext<'_>) -> Vec<Finding> {
-        let tree = context.semantic.scope_tree();
-        let mut findings = Vec::new();
+impl Rule for Shadowing {
+    fn run_once(&self, context: &LintContext<'_, '_>) {
+        let tree = context.scoping();
 
         for symbol in tree.symbols() {
             let Some(shadowed_id) = symbol.shadows else {
                 continue;
             };
+            let shadowed = tree.symbol(shadowed_id);
             // A leading `_` marks a name as deliberately unused, and an
-            // implicit `self` has no name the author could change.
+            // implicit `self` has no name the author could change. Lua 5.1's
+            // `local arg = {...}` is how a vararg function replaces its
+            // implicit `arg`.
             let name = tree.name(symbol.name);
-            if name.starts_with('_') || symbol.kind == SymbolKind::ImplicitSelf {
+            if name.starts_with('_')
+                || symbol.kind.is_implicit()
+                || shadowed.kind == SymbolKind::ImplicitArg
+            {
                 continue;
             }
-            let shadowed = tree.symbol(shadowed_id);
-            let (line, column) = context.line_index().line_column(shadowed.definition_span.start);
-            findings.push(
+            context.diagnostic(
                 Finding::new(
                     format!("variable `{name}` shadows outer variable"),
                     symbol.definition_span,
                 )
-                .with_help(format!("outer variable defined at {line}:{column}")),
+                .with_label(shadowed.definition_span, "outer variable defined here"),
             );
         }
-
-        findings
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
+    use luck_token::LuaTarget;
 
-    use super::*;
-    use crate::diagnostic::LintDiagnostic;
-    use crate::fixtures::run_rule;
+    use crate::fixtures::Tester;
+    use crate::rules::RuleId;
 
-    fn run(source: &str) -> Vec<LintDiagnostic> {
-        run_rule(&Shadowing, source, LuaVersion::Lua54)
-    }
-
-    #[test]
-    fn flags_nested_block_shadow() {
-        // Inner-scope redeclaration of an outer local. `redefining_local`
-        // covers only the same block.
-        let diags = run("\
+    const PASS: &[(&str, LuaTarget)] = &[
+        (
+            "\
 local x = 1
-do local x = 2 print(x) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("`x`"));
-    }
-
-    #[test]
-    fn flags_loop_variable_shadow() {
-        let diags = run("\
-local i = 1
-for i = 1, 3 do print(i) end");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_distinct_names() {
-        let diags = run("\
-local x = 1
-do local y = 2 print(y) end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_underscore_names() {
-        let diags = run("\
+do local y = 2 print(y) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
 local _ = 1
-do local _ = 2 end");
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn ignores_implicit_self_of_nested_method() {
-        let diags = run("\
+do local _ = 2 end",
+            LuaTarget::Lua54,
+        ),
+        // An implicit `self` has no name to change.
+        (
+            "\
 local M = {}
 function M:a()
  local t = {}
  function t:b() return self end
  return t
 end
-return M");
-        assert!(diags.is_empty(), "an implicit `self` has no name to change: {diags:?}");
-    }
+return M",
+            LuaTarget::Lua54,
+        ),
+        ("local function f(...) local arg = { ... } return arg end", LuaTarget::Lua51),
+    ];
+
+    const FAIL: &[(&str, LuaTarget)] = &[
+        // Inner-scope redeclaration of an outer local. `redefining_local` covers
+        // only the same block.
+        (
+            "\
+local x = 1
+do local x = 2 print(x) end",
+            LuaTarget::Lua54,
+        ),
+        (
+            "\
+local i = 1
+for i = 1, 3 do print(i) end",
+            LuaTarget::Lua54,
+        ),
+    ];
 
     #[test]
-    fn ignores_local_arg_in_a_lua51_vararg_function() {
-        let source = "local function f(...) local arg = { ... } return arg end";
-        let diags = run_rule(&Shadowing, source, LuaVersion::Lua51);
-        assert!(diags.is_empty(), "{diags:?}");
+    fn test() {
+        Tester::new(RuleId::Shadowing, PASS, FAIL).test_and_snapshot();
     }
 }

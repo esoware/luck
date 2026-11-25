@@ -57,7 +57,10 @@ type InternalState = {
 	active: boolean,
 }
 
-local function add(a: number, b: number): number
+local function add(
+	a: number,
+	b: number
+): number
 	return a + b
 end
 
