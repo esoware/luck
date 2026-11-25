@@ -186,11 +186,18 @@ impl<'source> Lexer<'source> {
         loop {
             self.skip_whitespace();
             let start = self.cursor.position();
-            let Some(byte) = self.cursor.peek() else {
-                let mut eof = self.token(TokenKind::Eof, start);
-                eof.is_unterminated = self.is_in_block_comment;
-                self.has_line_break = eof.has_line_break_before;
-                return eof;
+            // The byte after the first reads as NUL past the end of the
+            // source, which no token goes on with, so one end check covers
+            // both.
+            let (byte, next) = match *self.cursor.rest() {
+                [byte, next, ..] => (byte, next),
+                [byte] => (byte, 0),
+                [] => {
+                    let mut eof = self.token(TokenKind::Eof, start);
+                    eof.is_unterminated = self.is_in_block_comment;
+                    self.has_line_break = eof.has_line_break_before;
+                    return eof;
+                }
             };
             // A name's scan takes its first byte too, so it vouches for the
             // whole name.
@@ -210,18 +217,19 @@ impl<'source> Lexer<'source> {
                 b'(' => TokenKind::LeftParen,
                 b')' => TokenKind::RightParen,
                 b',' => TokenKind::Comma,
-                b'=' => self.either(b'=', TokenKind::EqualEqual, TokenKind::Equal),
-                b'.' => match self.cursor.peek() {
-                    Some(b'0'..=b'9') => match self.lex_number(start, byte) {
+                b'=' => self.either(next, b'=', TokenKind::EqualEqual, TokenKind::Equal),
+                b'.' => match next {
+                    b'0'..=b'9' => match self.lex_number(start, byte) {
                         Some(kind) => kind,
                         None => continue,
                     },
-                    Some(b'.') => {
+                    b'.' => {
                         self.cursor.bump();
                         if self.cursor.eat(b'.') {
                             TokenKind::DotDotDot
                         } else {
-                            self.compound_or(TokenKind::DotDotEqual, TokenKind::DotDot)
+                            let following = self.cursor.peek().unwrap_or(0);
+                            self.compound_or(following, TokenKind::DotDotEqual, TokenKind::DotDot)
                         }
                     }
                     _ => TokenKind::Dot,
@@ -247,8 +255,8 @@ impl<'source> Lexer<'source> {
                     None => TokenKind::LeftBracket,
                 },
                 b']' => TokenKind::RightBracket,
-                b':' => self.either(b':', TokenKind::DoubleColon, TokenKind::Colon),
-                b'-' if self.cursor.peek() == Some(b'-') => {
+                b':' => self.either(next, b':', TokenKind::DoubleColon, TokenKind::Colon),
+                b'-' if next == b'-' => {
                     self.lex_comment(start);
                     continue;
                 }
@@ -256,7 +264,7 @@ impl<'source> Lexer<'source> {
                 b'`' if self.version.has_interpolated_strings() => {
                     return self.lex_interpolated_string(start);
                 }
-                _ => match self.lex_operator(start, byte) {
+                _ => match self.lex_operator(start, byte, next) {
                     Some(kind) => kind,
                     None => continue,
                 },
@@ -394,36 +402,47 @@ impl<'source> Lexer<'source> {
     }
 
     /// Lex an operator from its first `byte` at `start`, with the cursor past
-    /// it, or report the byte and return `None` where it starts no token.
-    fn lex_operator(&mut self, start: usize, byte: u8) -> Option<TokenKind> {
+    /// it, at `next`, or report the byte and return `None` where it starts no
+    /// token.
+    fn lex_operator(&mut self, start: usize, byte: u8, next: u8) -> Option<TokenKind> {
         Some(match byte {
             b';' => TokenKind::Semicolon,
             b'#' => TokenKind::Hash,
             b'-' => {
                 // Luau
-                if self.version.has_type_syntax() && self.cursor.eat(b'>') {
+                if self.version.has_type_syntax() && next == b'>' {
+                    self.cursor.bump();
                     TokenKind::Arrow
                 } else {
-                    self.compound_or(TokenKind::MinusEqual, TokenKind::Minus)
+                    self.compound_or(next, TokenKind::MinusEqual, TokenKind::Minus)
                 }
             }
-            b'+' => self.compound_or(TokenKind::PlusEqual, TokenKind::Plus),
-            b'*' => self.compound_or(TokenKind::StarEqual, TokenKind::Star),
+            b'+' => self.compound_or(next, TokenKind::PlusEqual, TokenKind::Plus),
+            b'*' => self.compound_or(next, TokenKind::StarEqual, TokenKind::Star),
             b'/' => {
-                if self.version.has_floor_div() && self.cursor.eat(b'/') {
-                    self.compound_or(TokenKind::FloorDivEqual, TokenKind::FloorDiv)
+                if self.version.has_floor_div() && next == b'/' {
+                    self.cursor.bump();
+                    let following = self.cursor.peek().unwrap_or(0);
+                    self.compound_or(following, TokenKind::FloorDivEqual, TokenKind::FloorDiv)
                 } else {
-                    self.compound_or(TokenKind::SlashEqual, TokenKind::Slash)
+                    self.compound_or(next, TokenKind::SlashEqual, TokenKind::Slash)
                 }
             }
-            b'%' => self.compound_or(TokenKind::PercentEqual, TokenKind::Percent),
-            b'^' => self.compound_or(TokenKind::CaretEqual, TokenKind::Caret),
-            b'<' => self.angle(b'<', TokenKind::LessEqual, TokenKind::ShiftLeft, TokenKind::Less),
-            b'>' => {
-                self.angle(b'>', TokenKind::GreaterEqual, TokenKind::ShiftRight, TokenKind::Greater)
+            b'%' => self.compound_or(next, TokenKind::PercentEqual, TokenKind::Percent),
+            b'^' => self.compound_or(next, TokenKind::CaretEqual, TokenKind::Caret),
+            b'<' => {
+                self.angle(next, b'<', TokenKind::LessEqual, TokenKind::ShiftLeft, TokenKind::Less)
             }
+            b'>' => self.angle(
+                next,
+                b'>',
+                TokenKind::GreaterEqual,
+                TokenKind::ShiftRight,
+                TokenKind::Greater,
+            ),
             b'~' => {
-                if self.cursor.eat(b'=') {
+                if next == b'=' {
+                    self.cursor.bump();
                     TokenKind::TildeEqual
                 } else if self.version.has_bitwise_ops() {
                     TokenKind::Tilde
@@ -457,36 +476,47 @@ impl<'source> Lexer<'source> {
         })
     }
 
-    /// `compound` when a compound-assignment `=` follows, consuming it, else
-    /// `plain`.
+    /// `compound` when `following`, the byte at the cursor, is a
+    /// compound-assignment `=`, consuming it, else `plain`.
     #[inline]
-    fn compound_or(&mut self, compound: TokenKind, plain: TokenKind) -> TokenKind {
-        if self.version.has_compound_assignment() && self.cursor.eat(b'=') {
+    fn compound_or(&mut self, following: u8, compound: TokenKind, plain: TokenKind) -> TokenKind {
+        if self.version.has_compound_assignment() && following == b'=' {
+            self.cursor.bump();
             compound
         } else {
             plain
         }
     }
 
-    /// `pair` when `second` follows, consuming it, else `single`.
+    /// `pair` when `next`, the byte at the cursor, is `second`, consuming it,
+    /// else `single`.
     #[inline]
-    fn either(&mut self, second: u8, pair: TokenKind, single: TokenKind) -> TokenKind {
-        if self.cursor.eat(second) { pair } else { single }
+    fn either(&mut self, next: u8, second: u8, pair: TokenKind, single: TokenKind) -> TokenKind {
+        if next == second {
+            self.cursor.bump();
+            pair
+        } else {
+            single
+        }
     }
 
-    /// Finish `<` or `>`: `or_equal` before `=`, `shift` before a second
-    /// `angle` where the version has shifts, else `plain`.
+    /// Finish `<` or `>`, with `next` at the cursor: `or_equal` before `=`,
+    /// `shift` before a second `angle` where the version has shifts, else
+    /// `plain`.
     #[inline]
     fn angle(
         &mut self,
+        next: u8,
         angle: u8,
         or_equal: TokenKind,
         shift: TokenKind,
         plain: TokenKind,
     ) -> TokenKind {
-        if self.cursor.eat(b'=') {
+        if next == b'=' {
+            self.cursor.bump();
             or_equal
-        } else if self.version.has_bitwise_ops() && self.cursor.eat(angle) {
+        } else if self.version.has_bitwise_ops() && next == angle {
+            self.cursor.bump();
             shift
         } else {
             plain
