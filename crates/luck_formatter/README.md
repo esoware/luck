@@ -1,6 +1,6 @@
 # luck_formatter
 
-The Prettier-style formatter for Lua 5.1 to 5.5 and Luau.
+The Prettier-style formatter for Luau.
 
 ## Overview
 
@@ -18,19 +18,16 @@ It writes the parentheses precedence needs. Of those in the source, it keeps the
 
 ## Usage
 
-- `format(allocator, source, version, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors. The source and the output are bytes, as Lua reads them, so a comment or a string that isn't UTF-8 keeps its bytes, and the output is UTF-8 whenever the source is.
+- `format(allocator, source, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors. The source and the output are bytes, as Luau reads them, so a comment or a string that isn't UTF-8 keeps its bytes, and the output is UTF-8 whenever the source is.
 - `format_parsed` formats a parse the caller holds, made with `luck_parser::parse_with_tokens`, which keeps the tokens the formatter reads, and `format_range` formats only the statements a byte range overlaps and copies the rest.
-- `format_chunk(allocator, &chunk, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic`, which places each `SyntheticComment` at the statement or block it's anchored to, or `Comments::none`, and spells each literal that has no spelling for the chunk's version. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
-- Every entry point that takes a tree reads its dialect from the tree's `Chunk`.
+- `format_chunk(allocator, &chunk, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic`, which places each `SyntheticComment` at the statement or block it's anchored to, or `Comments::none`, and spells each literal that has no spelling from its value. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
 
 ```rust
 use luck_allocator::Allocator;
 use luck_formatter::FormatOptions;
-use luck_token::LuaVersion;
 
 let allocator = Allocator::new();
-let result =
-    luck_formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+let result = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::default());
 assert!(result.errors.is_empty());
 assert_eq!(result.output, b"local x = 1\n");
 ```

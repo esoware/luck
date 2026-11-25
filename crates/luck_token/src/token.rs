@@ -1,36 +1,33 @@
 use std::fmt;
 
-use crate::{LuaVersion, Span};
+use crate::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Identifier,
 
     // Contextual keywords, each a name wherever its keyword reading doesn't
-    // apply, and a name in every version that lacks it. They follow
-    // `Identifier`, so `is_name` is one comparison.
-    Continue, // Luau
-    Export,   // Luau
-    Const,    // Luau
-    Type,     // Luau
-    Typeof,   // Luau
-    Read,     // Luau
-    Write,    // Luau
-    Global,   // Lua 5.5
+    // apply. They follow `Identifier`, so `is_name` is one comparison.
+    Continue,
+    Export,
+    Const,
+    Type,
+    Typeof,
+    Read,
+    Write,
 
     Number,
-    /// Luau: a numeral with the `i` suffix, which reads as an exact 64-bit
-    /// integer.
+    /// A numeral with the `i` suffix, which reads as an exact 64-bit integer.
     Integer,
     StringLiteral,
 
-    // Luau interpolated string pieces, each spanning its delimiters
+    // Interpolated string pieces, each spanning its delimiters
     InterpolatedStringBegin,  // `text{
     InterpolatedStringMiddle, // }text{
     InterpolatedStringEnd,    // }text`
     InterpolatedStringSimple, // `text`, which holds no expression
 
-    // Keywords (Lua 5.1 base)
+    // Keywords
     And,
     Break,
     Do,
@@ -53,9 +50,6 @@ pub enum TokenKind {
     Until,
     While,
 
-    // Lua 5.2+
-    Goto,
-
     Plus,
     Minus,
     Star,
@@ -65,10 +59,7 @@ pub enum TokenKind {
     Caret,
     Hash,
     Ampersand,
-    Tilde,
     Pipe,
-    ShiftLeft,
-    ShiftRight,
     Dot,
     DotDot,
     DotDotDot,
@@ -90,7 +81,7 @@ pub enum TokenKind {
     LeftBracket,
     RightBracket,
 
-    // Luau compound assignment operators
+    // Compound assignment operators
     PlusEqual,
     MinusEqual,
     StarEqual,
@@ -100,7 +91,6 @@ pub enum TokenKind {
     CaretEqual,
     DotDotEqual,
 
-    // Luau
     At,
     Arrow,
     Question,
@@ -171,28 +161,23 @@ impl TokenKind {
             Self::True => "true",
             Self::Until => "until",
             Self::While => "while",
-            Self::Goto => "goto",         // Lua 5.2+
-            Self::Continue => "continue", // Luau
-            Self::Export => "export",     // Luau
-            Self::Const => "const",       // Luau
-            Self::Type => "type",         // Luau
-            Self::Typeof => "typeof",     // Luau
-            Self::Read => "read",         // Luau
-            Self::Write => "write",       // Luau
-            Self::Global => "global",     // Lua 5.5
+            Self::Continue => "continue",
+            Self::Export => "export",
+            Self::Const => "const",
+            Self::Type => "type",
+            Self::Typeof => "typeof",
+            Self::Read => "read",
+            Self::Write => "write",
             Self::Plus => "+",
             Self::Minus => "-",
             Self::Star => "*",
             Self::Slash => "/",
-            Self::FloorDiv => "//", // Lua 5.3+, Luau
+            Self::FloorDiv => "//",
             Self::Percent => "%",
             Self::Caret => "^",
             Self::Hash => "#",
-            Self::Ampersand => "&",   // Lua 5.3+
-            Self::Tilde => "~",       // Lua 5.3+
-            Self::Pipe => "|",        // Lua 5.3+
-            Self::ShiftLeft => "<<",  // Lua 5.3+
-            Self::ShiftRight => ">>", // Lua 5.3+
+            Self::Ampersand => "&",
+            Self::Pipe => "|",
             Self::Dot => ".",
             Self::DotDot => "..",
             Self::DotDotDot => "...",
@@ -213,36 +198,47 @@ impl TokenKind {
             Self::RightBrace => "}",
             Self::LeftBracket => "[",
             Self::RightBracket => "]",
-            Self::PlusEqual => "+=",      // Luau
-            Self::MinusEqual => "-=",     // Luau
-            Self::StarEqual => "*=",      // Luau
-            Self::SlashEqual => "/=",     // Luau
-            Self::FloorDivEqual => "//=", // Luau
-            Self::PercentEqual => "%=",   // Luau
-            Self::CaretEqual => "^=",     // Luau
-            Self::DotDotEqual => "..=",   // Luau
-            Self::At => "@",              // Luau
-            Self::Arrow => "->",          // Luau
-            Self::Question => "?",        // Luau
+            Self::PlusEqual => "+=",
+            Self::MinusEqual => "-=",
+            Self::StarEqual => "*=",
+            Self::SlashEqual => "/=",
+            Self::FloorDivEqual => "//=",
+            Self::PercentEqual => "%=",
+            Self::CaretEqual => "^=",
+            Self::DotDotEqual => "..=",
+            Self::At => "@",
+            Self::Arrow => "->",
+            Self::Question => "?",
         })
     }
 
-    /// The keyword or contextual keyword `text` spells under `version`, as the
-    /// lexer reads it, or `None` when it's an identifier there, as `goto` is
-    /// on 5.1 and Luau and `type` is outside Luau.
+    /// The keyword or contextual keyword `text` spells, as the lexer reads
+    /// it, or `None` for any other name.
     #[inline]
-    pub fn keyword(text: impl AsRef<[u8]>, version: LuaVersion) -> Option<Self> {
+    pub fn keyword(text: impl AsRef<[u8]>) -> Option<Self> {
         let packed = pack_keyword_candidate(text.as_ref())?;
         let (keyword, kind) = KEYWORDS[keyword_slot(packed)];
-        (keyword == packed && kind.is_keyword_in(version)).then_some(kind)
+        (keyword == packed).then_some(kind)
     }
 
-    /// Whether code luck writes can't name a variable `text` under
-    /// `version`: a keyword, or Lua 5.5's `global`, which builds without
-    /// `LUA_COMPAT_GLOBAL` reserve. Every other contextual keyword is a name
-    /// wherever a name goes.
-    pub fn is_reserved(text: &str, version: LuaVersion) -> bool {
-        Self::keyword(text, version).is_some_and(|kind| !kind.is_name() || kind == Self::Global)
+    /// The kind of the name of `length` bytes, at least one, that opens
+    /// `first_eight`, eight bytes in little-endian order that run past a
+    /// shorter name: as [`Self::keyword`] reads it, or [`Self::Identifier`].
+    ///
+    /// It takes no branch on the length, for a lexer that reads many names
+    /// at once.
+    #[inline]
+    pub fn of_name(first_eight: u64, length: usize) -> Self {
+        let spelled = u64::MAX >> (64 - 8 * length.clamp(1, 8));
+        let packed = first_eight & spelled;
+        let (keyword, kind) = KEYWORDS[keyword_slot(packed)];
+        if keyword == packed && length <= 8 { kind } else { Self::Identifier }
+    }
+
+    /// Whether code luck writes can't name a variable `text`: a keyword, but
+    /// no contextual keyword, which is a name wherever a name goes.
+    pub fn is_reserved(text: &str) -> bool {
+        Self::keyword(text).is_some_and(|kind| !kind.is_name())
     }
 
     /// Whether the parser reads this kind as a name where one goes: an
@@ -257,8 +253,7 @@ impl TokenKind {
             | Self::Type
             | Self::Typeof
             | Self::Read
-            | Self::Write
-            | Self::Global => true,
+            | Self::Write => true,
             Self::Number
             | Self::Integer
             | Self::StringLiteral
@@ -287,7 +282,6 @@ impl TokenKind {
             | Self::True
             | Self::Until
             | Self::While
-            | Self::Goto
             | Self::Plus
             | Self::Minus
             | Self::Star
@@ -297,103 +291,7 @@ impl TokenKind {
             | Self::Caret
             | Self::Hash
             | Self::Ampersand
-            | Self::Tilde
             | Self::Pipe
-            | Self::ShiftLeft
-            | Self::ShiftRight
-            | Self::Dot
-            | Self::DotDot
-            | Self::DotDotDot
-            | Self::Semicolon
-            | Self::Colon
-            | Self::DoubleColon
-            | Self::Comma
-            | Self::Equal
-            | Self::EqualEqual
-            | Self::TildeEqual
-            | Self::Less
-            | Self::LessEqual
-            | Self::Greater
-            | Self::GreaterEqual
-            | Self::LeftParen
-            | Self::RightParen
-            | Self::LeftBrace
-            | Self::RightBrace
-            | Self::LeftBracket
-            | Self::RightBracket
-            | Self::PlusEqual
-            | Self::MinusEqual
-            | Self::StarEqual
-            | Self::SlashEqual
-            | Self::FloorDivEqual
-            | Self::PercentEqual
-            | Self::CaretEqual
-            | Self::DotDotEqual
-            | Self::At
-            | Self::Arrow
-            | Self::Question
-            | Self::Eof => false,
-        }
-    }
-
-    /// Whether `version` reads this keyword's spelling as the keyword, which
-    /// holds for every keyword but those only some versions have.
-    const fn is_keyword_in(self, version: LuaVersion) -> bool {
-        match self {
-            // Lua 5.2+
-            Self::Goto => version.has_goto(),
-            // Luau
-            Self::Continue => version.has_continue(),
-            // Luau
-            Self::Const => version.has_const_stmt(),
-            // Luau
-            Self::Export | Self::Type | Self::Typeof | Self::Read | Self::Write => {
-                version.has_type_syntax()
-            }
-            // Lua 5.5
-            Self::Global => version.has_global(),
-            Self::And
-            | Self::Break
-            | Self::Do
-            | Self::Else
-            | Self::ElseIf
-            | Self::End
-            | Self::False
-            | Self::For
-            | Self::Function
-            | Self::If
-            | Self::In
-            | Self::Local
-            | Self::Nil
-            | Self::Not
-            | Self::Or
-            | Self::Repeat
-            | Self::Return
-            | Self::Then
-            | Self::True
-            | Self::Until
-            | Self::While => true,
-            Self::Identifier
-            | Self::Number
-            | Self::Integer
-            | Self::StringLiteral
-            | Self::InterpolatedStringBegin
-            | Self::InterpolatedStringMiddle
-            | Self::InterpolatedStringEnd
-            | Self::InterpolatedStringSimple
-            | Self::Plus
-            | Self::Minus
-            | Self::Star
-            | Self::Slash
-            | Self::FloorDiv
-            | Self::Percent
-            | Self::Caret
-            | Self::Hash
-            | Self::Ampersand
-            | Self::Tilde
-            | Self::Pipe
-            | Self::ShiftLeft
-            | Self::ShiftRight
             | Self::Dot
             | Self::DotDot
             | Self::DotDotDot
@@ -441,7 +339,7 @@ impl TokenKind {
 }
 
 /// Every keyword is 2 to 8 bytes, so its spelling packs into a `u64`.
-const KEYWORD_KINDS: [TokenKind; 30] = [
+const KEYWORD_KINDS: [TokenKind; 28] = [
     TokenKind::And,
     TokenKind::Break,
     TokenKind::Do,
@@ -451,7 +349,6 @@ const KEYWORD_KINDS: [TokenKind; 30] = [
     TokenKind::False,
     TokenKind::For,
     TokenKind::Function,
-    TokenKind::Goto,
     TokenKind::If,
     TokenKind::In,
     TokenKind::Local,
@@ -471,17 +368,16 @@ const KEYWORD_KINDS: [TokenKind; 30] = [
     TokenKind::Typeof,
     TokenKind::Read,
     TokenKind::Write,
-    TokenKind::Global,
 ];
 
 /// Gives each keyword its own slot. Building [`KEYWORDS`] fails to compile on
 /// a collision, so a new keyword may need a new multiplier.
-const KEYWORD_HASH_MULTIPLIER: u64 = 0x4FA6_9611_45F2_1E95;
+const KEYWORD_HASH_MULTIPLIER: u64 = 0xE043_5658_D461_2E0B;
 
 /// A perfect hash table of the keywords, each beside its little-endian
 /// spelling, zero-padded. A free slot holds 0, which no name packs to.
-static KEYWORDS: [(u64, TokenKind); 64] = {
-    let mut table = [(0, TokenKind::Identifier); 64];
+static KEYWORDS: [(u64, TokenKind); 32] = {
+    let mut table = [(0, TokenKind::Identifier); 32];
     let mut i = 0;
     while i < KEYWORD_KINDS.len() {
         let kind = KEYWORD_KINDS[i];
@@ -503,52 +399,7 @@ static KEYWORDS: [(u64, TokenKind); 64] = {
 
 #[inline]
 const fn keyword_slot(packed: u64) -> usize {
-    (packed.wrapping_mul(KEYWORD_HASH_MULTIPLIER) >> 58) as usize
-}
-
-/// The kind each name has under one version, looked up with no branch on its
-/// length or its version, for a lexer that reads many names at once.
-#[derive(Debug)]
-pub struct Keywords([(u64, TokenKind); 64]);
-
-/// [`KEYWORDS`] for each version, in [`LuaVersion::ALL`]'s order, with a
-/// keyword the version lacks read as [`TokenKind::Identifier`].
-static KEYWORDS_BY_VERSION: [Keywords; 6] = {
-    let mut tables = [const { Keywords([(0, TokenKind::Identifier); 64]) }; 6];
-    let mut version = 0;
-    while version < LuaVersion::ALL.len() {
-        let mut slot = 0;
-        while slot < KEYWORDS.len() {
-            let (packed, kind) = KEYWORDS[slot];
-            let kind_there = if kind.is_keyword_in(LuaVersion::ALL[version]) {
-                kind
-            } else {
-                TokenKind::Identifier
-            };
-            tables[version].0[slot] = (packed, kind_there);
-            slot += 1;
-        }
-        version += 1;
-    }
-    tables
-};
-
-impl Keywords {
-    pub const fn of(version: LuaVersion) -> &'static Self {
-        &KEYWORDS_BY_VERSION[version as usize]
-    }
-
-    /// The kind of the name of `length` bytes, at least one, that opens
-    /// `first_eight`, eight bytes in little-endian order that run past a
-    /// shorter name: as [`TokenKind::keyword`] reads it, or
-    /// [`TokenKind::Identifier`].
-    #[inline]
-    pub fn kind(&self, first_eight: u64, length: usize) -> TokenKind {
-        let spelled = u64::MAX >> (64 - 8 * length.clamp(1, 8));
-        let packed = first_eight & spelled;
-        let (keyword, kind) = self.0[keyword_slot(packed)];
-        if keyword == packed && length <= 8 { kind } else { TokenKind::Identifier }
-    }
+    (packed.wrapping_mul(KEYWORD_HASH_MULTIPLIER) >> 59) as usize
 }
 
 /// `bytes` packed as [`KEYWORDS`] packs a keyword, or `None` for a length no

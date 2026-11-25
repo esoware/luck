@@ -17,7 +17,7 @@ use std::ops::Range;
 use luck_allocator::{Allocator, List};
 use luck_ast::Name;
 use luck_parser::Groupings;
-use luck_token::{LuaVersion, Span};
+use luck_token::Span;
 use memchr::memchr2;
 use unicode_width::UnicodeWidthStr as _;
 
@@ -125,7 +125,7 @@ impl TextWidth {
         // Without a line break, every ASCII character is one column. A short
         // text, the usual kind, takes one pass to tell, and a long one goes
         // to the vectorized scans. A lone CR breaks the line too, as it does
-        // in Lua 5.x and in most editors.
+        // in most editors.
         let is_one_ascii_line = if text.len() <= 64 {
             text.iter().all(|&b| b.is_ascii() && b != b'\n' && b != b'\r')
         } else {
@@ -197,9 +197,6 @@ pub(crate) struct Formatter<'ast> {
     /// No space joins an element before this one, which starts a run of
     /// elements an emitter moves or takes back as a unit.
     space_fence: usize,
-    /// The chunk's dialect, which spells a literal the tree doesn't, and reads
-    /// the source's line breaks.
-    version: LuaVersion,
     options: FormatOptions,
     allocator: &'ast Allocator,
     comments: Comments<'ast>,
@@ -226,7 +223,6 @@ impl<'ast> Formatter<'ast> {
     /// `groupings` are the parentheses the user of a parse wrote.
     pub(crate) fn new(
         allocator: &'ast Allocator,
-        version: LuaVersion,
         options: FormatOptions,
         comments: Comments<'ast>,
         groupings: Option<&'ast Groupings>,
@@ -242,7 +238,6 @@ impl<'ast> Formatter<'ast> {
             layout: Layout::with_capacity_in(capacity.div_ceil(8), allocator),
             text_bytes: 0,
             space_fence: 0,
-            version,
             options,
             allocator,
             comments,
@@ -312,10 +307,6 @@ impl<'ast> Formatter<'ast> {
 
     pub(crate) const fn options(&self) -> &FormatOptions {
         &self.options
-    }
-
-    pub(crate) const fn version(&self) -> LuaVersion {
-        self.version
     }
 
     pub(crate) const fn allocator(&self) -> &'ast Allocator {

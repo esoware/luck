@@ -1,22 +1,24 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
 use luck_stdlib::library_for;
-use luck_token::LuaTarget;
+use luck_token::Variant;
 
-pub(crate) fn lint(source: &str, target: LuaTarget, config: &LintConfig) -> Vec<Message> {
-    lint_bytes(source.as_bytes(), target, config, FixKind::empty())
+/// `source`'s messages against Luau's standard library, with no fixes.
+pub(crate) fn lint(source: &str, config: &LintConfig) -> Vec<Message> {
+    lint_bytes(source.as_bytes(), Variant::Standalone, config, FixKind::empty())
 }
 
-/// `source`'s messages, with the fixes of the kinds `fixes` holds.
+/// `source`'s messages against `variant`'s standard library, with the fixes
+/// of the kinds `fixes` holds.
 pub(crate) fn lint_bytes(
     source: &[u8],
-    target: LuaTarget,
+    variant: Variant,
     config: &LintConfig,
     fixes: FixKind,
 ) -> Vec<Message> {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, source, target.version());
-    Linter::new(config.clone()).run(&parse, library_for(target), fixes, None)
+    let parse = luck_parser::parse(&allocator, source);
+    Linter::new(config.clone()).run(&parse, library_for(variant), fixes, None)
 }
 
 pub(crate) fn with_level(rule: RuleId, level: RuleLevel) -> LintConfig {

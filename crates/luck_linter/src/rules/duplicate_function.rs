@@ -29,17 +29,13 @@ impl Rule for DuplicateFunction {
         let mut definitions: FxHashMap<String, Span> = FxHashMap::default();
         for stmt in &block.stmts {
             // `redefining_local` covers local functions.
-            let (declared_name, name_span) = if let Statement::FunctionDecl(decl) = stmt {
-                (full_name(&decl.name), decl.name.span)
-            } else if let Statement::GlobalFunction(function) = stmt {
-                // Lua 5.5
-                (Some(function.name.text.as_str().to_owned()), function.name.span)
-            } else {
+            let Statement::FunctionDecl(decl) = stmt else {
                 continue;
             };
-            let Some(name) = declared_name else {
+            let Some(name) = full_name(&decl.name) else {
                 continue;
             };
+            let name_span = decl.name.span;
             match definitions.entry(name) {
                 Entry::Occupied(first) => context.diagnostic(
                     Finding::new(
@@ -73,90 +69,51 @@ fn full_name(function_name: &FunctionName<'_>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local t = {}
 function t.m() end
 function t:m() end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 function f() end
 function g() end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local function f() end
 local function f() end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 do function f() end end
 do function f() end end",
-            LuaTarget::Lua54,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 function f() end
 function f() end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local t = {}
 function t.m() end
 function t.m() end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local t = {}
 function t:m() end
 function t:m() end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 do
 function f() end
 function f() end
 end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 function f() end
 function f() end
 function f() end",
-            LuaTarget::Lua54,
-        ),
-        // Both statements define `f` in one block.
-        (
-            "\
-global function f() end
-global function f() end",
-            LuaTarget::Lua55,
-        ),
-        (
-            "\
+        "\
 function m.f0() end
 function m.f1() end
 function m.f0() end
 function m.f1() end",
-            LuaTarget::Lua54,
-        ),
     ];
 
     #[test]

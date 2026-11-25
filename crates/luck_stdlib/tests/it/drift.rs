@@ -1,19 +1,15 @@
-//! The seven files don't inherit from each other, so copies of a shared
-//! entry can drift apart.
-//!
-//! The two Luau files must agree on every shared
-//! entry, and so must each pair of adjacent Lua versions, unless an
-//! allowlist below names the difference and the reason for it. The other
-//! tests check each library's internal consistency.
+//! Roblox's library layers `roblox.toml` over Luau's, which replaces a Luau
+//! entry it redeclares whole, so it may change only the entries an allowlist
+//! below names with the reason for it. The other tests check each library's
+//! internal consistency.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use luck_stdlib::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibLibrary, StdlibParam, StdlibSignature,
 };
-use luck_token::LuaVersion;
 
-use crate::common::{NUMBERED_VERSIONS, all_libraries, luau, roblox, standalone_library};
+use crate::common::{all_libraries, luau, roblox};
 
 fn global_paths(
     library: &'static StdlibLibrary<'static>,
@@ -138,163 +134,52 @@ fn deprecation_fingerprint(entry: &StdlibEntry<'_>) -> String {
 }
 
 #[test]
-fn luau_and_roblox_shared_surface_agrees() {
-    // Signature divergence: Roblox vectors are 3-wide, while standalone Luau
-    // also has the 4-arg form of LUA_VECTOR_SIZE=4 builds. And the standalone
-    // CLI's collectgarbage also accepts "collect", which returns nothing.
+fn roblox_changes_only_the_allowlisted_luau_entries() {
+    // Signature divergence: Roblox vectors are 3-wide, while Luau also has
+    // the 4-arg form of LUA_VECTOR_SIZE=4 builds. And the Luau CLI's
+    // collectgarbage also accepts "collect", which returns nothing.
     const SIGNATURE_ALLOWLIST: [&str; 2] = ["vector.create", "collectgarbage"];
     // Deprecation divergence: Roblox deprecates these while they stay fully
-    // supported in standalone Luau.
+    // supported in Luau.
     const DEPRECATION_ALLOWLIST: [&str; 3] = ["collectgarbage", "getfenv", "setfenv"];
 
-    let standalone_globals = global_paths(luau());
+    let luau_globals = global_paths(luau());
     let roblox_globals = global_paths(roblox());
     let mut mismatches = Vec::new();
-    for (path, standalone_entry) in &standalone_globals {
-        let Some(roblox_entry) = roblox_globals.get(path) else {
-            continue;
-        };
-        let standalone_fingerprint = fingerprint(standalone_entry);
+    for (path, luau_entry) in &luau_globals {
+        let roblox_entry = roblox_globals[path];
+        let luau_fingerprint = fingerprint(luau_entry);
         let roblox_fingerprint = fingerprint(roblox_entry);
-        if standalone_fingerprint != roblox_fingerprint
-            && !SIGNATURE_ALLOWLIST.contains(&path.as_str())
-        {
+        if luau_fingerprint != roblox_fingerprint && !SIGNATURE_ALLOWLIST.contains(&path.as_str()) {
             mismatches.push(format!(
-                "{path}:\n  standalone: {standalone_fingerprint}\n  roblox:     {roblox_fingerprint}"
+                "{path}:\n  luau:   {luau_fingerprint}\n  roblox: {roblox_fingerprint}"
             ));
         }
-        let standalone_deprecation = deprecation_fingerprint(standalone_entry);
+        let luau_deprecation = deprecation_fingerprint(luau_entry);
         let roblox_deprecation = deprecation_fingerprint(roblox_entry);
-        if standalone_deprecation != roblox_deprecation
-            && !DEPRECATION_ALLOWLIST.contains(&path.as_str())
+        if luau_deprecation != roblox_deprecation && !DEPRECATION_ALLOWLIST.contains(&path.as_str())
         {
             mismatches.push(format!(
-                "{path} deprecation:\n  standalone: {standalone_deprecation}\n  roblox:     {roblox_deprecation}"
+                "{path} deprecation:\n  luau:   {luau_deprecation}\n  roblox: {roblox_deprecation}"
             ));
         }
     }
 
-    // The derived string receiver is the only shape both define. It mirrors
-    // the namespaces compared above, so this only catches a hand-authored
-    // override in one file.
-    let standalone_shapes = shape_paths(luau());
+    // The derived string receiver is Luau's only shape, so this catches a
+    // Roblox override of one of its methods.
     let roblox_shapes = shape_paths(roblox());
-    for (path, standalone_entry) in &standalone_shapes {
-        let Some(roblox_entry) = roblox_shapes.get(path) else {
-            continue;
-        };
-        let standalone_fingerprint = fingerprint(standalone_entry);
-        let roblox_fingerprint = fingerprint(roblox_entry);
-        if standalone_fingerprint != roblox_fingerprint {
+    for (path, luau_entry) in &shape_paths(luau()) {
+        let luau_fingerprint = fingerprint(luau_entry);
+        let roblox_fingerprint = fingerprint(roblox_shapes[path]);
+        if luau_fingerprint != roblox_fingerprint {
             mismatches.push(format!(
-                "shape {path}:\n  standalone: {standalone_fingerprint}\n  roblox:     {roblox_fingerprint}"
+                "shape {path}:\n  luau:   {luau_fingerprint}\n  roblox: {roblox_fingerprint}"
             ));
         }
     }
     assert!(
         mismatches.is_empty(),
-        "luau.toml and luau_roblox.toml drifted on shared entries:\n{}",
-        mismatches.join("\n")
-    );
-}
-
-/// Each allowlist entry cites its manual change. Deprecation isn't
-/// compared, since APIs routinely age into it and its policy has its own
-/// tests.
-#[test]
-fn numbered_lua_adjacent_versions_agree() {
-    // (path, older version of the adjacent pair) -> manual delta.
-    let allowlist: &[(&str, LuaVersion)] = &[
-        // 5.2 load accepts a chunk string or function plus mode/env;
-        // 5.1 load takes only a function.
-        ("load", LuaVersion::Lua51),
-        // 5.2 loadfile gains mode and env parameters.
-        ("loadfile", LuaVersion::Lua51),
-        // 5.2 xpcall becomes variadic (extra args forwarded to f).
-        ("xpcall", LuaVersion::Lua51),
-        // 5.2 os.exit accepts true/false as well as a number, plus the
-        // close flag.
-        ("os.exit", LuaVersion::Lua51),
-        // 5.2 io.lines forwards read formats to the iterator.
-        ("io.lines", LuaVersion::Lua51),
-        // 5.2 io.write returns the file handle (chainable); 5.1 doesn't
-        // document a return.
-        ("io.write", LuaVersion::Lua51),
-        // 5.2 io.open rejects modes outside `[rwa]%+?b*`, such as rb+.
-        ("io.open", LuaVersion::Lua51),
-        // 5.2 string.rep gains the separator argument.
-        ("string.rep", LuaVersion::Lua51),
-        // 5.2 math.log gains the optional base argument.
-        ("math.log", LuaVersion::Lua51),
-        // 5.2 pairs/ipairs consult the __pairs/__ipairs metamethods, so
-        // any value is a valid subject; 5.1 raw-accesses a table.
-        ("pairs", LuaVersion::Lua51),
-        ("ipairs", LuaVersion::Lua51),
-        // 5.3 math.atan absorbs atan2 via the optional second argument.
-        ("math.atan", LuaVersion::Lua52),
-        // 5.3 string.dump gains the strip argument.
-        ("string.dump", LuaVersion::Lua52),
-        // 5.4 userdata carry multiple user values; get/setuservalue gain
-        // the index argument.
-        ("debug.getuservalue", LuaVersion::Lua53),
-        ("debug.setuservalue", LuaVersion::Lua53),
-        // collectgarbage changes in every version: 5.2 adds isrunning,
-        // generational, and incremental, 5.3 drops the mode switches, 5.4
-        // brings them back with tuning arguments, and 5.5 replaces
-        // setpause/setstepmul with the param form.
-        ("collectgarbage", LuaVersion::Lua51),
-        ("collectgarbage", LuaVersion::Lua52),
-        ("collectgarbage", LuaVersion::Lua53),
-        ("collectgarbage", LuaVersion::Lua54),
-        // 5.4 math.randomseed becomes optional and two-seed.
-        ("math.randomseed", LuaVersion::Lua53),
-        // 5.4 string.gmatch gains the init argument.
-        ("string.gmatch", LuaVersion::Lua53),
-        ("string:gmatch", LuaVersion::Lua53),
-        // 5.4 coroutine.isyieldable gains the coroutine argument.
-        ("coroutine.isyieldable", LuaVersion::Lua53),
-        // 5.4 drops the __ipairs metamethod 5.3 still runs, so ipairs is
-        // pure again.
-        ("ipairs", LuaVersion::Lua53),
-        // 5.5 coroutine.close defaults to the running coroutine.
-        ("coroutine.close", LuaVersion::Lua54),
-        // 5.4 utf8 gains the lax flag on codes/codepoint/len.
-        ("utf8.codes", LuaVersion::Lua53),
-        ("utf8.codepoint", LuaVersion::Lua53),
-        ("utf8.len", LuaVersion::Lua53),
-        // Derived string receiver mirrors the string.rep delta above.
-        ("string:rep", LuaVersion::Lua51),
-        // file:lines forwards read formats from 5.2 like io.lines.
-        ("file:lines", LuaVersion::Lua51),
-        // file:write returns the handle from 5.2 like io.write.
-        ("file:write", LuaVersion::Lua51),
-    ];
-
-    let mut mismatches = Vec::new();
-    for pair in NUMBERED_VERSIONS.windows(2) {
-        let &[older, newer] = pair else {
-            continue;
-        };
-        let older_paths = all_entries(standalone_library(older));
-        let newer_paths = all_entries(standalone_library(newer));
-        for (path, older_entry) in &older_paths {
-            let Some(newer_entry) = newer_paths.get(path) else {
-                continue;
-            };
-            let older_fingerprint = fingerprint(older_entry);
-            let newer_fingerprint = fingerprint(newer_entry);
-            if older_fingerprint != newer_fingerprint
-                && !allowlist.contains(&(path.as_str(), older))
-            {
-                mismatches.push(format!(
-                    "{path} ({older:?} -> {newer:?}):\n  {older:?}: {older_fingerprint}\n  {newer:?}: {newer_fingerprint}"
-                ));
-            }
-        }
-    }
-    assert!(
-        mismatches.is_empty(),
-        "adjacent numbered-Lua versions drifted without an allowlisted manual delta:\n{}",
+        "roblox.toml changes Luau entries no allowlist names:\n{}",
         mismatches.join("\n")
     );
 }
@@ -318,7 +203,7 @@ fn max_placeholder(template: &str) -> usize {
 #[test]
 fn overloads_are_distinct_and_constants_unique() {
     let mut violations = Vec::new();
-    for (file, library) in all_libraries() {
+    for (target, library) in all_libraries() {
         for (path, entry) in all_entries(library) {
             let StdlibEntry::Function(function) = entry else {
                 continue;
@@ -331,7 +216,7 @@ fn overloads_are_distinct_and_constants_unique() {
                         for v in values {
                             if !seen_values.insert(v.value) {
                                 violations.push(format!(
-                                    "{file} {path}: duplicate constant value '{}'",
+                                    "{target} {path}: duplicate constant value '{}'",
                                     v.value
                                 ));
                             }
@@ -344,7 +229,7 @@ fn overloads_are_distinct_and_constants_unique() {
             for arity in &arities {
                 if !seen_arities.insert(*arity) {
                     violations.push(format!(
-                        "{file} {path}: two overloads with identical arity range {arity:?}"
+                        "{target} {path}: two overloads with identical arity range {arity:?}"
                     ));
                 }
             }
@@ -356,7 +241,7 @@ fn overloads_are_distinct_and_constants_unique() {
 #[test]
 fn shape_references_resolve_and_templates_fit_arity() {
     let mut violations = Vec::new();
-    for (file, library) in all_libraries() {
+    for (target, library) in all_libraries() {
         for (path, entry) in all_entries(library) {
             let (shape_reference, template_budget) = match entry {
                 StdlibEntry::Function(function) => {
@@ -373,7 +258,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
             if let Some(shape) = shape_reference
                 && !library.shapes.contains_key(shape)
             {
-                violations.push(format!("{file} {path}: dangling shape reference '{shape}'"));
+                violations.push(format!("{target} {path}: dangling shape reference '{shape}'"));
             }
             let mut check_template = |context: &str,
                                       deprecation: &StdlibDeprecation<'_>,
@@ -383,7 +268,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
                     let highest = max_placeholder(template);
                     if highest > budget {
                         violations.push(format!(
-                            "{file} {path}{context}: template '{template}' references arg {highest}, max arity {budget}"
+                            "{target} {path}{context}: template '{template}' references arg {highest}, max arity {budget}"
                         ));
                     }
                 }
@@ -412,7 +297,7 @@ fn shape_references_resolve_and_templates_fit_arity() {
             if let Some(base) = shape.extends
                 && !library.shapes.contains_key(base)
             {
-                violations.push(format!("{file} {name}: extends the missing shape '{base}'"));
+                violations.push(format!("{target} {name}: extends the missing shape '{base}'"));
             }
         }
     }
@@ -427,12 +312,12 @@ fn string_shape_mirrors_string_namespace() {
     // string.char builds from byte values and string.dump takes a
     // function; neither has a string subject.
     const NON_RECEIVER_MEMBERS: [&str; 2] = ["char", "dump"];
-    for (file, library) in all_libraries() {
+    for (target, library) in all_libraries() {
         let Some(StdlibEntry::Namespace(namespace)) = library.globals.get("string") else {
-            panic!("{file}: string namespace missing");
+            panic!("{target}: string namespace missing");
         };
         let Some(shape) = library.shapes.get("string") else {
-            panic!("{file}: derived string shape missing");
+            panic!("{target}: derived string shape missing");
         };
         for (name, entry) in &namespace.members {
             let is_function = matches!(entry, StdlibEntry::Function(_));
@@ -440,23 +325,23 @@ fn string_shape_mirrors_string_namespace() {
             assert_eq!(
                 shape.members.contains_key(name),
                 should_be_member,
-                "{file}: string shape membership wrong for '{name}'"
+                "{target}: string shape membership wrong for '{name}'"
             );
             if let (Some(StdlibEntry::Function(method)), StdlibEntry::Function(source)) =
                 (shape.members.get(name), entry)
             {
-                assert!(method.is_method, "{file}: string:{name} not a method");
+                assert!(method.is_method, "{target}: string:{name} not a method");
                 assert_eq!(
                     method.primary_signature().params.len(),
                     source.primary_signature().params.len() - 1,
-                    "{file}: string:{name} did not drop exactly the subject param"
+                    "{target}: string:{name} did not drop exactly the subject param"
                 );
             }
         }
         for name in shape.members.keys() {
             assert!(
                 namespace.members.contains_key(name),
-                "{file}: string shape member '{name}' has no namespace source"
+                "{target}: string shape member '{name}' has no namespace source"
             );
         }
     }
@@ -464,8 +349,7 @@ fn string_shape_mirrors_string_namespace() {
 
 #[test]
 fn environment_surfaces_do_not_leak() {
-    // Representative Roblox-only surface; none of it may appear in
-    // standalone Luau.
+    // Representative Roblox-only surface; none of it may appear in Luau.
     const ROBLOX_ONLY_GLOBALS: [&str; 24] = [
         "game",
         "workspace",
@@ -492,27 +376,16 @@ fn environment_surfaces_do_not_leak() {
         "UserSettings",
         "settings",
     ];
-    // Both Luau flavors lack the loader/io surface the VM removed.
+    // The loader and io surface the Luau VM leaves out.
     const LUAU_ABSENT_GLOBALS: [&str; 6] =
         ["io", "package", "dofile", "loadfile", "load", "module"];
     for name in ROBLOX_ONLY_GLOBALS {
-        assert!(!luau().globals.contains_key(name), "{name} leaked into standalone luau");
+        assert!(!luau().globals.contains_key(name), "{name} leaked into luau");
         assert!(roblox().globals.contains_key(name), "{name} missing from roblox");
     }
-    for name in LUAU_ABSENT_GLOBALS {
-        assert!(!luau().globals.contains_key(name), "{name} must be absent from standalone luau");
-        assert!(!roblox().globals.contains_key(name), "{name} must be absent from roblox luau");
-    }
-    // Luau-only globals must not leak into numbered Lua, though 5.1 has its
-    // own gcinfo.
-    for version in NUMBERED_VERSIONS {
-        for name in ["typeof", "buffer", "vector", "gcinfo"] {
-            let should_be_present = name == "gcinfo" && version == LuaVersion::Lua51;
-            assert_eq!(
-                standalone_library(version).globals.contains_key(name),
-                should_be_present,
-                "{name} presence wrong in {version:?}"
-            );
+    for (target, library) in all_libraries() {
+        for name in LUAU_ABSENT_GLOBALS {
+            assert!(!library.globals.contains_key(name), "{name} must be absent from {target}");
         }
     }
 }

@@ -2,8 +2,6 @@ mod expr;
 mod stmt;
 mod types;
 
-use luck_token::LuaVersion;
-
 use crate::rng::Rng;
 
 const NAME_STEMS: [&str; 16] = [
@@ -35,45 +33,40 @@ enum Varargs {
 #[derive(Debug)]
 struct FullGenerator {
     rng: Rng,
-    version: LuaVersion,
     output: String,
     indent: String,
     stmt_depth: usize,
-    /// Luau: this program exports values instead of returning a table. A
-    /// module can't do both, so each program picks one.
+    /// This program exports values instead of returning a table. A module
+    /// can't do both, so each program picks one.
     is_export_module: bool,
     function_varargs: Vec<Varargs>,
     names: Vec<String>,
-    /// Names the validator treats as read-only: const bindings, exported
-    /// functions, and 5.5 `for` control variables. They never appear as
-    /// assignment targets.
+    /// Names the validator treats as read-only: const bindings and exported
+    /// functions. They never appear as assignment targets.
     read_only_names: Vec<String>,
     callables: Vec<String>,
     /// Type expressions naming a declared alias, generic ones instantiated.
     alias_types: Vec<String>,
     next_id: usize,
-    next_label: usize,
 }
 
 impl FullGenerator {
-    fn new(seed: u64, version: LuaVersion) -> Self {
+    fn new(seed: u64) -> Self {
         let mut rng = Rng::new(seed);
-        let is_export_module = version.has_value_exports() && rng.chance(30);
+        let is_export_module = rng.chance(30);
         Self {
             rng,
-            version,
             output: String::new(),
             indent: String::new(),
             stmt_depth: 0,
             is_export_module,
-            // The chunk itself is a vararg function in every version.
+            // The chunk itself is a vararg function.
             function_varargs: vec![Varargs::Allowed],
             names: Vec::new(),
             read_only_names: Vec::new(),
             callables: BUILTIN_CALLEES.iter().map(|callee| (*callee).to_owned()).collect(),
             alias_types: Vec::new(),
             next_id: 0,
-            next_label: 0,
         }
     }
 
@@ -130,10 +123,8 @@ impl FullGenerator {
     }
 
     fn prelude(&mut self) {
-        if self.version.is_luau() {
-            self.line("--!strict");
-        }
-        self.line("-- Generated module: exercises the full grammar for one version.");
+        self.line("--!strict");
+        self.line("-- Generated module: exercises the full grammar.");
         self.line("--[[ Long-bracket block comment,");
         self.line("     spanning two lines. ]]");
         self.line("--[==[ leveled block comment ]==]");
@@ -143,20 +134,8 @@ impl FullGenerator {
             let source = self.rng.pick(&["math.floor", "table.concat", "string.rep", "os.clock"]);
             self.line(&format!("local {name} = {source}"));
         }
-        if self.version.is_luau() {
-            for _ in 0..2 {
-                self.type_alias_stmt();
-            }
-        }
-        if self.version.has_global() {
-            self.line("global registry, dispatch");
-            // `global <const> *` would make every later write to a global a
-            // compile error, so it stays in a block that writes none.
-            self.line("global *");
-            self.line("do");
-            self.line("\tglobal <const> *");
-            self.line("\tprint(registry, dispatch)");
-            self.line("end");
+        for _ in 0..2 {
+            self.type_alias_stmt();
         }
         self.line("");
     }
@@ -168,9 +147,7 @@ impl FullGenerator {
         self.line("");
 
         let param = self.fresh_name();
-        let annotated =
-            if self.version.is_luau() { format!("{param}: number?") } else { param.clone() };
-        self.line(&format!("function {class}.new({annotated}, ...)"));
+        self.line(&format!("function {class}.new({param}: number?, ...)"));
         self.class_function_body(Varargs::Allowed, |generator| {
             generator.line(&format!("local self = setmetatable({{}}, {class})"));
             generator.line(&format!("self.size = {param} or 0"));
@@ -217,7 +194,7 @@ impl FullGenerator {
     }
 
     fn module_return(&mut self) {
-        // Luau: an export module may not also return at module scope.
+        // An export module may not also return at module scope.
         if self.is_export_module {
             let local = self.fresh_name();
             let value = self.expr(1);
@@ -236,7 +213,7 @@ impl FullGenerator {
         ));
     }
 
-    /// Luau: one `export` declaration at module scope. Names come from
+    /// One `export` declaration at module scope. Names come from
     /// `fresh_name`, which never repeats, so duplicate exports can't happen.
     fn export_declaration(&mut self) {
         match self.rng.below(3) {
@@ -267,16 +244,16 @@ impl FullGenerator {
     }
 }
 
-/// A program in `version` that reaches all of its grammar, with
-/// `statement_budget` random statements at module scope.
+/// A program that reaches the whole grammar, with `statement_budget` random
+/// statements at module scope.
 ///
 /// The same arguments always give the same program. It's shaped like real
 /// code, a module prelude, a class table, and call- and table-heavy bodies,
 /// rather than statement soup. It parses with no errors, but it's for the
 /// stages, never for running, so it may index `nil`, divide strings, or call
 /// numbers.
-pub fn generate_full_grammar(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
-    FullGenerator::new(seed, version).program(statement_budget)
+pub fn generate_full_grammar(seed: u64, statement_budget: usize) -> String {
+    FullGenerator::new(seed).program(statement_budget)
 }
 
 #[cfg(test)]
@@ -285,33 +262,16 @@ mod tests {
 
     #[test]
     fn same_seed_generates_the_same_program() {
-        let first = generate_full_grammar(7, LuaVersion::Luau, 30);
-        let second = generate_full_grammar(7, LuaVersion::Luau, 30);
+        let first = generate_full_grammar(7, 30);
+        let second = generate_full_grammar(7, 30);
         assert_eq!(first, second);
     }
 
     #[test]
-    fn lua51_programs_contain_no_later_syntax() {
-        for seed in 0..8 {
-            let lua51 = generate_full_grammar(seed, LuaVersion::Lua51, 60);
-            assert!(!lua51.contains("goto"), "5.1 must not emit goto");
-            assert!(!lua51.contains("::"), "5.1 must not emit labels");
-            assert!(!lua51.contains("<const>"), "5.1 must not emit attributes");
-            assert!(!lua51.contains("continue"), "5.1 must not emit continue");
-            assert!(!lua51.contains("0b"), "5.1 must not emit binary literals");
-            assert!(!lua51.contains("export local"), "5.1 must not emit exports");
-            assert!(!lua51.contains("export const"), "5.1 must not emit exports");
-            assert!(!lua51.contains("export function"), "5.1 must not emit exports");
-            assert!(!lua51.contains("<<"), "5.1 must not emit instantiation");
-            assert!(!lua51.contains("1_000_000i"), "5.1 must not emit integer literals");
-        }
-    }
-
-    #[test]
-    fn luau_programs_reach_merged_rfc_syntax() {
+    fn programs_reach_merged_rfc_syntax() {
         let mut all_programs = String::new();
         for seed in 0..16 {
-            all_programs.push_str(&generate_full_grammar(seed, LuaVersion::Luau, 60));
+            all_programs.push_str(&generate_full_grammar(seed, 60));
         }
         for needle in ["export local", "export const", "export function", "1_000_000i", "<<"] {
             assert!(all_programs.contains(needle), "expected generated {needle}");

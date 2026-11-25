@@ -8,15 +8,13 @@ use std::ffi::OsString;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use luck_config::{CONFIG_FILE_NAME, EDITORCONFIG_FILE_NAME, Editorconfigs, Project, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_formatter::FormatOptions;
 use luck_linter::Linter;
-use luck_resolver::{FileSystem as _, FileSystemOs, ResolveOptions, Resolver};
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolver};
 use luck_stdlib::Stdlib;
-use luck_token::LuaVersion;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -27,8 +25,8 @@ pub(crate) struct DocumentSettings {
     /// Canonical, or `None` for a document with no file.
     pub path: Option<PathBuf>,
     pub project: Arc<LoadedProject>,
-    /// The standard library of the document's dialect, with the project's
-    /// std definitions over it.
+    /// The standard library of the project's variant, with its std
+    /// definitions over it.
     pub stdlib: Stdlib,
     /// The linter of the project's lint settings, with the overrides the
     /// path matches. Publishing, code actions, and fix-all all lint with it,
@@ -40,41 +38,25 @@ pub(crate) struct DocumentSettings {
     pub is_included: bool,
 }
 
-/// A project, and the resolvers its files' requires go through, so each
+/// A project, and the resolver its files' requires go through, so each
 /// request answers from what the ones before it read.
 #[derive(Debug)]
 pub(crate) struct LoadedProject {
     project: Project,
-    lua: OnceLock<Resolver>,
-    luau: OnceLock<Resolver>,
+    resolver: Resolver,
 }
 
 impl LoadedProject {
-    pub(crate) const fn new(project: Project) -> Self {
-        Self { project, lua: OnceLock::new(), luau: OnceLock::new() }
+    pub(crate) fn new(project: Project) -> Self {
+        Self { project, resolver: Resolver::new() }
     }
 
     pub(crate) const fn project(&self) -> &Project {
         &self.project
     }
 
-    /// The resolver for a file of `version`. Every Lua version searches the
-    /// same templates, so they share one.
-    pub(crate) fn resolver(&self, version: LuaVersion) -> &Resolver {
-        let resolver = if version.is_luau() { &self.luau } else { &self.lua };
-        resolver.get_or_init(|| {
-            Resolver::new(ResolveOptions {
-                version,
-                search_paths: self.project.search_paths().to_vec(),
-                root: self.project.root().to_path_buf(),
-            })
-        })
-    }
-
-    fn clear_resolvers(&self) {
-        for resolver in [&self.lua, &self.luau].into_iter().filter_map(OnceLock::get) {
-            resolver.clear_cache();
-        }
+    pub(crate) const fn resolver(&self) -> &Resolver {
+        &self.resolver
     }
 }
 
@@ -179,7 +161,7 @@ impl SettingsCache {
     ) -> DocumentSettings {
         let editorconfigs = Arc::clone(&self.lookups.read().editorconfigs);
         let loaded = project.project();
-        let stdlib = loaded.stdlib_for(file).clone();
+        let stdlib = loaded.stdlib().clone();
         let linter = loaded.linter_for(file);
         let format = loaded.format_options(file, Some(&editorconfigs));
         let path = file.map(|located| FileSystemOs.canonicalize_existing(located));
@@ -274,11 +256,11 @@ impl SettingsCache {
         broken
     }
 
-    /// Makes every project's resolvers read the disk again, as a module
+    /// Makes every project's resolver read the disk again, as a module
     /// created or deleted, or a `.luaurc` edited, needs.
     pub(crate) fn clear_resolvers(&self) {
         for project in &self.lookups.read().projects {
-            project.clear_resolvers();
+            project.resolver.clear_cache();
         }
     }
 }
@@ -287,8 +269,8 @@ impl SettingsCache {
 /// directory's canonical path.
 ///
 /// A document's project and settings follow this, as `luck lint`'s follow
-/// the path it's given, so a symlink takes the dialect of its own name and
-/// not its target's.
+/// the path it's given, so a symlink takes the project of its own directory
+/// and not its target's.
 pub(crate) fn settings_path(spelled: &Path) -> PathBuf {
     match (spelled.parent(), spelled.file_name()) {
         (Some(directory), Some(name)) => FileSystemOs.canonicalize_existing(directory).join(name),
@@ -317,7 +299,7 @@ mod tests {
     use std::fs;
     use std::ptr;
 
-    use luck_token::LuaTarget;
+    use luck_token::Variant;
 
     use super::*;
 
@@ -328,12 +310,12 @@ mod tests {
         let cache = SettingsCache::default();
         let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
-        assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
+        assert_eq!(project.project().variant(), Variant::Standalone);
         if find_config(directory.path()).is_none() {
             assert_eq!(project.project().root(), directory.path());
         }
         let (untitled, _) = cache.project_for(None, None);
-        assert_eq!(untitled.project().target_for(None), LuaTarget::Lua54);
+        assert_eq!(untitled.project().variant(), Variant::Standalone);
         assert!(Arc::ptr_eq(&untitled, &cache.project_for(None, None).0));
     }
 
@@ -341,30 +323,30 @@ mod tests {
     fn cache_keeps_projects_until_cleared() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{ "lua": "lua53" }"#).expect("write luck.json");
+        fs::write(&config_path, r#"{ "variant": "roblox" }"#).expect("write luck.json");
         fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
         let first = directory.path().join("first.lua");
         let nested = directory.path().join("sub/nested.lua");
         let cache = SettingsCache::default();
 
         let (project, _) = cache.project_for(Some(&first), None);
-        assert_eq!(project.project().target_for(Some(&first)), LuaTarget::Lua53);
+        assert_eq!(project.project().variant(), Variant::Roblox);
         assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested), None).0));
 
-        fs::write(&config_path, r#"{ "lua": "lua51" }"#).expect("rewrite luck.json");
+        fs::write(&config_path, r#"{ "variant": "standalone" }"#).expect("rewrite luck.json");
         let (cached, _) = cache.project_for(Some(&first), None);
-        assert_eq!(cached.project().target_for(Some(&first)), LuaTarget::Lua53);
+        assert_eq!(cached.project().variant(), Variant::Roblox);
         let generation = cache.generation();
         cache.clear();
         assert_ne!(cache.generation(), generation, "a clear starts a new generation");
         let (reloaded, _) = cache.project_for(Some(&first), None);
-        assert_eq!(reloaded.project().target_for(Some(&first)), LuaTarget::Lua51);
+        assert_eq!(reloaded.project().variant(), Variant::Standalone);
     }
 
     #[test]
     fn a_broken_config_is_reported_once_and_its_files_take_the_defaults() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("luck.json"), r#"{ "lua": "lua99" }"#)
+        fs::write(directory.path().join("luck.json"), r#"{ "variant": "bogus" }"#)
             .expect("write luck.json");
         let file = directory.path().join("a.lua");
         let cache = SettingsCache::default();
@@ -373,7 +355,7 @@ mod tests {
         let error = first_error.expect("the error comes with the first lookup");
         assert_eq!(error.file.diags[0].code, "E014");
         assert_eq!(error.generation, cache.generation());
-        assert_eq!(project.project().target_for(Some(&file)), LuaTarget::Lua54);
+        assert_eq!(project.project().variant(), Variant::Standalone);
         assert!(cache.project_for(Some(&file), None).1.is_none(), "reported once");
 
         assert!(cache.is_settings_file(&directory.path().join("other.json")));
@@ -411,13 +393,13 @@ mod tests {
         let main = directory.path().join("main.lua");
         let cache = SettingsCache::default();
         let (project, _) = cache.project_for(Some(&main), None);
-        let resolver = project.resolver(LuaVersion::Lua54);
-        assert!(ptr::eq(resolver, project.resolver(LuaVersion::Lua51)));
-        assert!(resolver.resolve(&main, "late").is_err(), "nothing named `late` exists yet");
+        let resolver = project.resolver();
+        assert!(ptr::eq(resolver, cache.project_for(Some(&main), None).0.resolver()));
+        assert!(resolver.resolve(&main, "./late").is_err(), "nothing named `late` exists yet");
 
         fs::write(directory.path().join("late.lua"), "return {}\n").expect("write late.lua");
-        assert!(resolver.resolve(&main, "late").is_err(), "the listing is cached");
+        assert!(resolver.resolve(&main, "./late").is_err(), "the listing is cached");
         cache.clear_resolvers();
-        assert!(resolver.resolve(&main, "late").is_ok(), "the cleared resolver reads the disk");
+        assert!(resolver.resolve(&main, "./late").is_ok(), "the cleared resolver reads the disk");
     }
 }

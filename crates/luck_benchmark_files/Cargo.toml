@@ -15,6 +15,7 @@ doctest = false
 
 [dependencies]
 luck_allocator = { workspace = true }
+luck_ast       = { workspace = true }
 luck_parser    = { workspace = true }
 luck_token     = { workspace = true }
 

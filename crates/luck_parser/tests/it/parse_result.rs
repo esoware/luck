@@ -4,7 +4,7 @@ use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionArgs, GetSpan as _, Statement, Visit};
 use luck_parser::{parse, parse_with_tokens};
 use luck_testgen::{broken_sources, sources_past_the_nesting_cap, with_the_smallest_stack};
-use luck_token::{LuaVersion, Span};
+use luck_token::Span;
 
 /// The parse reads every token once, in order, so what it keeps is the
 /// lexer's stream, `Eof` once at its end, however the parse stops, and a
@@ -14,20 +14,20 @@ fn parse_with_tokens_keeps_the_lexed_stream() {
     with_the_smallest_stack(|| {
         let allocator = Allocator::new();
         let handwritten = [
-            (LuaVersion::Lua54, String::new()),
-            (LuaVersion::Lua54, "local x = \"open".to_owned()),
-            (LuaVersion::Lua54, "--[[ never closed".to_owned()),
-            (LuaVersion::Luau, "local s = `a{b}c` .. `d`".to_owned()),
-            (LuaVersion::Lua51, "x = = 1 end )".to_owned()),
+            String::new(),
+            "local x = \"open".to_owned(),
+            "--[[ never closed".to_owned(),
+            "local s = `a{b}c` .. `d`".to_owned(),
+            "x = = 1 end )".to_owned(),
         ];
-        for (version, source) in
+        for source in
             handwritten.into_iter().chain(broken_sources()).chain(sources_past_the_nesting_cap())
         {
-            let recorded = parse_with_tokens(&allocator, source.as_bytes(), version);
-            let lexed = luck_lexer::lex(source.as_bytes(), version);
+            let recorded = parse_with_tokens(&allocator, source.as_bytes());
+            let lexed = luck_lexer::lex(source.as_bytes());
             assert_eq!(recorded.tokens, lexed.tokens, "{source:.80}");
             assert_eq!(recorded.comments, lexed.comments, "{source:.80}");
-            assert_eq!(parse(&allocator, source.as_bytes(), version).tokens, []);
+            assert_eq!(parse(&allocator, source.as_bytes()).tokens, []);
         }
     });
 }
@@ -38,7 +38,7 @@ fn parse_with_tokens_keeps_the_lexed_stream() {
 fn the_tree_borrows_its_leaves_from_the_source() {
     let allocator = Allocator::new();
     let source = b"local name = 'caf\xE9' .. 42".to_vec();
-    let result = parse(&allocator, &source, LuaVersion::Lua54);
+    let result = parse(&allocator, &source);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert!(ptr::eq(result.source, source.as_slice()));
     let Some(Statement::LocalAssignment(local)) = result.chunk.block.stmts.first() else {
@@ -65,15 +65,10 @@ fn the_tree_borrows_its_leaves_from_the_source() {
 }
 
 #[test]
-fn declaration_without_values_spans_its_annotation_and_attribute() {
+fn declaration_without_values_spans_its_annotations() {
     let allocator = Allocator::new();
-    for (source, version) in [
-        ("local x <const>", LuaVersion::Lua54),
-        ("local a, b <close>", LuaVersion::Lua54),
-        ("global x <const>", LuaVersion::Lua55),
-        ("local x: number", LuaVersion::Luau),
-    ] {
-        let result = parse(&allocator, source.as_bytes(), version);
+    for source in ["local x: number", "local a, b: {string}?"] {
+        let result = parse(&allocator, source.as_bytes());
         assert!(result.errors.is_empty(), "{source}: {:?}", result.errors);
         let statement_span = result.chunk.block.stmts[0].span();
         assert_eq!(
@@ -108,7 +103,7 @@ impl<'ast> Visit<'ast> for ArgLists<'ast> {
 fn an_expression_list_nested_in_another_fills_a_list_of_exactly_its_length() {
     let allocator = Allocator::new();
     let source = "f(a, g(b, h(c, d, e, i, j), k), l)(m)()";
-    let result = parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+    let result = parse(&allocator, source.as_bytes());
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     let mut calls = ArgLists { source: source.as_bytes(), lists: Vec::new() };
     calls.visit_block(&result.chunk.block);

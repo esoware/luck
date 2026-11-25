@@ -4,7 +4,7 @@ use luck_token::TokenKind;
 
 use super::Candidate;
 
-/// Every character a name can hold, the most frequent in minified Lua first.
+/// Every character a name can hold, the most frequent in minified Luau first.
 ///
 /// Names drawn from it share their bytes with the code around them, so they
 /// compress best, as with `oxc_mangler`'s base54 alphabet for JavaScript.
@@ -38,7 +38,7 @@ fn push_base53(index: usize, name: &mut String) {
     }
 }
 
-/// Each name in turn, computed once and shared by every slot and label.
+/// Each name in turn, computed once and shared by every slot.
 pub(super) struct CandidatePool<'walk, 'ast> {
     allocator: &'ast Allocator,
     scoping: &'walk Scoping,
@@ -63,7 +63,7 @@ impl<'walk, 'ast> CandidatePool<'walk, 'ast> {
             };
             self.candidates.push(Candidate {
                 name,
-                is_reserved: TokenKind::is_reserved(name, self.scoping.version()),
+                is_reserved: TokenKind::is_reserved(name),
                 name_id: self.scoping.name_id(name),
             });
         }
@@ -73,7 +73,6 @@ impl<'walk, 'ast> CandidatePool<'walk, 'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
     use rustc_hash::FxHashSet;
 
     use super::*;
@@ -118,19 +117,17 @@ mod tests {
     #[test]
     fn the_pool_marks_every_two_letter_keyword_reserved() {
         let allocator = Allocator::new();
-        for version in LuaVersion::ALL {
-            let result = luck_parser::parse(&allocator, b"", version);
-            let scoping = analyze(&result.chunk, result.counts, None);
-            let mut pool = CandidatePool::new(&allocator, &scoping);
-            let reserved: Vec<&str> = (0..FIRST_CHARS * (REST_CHARS + 1))
-                .map(|index| pool.get(index))
-                .filter(|candidate| candidate.is_reserved)
-                .map(|candidate| candidate.name)
-                .collect();
-            for keyword in ["do", "if", "in", "or"] {
-                assert!(reserved.contains(&keyword), "{keyword} {version:?}");
-            }
-            assert_eq!(reserved.len(), 4, "{version:?}");
+        let result = luck_parser::parse(&allocator, b"");
+        let scoping = analyze(&result.chunk, result.counts, None);
+        let mut pool = CandidatePool::new(&allocator, &scoping);
+        let reserved: Vec<&str> = (0..FIRST_CHARS * (REST_CHARS + 1))
+            .map(|index| pool.get(index))
+            .filter(|candidate| candidate.is_reserved)
+            .map(|candidate| candidate.name)
+            .collect();
+        for keyword in ["do", "if", "in", "or"] {
+            assert!(reserved.contains(&keyword), "{keyword}");
         }
+        assert_eq!(reserved.len(), 4, "{reserved:?}");
     }
 }

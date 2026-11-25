@@ -3,7 +3,6 @@ use std::ptr;
 use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 use luck_ast::{AstKind, GetSpan as _, Suffix};
 use luck_stdlib::{StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibParam};
-use luck_token::LuaVersion;
 
 use crate::document::DocumentState;
 use crate::providers::cursor::{TextKind, name_at, text_kind_at};
@@ -44,23 +43,23 @@ pub(crate) fn hover(document: &DocumentState, position: Position) -> Option<Hove
         let span = method.map_or_else(|| head.span(), |called| head.span().merge(called.span));
         (segments.collect(), dotted.root(), span)
     };
-    // Resolving from the root's reference lets shaped locals (`f:read` after
-    // `local f = io.open(...)`) resolve through their shape, and gives a
+    // Resolving from the root's reference lets shaped locals (`g:GetService`
+    // after `local g = game`) resolve through their shape, and gives a
     // shadowed base (`local string = 1; string.format`) no stdlib hover
     // instead of the wrong docs.
     let entry = semantic.resolve_stdlib_path(&path, tree.reference(tree.reference_of(root)?))?;
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: render_entry(&path, entry, document.version()),
+            value: render_entry(&path, entry),
         }),
         range: Some(document.range(span)),
     })
 }
 
-fn render_entry(path: &[&str], entry: &StdlibEntry<'_>, version: LuaVersion) -> String {
+fn render_entry(path: &[&str], entry: &StdlibEntry<'_>) -> String {
     let full_path = render_path(path, entry);
-    let body = match entry {
+    match entry {
         StdlibEntry::Function(function) => render_function(&full_path, function),
         StdlibEntry::Namespace(namespace) => format!(
             "**`{full_path}`** namespace \u{b7} {} entries\n{}",
@@ -68,18 +67,17 @@ fn render_entry(path: &[&str], entry: &StdlibEntry<'_>, version: LuaVersion) -> 
             deprecation_note(namespace.deprecated.as_ref()),
         ),
         StdlibEntry::Constant(value) => format!(
-            "```lua\n{full_path}  -- constant\n```\n{}",
+            "```luau\n{full_path}  -- constant\n```\n{}",
             deprecation_note(value.deprecated.as_ref()),
         ),
         StdlibEntry::Property(value) => {
             let access = if value.is_read_only { "read-only" } else { "read/write" };
             format!(
-                "```lua\n{full_path}  -- {access} property\n```\n{}",
+                "```luau\n{full_path}  -- {access} property\n```\n{}",
                 deprecation_note(value.deprecated.as_ref()),
             )
         }
-    };
-    format!("{body}\n_{}_", version_label(version))
+    }
 }
 
 /// Methods render with colon syntax (`game:GetService`).
@@ -115,7 +113,7 @@ fn render_function(full_path: &str, function: &StdlibFunction<'_>) -> String {
     let tag_line =
         if tags.is_empty() { String::new() } else { format!("\n_{}_\n", tags.join(" \u{b7} ")) };
     format!(
-        "```lua\n{signatures}\n```\n{}{tag_line}",
+        "```luau\n{signatures}\n```\n{}{tag_line}",
         deprecation_note(function.deprecated.as_ref())
     )
 }
@@ -140,23 +138,12 @@ fn render_param(param: &StdlibParam<'_>) -> String {
     format!("{label}: {allowed}")
 }
 
-const fn version_label(version: LuaVersion) -> &'static str {
-    match version {
-        LuaVersion::Lua51 => "Lua 5.1",
-        LuaVersion::Lua52 => "Lua 5.2",
-        LuaVersion::Lua53 => "Lua 5.3",
-        LuaVersion::Lua54 => "Lua 5.4",
-        LuaVersion::Lua55 => "Lua 5.5",
-        LuaVersion::Luau => "Luau",
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaTarget, index_to_offset};
+    use luck_token::index_to_offset;
 
     use super::*;
-    use crate::fixtures::document;
+    use crate::fixtures::{document, roblox_document};
 
     fn markdown_at(document: &DocumentState, line: u32, utf16_column: u32) -> Option<String> {
         let HoverContents::Markup(markup) =
@@ -170,7 +157,7 @@ mod tests {
     #[test]
     fn hover_on_an_enum_item_names_its_full_path() {
         let text = "local m = Enum.Material.Grass";
-        let document = document(text, LuaTarget::LuauRoblox);
+        let document = roblox_document(text);
         // Cursor on `Grass`.
         let utf16_column = index_to_offset(text.find("Grass").expect("item") + 2);
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on enum item");
@@ -180,12 +167,12 @@ mod tests {
     #[test]
     fn hover_on_shaped_local_method_renders_colon_form() {
         let text = "\
-local f = io.open('x')
-local n = f:seek('set')";
-        let document = document(text, LuaTarget::Lua54);
-        // Cursor on `seek`.
+local g = game
+local s = g:GetService('Players')";
+        let document = roblox_document(text);
+        // Cursor on `GetService`.
         let markdown = markdown_at(&document, 1, 14).expect("hover on shaped local method");
-        assert!(markdown.contains("f:seek("), "colon rendering expected: {markdown}");
+        assert!(markdown.contains("g:GetService("), "colon rendering expected: {markdown}");
     }
 
     #[test]
@@ -193,7 +180,7 @@ local n = f:seek('set')";
         let text = "\
 local string = 1
 local x = string.format";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         // Cursor on `format`.
         assert!(
             markdown_at(&document, 1, 19).is_none(),
@@ -203,7 +190,7 @@ local x = string.format";
 
     #[test]
     fn hover_covers_the_path_a_member_ends() {
-        let document = document("local s = string.format", LuaTarget::Lua54);
+        let document = document("local s = string.format");
         let hovered = hover(&document, Position::new(0, 19)).expect("hover on `format`");
         let range = hovered.range.expect("a range");
         assert_eq!((range.start.character, range.end.character), (10, 23), "{range:?}");
@@ -211,7 +198,7 @@ local x = string.format";
 
     #[test]
     fn hover_reads_only_a_name_that_reaches_the_global() {
-        let document = document("local tostring = tostring", LuaTarget::Lua54);
+        let document = document("local tostring = tostring");
         assert!(markdown_at(&document, 0, 8).is_none(), "the declaration names a local");
         let read = markdown_at(&document, 0, 20).expect("the initializer reads the global");
         assert!(read.contains("function tostring("), "{read}");
@@ -220,7 +207,7 @@ local x = string.format";
     #[test]
     fn hover_on_game_get_service_uses_colon_syntax() {
         let text = "local p = game:GetService('RunService')";
-        let document = document(text, LuaTarget::LuauRoblox);
+        let document = roblox_document(text);
         let utf16_column = index_to_offset(text.find("GetService").expect("method") + 4);
         let markdown = markdown_at(&document, 0, utf16_column).expect("hover on GetService");
         assert!(markdown.contains("game:GetService("), "colon rendering expected: {markdown}");
@@ -229,7 +216,7 @@ local x = string.format";
     #[test]
     fn hover_ignores_a_field_of_a_call_result() {
         let text = "local printer = make().print\n";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         let utf16_column = index_to_offset(text.find(".print").expect("field") + 3);
         let markdown = markdown_at(&document, 0, utf16_column);
         assert!(
@@ -241,13 +228,13 @@ local x = string.format";
     #[test]
     fn hover_on_a_statement_level_method_call_resolves() {
         let text = "\
-local f = io.open('x')
-f:seek('set')
+local g = game
+g:GetService('Players')
 ";
-        let document = document(text, LuaTarget::Lua54);
+        let document = roblox_document(text);
         let markdown = markdown_at(&document, 1, 3);
         assert!(
-            markdown.as_deref().is_some_and(|rendered| rendered.contains("f:seek(")),
+            markdown.as_deref().is_some_and(|rendered| rendered.contains("g:GetService(")),
             "a method call in statement position hovers like one in an expression: {markdown:?}"
         );
     }
@@ -255,7 +242,7 @@ f:seek('set')
     #[test]
     fn hover_ignores_a_comment_inside_a_call() {
         let text = "print(--[[ print ]] 1)\n";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         assert!(markdown_at(&document, 0, 13).is_none());
     }
 }

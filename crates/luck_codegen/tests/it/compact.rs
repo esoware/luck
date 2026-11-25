@@ -1,38 +1,33 @@
 use luck_allocator::Allocator;
 use luck_ast::{Chunk, Expression, SpanCounter, Synth, block_nesting_depth};
 use luck_codegen::LiteralSpelling;
-use luck_token::{BinOp, LuaVersion, UnOp};
+use luck_token::{BinOp, UnOp};
 
 use crate::common::{assert_compacts_to, assert_reprints};
 
 #[test]
 fn a_header_or_a_capacity_never_changes_the_output() {
-    for version in LuaVersion::ALL {
-        let source = format!(
-            "\
+    let source = format!(
+        "\
 --{}
 local value = - -1; return value .. '\u{e9}'",
-            "comment ".repeat(8192)
-        );
-        let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
-        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
-            let expected = luck_codegen::compact(&parsed.chunk, spelling);
-            for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
-                let output = luck_codegen::compact_into(
-                    &parsed.chunk,
-                    spelling,
-                    Vec::with_capacity(capacity),
-                );
-                assert_eq!(output, expected);
-            }
-            let header = b"#!/bin/lua\n".to_vec();
-            let output = luck_codegen::compact_into(&parsed.chunk, spelling, header.clone());
-            assert_eq!(output, [header, expected].concat());
+        "comment ".repeat(8192)
+    );
+    let allocator = Allocator::new();
+    let parsed = luck_parser::parse(&allocator, source.as_bytes());
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
+        let expected = luck_codegen::compact(&parsed.chunk, spelling);
+        for capacity in [0, 1, expected.len(), expected.len() + 1, source.len()] {
+            let output =
+                luck_codegen::compact_into(&parsed.chunk, spelling, Vec::with_capacity(capacity));
+            assert_eq!(output, expected);
         }
-        assert_reprints(&parsed.chunk);
+        let header = b"#!/bin/luau\n".to_vec();
+        let output = luck_codegen::compact_into(&parsed.chunk, spelling, header.clone());
+        assert_eq!(output, [header, expected].concat());
     }
+    assert_reprints(&parsed.chunk);
 }
 
 /// A tree holds no parentheses for grouping, so the printer writes the ones
@@ -40,107 +35,71 @@ local value = - -1; return value .. '\u{e9}'",
 #[test]
 fn a_tree_prints_the_parentheses_its_grouping_needs() {
     type Build = for<'ast> fn(Synth<'ast>, [Expression<'ast>; 3]) -> Expression<'ast>;
-    let (lua, luau) = (LuaVersion::Lua54, LuaVersion::Luau);
-    let cases: [(Build, &str, LuaVersion); 19] = [
+    let cases: [(Build, &str); 19] = [
         (
             |synth, [a, b, c]| synth.binary_op(synth.binary_op(a, BinOp::Add, b), BinOp::Mul, c),
             "(a+b)*c",
-            lua,
         ),
         (
             |synth, [a, b, c]| synth.binary_op(a, BinOp::Sub, synth.binary_op(b, BinOp::Sub, c)),
             "a-(b-c)",
-            lua,
         ),
         (
             |synth, [a, b, c]| synth.binary_op(synth.binary_op(a, BinOp::Sub, b), BinOp::Sub, c),
             "a-b-c",
-            lua,
         ),
         (
             |synth, [a, b, c]| {
                 synth.binary_op(synth.binary_op(a, BinOp::Concat, b), BinOp::Concat, c)
             },
             "(a..b)..c",
-            lua,
         ),
-        (
-            |synth, [a, b, _]| synth.binary_op(synth.unary_op(UnOp::Neg, a), BinOp::Pow, b),
-            "(-a)^b",
-            lua,
-        ),
-        (
-            |synth, [a, b, _]| synth.binary_op(a, BinOp::Pow, synth.unary_op(UnOp::Neg, b)),
-            "a^-b",
-            lua,
-        ),
-        (
-            |synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Add, b)),
-            "-(a+b)",
-            lua,
-        ),
-        (
-            |synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Pow, b)),
-            "-a^b",
-            lua,
-        ),
+        (|synth, [a, b, _]| synth.binary_op(synth.unary_op(UnOp::Neg, a), BinOp::Pow, b), "(-a)^b"),
+        (|synth, [a, b, _]| synth.binary_op(a, BinOp::Pow, synth.unary_op(UnOp::Neg, b)), "a^-b"),
+        (|synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Add, b)), "-(a+b)"),
+        (|synth, [a, b, _]| synth.unary_op(UnOp::Neg, synth.binary_op(a, BinOp::Pow, b)), "-a^b"),
         (
             |synth, _| synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]),
             "(\"s\"):rep(2)",
-            lua,
         ),
-        (|synth, _| synth.field(synth.table([]), "x"), "({}).x", lua),
-        (
-            |synth, _| synth.call(synth.function_def(&[], synth.block([])), []),
-            "(function()end)()",
-            lua,
-        ),
-        (
-            |synth, _| synth.unary_op(UnOp::Neg, synth.number_f64(f64::NAN)),
-            "-(0/0)",
-            LuaVersion::Lua51,
-        ),
+        (|synth, _| synth.field(synth.table([]), "x"), "({}).x"),
+        (|synth, _| synth.call(synth.function_def(&[], synth.block([])), []), "(function()end)()"),
+        (|synth, _| synth.unary_op(UnOp::Neg, synth.number_f64(f64::NAN)), "-(0/0)"),
         (
             |synth, [a, b, _]| {
                 synth.binary_op(synth.type_cast(a, synth.ty_named("T")), BinOp::Lt, b)
             },
             "(a::T)<b",
-            luau,
         ),
         (
             |synth, [a, b, _]| {
                 synth.binary_op(a, BinOp::Lt, synth.type_cast(b, synth.ty_named("T")))
             },
             "a<b::T",
-            luau,
         ),
         (
             |synth, [a, b, _]| {
                 synth.type_cast(synth.binary_op(a, BinOp::Add, b), synth.ty_named("T"))
             },
             "(a+b)::T",
-            luau,
         ),
         (
             |synth, [a, _, _]| {
                 synth.type_cast(synth.type_cast(a, synth.ty_named("T")), synth.ty_named("U"))
             },
             "(a::T)::U",
-            luau,
         ),
         (
             |synth, [a, b, c]| {
                 synth.binary_op(synth.if_expr(a, b, [], c), BinOp::Add, synth.number_i64(1))
             },
             "(if a then b else c)+1",
-            luau,
         ),
         (
             |synth, [a, b, c]| {
                 synth.binary_op(synth.number_i64(1), BinOp::Add, synth.if_expr(a, b, [], c))
             },
             "1+if a then b else c",
-            luau,
         ),
         (
             |synth, [a, b, c]| {
@@ -148,15 +107,14 @@ fn a_tree_prints_the_parentheses_its_grouping_needs() {
                 synth.binary_op(negation, BinOp::Add, synth.number_i64(1))
             },
             "-(if a then b else c)+1",
-            luau,
         ),
     ];
-    for (build, expected, version) in cases {
+    for (build, expected) in cases {
         let allocator = Allocator::new();
         let spans = SpanCounter::new();
-        let synth = Synth::new(&allocator, &spans).with_version(version);
+        let synth = Synth::new(&allocator, &spans);
         let names = ["a", "b", "c"].map(|name| synth.name_expr(name));
-        let chunk = Chunk::new(version, synth.block([synth.return_([build(synth, names)])]));
+        let chunk = Chunk::new(synth.block([synth.return_([build(synth, names)])]));
         let output =
             String::from_utf8(luck_codegen::compact(&chunk, LiteralSpelling::AsWritten)).unwrap();
         assert_eq!(output.strip_prefix("return").map(str::trim_start), Some(expected));
@@ -171,7 +129,7 @@ fn a_stmt_whose_prefix_needs_parens_takes_a_semicolon_where_it_would_glue_on() {
     let synth = Synth::new(&allocator, &spans);
     let call = synth.method_call(synth.string("s"), "f", []);
     let local = synth.local(&["x"], [synth.name_expr("y")]);
-    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([local, synth.call_stmt(call)]));
+    let chunk = Chunk::new(synth.block([local, synth.call_stmt(call)]));
     assert_eq!(luck_codegen::compact(&chunk, LiteralSpelling::AsWritten), b"local x=y;(\"s\"):f()");
     assert_reprints(&chunk);
 }
@@ -189,11 +147,11 @@ fn a_run_of_any_length_prints_as_one_level() {
     for _ in 0..2_000 {
         calls = synth.call(calls, []);
     }
-    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([sum, calls])]));
+    let chunk = Chunk::new(synth.block([synth.return_([sum, calls])]));
     assert_eq!(block_nesting_depth(&chunk.block), 2);
     let output = luck_codegen::compact(&chunk, LiteralSpelling::AsWritten);
     assert_eq!(output.len(), "return x".len() + 200_000 * 2 + ",f".len() + 2_000 * 2);
-    let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
+    let reparsed = luck_parser::parse(&allocator, &output);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors.first());
     assert_eq!(block_nesting_depth(&reparsed.chunk.block), 2);
     assert_eq!(luck_codegen::compact(&reparsed.chunk, LiteralSpelling::AsWritten), output);
@@ -235,7 +193,7 @@ end",
         ("return", "return"),
         ("return  1 , 2", "return 1,2"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_compacts_to(source, expected);
     }
 }
 
@@ -254,7 +212,7 @@ fn functions_compact_to_minimal_whitespace() {
         ),
         ("x  =  {  f  =  function ( a )  return  a  end  }", "x={f=function(a)return a end}"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_compacts_to(source, expected);
     }
 }
 
@@ -271,32 +229,28 @@ fn exprs_compact_to_minimal_whitespace() {
         ("x  =  a . b . c [ 2 ]", "x=a.b.c[2]"),
         ("return  ...  ..  x", "return.....x"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_compacts_to(source, expected);
     }
 }
 
 #[test]
 fn operators_compact_to_minimal_whitespace() {
-    for (source, expected, version) in [
-        ("x = a + b - c * d / e % f ^ g", "x=a+b-c*d/e%f^g", LuaVersion::Lua51),
-        ("x = a .. b", "x=a..b", LuaVersion::Lua51),
-        ("x = a == b", "x=a==b", LuaVersion::Lua51),
-        ("x = a ~= b", "x=a~=b", LuaVersion::Lua51),
-        ("x = a < b", "x=a<b", LuaVersion::Lua51),
-        ("x = a <= b", "x=a<=b", LuaVersion::Lua51),
-        ("x = a > b", "x=a>b", LuaVersion::Lua51),
-        ("x = a >= b", "x=a>=b", LuaVersion::Lua51),
-        ("x = a and b or c", "x=a and b or c", LuaVersion::Lua51),
-        ("x = -a", "x=-a", LuaVersion::Lua51),
-        ("x = - -a", "x=- -a", LuaVersion::Lua51),
-        ("x = not not a", "x=not not a", LuaVersion::Lua51),
-        // Lua 5.3+
-        ("x = a // b", "x=a//b", LuaVersion::Lua53),
-        ("x = a & b | c ~ d", "x=a&b|c~d", LuaVersion::Lua53),
-        ("x = a << b >> c", "x=a<<b>>c", LuaVersion::Lua53),
-        ("x = ~a", "x=~a", LuaVersion::Lua53),
+    for (source, expected) in [
+        ("x = a + b - c * d / e % f ^ g", "x=a+b-c*d/e%f^g"),
+        ("x = a .. b", "x=a..b"),
+        ("x = a == b", "x=a==b"),
+        ("x = a ~= b", "x=a~=b"),
+        ("x = a < b", "x=a<b"),
+        ("x = a <= b", "x=a<=b"),
+        ("x = a > b", "x=a>b"),
+        ("x = a >= b", "x=a>=b"),
+        ("x = a and b or c", "x=a and b or c"),
+        ("x = -a", "x=-a"),
+        ("x = - -a", "x=- -a"),
+        ("x = not not a", "x=not not a"),
+        ("x = a // b", "x=a//b"),
     ] {
-        assert_compacts_to(source, expected, version);
+        assert_compacts_to(source, expected);
     }
 }
 
@@ -310,7 +264,7 @@ fn tables_compact_to_minimal_whitespace() {
         ("x  =  { { 1 } , { 2 } }", "x={{1},{2}}"),
         ("x = {a = 1, b = {c = 2}, [3] = function() end}", "x={a=1,b={c=2},[3]=function()end}"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_compacts_to(source, expected);
     }
 }
 
@@ -324,7 +278,7 @@ fn calls_compact_to_minimal_whitespace() {
         ("a : b ( 1 )", "a:b(1)"),
         ("f ( g ( h ( 1 ) ) )", "f(g(h(1)))"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Lua51);
+        assert_compacts_to(source, expected);
     }
 }
 
@@ -339,32 +293,12 @@ fn compact_input_prints_unchanged() {
         "a.b.c:d()()",
         "x={[1]=2,[3]=4}",
     ] {
-        assert_compacts_to(source, source, LuaVersion::Lua51);
+        assert_compacts_to(source, source);
     }
 }
 
 #[test]
-fn version_gated_stmts_compact_to_minimal_whitespace() {
-    for (source, expected, version) in [
-        ("goto  skip  :: skip ::", "goto skip::skip::", LuaVersion::Lua52),
-        ("; ;", "", LuaVersion::Lua52),
-        ("local  x <const>, y <close> =  1, z", "local x<const>,y<close> =1,z", LuaVersion::Lua54),
-        ("global  x", "global x", LuaVersion::Lua55),
-        ("global  function  f ( )  end", "global function f()end", LuaVersion::Lua55),
-        ("global  *", "global*", LuaVersion::Lua55),
-        ("global <const> *", "global<const>*", LuaVersion::Lua55),
-        (
-            "function  f ( ... t )  return  t  end",
-            "function f(...t)return t end",
-            LuaVersion::Lua55,
-        ),
-    ] {
-        assert_compacts_to(source, expected, version);
-    }
-}
-
-#[test]
-fn luau_syntax_compacts_to_minimal_whitespace() {
+fn compound_assignments_casts_and_attributes_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("x  +=  1  x ..= 'a'", "x+=1 x..='a'"),
         ("for  i = 1 , 10  do  continue  end", "for i=1,10 do continue end"),
@@ -404,24 +338,24 @@ end",
             "@native@[deprecated{use='g',reason='old'}]local function f()end",
         ),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Luau);
+        assert_compacts_to(source, expected);
     }
 }
 
 #[test]
-fn luau_interpolated_strings_keep_their_text_and_holes() {
+fn interpolated_strings_keep_their_text_and_holes() {
     for (source, expected) in [
         ("local  x  =  `hello {name}`", "local x=`hello {name}`"),
         ("local  x  =  `plain text`", "local x=`plain text`"),
         ("local  x  =  `a {b} c {d .. e} f`", "local x=`a {b} c {d..e} f`"),
         ("local  x  =  `{ `{inner}` }`", "local x=`{`{inner}`}`"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Luau);
+        assert_compacts_to(source, expected);
     }
 }
 
 #[test]
-fn luau_types_compact_to_minimal_whitespace() {
+fn types_compact_to_minimal_whitespace() {
     for (source, expected) in [
         ("local  x :  number  =  5", "local x:number=5"),
         ("local  x :  number ? ?  =  nil", "local x:number??=nil"),
@@ -449,6 +383,6 @@ fn luau_types_compact_to_minimal_whitespace() {
         ),
         ("for  i :  number  = 1 , 10  do  end", "for i:number=1,10 do end"),
     ] {
-        assert_compacts_to(source, expected, LuaVersion::Luau);
+        assert_compacts_to(source, expected);
     }
 }

@@ -84,7 +84,7 @@ impl Rule for CyclomaticComplexity {
 }
 
 /// One per `if`, `elseif`, and loop, one per `and` or `or`, and one per `if`
-/// or `elseif` of a Luau if-expression.
+/// or `elseif` of an if-expression.
 #[derive(Default)]
 struct DecisionPoints {
     count: u32,
@@ -131,7 +131,6 @@ impl<'ast> Visit<'ast> for DecisionPoints {
         self.walk_binary_op(binary_op);
     }
 
-    // Luau
     fn visit_if_expr(&mut self, if_expr: &'ast IfExpression<'ast>) {
         self.count_clauses(if_expr.elseif_clauses.len());
         self.walk_if_expr(if_expr);
@@ -144,68 +143,46 @@ impl<'ast> Visit<'ast> for DecisionPoints {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget, Option<&str>)] = &[
+    const PASS: &[(&str, Option<&str>)] = &[
+        ("function f() if a then end if b then end if c then end if d then end end", None),
         (
             "function f() if a then end if b then end if c then end if d then end end",
-            LuaTarget::Lua54,
-            None,
-        ),
-        (
-            "function f() if a then end if b then end if c then end if d then end end",
-            LuaTarget::Lua54,
             Some(r#"{"max": 100}"#),
         ),
     ];
 
-    const FAIL: &[(&str, LuaTarget, Option<&str>)] = &[
+    const FAIL: &[(&str, Option<&str>)] = &[
         // Four `if` statements = 4 decision points + 1 baseline = 5.
         (
             "function f() if a then end if b then end if c then end if d then end end",
-            LuaTarget::Lua54,
             Some(r#"{"max": 3}"#),
         ),
-        (
-            "function my_func() if a then end if b then end end",
-            LuaTarget::Lua54,
-            Some(r#"{"max": 1}"#),
-        ),
+        ("function my_func() if a then end if b then end end", Some(r#"{"max": 1}"#)),
         (
             "\
 local m = {}
 function m.sub:run() if a then end end",
-            LuaTarget::Lua54,
             Some(r#"{"max": 1}"#),
         ),
-        (
-            "local f = function() if a then end if b then end end",
-            LuaTarget::Lua54,
-            Some(r#"{"max": 1}"#),
-        ),
-        ("function paren_table_arg() f({a and b}) end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function bare_table_arg() f{a and b} end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function value_and() x = a and b end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function target_or() t[a or b] = 1 end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function return_and() return a and b end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        (
-            "function after_return() do return end return a and b end",
-            LuaTarget::Lua54,
-            Some(r#"{"max": 0}"#),
-        ),
-        ("function if_and() if a and b then end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("local f = function() if a then end if b then end end", Some(r#"{"max": 1}"#)),
+        ("function paren_table_arg() f({a and b}) end", Some(r#"{"max": 0}"#)),
+        ("function bare_table_arg() f{a and b} end", Some(r#"{"max": 0}"#)),
+        ("function value_and() x = a and b end", Some(r#"{"max": 0}"#)),
+        ("function target_or() t[a or b] = 1 end", Some(r#"{"max": 0}"#)),
+        ("function return_and() return a and b end", Some(r#"{"max": 0}"#)),
+        ("function after_return() do return end return a and b end", Some(r#"{"max": 0}"#)),
+        ("function if_and() if a and b then end end", Some(r#"{"max": 0}"#)),
         (
             "function elseif_chain() if a then elseif b then elseif c then end end",
-            LuaTarget::Lua54,
             Some(r#"{"max": 0}"#),
         ),
-        ("function while_loop() while a do end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function repeat_loop() repeat until a end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function numeric_for() for i = 1, 2 do end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
-        ("function generic_for() for _ in f do end end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function while_loop() while a do end end", Some(r#"{"max": 0}"#)),
+        ("function repeat_loop() repeat until a end", Some(r#"{"max": 0}"#)),
+        ("function numeric_for() for i = 1, 2 do end end", Some(r#"{"max": 0}"#)),
+        ("function generic_for() for _ in f do end end", Some(r#"{"max": 0}"#)),
         // `outer` counts neither nested function's `if`, which each counts as
         // its own.
         (
@@ -214,18 +191,16 @@ function outer()
   local f = function() if a then end end
   local function g() if b then end end
 end",
-            LuaTarget::Lua54,
             Some(r#"{"max": 0}"#),
         ),
-        ("function comp_value() t[1] += a or b end", LuaTarget::Luau, Some(r#"{"max": 0}"#)),
-        ("function comp_target() t[a or b] += 1 end", LuaTarget::Luau, Some(r#"{"max": 0}"#)),
-        ("type function t1(a) if a then return a end end", LuaTarget::Luau, Some(r#"{"max": 1}"#)),
+        ("function comp_value() t[1] += a or b end", Some(r#"{"max": 0}"#)),
+        ("function comp_target() t[a or b] += 1 end", Some(r#"{"max": 0}"#)),
+        ("type function t1(a) if a then return a end end", Some(r#"{"max": 1}"#)),
         // Baseline 1 > 0, so the threshold trips.
-        ("function f() end", LuaTarget::Lua54, Some(r#"{"max": 0}"#)),
+        ("function f() end", Some(r#"{"max": 0}"#)),
         // `f` has complexity 3 and `g` 2, so both exceed 1.
         (
             "function f() if a then end if b then end end function g() if c then end end",
-            LuaTarget::Lua54,
             Some(r#"{"max": 1}"#),
         ),
     ];

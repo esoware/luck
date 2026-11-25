@@ -73,10 +73,6 @@ do end
 for i = 1, 2 do end
 for k in pairs({}) do end
 repeat until c",
-        "\
-local c = 1
-if c then ; else ;; end
-do ; end",
     ];
 
     #[test]

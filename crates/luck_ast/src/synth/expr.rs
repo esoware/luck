@@ -8,6 +8,7 @@ use crate::expr::{
     SuffixedExpression, TableConstructor, Var,
 };
 use crate::function::FunctionAttribute;
+use crate::identifier::is_valid_identifier;
 use crate::one_or_more::OneOrMore;
 use crate::stmt::Block;
 use crate::synth::{FunctionSignature, Synth};
@@ -84,10 +85,10 @@ impl<'ast> Synth<'ast> {
         SuffixedExpression::boxed(self.next_span(), prefix, suffixes, self.allocator)
     }
 
-    /// `prefix.name` when `name` is a safe identifier (in the pinned dialect,
-    /// or in every dialect when none is pinned), `prefix["name"]` otherwise.
+    /// `prefix.name` when `name` is an identifier, `prefix["name"]`
+    /// otherwise.
     pub fn field_or_index(&self, prefix: Expression<'ast>, name: &str) -> Expression<'ast> {
-        if self.is_safe_field_name(name) {
+        if is_valid_identifier(name) {
             self.field(prefix, name)
         } else {
             let key = self.string(name);
@@ -148,12 +149,12 @@ impl<'ast> Synth<'ast> {
         }
     }
 
-    /// Luau type cast: `expr :: T`.
+    /// A type cast: `expr :: T`.
     pub fn type_cast(&self, expr: Expression<'ast>, ty: Type<'ast>) -> Expression<'ast> {
         Expression::new_type_cast(self.next_span(), expr, ty, self.allocator)
     }
 
-    /// Luau: `expr<<T, U>>`.
+    /// `expr<<T, U>>`.
     pub fn type_instantiation<Types>(
         &self,
         expr: Expression<'ast>,
@@ -200,7 +201,7 @@ impl<'ast> Synth<'ast> {
         self.method_call_node(receiver, name, None, self.parenthesized_args(args))
     }
 
-    /// Luau: `receiver:name<<T, U>>(args)`.
+    /// `receiver:name<<T, U>>(args)`.
     ///
     /// # Panics
     ///
@@ -319,7 +320,7 @@ impl<'ast> Synth<'ast> {
         Fields::IntoIter: ExactSizeIterator,
     {
         self.table(fields.into_iter().map(|(name, value)| {
-            if self.is_safe_field_name(name) {
+            if is_valid_identifier(name) {
                 FieldSpec::Named(name, value)
             } else {
                 FieldSpec::Bracketed(self.string(name), value)
@@ -373,7 +374,7 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// Luau: `if condition then then_expr elseif ... else else_expr`.
+    /// `if condition then then_expr elseif ... else else_expr`.
     pub fn if_expr<ElseIfs>(
         &self,
         condition: Expression<'ast>,
@@ -402,8 +403,6 @@ impl<'ast> Synth<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::fixtures::Fixture;
 
@@ -549,32 +548,15 @@ mod tests {
         let synth = fixture.synth();
         let valid = synth.field_or_index(synth.name_expr("t"), "valid_name");
         assert!(matches!(chain(&valid).suffixes.last(), Suffix::Field(_)));
-        for bad in ["not an ident", "1st", "", "end", "goto"] {
+        let goto = synth.field_or_index(synth.name_expr("t"), "goto");
+        assert!(matches!(chain(&goto).suffixes.last(), Suffix::Field(_)));
+        for bad in ["not an ident", "1st", "", "end"] {
             let bracketed = synth.field_or_index(synth.name_expr("t"), bad);
             assert!(
                 matches!(chain(&bracketed).suffixes.last(), Suffix::Index { .. }),
                 "{bad:?} should use the bracketed form"
             );
         }
-    }
-
-    #[test]
-    fn field_or_index_follows_the_pinned_version() {
-        let fixture = Fixture::default();
-        // Unpinned: `goto` is a keyword somewhere, so it gets bracketed.
-        let unpinned = fixture.synth();
-        let unpinned_goto = unpinned.field_or_index(unpinned.name_expr("t"), "goto");
-        assert!(matches!(chain(&unpinned_goto).suffixes.last(), Suffix::Index { .. }));
-
-        // Pinned to Luau: `goto` is a plain identifier there.
-        let luau = fixture.synth().with_version(LuaVersion::Luau);
-        let luau_goto = luau.field_or_index(luau.name_expr("t"), "goto");
-        assert!(matches!(chain(&luau_goto).suffixes.last(), Suffix::Field(_)));
-
-        // Pinned to 5.4: still a keyword, still bracketed.
-        let lua54 = fixture.synth().with_version(LuaVersion::Lua54);
-        let lua54_goto = lua54.field_or_index(lua54.name_expr("t"), "goto");
-        assert!(matches!(chain(&lua54_goto).suffixes.last(), Suffix::Index { .. }));
     }
 
     #[test]
@@ -661,7 +643,7 @@ mod tests {
     #[test]
     fn builds_type_instantiations_and_typed_method_calls() {
         let fixture = Fixture::default();
-        let synth = fixture.synth().with_version(LuaVersion::Luau);
+        let synth = fixture.synth();
         let instantiated =
             synth.type_instantiation(synth.name_expr("f"), [synth.ty_named("integer")]);
         let Suffix::TypeInstantiation { type_args, .. } = chain(&instantiated).suffixes.last()

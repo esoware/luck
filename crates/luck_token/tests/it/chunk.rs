@@ -1,7 +1,6 @@
-use LuaVersion::{Lua51, Lua52, Lua53, Lua54, Lua55, Luau};
 use luck_token::{
-    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, chunk_header,
-    chunk_start, has_shebang, index_to_offset, leading_hot_comments,
+    Comment, CommentContent, CommentKind, CommentPosition, Span, chunk_header, has_shebang,
+    index_to_offset, leading_hot_comments,
 };
 
 fn span_of(source: &str, text: &str) -> Span {
@@ -17,7 +16,7 @@ fn comment_at(source: &str, text: &str, kind: CommentKind) -> Comment {
         kind,
         position: CommentPosition::Leading,
         is_followed_by_newline: true,
-        content: CommentContent::of(text.as_bytes(), kind, Luau),
+        content: CommentContent::of(text.as_bytes(), kind),
     }
 }
 
@@ -34,27 +33,14 @@ fn hot_comment_texts<'source>(
 }
 
 #[test]
-fn chunk_start_skips_a_bom_only_where_the_loader_does() {
-    let with_bom = "\u{FEFF}return".as_bytes();
-    assert_eq!(chunk_start(with_bom, Lua54), 3);
-    assert_eq!(chunk_start(b"return", Lua54), 0);
-    assert_eq!(chunk_start(with_bom, Lua51), 0);
-    assert_eq!(chunk_start(with_bom, Luau), 0);
-}
-
-#[test]
-fn has_shebang_holds_for_a_hash_bang_line_and_on_puc_for_any_hash_line() {
-    for version in LuaVersion::ALL {
-        assert!(has_shebang(b"#!/usr/bin/env lua\nprint(1)", version), "{version:?}");
-        assert!(!has_shebang(b"print(1)", version), "{version:?}");
-        assert!(!has_shebang(b"", version), "{version:?}");
-    }
-    for version in [Lua51, Lua52, Lua53, Lua54, Lua55] {
-        assert!(has_shebang(b"#!", version), "{version:?}");
-        assert!(has_shebang(b"# a note\nprint(1)", version), "{version:?}");
-    }
-    assert!(!has_shebang(b"#!", Luau));
-    assert!(!has_shebang(b"# a note\nprint(1)", Luau));
+fn has_shebang_holds_only_for_a_hash_bang_line_longer_than_its_two_bytes() {
+    assert!(has_shebang(b"#!/usr/bin/env luau\nprint(1)"));
+    assert!(has_shebang(b"#!\n"));
+    assert!(!has_shebang(b"print(1)"));
+    assert!(!has_shebang(b""));
+    assert!(!has_shebang(b"#!"));
+    assert!(!has_shebang(b"# a note\nprint(1)"));
+    assert!(!has_shebang("\u{FEFF}#!/usr/bin/env luau".as_bytes()));
 }
 
 #[test]

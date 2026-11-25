@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: value assigned to `x` is overwritten before it is read
- --> Lua54:1:7
+ --> Standalone:1:7
 1 | local x = 1
   |       ^
 2 | x = 2
@@ -10,7 +10,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | local x
 2 | x = 1
   | ^
@@ -19,7 +19,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Lua54:1:7
+ --> Standalone:1:7
 1 | local x = 1
   |       ^
 2 | if c then x = 2 else x = 3 end

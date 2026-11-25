@@ -6,7 +6,7 @@
 
 use luck_ast::{Chunk, FunctionBody, GetSpan as _, Statement, Visit};
 use luck_diagnostics::{Diagnostic, Label};
-use luck_token::{LuaVersion, Span, Token, TokenKind, has_line_break};
+use luck_token::{Span, Token, TokenKind, has_line_break};
 
 /// An error that a block is missing its `end` or `until`.
 #[derive(Clone, Copy)]
@@ -28,9 +28,8 @@ pub(super) fn label_forgotten_ends(
     // The tree keeps no span for a `function` or `until` keyword, so they
     // come from lexing the source again, which only a parse that left a
     // block unclosed pays for.
-    let tokens = luck_lexer::lex(source, chunk.version).tokens;
-    let mut finder =
-        Misindented { source, version: chunk.version, tokens: &tokens, found: Vec::new() };
+    let tokens = luck_lexer::lex(source).tokens;
+    let mut finder = Misindented { source, tokens: &tokens, found: Vec::new() };
     finder.visit_block(&chunk.block);
     for &UnclosedBlock { error_index, opener } in unclosed {
         let error = &mut errors[error_index];
@@ -58,7 +57,6 @@ struct Suspect {
 
 struct Misindented<'source> {
     source: &'source [u8],
-    version: LuaVersion,
     tokens: &'source [Token],
     found: Vec<Suspect>,
 }
@@ -79,7 +77,7 @@ impl Misindented<'_> {
 
     fn is_on_another_line(&self, earlier: Span, later: Span) -> bool {
         let between = self.source.get(earlier.end as usize..later.start as usize);
-        between.is_some_and(|text| has_line_break(text, self.version))
+        between.is_some_and(has_line_break)
     }
 
     /// The last `keyword` token that starts at `from` or later and before
@@ -130,11 +128,6 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
             | Statement::Return(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => None,
@@ -159,8 +152,7 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
 /// The spaces and tabs that open the line holding `offset`.
 fn indentation(source: &[u8], offset: u32) -> &[u8] {
     let index = offset as usize;
-    let line_start =
-        source[..index].iter().rposition(|&b| b == b'\n' || b == b'\r').map_or(0, |at| at + 1);
+    let line_start = source[..index].iter().rposition(|&b| b == b'\n').map_or(0, |at| at + 1);
     let line = &source[line_start..];
     let width = line.iter().take_while(|&&b| b == b' ' || b == b'\t').count();
     &line[..width]

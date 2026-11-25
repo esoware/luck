@@ -1,36 +1,34 @@
-//! The reference compilers' limits, which a merged or hoisted statement has
-//! to stay under.
+//! The Luau compiler's limits, which a merged or hoisted statement has to
+//! stay under.
 
 use luck_ast::FunctionBody;
 
-/// Registers one function can use on the strictest target. 5.1's and 5.2's
-/// `MAXSTACK` is 250, and `luaK_checkstack` rejects reaching it.
-pub(crate) const MAX_REGISTERS: usize = 249;
+/// Registers one function can use, the compiler's `kMaxRegisterCount`.
+pub(crate) const MAX_REGISTERS: usize = 255;
 
-/// The most registers a numeric `for` loop's state takes besides its
-/// variable's on any target: the three hidden locals of 5.1 to 5.4, or
-/// Luau's limit, step, and index.
-pub(crate) const NUMERIC_FOR_STATE_REGISTERS: usize = 3;
+/// Registers a numeric `for` loop takes: its limit, step, and index, which
+/// its variable shares, and one more for the variable when the body assigns
+/// it.
+pub(crate) const NUMERIC_FOR_REGISTERS: usize = 4;
 
-/// The most registers a generic `for` loop's state takes besides its
-/// variables' on any target: 5.4's four hidden locals.
-pub(crate) const GENERIC_FOR_STATE_REGISTERS: usize = 4;
+/// Registers a generic `for` loop takes: its generator, state, and index,
+/// and one per variable, at least two, since the `pairs` and `ipairs` fast
+/// paths assume two.
+pub(crate) fn generic_for_registers(variables: usize) -> usize {
+    3 + variables.max(2)
+}
 
 /// Registers one assignment target can hold until the statement stores it:
-/// its value, and on 5.4 `_ENV` and the key of a global whose name is past
-/// the 255 constants an instruction can address.
+/// its value, and an indexed target's table and key.
 const REGISTERS_PER_ASSIGNMENT_TARGET: usize = 3;
 
 /// How many targets one assignment may have once locals hold `live_registers`.
-///
-/// This is well under the 200 C levels `restassign` recurses through, so the
-/// target count needs no limit of its own.
 pub(crate) const fn assignment_target_limit(live_registers: usize) -> usize {
     MAX_REGISTERS.saturating_sub(live_registers) / REGISTERS_PER_ASSIGNMENT_TARGET
 }
 
-/// A `:` method's `self` and a named vararg aren't all visible from the body
-/// alone, so both are assumed present.
+/// A `:` method's `self` isn't visible from the body alone, so it's assumed
+/// present. A vararg takes no register.
 pub(crate) fn parameter_locals(body: &FunctionBody<'_>) -> usize {
-    body.params.len() + 2
+    body.params.len() + 1
 }

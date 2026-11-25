@@ -9,7 +9,6 @@ use luck_config::{Editorconfigs, Project};
 use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::LuaVersion;
 
 use crate::exit::{Exit, usage_error};
 use crate::output::{read_stdin_source, write_output};
@@ -49,7 +48,7 @@ pub(crate) struct FmtArgs {
     #[arg(long)]
     no_editorconfig: bool,
 
-    /// Read source from stdin, using PATH to pick the target and
+    /// Read source from stdin, using PATH to pick the config and
     /// `.editorconfig` settings and to label diagnostics; the result is
     /// written to stdout.
     #[arg(long, value_name = "PATH")]
@@ -178,10 +177,9 @@ impl FmtArgs {
         })?;
 
         let file_path = Path::new(stdin_path);
-        let version = project.target_for(Some(file_path)).version();
         let options = self.format_options(&Editorconfigs::default(), project, file_path);
 
-        match format_document(&Allocator::new(), &source, file_path, version, &options, range) {
+        match format_document(&Allocator::new(), &source, file_path, &options, range) {
             FormatOutcome::Failed(rendered) => {
                 let _ = io::stderr().write_all(&rendered);
                 Err(Exit::Failure)
@@ -216,13 +214,12 @@ impl FmtArgs {
         file: &ProjectFile,
     ) -> FileOutcome {
         let file_path = file.path.as_path();
-        let version = file.project.target_for(Some(file_path)).version();
         let source = match FileSystemOs.read(file_path) {
             Ok(bytes) => bytes,
             Err(error) => {
                 let mut rendered = Vec::new();
                 let label = file_path.to_string_lossy();
-                let source_file = SourceFile { label: &label, text: None, version };
+                let source_file = SourceFile { label: &label, text: None };
                 let diag = Diagnostic::e010(&label, &error);
                 DefaultReporter.render(source_file, &[diag], &mut rendered);
                 return FileOutcome::Failed(rendered);
@@ -235,12 +232,11 @@ impl FmtArgs {
         };
 
         let options = self.format_options(editorconfigs, &file.project, file_path);
-        let formatted =
-            match format_document(allocator, &source, file_path, version, &options, range) {
-                FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
-                FormatOutcome::Unchanged => return FileOutcome::Unchanged,
-                FormatOutcome::Changed(output) => output,
-            };
+        let formatted = match format_document(allocator, &source, file_path, &options, range) {
+            FormatOutcome::Failed(rendered) => return FileOutcome::Failed(rendered),
+            FormatOutcome::Unchanged => return FileOutcome::Unchanged,
+            FormatOutcome::Changed(output) => output,
+        };
 
         let path = file_path.display().to_string();
         if self.is_report_only() {
@@ -285,15 +281,14 @@ fn format_document(
     allocator: &Allocator,
     source: &[u8],
     file_path: &Path,
-    version: LuaVersion,
     options: &FormatOptions,
     range: Option<Range<usize>>,
 ) -> FormatOutcome {
-    let parse = luck_parser::parse_with_tokens(allocator, source, version);
+    let parse = luck_parser::parse_with_tokens(allocator, source);
     if !parse.errors.is_empty() {
         let mut rendered = Vec::new();
         let label = file_path.to_string_lossy();
-        let file = SourceFile { label: &label, text: Some(source), version };
+        let file = SourceFile { label: &label, text: Some(source) };
         DefaultReporter.render(file, &parse.errors, &mut rendered);
         return FormatOutcome::Failed(rendered);
     }
@@ -363,7 +358,7 @@ mod tests {
         // `.editorconfig` defaults: two-space indentation here.
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{"lua":"lua54"}"#).expect("write luck.json");
+        fs::write(&config_path, r#"{"variant":"standalone"}"#).expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
             "\
@@ -404,7 +399,7 @@ end
         let config_path = directory.path().join("luck.json");
         fs::write(
             &config_path,
-            r#"{"lua":"lua54","format":{"indent_style":"spaces","indent_width":4}}"#,
+            r#"{"variant":"standalone","format":{"indent_style":"spaces","indent_width":4}}"#,
         )
         .expect("write luck.json");
         fs::write(
@@ -446,14 +441,7 @@ end
             &Project::defaults(PathBuf::from(".")),
             file_path,
         );
-        format_document(
-            &Allocator::new(),
-            source.as_bytes(),
-            file_path,
-            LuaVersion::Lua54,
-            &options,
-            None,
-        )
+        format_document(&Allocator::new(), source.as_bytes(), file_path, &options, None)
     }
 
     #[test]

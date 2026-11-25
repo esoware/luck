@@ -6,8 +6,8 @@
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TreeCounts {
     pub blocks: u32,
-    /// Names a declaration binds: locals, Lua 5.5 globals, parameters, loop
-    /// variables, and a method's `self`.
+    /// Names a declaration binds: locals, parameters, loop variables, and a
+    /// method's `self`.
     pub declarations: u32,
     /// Names an expression reads, and each function statement's first name.
     pub name_uses: u32,

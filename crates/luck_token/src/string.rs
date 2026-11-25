@@ -1,6 +1,6 @@
 //! What a string literal means, and the shortest literal for a value.
 //!
-//! A Lua string is bytes, which need not be UTF-8. One routine,
+//! A Luau string is bytes, which need not be UTF-8. One routine,
 //! [`read_escape`], reads every escape sequence, for the lexer that checks
 //! them and the parser that decodes them.
 
@@ -8,33 +8,32 @@ use std::iter;
 
 use memchr::memmem;
 
-use crate::{LuaVersion, is_lua_whitespace, strip_line_break};
+use crate::{is_luau_whitespace, strip_line_break};
 
 /// What an escape sequence puts in a string's value.
 ///
-/// That's no bytes for `\z`, one for most, and up to six for `\u{XXX}`,
-/// which Lua writes as UTF-8, a surrogate or a value past U+10FFFF included,
-/// in the original UTF-8's longer forms (`luaO_utf8esc`).
+/// That's no bytes for `\z`, one for most, and up to four for `\u{XXX}`,
+/// which Luau writes as UTF-8, a surrogate included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Escaped {
-    bytes: [u8; 6],
+    bytes: [u8; 4],
     length: u8,
     is_lenient: bool,
 }
 
 impl Escaped {
     const fn byte(byte: u8) -> Self {
-        Self { bytes: [byte, 0, 0, 0, 0, 0], length: 1, is_lenient: false }
+        Self { bytes: [byte, 0, 0, 0], length: 1, is_lenient: false }
     }
 
-    const NOTHING: Self = Self { bytes: [0; 6], length: 0, is_lenient: false };
+    const NOTHING: Self = Self { bytes: [0; 4], length: 0, is_lenient: false };
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..usize::from(self.length)]
     }
 
-    /// Whether it escapes a character Lua 5.1 and Luau define no escape for,
-    /// which they read as itself.
+    /// Whether it escapes a character Luau defines no escape for, which it
+    /// reads as itself.
     pub const fn is_lenient(self) -> bool {
         self.is_lenient
     }
@@ -51,13 +50,10 @@ pub enum EscapeError {
     UnicodeBrace,
     /// `\u{` with no hex digit.
     UnicodeDigits,
-    /// `\u{XXX}` past the code points the version reaches, or past Luau's 16
-    /// digits.
+    /// `\u{XXX}` past U+10FFFF, or past 16 digits.
     UnicodeTooLarge,
     /// `\u{XXX` without its `}`.
     UnicodeUnclosed,
-    /// A character a strict dialect (5.2+) defines no escape for.
-    Undefined,
 }
 
 /// The kind of string an escape is in, which decides the escapes it takes.
@@ -65,7 +61,7 @@ pub enum EscapeError {
 pub enum StringKind {
     /// In single or double quotes.
     Quoted,
-    /// Luau: the text of an interpolated string, in backticks.
+    /// The text of an interpolated string, in backticks.
     Interpolated,
 }
 
@@ -73,16 +69,13 @@ pub enum StringKind {
 ///
 /// Returns how many bytes of `rest` it spans, with what it puts in the
 /// string or why it's malformed. A malformed one spans what its reader took
-/// before giving up, so the string goes on after it. An interpolated string
-/// (Luau) also defines `\{`, `\}`, and `` \` ``.
+/// before giving up, so the string goes on after it, and a `\` that ends the
+/// text spans and puts nothing. An interpolated string also defines `\{`,
+/// `\}`, and `` \` ``.
 #[expect(clippy::missing_panics_doc, reason = "`\\x` reads only hex digits, and two fit a byte")]
-pub fn read_escape(
-    rest: &[u8],
-    kind: StringKind,
-    version: LuaVersion,
-) -> (usize, Result<Escaped, EscapeError>) {
+pub fn read_escape(rest: &[u8], kind: StringKind) -> (usize, Result<Escaped, EscapeError>) {
     let Some((&escaped, after)) = rest.split_first() else {
-        return (0, Err(EscapeError::Undefined));
+        return (0, Ok(Escaped::NOTHING));
     };
     let byte = |value: u8| (1, Ok(Escaped::byte(value)));
     match escaped {
@@ -93,11 +86,7 @@ pub fn read_escape(
         b'r' => byte(b'\r'),
         b't' => byte(b'\t'),
         b'v' => byte(0x0B),
-        b'\\' | b'"' | b'\'' => byte(escaped),
-        b'\n' => {
-            let is_lfcr = version.has_lfcr_line_break() && after.first() == Some(&b'\r');
-            (if is_lfcr { 2 } else { 1 }, Ok(Escaped::byte(b'\n')))
-        }
+        b'\\' | b'"' | b'\'' | b'\n' => byte(escaped),
         b'\r' => (if after.first() == Some(&b'\n') { 2 } else { 1 }, Ok(Escaped::byte(b'\n'))),
         b'0'..=b'9' => {
             let digit_count = rest.iter().take(3).take_while(|b| b.is_ascii_digit()).count();
@@ -110,7 +99,7 @@ pub fn read_escape(
                 .map_err(|_| EscapeError::DecimalTooLarge(value));
             (digit_count, meaning)
         }
-        b'x' if version.has_hex_escape() => {
+        b'x' => {
             let digits = after.iter().take(2).take_while(|b| b.is_ascii_hexdigit());
             let (digit_count, value) = digits.fold((0, 0), |(count, value), &digit| {
                 let nibble = char::from(digit).to_digit(16).expect("a hex digit");
@@ -122,25 +111,18 @@ pub fn read_escape(
             }
             (length, Ok(Escaped::byte(u8::try_from(value).expect("two hex digits fit a byte"))))
         }
-        b'z' if version.has_whitespace_escape() => {
-            let whitespace_length = after.iter().take_while(|&&b| is_lua_whitespace(b)).count();
+        b'z' => {
+            let whitespace_length = after.iter().take_while(|&&b| is_luau_whitespace(b)).count();
             (whitespace_length + 1, Ok(Escaped::NOTHING))
         }
-        b'u' if version.has_unicode_escape() => read_unicode_escape(after, version),
-        // Luau
+        b'u' => read_unicode_escape(after),
         b'{' | b'}' | b'`' if kind == StringKind::Interpolated => byte(escaped),
-        _ if !version.has_strict_escapes() => {
-            (1, Ok(Escaped { is_lenient: true, ..Escaped::byte(escaped) }))
-        }
-        _ => (1, Err(EscapeError::Undefined)),
+        _ => (1, Ok(Escaped { is_lenient: true, ..Escaped::byte(escaped) })),
     }
 }
 
 /// `after_u` starts past the `u` of `\u{XXX}`.
-fn read_unicode_escape(
-    after_u: &[u8],
-    version: LuaVersion,
-) -> (usize, Result<Escaped, EscapeError>) {
+fn read_unicode_escape(after_u: &[u8]) -> (usize, Result<Escaped, EscapeError>) {
     let Some(after_open) = after_u.strip_prefix(b"{") else {
         return (1, Err(EscapeError::UnicodeBrace));
     };
@@ -150,12 +132,10 @@ fn read_unicode_escape(
         return (through_digits, Err(EscapeError::UnicodeDigits));
     }
     let digits = &after_open[..digit_count];
-    let is_within_digit_limit = !version.has_unicode_escape_digit_limit() || digit_count <= 16;
     let spelled = digits.iter().try_fold(0u32, |value, &digit| {
         value.checked_mul(16)?.checked_add(char::from(digit).to_digit(16)?)
     });
-    let limit = if version.has_extended_unicode_escape() { 0x7FFF_FFFF } else { 0x0010_FFFF };
-    let Some(code_point) = spelled.filter(|&value| is_within_digit_limit && value <= limit) else {
+    let Some(code_point) = spelled.filter(|&value| digit_count <= 16 && value <= 0x10_FFFF) else {
         return (through_digits, Err(EscapeError::UnicodeTooLarge));
     };
     if after_open.get(digit_count) != Some(&b'}') {
@@ -164,31 +144,22 @@ fn read_unicode_escape(
     (through_digits + 1, Ok(utf8_escape(code_point)))
 }
 
-/// Lua's `luaO_utf8esc` (`lobject.c`), which writes the continuation bytes
-/// from the end and the lead byte last.
+/// Luau's `toUtf8`, which writes a surrogate as it writes any other code
+/// point. `code_point` is at most U+10FFFF.
 fn utf8_escape(code_point: u32) -> Escaped {
-    if let Ok(ascii) = u8::try_from(code_point)
-        && ascii.is_ascii()
-    {
-        return Escaped::byte(ascii);
-    }
-    let mut escaped = Escaped::NOTHING;
-    let mut remaining = code_point;
-    let mut lead_byte_room = 0x3F;
-    let mut written = 0;
-    for slot in escaped.bytes.iter_mut().rev() {
-        written += 1;
-        if remaining <= lead_byte_room {
-            *slot = (((!lead_byte_room << 1) | remaining) & 0xFF) as u8;
-            break;
-        }
-        *slot = 0x80 | (remaining & 0x3F) as u8;
-        remaining >>= 6;
-        lead_byte_room >>= 1;
-    }
-    escaped.bytes.rotate_right(written);
-    escaped.length = u8::try_from(written).expect("at most six bytes");
-    escaped
+    let low_byte = |bits: u32| (bits & 0xFF) as u8;
+    let continuation = |shift: u32| low_byte(0x80 | ((code_point >> shift) & 0x3F));
+    let (bytes, length) = if code_point < 0x80 {
+        ([low_byte(code_point), 0, 0, 0], 1)
+    } else if code_point < 0x800 {
+        ([low_byte(0xC0 | (code_point >> 6)), continuation(0), 0, 0], 2)
+    } else if code_point < 0x1_0000 {
+        ([low_byte(0xE0 | (code_point >> 12)), continuation(6), continuation(0), 0], 3)
+    } else {
+        let lead = low_byte(0xF0 | (code_point >> 18));
+        ([lead, continuation(12), continuation(6), continuation(0)], 4)
+    };
+    Escaped { bytes, length, is_lenient: false }
 }
 
 /// Where a string literal's value ended up.
@@ -207,7 +178,8 @@ pub enum StringValue<'raw> {
 /// `raw` keeps its quotes or long brackets. A malformed escape, which the
 /// lexer reports, puts nothing, and a literal cut off before its closer holds
 /// what it reached. A long bracket's value drops a line break right after the
-/// opener and turns every other one into a newline, but Luau keeps a lone CR.
+/// opener and turns every CRLF into a newline, as Luau's
+/// `fixupMultilineString` does, which keeps a lone CR.
 ///
 /// `has_escape` is whether `raw` holds an escape, or in long brackets a CR,
 /// as its token says, without which it holds nothing to rewrite. True makes
@@ -215,7 +187,6 @@ pub enum StringValue<'raw> {
 pub fn decode_string<'raw>(
     raw: &'raw [u8],
     has_escape: bool,
-    version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
     match raw.first() {
@@ -226,26 +197,25 @@ pub fn decode_string<'raw>(
                 _ => after_quote,
             };
             if has_escape {
-                decode_escapes(body, StringKind::Quoted, version, output)
+                decode_escapes(body, StringKind::Quoted, output)
             } else {
                 StringValue::Verbatim(body)
             }
         }
-        Some(b'[') => decode_long_bracket(raw, has_escape, version, output),
+        Some(b'[') => decode_long_bracket(raw, has_escape, output),
         _ => StringValue::Verbatim(raw),
     }
 }
 
-/// The value of a piece of a Luau interpolated string, the text between its
+/// The value of a piece of an interpolated string, the text between its
 /// delimiters, as [`decode_string`] gives a quoted string's.
 pub fn decode_interpolated_text<'raw>(
     text: &'raw [u8],
     has_escape: bool,
-    version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
     if has_escape {
-        decode_escapes(text, StringKind::Interpolated, version, output)
+        decode_escapes(text, StringKind::Interpolated, output)
     } else {
         StringValue::Verbatim(text)
     }
@@ -254,7 +224,6 @@ pub fn decode_interpolated_text<'raw>(
 fn decode_escapes<'raw>(
     body: &'raw [u8],
     kind: StringKind,
-    version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
     let Some(first_escape) = memchr::memchr(b'\\', body) else {
@@ -265,7 +234,7 @@ fn decode_escapes<'raw>(
     output.extend_from_slice(before_escape);
     loop {
         let after_backslash = &remaining[1..];
-        let (length, meaning) = read_escape(after_backslash, kind, version);
+        let (length, meaning) = read_escape(after_backslash, kind);
         if let Ok(escaped) = meaning {
             output.extend_from_slice(escaped.as_bytes());
         }
@@ -284,7 +253,6 @@ fn decode_escapes<'raw>(
 fn decode_long_bracket<'raw>(
     raw: &'raw [u8],
     has_cr: bool,
-    version: LuaVersion,
     output: &mut Vec<u8>,
 ) -> StringValue<'raw> {
     let after_open = &raw[1..];
@@ -300,26 +268,24 @@ fn decode_long_bracket<'raw>(
             closer_equals.iter().all(|&b| b == b'=').then_some(content)
         })
         .unwrap_or(body_with_closer);
-    // Each line break becomes one newline, and one right after the opening
-    // bracket is dropped (5.4 manual section 3.1). Every break but a lone LF
-    // holds a CR, so a body without one is already the value.
-    let body = strip_line_break(content, version).unwrap_or(content);
-    if !has_cr || memchr::memchr(b'\r', body).is_none() {
+    let body = strip_line_break(content).unwrap_or(content);
+    let mut crlfs = memmem::find_iter(body, b"\r\n").peekable();
+    if !has_cr || crlfs.peek().is_none() {
         return StringValue::Verbatim(body);
     }
     output.reserve(body.len());
-    let mut remaining = body;
-    while let Some((&byte, rest)) = remaining.split_first() {
-        let (decoded, after_decoded) = strip_line_break(remaining, version)
-            .map_or((byte, rest), |after_break| (b'\n', after_break));
-        output.push(decoded);
-        remaining = after_decoded;
+    // Each CRLF loses its CR, and its LF starts the next run.
+    let mut run_start = 0;
+    for cr in crlfs {
+        output.extend_from_slice(&body[run_start..cr]);
+        run_start = cr + 1;
     }
+    output.extend_from_slice(&body[run_start..]);
     StringValue::Decoded
 }
 
-/// The shortest string literal whose value is some bytes, in any version,
-/// measured before it's written.
+/// The shortest string literal whose value is some bytes, measured before
+/// it's written.
 ///
 /// It's quoted with whichever quote needs fewer escapes, or in long brackets
 /// when they save more than they cost. A quoted literal escapes its quote,
@@ -389,11 +355,10 @@ fn spelling<'value>(bytes: &'value [u8], counts: &EscapeCounts) -> StringSpellin
 
 /// Appends to `output` the long-bracket literal whose value is `text`.
 ///
-/// It takes the lowest level every version reads back as `text`: one whose
-/// closer neither appears in `text` nor finishes at its end, and above 0
-/// when `text` holds a `[[`, which Lua 5.1 rejects at that level. Returns
-/// false and appends nothing for text with a CR, which a long bracket can't
-/// hold, or a NUL, which ends a Luau source.
+/// It takes the lowest level whose closer neither appears in `text` nor
+/// finishes at its end. Returns false and appends nothing for text with a
+/// CR, which a long bracket's CRLF loses and no printer writes raw, or a
+/// NUL, which ends a source.
 pub fn write_long_string(text: &str, output: &mut Vec<u8>) -> bool {
     if text.contains(['\r', '\0']) {
         return false;
@@ -407,7 +372,7 @@ fn write_long_bracket(bytes: &[u8], level: usize, output: &mut Vec<u8>) {
     output.push(b'[');
     output.extend(iter::repeat_n(b'=', level));
     output.push(b'[');
-    // Lua drops a line break right after the opener.
+    // Luau drops a line break right after the opener.
     if bytes.first() == Some(&b'\n') {
         output.push(b'\n');
     }
@@ -421,7 +386,7 @@ fn write_long_bracket(bytes: &[u8], level: usize, output: &mut Vec<u8>) {
 /// [`write_long_string`] picks it.
 fn long_bracket_level(bytes: &[u8]) -> usize {
     // Bit `n` says level `n` is taken, for the levels a word holds.
-    let mut taken = u64::from(memmem::find(bytes, b"[[").is_some());
+    let mut taken = 0u64;
     let mut taken_beyond = Vec::new();
     for closer_start in memchr::memchr_iter(b']', bytes) {
         let after = &bytes[closer_start + 1..];
@@ -527,7 +492,7 @@ fn escape(byte: u8, is_followed_by_digit: bool) -> EscapeText {
         0x0C => "\\f",
         b'\t' => "\\t",
         0x0B => "\\v",
-        // Luau: an interpolated string escapes its delimiters by name.
+        // An interpolated string escapes its delimiters by name.
         b'{' => "\\{",
         b'`' => "\\`",
         _ => return EscapeText::decimal(byte, is_followed_by_digit),
@@ -581,7 +546,7 @@ fn write_quoted(bytes: &[u8], quote: u8, output: &mut Vec<u8>) {
     output.push(quote);
 }
 
-/// Appends `bytes` as the text of a Luau interpolated string's piece,
+/// Appends `bytes` as the text of an interpolated string's piece,
 /// escaping backslashes, backticks, `{`, control bytes, and bytes that aren't
 /// UTF-8.
 pub fn write_interpolated_text(bytes: &[u8], output: &mut Vec<u8>) {

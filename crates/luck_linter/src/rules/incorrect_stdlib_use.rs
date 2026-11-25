@@ -114,20 +114,34 @@ fn invalid_constant_args(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("table.insert(t, 1)", LuaTarget::Lua54),
-        ("collectgarbage('collect')", LuaTarget::Lua54),
+    const PASS: &[&str] = &[
+        "table.insert(t, 1)",
+        "collectgarbage('collect')",
         // `obj` has no known shape, so `foo` doesn't resolve to the stdlib.
-        ("obj:foo()", LuaTarget::Lua54),
+        "obj:foo()",
+        "\
+local type = f
+type(1, 2, 3)",
+        // `error()` raises a nil error.
+        "error()",
+    ];
+
+    const FAIL: &[&str] = &[
+        "table.insert()",
+        "type(1, 2, 3)",
+        // `collectgarbage` first arg must be one of the option names.
+        "collectgarbage('frob')",
+        "collectgarbage'frob'",
+        "local s = ('x'):rep()",
+    ];
+
+    const ROBLOX_PASS: &[&str] = &[
         // Every `CFrame.new` overload: no arguments, one or two `Vector3`s, and 3,
         // 7, or 12 numbers.
-        (
-            "\
+        "\
 local v = Vector3.new(1, 2, 3)
 local a = CFrame.new()
 local b = CFrame.new(v)
@@ -135,80 +149,42 @@ local c = CFrame.new(v, v)
 local d = CFrame.new(1, 2, 3)
 local e = CFrame.new(1, 2, 3, 4, 5, 6, 7)
 local f = CFrame.new(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)",
-            LuaTarget::LuauRoblox,
-        ),
-        (
-            "\
+        "\
 local u = UDim.new(0, 10)
 local a = UDim2.new(0, 0, 1, 0)
 local b = UDim2.new(u, u)",
-            LuaTarget::LuauRoblox,
-        ),
-        // The 5.5 three-arg tuning form matches only the `param` overload; the
-        // plain-option overloads must not reject it.
-        ("collectgarbage('param', 'pause', 100)", LuaTarget::Lua55),
-        ("collectgarbage('incremental', 100, 200, 13)", LuaTarget::Lua54),
-        (
-            "\
-local type = f
-type(1, 2, 3)",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-local f = something()
-f:setvbuf()",
-            LuaTarget::Lua54,
-        ),
-        ("game:GetService('ProximityPromptService')", LuaTarget::LuauRoblox),
-        ("local x = script:IsA('BasePart')", LuaTarget::LuauRoblox),
-        ("Instance.new('Folder')", LuaTarget::LuauRoblox),
-        ("BrickColor.new('Bright red')", LuaTarget::LuauRoblox),
+        "game:GetService('ProximityPromptService')",
+        "local x = script:IsA('BasePart')",
+        "Instance.new('Folder')",
+        "BrickColor.new('Bright red')",
         // The three-number form skips the name check.
-        ("BrickColor.new(1, 0, 0)", LuaTarget::LuauRoblox),
-        // `error()` raises a nil error.
-        ("error()", LuaTarget::Lua54),
-        // `os.setlocale()` queries the locale.
-        ("local l = os.setlocale()", LuaTarget::Lua54),
-        // Standalone Luau accepts `collect`.
-        ("collectgarbage('collect')", LuaTarget::Luau),
-        // Lua 5.2 accepts `setmajorinc`.
-        (r#"local n = collectgarbage("setmajorinc", 100)"#, LuaTarget::Lua52),
+        "BrickColor.new(1, 0, 0)",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("table.insert()", LuaTarget::Lua54),
-        ("type(1, 2, 3)", LuaTarget::Lua54),
-        // `collectgarbage` first arg must be one of the option names.
-        ("collectgarbage('frob')", LuaTarget::Lua54),
-        ("collectgarbage'frob'", LuaTarget::Lua54),
+    const ROBLOX_FAIL: &[&str] = &[
         // Five arguments match no `CFrame.new` overload.
-        ("local c = CFrame.new(1, 2, 3, 4, 5)", LuaTarget::LuauRoblox),
-        (
-            "\
-local f = io.open('x')
-f:setvbuf()",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-local f = io.open('x')
-f:seek('nope')",
-            LuaTarget::Lua54,
-        ),
-        ("local s = ('x'):rep()", LuaTarget::Lua54),
-        ("game:GetService('Playerz')", LuaTarget::LuauRoblox),
-        ("game:GetService'Playerz'", LuaTarget::LuauRoblox),
-        ("Instance.new('Playerz')", LuaTarget::LuauRoblox),
+        "local c = CFrame.new(1, 2, 3, 4, 5)",
+        // A local holds the shape of the call it's set to.
+        "\
+local child = script:FindFirstChild('x')
+local grandchild = child:FindFirstChild()",
+        "\
+local child = script:WaitForChild('x')
+local is_part = child:IsA('Partz')",
+        "game:GetService('Playerz')",
+        "game:GetService'Playerz'",
+        "Instance.new('Playerz')",
         // `BasePart` exists but isn't creatable, so `IsA` accepts it and
         // `Instance.new` doesn't.
-        ("Instance.new('BasePart')", LuaTarget::LuauRoblox),
-        ("game:GetService()", LuaTarget::LuauRoblox),
-        ("BrickColor.new('Bright rad')", LuaTarget::LuauRoblox),
+        "Instance.new('BasePart')",
+        "game:GetService()",
+        "BrickColor.new('Bright rad')",
     ];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::IncorrectStdlibUse, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::IncorrectStdlibUse, PASS, FAIL)
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }

@@ -23,7 +23,7 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        host.semantic.target().is_roblox()
+        host.semantic.variant().is_roblox()
     }
 
     /// A call statement's value goes unused, so it isn't checked.
@@ -82,31 +82,32 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local u = UDim2.new(0, 0, 0, 0)", LuaTarget::LuauRoblox),
-        ("local u = UDim2.new(0.5, 100, 0.5, 0)", LuaTarget::LuauRoblox),
-        ("local x = 0.5 local u = UDim2.new(x, 0, 1, 0)", LuaTarget::LuauRoblox),
-        ("local u = UDim2.new(0.5, 0)", LuaTarget::LuauRoblox),
-        ("local UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
-        ("UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
-        ("local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::Luau),
+    const PASS: &[&str] = &["local u = UDim2.new(0.5, 0, 1, 0)"];
+
+    const ROBLOX_PASS: &[&str] = &[
+        "local u = UDim2.new(0, 0, 0, 0)",
+        "local u = UDim2.new(0.5, 100, 0.5, 0)",
+        "local x = 0.5 local u = UDim2.new(x, 0, 1, 0)",
+        "local u = UDim2.new(0.5, 0)",
+        "local UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)",
+        "UDim2 = {} local u = UDim2.new(0.5, 0, 1, 0)",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local u = UDim2.new(0.5, 0, 1, 0)", LuaTarget::LuauRoblox),
-        ("local u = UDim2.new(0, 100, 0, 200)", LuaTarget::LuauRoblox),
-        ("local u = UDim2.new(0, -100, 0, 0x20)", LuaTarget::LuauRoblox),
+    const ROBLOX_FAIL: &[&str] = &[
+        "local u = UDim2.new(0.5, 0, 1, 0)",
+        "local u = UDim2.new(0, 100, 0, 200)",
+        "local u = UDim2.new(0, -100, 0, 0x20)",
         // No fix, since it would delete the comment.
-        ("local u = UDim2.new(0.5, --[[no offset]] 0, 1, 0)", LuaTarget::LuauRoblox),
+        "local u = UDim2.new(0.5, --[[no offset]] 0, 1, 0)",
     ];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::RobloxManualFromScaleOrFromOffset, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::RobloxManualFromScaleOrFromOffset, PASS, &[])
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }

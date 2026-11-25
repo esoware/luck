@@ -2,17 +2,16 @@
 // `just ast` after changing one.
 
 use crate::{
-    Assignment, AstType, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk,
-    CompoundAssignment, DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field,
-    FunctionArgs, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName,
-    FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
-    GenericTypeParam, GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression,
-    IfStatement, IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType,
-    LabelStatement, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral,
-    NumericFor, OptionalType, Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
-    ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor,
-    TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField,
-    TypePack, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, AstType, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock,
+    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
+    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalFunction, LocalName, MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType,
+    Parameter, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
+    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
+    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypeofType, UnaryOp,
+    UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// [`Visit`](crate::Visit)'s walk through `&mut`, in the same order and
@@ -269,28 +268,13 @@ pub trait VisitMut<'ast> {
     }
 
     #[inline]
-    fn visit_attribute(&mut self, attribute: &mut Attribute<'ast>) {
-        self.walk_attribute(attribute);
-    }
-
-    #[inline]
-    fn visit_attributed_name(&mut self, attributed_name: &mut AttributedName<'ast>) {
-        self.walk_attributed_name(attributed_name);
+    fn visit_local_name(&mut self, local_name: &mut LocalName<'ast>) {
+        self.walk_local_name(local_name);
     }
 
     #[inline]
     fn visit_local_assignment(&mut self, local_assignment: &mut LocalAssignment<'ast>) {
         self.walk_local_assignment(local_assignment);
-    }
-
-    #[inline]
-    fn visit_goto_stmt(&mut self, goto_stmt: &mut GotoStatement<'ast>) {
-        self.walk_goto_stmt(goto_stmt);
-    }
-
-    #[inline]
-    fn visit_label_stmt(&mut self, label_stmt: &mut LabelStatement<'ast>) {
-        self.walk_label_stmt(label_stmt);
     }
 
     #[inline]
@@ -314,21 +298,6 @@ pub trait VisitMut<'ast> {
         type_declaration_value: &mut TypeDeclarationValue<'ast>,
     ) {
         self.walk_type_declaration_value(type_declaration_value);
-    }
-
-    #[inline]
-    fn visit_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
-        self.walk_global_declaration(global_declaration);
-    }
-
-    #[inline]
-    fn visit_global_function(&mut self, global_function: &mut GlobalFunction<'ast>) {
-        self.walk_global_function(global_function);
-    }
-
-    #[inline]
-    fn visit_global_star(&mut self, global_star: &mut GlobalStar<'ast>) {
-        self.walk_global_star(global_star);
     }
 
     #[inline]
@@ -685,9 +654,6 @@ pub trait VisitMut<'ast> {
     fn walk_var_arg_param(&mut self, var_arg_param: &mut VarArgParam<'ast>) {
         let kind = AstType::VarArgParam;
         self.enter_node(kind);
-        if let Some(name) = &mut var_arg_param.name {
-            self.visit_name(name);
-        }
         if let Some(type_annotation) = &mut var_arg_param.type_annotation {
             self.visit_type(type_annotation);
         }
@@ -780,15 +746,6 @@ pub trait VisitMut<'ast> {
             }
             Statement::Return(return_stmt) => self.visit_return_stmt(return_stmt),
             Statement::Break(_) | Statement::Continue(_) | Statement::Error(_) => {}
-            Statement::Goto(goto_stmt) => self.visit_goto_stmt(goto_stmt),
-            Statement::Label(label_stmt) => self.visit_label_stmt(label_stmt),
-            Statement::GlobalDeclaration(global_declaration) => {
-                self.visit_global_declaration(global_declaration);
-            }
-            Statement::GlobalFunction(global_function) => {
-                self.visit_global_function(global_function);
-            }
-            Statement::GlobalStar(global_star) => self.visit_global_star(global_star),
             Statement::CompoundAssignment(compound_assignment) => {
                 self.visit_compound_assignment(compound_assignment);
             }
@@ -937,23 +894,12 @@ pub trait VisitMut<'ast> {
     }
 
     #[inline]
-    fn walk_attribute(&mut self, attribute: &mut Attribute<'ast>) {
-        let kind = AstType::Attribute;
+    fn walk_local_name(&mut self, local_name: &mut LocalName<'ast>) {
+        let kind = AstType::LocalName;
         self.enter_node(kind);
-        self.visit_name(&mut attribute.name);
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_attributed_name(&mut self, attributed_name: &mut AttributedName<'ast>) {
-        let kind = AstType::AttributedName;
-        self.enter_node(kind);
-        self.visit_name(&mut attributed_name.name);
-        if let Some(type_annotation) = &mut attributed_name.type_annotation {
+        self.visit_name(&mut local_name.name);
+        if let Some(type_annotation) = &mut local_name.type_annotation {
             self.visit_type(type_annotation);
-        }
-        if let Some(attribute) = &mut attributed_name.attribute {
-            self.visit_attribute(attribute);
         }
         self.leave_node(kind);
     }
@@ -962,31 +908,12 @@ pub trait VisitMut<'ast> {
     fn walk_local_assignment(&mut self, local_assignment: &mut LocalAssignment<'ast>) {
         let kind = AstType::LocalAssignment;
         self.enter_node(kind);
-        if let Some(attribute) = &mut local_assignment.attribute {
-            self.visit_attribute(attribute);
-        }
-        for attributed_name in &mut local_assignment.names {
-            self.visit_attributed_name(attributed_name);
+        for local_name in &mut local_assignment.names {
+            self.visit_local_name(local_name);
         }
         for expr in &mut local_assignment.exprs {
             self.visit_expr(expr);
         }
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_goto_stmt(&mut self, goto_stmt: &mut GotoStatement<'ast>) {
-        let kind = AstType::GotoStatement;
-        self.enter_node(kind);
-        self.visit_name(&mut goto_stmt.name);
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_label_stmt(&mut self, label_stmt: &mut LabelStatement<'ast>) {
-        let kind = AstType::LabelStatement;
-        self.enter_node(kind);
-        self.visit_name(&mut label_stmt.name);
         self.leave_node(kind);
     }
 
@@ -1031,41 +958,6 @@ pub trait VisitMut<'ast> {
                 self.visit_function_body(function_body);
             }
         }
-    }
-
-    #[inline]
-    fn walk_global_declaration(&mut self, global_declaration: &mut GlobalDeclaration<'ast>) {
-        let kind = AstType::GlobalDeclaration;
-        self.enter_node(kind);
-        if let Some(attribute) = &mut global_declaration.attribute {
-            self.visit_attribute(attribute);
-        }
-        for attributed_name in &mut global_declaration.names {
-            self.visit_attributed_name(attributed_name);
-        }
-        for expr in &mut global_declaration.exprs {
-            self.visit_expr(expr);
-        }
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_global_function(&mut self, global_function: &mut GlobalFunction<'ast>) {
-        let kind = AstType::GlobalFunction;
-        self.enter_node(kind);
-        self.visit_name(&mut global_function.name);
-        self.visit_function_body(&mut global_function.body);
-        self.leave_node(kind);
-    }
-
-    #[inline]
-    fn walk_global_star(&mut self, global_star: &mut GlobalStar<'ast>) {
-        let kind = AstType::GlobalStar;
-        self.enter_node(kind);
-        if let Some(attribute) = &mut global_star.attribute {
-            self.visit_attribute(attribute);
-        }
-        self.leave_node(kind);
     }
 
     fn walk_type(&mut self, ty: &mut Type<'ast>) {

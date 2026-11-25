@@ -3,99 +3,51 @@ use luck_ast::{
     NumericFor, Statement, Suffix, Var,
 };
 use luck_semantic::{AstNode, AstTypesBitset, Scoping, SymbolId};
-use luck_stdlib::SemanticAnalysis;
 use luck_token::{Span, UnOp};
 
 use crate::call::is_global_call;
-use crate::context::{ContextHost, LintContext};
+use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::number::has_number_value;
 use crate::rule::{Rule, declare_lint_rule};
 
-/// The help suggests `table.clone(src)` where the target's stdlib has it, and
-/// `table.move(src, 1, #src, 1, {})` otherwise. A target with neither gets no
-/// finding.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ManualTableClone;
 
 // Manual copy loops are slower than a single stdlib call.
-declare_lint_rule!(
-    ManualTableClone,
-    Performance,
-    Warning,
-    "manual table copy; use `table.clone` or `table.move`"
-);
+declare_lint_rule!(ManualTableClone, Performance, Warning, "manual table copy; use `table.clone`");
 
 impl Rule for ManualTableClone {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::Block]);
-
-    fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        CopyCall::for_target(host.semantic).is_some()
-    }
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
         let AstKind::Block(block) = node.kind() else {
             return;
         };
         for (first, second) in block.stmts.iter().zip(block.stmts.iter().skip(1)) {
-            if let Some((span, copy_call)) = manual_copy(first, second, context) {
+            if let Some(span) = manual_copy(first, second, context) {
                 context.diagnostic(
                     Finding::new("manual table copy can be replaced with a stdlib call", span)
-                        .with_help(copy_call.help()),
+                        .with_help("use `table.clone(src)` instead"),
                 );
             }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum CopyCall {
-    TableClone,
-    TableMove,
-}
-
-impl CopyCall {
-    /// `None` when the target's stdlib has neither.
-    fn for_target(semantic: &SemanticAnalysis<'_>) -> Option<Self> {
-        let stdlib = semantic.stdlib();
-        if stdlib.lookup(&["table", "clone"]).is_some() {
-            Some(Self::TableClone)
-        } else if stdlib.lookup(&["table", "move"]).is_some() {
-            Some(Self::TableMove)
-        } else {
-            None
-        }
-    }
-
-    /// `src` stands for whichever table the loop copies from.
-    const fn help(self) -> &'static str {
-        match self {
-            Self::TableClone => "use `table.clone(src)` instead",
-            Self::TableMove => "use `table.move(src, 1, #src, 1, {})` instead",
-        }
-    }
-}
-
-/// The span from the `local` through the loop, and the call that can replace
-/// them, when `stmt` is `local out = {}` and `next` a loop that copies a table
-/// into it.
+/// The span from the `local` through the loop, when `stmt` is
+/// `local out = {}` and `next` a loop that copies a table into it.
 fn manual_copy(
     stmt: &Statement<'_>,
     next: &Statement<'_>,
     context: &LintContext<'_, '_>,
-) -> Option<(Span, CopyCall)> {
+) -> Option<Span> {
     let Statement::LocalAssignment(local) = stmt else {
         return None;
     };
     let destination = empty_table_local(local, context.scoping())?;
-    let copy_call = CopyCall::for_target(context.semantic)?;
     let is_copy = match next {
-        // `table.move` copies only the array part, so it can't stand in for
-        // a `pairs` loop.
-        Statement::GenericFor(generic_for) => {
-            !matches!(copy_call, CopyCall::TableMove)
-                && is_generic_copy(generic_for, destination, context)
-        }
+        Statement::GenericFor(generic_for) => is_generic_copy(generic_for, destination, context),
         Statement::NumericFor(numeric_for) => is_numeric_copy(numeric_for, destination, context),
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
@@ -107,30 +59,25 @@ fn manual_copy(
         | Statement::LocalFunction(_)
         | Statement::LocalAssignment(_)
         | Statement::Return(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
         | Statement::Break(_)
         | Statement::Continue(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
         | Statement::Error(_) => false,
     };
-    is_copy.then(|| (Span::new(local.span.start, next.span().end), copy_call))
+    is_copy.then(|| Span::new(local.span.start, next.span().end))
 }
 
 /// The local `local` declares, when it's exactly `local out = {}`.
 fn empty_table_local(local: &LocalAssignment<'_>, tree: &Scoping) -> Option<SymbolId> {
-    let ([attributed], [Expression::TableConstructor(table)]) = (&*local.names, &*local.exprs)
+    let ([local_name], [Expression::TableConstructor(table)]) = (&*local.names, &*local.exprs)
     else {
         return None;
     };
     if !table.fields.is_empty() {
         return None;
     }
-    tree.symbol_of(&attributed.name)
+    tree.symbol_of(&local_name.name)
 }
 
 /// Whether `generic_for` is `for k, v in pairs(src) do out[k] = v end`.
@@ -242,129 +189,59 @@ fn is_same_binding(expr: &Expression<'_>, source: &Name<'_>, tree: &Scoping) -> 
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        // `table.move` copies only the array part.
-        (
-            "\
-local out = {}
-for k, v in pairs(src) do out[k] = v end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local out = {}
 for k, v in pairs(src) do out[k] = v
 print(k) end",
-            LuaTarget::Luau,
-        ),
-        // The 5.5 stdlib has no `table.clone`, and `table.move` can't copy a
-        // `pairs` loop.
-        (
-            "\
-local src = {1}
-local out = {}
-for k, v in pairs(src) do out[k] = v end",
-            LuaTarget::Lua55,
-        ),
-        (
-            "\
+        "\
 local src = {1}
 local out = {}
 for out, v in pairs(src) do out[out] = v end
 return out",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 local out = {}
 for k, out in pairs(src) do out[k] = out end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 local out = {}
 for out = 1, #src do out[out] = src[out] end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local out = {}
 for src = 1, #src do out[src] = src[src] end",
-            LuaTarget::Lua54,
-        ),
-        // Lua 5.1 has neither helper, so the rule stays silent.
-        (
-            "\
-local out = {}
-for i = 1, #src do out[i] = src[i] end",
-            LuaTarget::Lua51,
-        ),
-        (
-            "\
+        "\
 local out = {1, 2}
 for k, v in pairs(src) do out[k] = v end",
-            LuaTarget::Luau,
-        ),
         // The assignment writes to a different table than the one declared above
         // the loop.
-        (
-            "\
+        "\
 local out = {}
 for k, v in pairs(src) do other[k] = v end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 local pairs = next
 local out = {}
 for k, v in pairs(src) do out[k] = v end",
-            LuaTarget::Luau,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 local out = {}
 for k, v in pairs(src) do out[k] = v end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 local out = {}
 for i = 1, #src do out[i] = src[i] end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-local out = {}
-for i = 1, #src do out[i] = src[i] end",
-            LuaTarget::Lua55,
-        ),
-        (
-            "\
+        "\
 local out = {}
 for i = 0x1, #src, 0x1 do out[i] = src[i] end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local out = {}
 for k, v in ipairs(src) do out[k] = v end",
-            LuaTarget::Luau,
-        ),
         // A `;` doesn't change the copy.
-        (
-            "\
+        "\
 local out = {};
 for i = 1, #src do out[i] = src[i] end",
-            LuaTarget::Lua54,
-        ),
     ];
 
     #[test]

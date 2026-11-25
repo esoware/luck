@@ -6,7 +6,7 @@ use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 
 pub(crate) const TWO_MODULE_ENTRY: &str = "\
-local h = require(\"helper\")
+local h = require(\"./helper\")
 print(h)
 ";
 pub(crate) const HELPER_MODULE: &str = "return 1\n";

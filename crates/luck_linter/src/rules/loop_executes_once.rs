@@ -70,57 +70,38 @@ impl Rule for LoopExecutesOnce {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local x = 1
 local c = 1
 while x do if c then break end print() end",
-            LuaTarget::Lua54,
-        ),
-        ("for i = 1, 10 do print(i) end", LuaTarget::Lua54),
+        "for i = 1, 10 do print(i) end",
         // `continue` starts another iteration.
-        ("for _, v in ipairs(t) do if v then continue end return v end", LuaTarget::Luau),
-        // The `goto` starts another iteration.
-        (
-            "for _, v in ipairs(t) do if v then goto continue end do return v end ::continue:: end",
-            LuaTarget::Lua54,
-        ),
+        "for _, v in ipairs(t) do if v then continue end return v end",
         // The inner `break` lets the outer loop go on.
-        ("for i = 1, 3 do while true do if i then break end end end", LuaTarget::Lua54),
+        "for i = 1, 3 do while true do if i then break end end end",
         // A local `error` doesn't raise.
-        (
-            "\
+        "\
 local function error(text) print(text) end
 for i = 1, 3 do error(i) end",
-            LuaTarget::Lua54,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 local x = 1
 while x do return 1 end",
-            LuaTarget::Lua54,
-        ),
-        ("for i = 1, 10 do break end", LuaTarget::Lua54),
-        (r#"repeat error("x") until true"#, LuaTarget::Lua54),
-        ("for k, v in pairs(t) do return v end", LuaTarget::Lua54),
+        "for i = 1, 10 do break end",
+        r#"repeat error("x") until true"#,
+        "for k, v in pairs(t) do return v end",
         // Every branch of the `if` returns, so the body never loops.
-        (
-            "\
+        "\
 local c = 1
 while c do if c then return 1 else return 2 end end",
-            LuaTarget::Lua54,
-        ),
-        ("while true do for i = 1, 2 do break end return end", LuaTarget::Lua54),
-        ("for i = 1, 3 do if i then break else return end end", LuaTarget::Lua54),
+        "while true do for i = 1, 2 do break end return end",
+        "for i = 1, 3 do if i then break else return end end",
     ];
 
     #[test]

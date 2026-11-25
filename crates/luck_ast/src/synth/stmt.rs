@@ -3,8 +3,8 @@ use luck_token::CompoundOp;
 use crate::expr::{Expression, Var};
 use crate::function::{FunctionAttribute, Parameter};
 use crate::stmt::{
-    Attribute, AttributedName, Block, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind,
-    LocalFunctionKind, Statement, TypeDeclarationValue,
+    Block, ElseClause, ElseIfClause, FunctionName, LocalAssignmentKind, LocalFunctionKind,
+    LocalName, Statement, TypeDeclarationValue,
 };
 use crate::synth::{FunctionSignature, Synth};
 use crate::types::{GenericTypeList, Type};
@@ -92,7 +92,7 @@ impl<'ast> Synth<'ast> {
         self.local_function_node(LocalFunctionKind::Local, name, attributes, signature, body)
     }
 
-    /// Luau: `const function`.
+    /// `const function`.
     ///
     /// # Panics
     ///
@@ -111,7 +111,7 @@ impl<'ast> Synth<'ast> {
         self.local_function_node(LocalFunctionKind::Const, name, attributes, signature, body)
     }
 
-    /// Luau: `export function`.
+    /// `export function`.
     ///
     /// # Panics
     ///
@@ -154,26 +154,7 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// Lua 5.5: `global function name`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn global_function(
-        &self,
-        name: &str,
-        signature: FunctionSignature<'ast>,
-        body: Block<'ast>,
-    ) -> Statement<'ast> {
-        Statement::new_global_function(
-            self.next_span(),
-            self.name(name),
-            self.function_body(signature, body),
-            self.allocator,
-        )
-    }
-
-    /// For type annotations or Lua 5.4 attributes, use [`Synth::local_full`].
+    /// For type annotations, use [`Synth::local_full`].
     ///
     /// # Panics
     ///
@@ -183,14 +164,14 @@ impl<'ast> Synth<'ast> {
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
-        let attributed = names.iter().map(|name| self.attributed_name(name, None, None));
-        self.local_full(attributed, exprs)
+        let local_names = names.iter().map(|name| self.local_name(name, None));
+        self.local_full(local_names, exprs)
     }
 
-    /// Build `names` with [`Synth::attributed_name`].
+    /// Build `names` with [`Synth::local_name`].
     pub fn local_full<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = AttributedName<'ast>>,
+        Names: IntoIterator<Item = LocalName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -198,14 +179,14 @@ impl<'ast> Synth<'ast> {
         self.local_assignment(names, exprs, LocalAssignmentKind::Local)
     }
 
-    /// Luau: `const names = exprs`.
+    /// `const names = exprs`.
     ///
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
     pub fn const_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = AttributedName<'ast>>,
+        Names: IntoIterator<Item = LocalName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -215,10 +196,10 @@ impl<'ast> Synth<'ast> {
         self.local_assignment(names, initializers, LocalAssignmentKind::Const)
     }
 
-    /// Luau: `export local names = exprs`.
+    /// `export local names = exprs`.
     pub fn export_local<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = AttributedName<'ast>>,
+        Names: IntoIterator<Item = LocalName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -226,14 +207,14 @@ impl<'ast> Synth<'ast> {
         self.local_assignment(names, exprs, LocalAssignmentKind::ExportLocal)
     }
 
-    /// Luau: `export const names = exprs`.
+    /// `export const names = exprs`.
     ///
     /// # Panics
     ///
     /// Panics if `exprs` is empty; the grammar requires an initializer.
     pub fn export_const<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = AttributedName<'ast>>,
+        Names: IntoIterator<Item = LocalName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
@@ -253,14 +234,13 @@ impl<'ast> Synth<'ast> {
         kind: LocalAssignmentKind,
     ) -> Statement<'ast>
     where
-        Names: IntoIterator<Item = AttributedName<'ast>>,
+        Names: IntoIterator<Item = LocalName<'ast>>,
         Names::IntoIter: ExactSizeIterator,
         Exprs: IntoIterator<Item = Expression<'ast>>,
         Exprs::IntoIter: ExactSizeIterator,
     {
         Statement::new_local_assignment(
             self.next_span(),
-            None,
             self.list(names),
             self.list(exprs),
             kind,
@@ -268,58 +248,14 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// One declared name for [`Synth::local_full`] / [`Synth::global_declaration`],
-    /// with an optional Luau type annotation or Lua 5.4+ attribute (`"const"`
-    /// or `"close"`). No dialect has both.
+    /// One declared name for [`Synth::local_full`], with an optional type
+    /// annotation.
     ///
     /// # Panics
     ///
-    /// Panics if `name` or `attribute` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn attributed_name(
-        &self,
-        name: &str,
-        ty: Option<Type<'ast>>,
-        attribute: Option<&str>,
-    ) -> AttributedName<'ast> {
-        AttributedName::new(
-            self.name(name),
-            ty.map(|annotation| self.boxed(annotation)),
-            attribute.map(|attribute_name| self.boxed(self.attribute(attribute_name))),
-        )
-    }
-
-    fn attribute(&self, name: &str) -> Attribute<'ast> {
-        Attribute::new(self.next_span(), self.name(name))
-    }
-
-    /// Lua 5.5: `global names = exprs`, or with no `=` when `exprs` is empty.
-    pub fn global_declaration<Names, Exprs>(&self, names: Names, exprs: Exprs) -> Statement<'ast>
-    where
-        Names: IntoIterator<Item = AttributedName<'ast>>,
-        Names::IntoIter: ExactSizeIterator,
-        Exprs: IntoIterator<Item = Expression<'ast>>,
-        Exprs::IntoIter: ExactSizeIterator,
-    {
-        Statement::new_global_declaration(
-            self.next_span(),
-            None,
-            self.list(names),
-            self.list(exprs),
-            self.allocator,
-        )
-    }
-
-    /// Lua 5.5: `global *`, or `global <attribute> *`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `attribute` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn global_star(&self, attribute: Option<&str>) -> Statement<'ast> {
-        Statement::new_global_star(
-            self.next_span(),
-            attribute.map(|name| self.attribute(name)),
-            self.allocator,
-        )
+    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
+    pub fn local_name(&self, name: &str, ty: Option<Type<'ast>>) -> LocalName<'ast> {
+        LocalName::new(self.name(name), ty.map(|annotation| self.boxed(annotation)))
     }
 
     /// Build targets with [`Synth::name_var`], [`Synth::index_var`], [`Synth::field_var`].
@@ -338,7 +274,7 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// Luau: `target op= value`.
+    /// `target op= value`.
     pub fn compound_assign(
         &self,
         target: Var<'ast>,
@@ -445,20 +381,6 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// # Panics
-    ///
-    /// Panics if `label` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn goto_(&self, label: &str) -> Statement<'ast> {
-        Statement::new_goto(self.next_span(), self.name(label), self.allocator)
-    }
-
-    /// # Panics
-    ///
-    /// Panics if `name` isn't a valid identifier, as [`Synth::name`] does.
-    pub fn label(&self, name: &str) -> Statement<'ast> {
-        Statement::new_label(self.next_span(), self.name(name), self.allocator)
-    }
-
     pub fn return_<Exprs>(&self, exprs: Exprs) -> Statement<'ast>
     where
         Exprs: IntoIterator<Item = Expression<'ast>>,
@@ -471,14 +393,12 @@ impl<'ast> Synth<'ast> {
         Statement::Break(self.next_span())
     }
 
-    /// Luau: `continue`.
     pub fn continue_(&self) -> Statement<'ast> {
         Statement::Continue(self.next_span())
     }
 
-    /// A statement that has to end its block, in the pinned dialect or in
-    /// any when none is pinned, goes in a `do ... end` of its own when others
-    /// follow it, so the printed block reads back.
+    /// A statement that has to end its block goes in a `do ... end` of its
+    /// own when others follow it, so the printed block reads back.
     pub fn block<Stmts>(&self, stmts: Stmts) -> Block<'ast>
     where
         Stmts: IntoIterator<Item = Statement<'ast>>,
@@ -487,9 +407,7 @@ impl<'ast> Synth<'ast> {
         let given = stmts.into_iter();
         let last_index = given.len().saturating_sub(1);
         let ended = given.enumerate().map(|(i, stmt)| {
-            let has_to_end_block =
-                self.versions().iter().any(|&version| stmt.has_to_end_block(version));
-            if i < last_index && has_to_end_block {
+            if i < last_index && stmt.has_to_end_block() {
                 let block = Block::new(self.next_span(), self.list([stmt]));
                 Statement::new_do_block(self.next_span(), block, self.allocator)
             } else {
@@ -499,7 +417,7 @@ impl<'ast> Synth<'ast> {
         Block::new(self.next_span(), self.list(ended))
     }
 
-    /// Luau: `[export] type name<generics> = value`.
+    /// `[export] type name<generics> = value`.
     ///
     /// # Panics
     ///
@@ -521,7 +439,7 @@ impl<'ast> Synth<'ast> {
         )
     }
 
-    /// Luau: `[export] type function name funcbody`.
+    /// `[export] type function name funcbody`.
     ///
     /// # Panics
     ///
@@ -548,7 +466,7 @@ impl<'ast> Synth<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{BinOp, LuaVersion};
+    use luck_token::BinOp;
 
     use super::*;
     use crate::fixtures::Fixture;
@@ -581,8 +499,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let optional = synth.ty_optional(synth.ty_named("number"));
-        let stmt =
-            synth.local_full([synth.attributed_name("x", Some(optional), None)], [synth.nil()]);
+        let stmt = synth.local_full([synth.local_name("x", Some(optional))], [synth.nil()]);
         let Statement::LocalAssignment(local) = &stmt else {
             panic!("expected local assignment");
         };
@@ -596,8 +513,7 @@ mod tests {
     fn builds_const_declarations() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        let stmt =
-            synth.const_local([synth.attributed_name("frozen", None, None)], [synth.number_i64(1)]);
+        let stmt = synth.const_local([synth.local_name("frozen", None)], [synth.number_i64(1)]);
         let Statement::LocalAssignment(const_local) = &stmt else {
             panic!("expected local assignment");
         };
@@ -615,26 +531,6 @@ mod tests {
             panic!("expected local function");
         };
         assert_eq!(local_function.kind, LocalFunctionKind::Const);
-    }
-
-    #[test]
-    fn builds_globals() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth();
-        let stmt =
-            synth.global_declaration([synth.attributed_name("shared", None, Some("const"))], []);
-        let Statement::GlobalDeclaration(declaration) = &stmt else {
-            panic!("expected global declaration");
-        };
-        assert!(declaration.names.iter().all(|name| name.attribute.is_some()));
-
-        let function = synth.global_function("main", FunctionSignature::default(), synth.block([]));
-        assert!(matches!(function, Statement::GlobalFunction(_)));
-
-        let Statement::GlobalStar(star) = synth.global_star(Some("const")) else {
-            panic!("expected global star");
-        };
-        assert!(star.attribute.is_some());
     }
 
     #[test]
@@ -698,14 +594,6 @@ mod tests {
     }
 
     #[test]
-    fn builds_goto_and_label() {
-        let fixture = Fixture::default();
-        let synth = fixture.synth();
-        assert!(matches!(synth.goto_("done"), Statement::Goto(_)));
-        assert!(matches!(synth.label("done"), Statement::Label(_)));
-    }
-
-    #[test]
     fn builds_loop_exits() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
@@ -728,10 +616,7 @@ mod tests {
             ]);
             block.stmts.iter().map(|stmt| matches!(stmt, Statement::DoBlock(_))).collect::<Vec<_>>()
         };
-        let unpinned = shapes(fixture.synth());
-        assert_eq!(unpinned, [true, false, true, false, true, false]);
-        let pinned = shapes(fixture.synth().with_version(LuaVersion::Lua54));
-        assert_eq!(pinned, [false, false, true, false, true, false]);
+        assert_eq!(shapes(fixture.synth()), [true, false, true, false, true, false]);
     }
 
     #[test]
@@ -781,9 +666,9 @@ mod tests {
     #[test]
     fn builds_exported_locals() {
         let fixture = Fixture::default();
-        let synth = fixture.synth().with_version(LuaVersion::Luau);
+        let synth = fixture.synth();
         let exported = synth.export_local(
-            [synth.attributed_name("value", Some(synth.ty_named("integer")), None)],
+            [synth.local_name("value", Some(synth.ty_named("integer")))],
             [synth.integer_i64(1)],
         );
         assert!(matches!(

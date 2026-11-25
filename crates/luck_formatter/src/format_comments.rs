@@ -20,7 +20,6 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return b"";
         };
-        let version = self.version();
         let text = comment.span.text(source);
         if comment.kind == CommentKind::Shebang {
             // Loaders skip this line up to LF, so a CR in it is text, but one
@@ -38,9 +37,9 @@ impl<'ast> Formatter<'ast> {
         }
         let (normalized, allocator) = self.scratch();
         let mut cursor = 0;
-        for line_break in line_breaks(text, version) {
-            // Luau reads a lone CR as a space, and one left before the LF
-            // would make a CRLF of it.
+        for line_break in line_breaks(text) {
+            // A lone CR is a space, and one left before the LF would make a
+            // CRLF of it.
             let line = &text[cursor..line_break.start];
             let length = line.iter().rposition(|&b| b != b'\r').map_or(0, |last| last + 1);
             normalized.extend_from_slice(&line[..length]);
@@ -66,20 +65,19 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return false;
         };
-        let version = self.version();
         let taken = self.comments_mut().take_before(start);
         let mut has_ignore = false;
         let followers = taken.iter().skip(1).map(|c| c.span.start).chain(once(start));
         for (comment, next_start) in taken.iter().zip(followers) {
             let is_line_ending = ends_line(comment);
-            if is_line_ending && starts_line(source, comment.span.start, version) {
+            if is_line_ending && starts_line(source, comment.span.start) {
                 self.hard_line();
             }
             has_ignore |= comment.content == CommentContent::FormatIgnore;
             let text = self.comment_text(comment);
             self.text(text);
             if is_line_ending {
-                self.line_break(has_blank_line(source, comment.span.end, next_start, version));
+                self.line_break(has_blank_line(source, comment.span.end, next_start));
             } else {
                 self.space();
             }
@@ -149,13 +147,12 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return;
         };
-        let version = self.version();
         let mut has_ended_line = false;
         for comment in self.comments_mut().take_before(closer) {
-            match (starts_line(source, comment.span.start, version), has_ended_line) {
+            match (starts_line(source, comment.span.start), has_ended_line) {
                 (true, _) => {
-                    let is_blank = keeps_blank_lines
-                        && has_leading_edge_blank(source, comment.span.start, version);
+                    let is_blank =
+                        keeps_blank_lines && has_leading_edge_blank(source, comment.span.start);
                     self.line_break(is_blank);
                 }
                 (false, false) => self.space(),
@@ -189,7 +186,6 @@ impl<'ast> Formatter<'ast> {
             self.token(close);
             return;
         };
-        let version = self.version();
         self.group(|grouped| {
             grouped.token(open);
             grouped.indent(|f| {
@@ -198,15 +194,10 @@ impl<'ast> Formatter<'ast> {
                 for comment in taken {
                     if let Some(before) = previous {
                         if before.kind == CommentKind::Line
-                            || starts_line(source, comment.span.start, version)
+                            || starts_line(source, comment.span.start)
                         {
                             let gap_start = before.span.end;
-                            f.line_break(has_blank_line(
-                                source,
-                                gap_start,
-                                comment.span.start,
-                                version,
-                            ));
+                            f.line_break(has_blank_line(source, gap_start, comment.span.start));
                         } else {
                             f.space();
                         }
@@ -281,11 +272,10 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return;
         };
-        let version = self.version();
         let mut previous_end = None;
         for comment in comments {
             if let Some(end) = previous_end {
-                self.line_break(has_blank_line(source, end, comment.span.start, version));
+                self.line_break(has_blank_line(source, end, comment.span.start));
             }
             previous_end = Some(comment.span.end);
             let text = self.comment_text(comment);
@@ -335,14 +325,13 @@ impl<'ast> Formatter<'ast> {
         let Some(source) = self.comments().source_text() else {
             return;
         };
-        let version = self.version();
         let gap_start =
             self.comments().last_printed_end().map_or(last_end, |end| end.max(last_end));
         let taken = self.comments_mut().take_dangling(gap_start);
         let Some(first) = taken.first() else {
             return;
         };
-        self.line_break(has_blank_line(source, gap_start, first.span.start, version));
+        self.line_break(has_blank_line(source, gap_start, first.span.start));
         self.write_comment_run(taken);
     }
 
@@ -370,7 +359,7 @@ impl<'ast> Formatter<'ast> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::{LuaVersion, Span};
+    use luck_token::Span;
 
     use super::*;
     use crate::FormatOptions;
@@ -379,7 +368,7 @@ mod tests {
     use crate::ir::FormatElement;
 
     fn formatter<'ast>(allocator: &'ast Allocator, comments: Comments<'ast>) -> Formatter<'ast> {
-        Formatter::new(allocator, LuaVersion::Lua54, FormatOptions::default(), comments, None)
+        Formatter::new(allocator, FormatOptions::default(), comments, None)
     }
 
     fn texts<'ast>(f: &Formatter<'ast>) -> Vec<&'ast str> {

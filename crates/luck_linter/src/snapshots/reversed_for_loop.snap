@@ -2,19 +2,19 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `for` loop from 10 to 1 without a negative step never runs
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | for i = 10, 1 do print(i) end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a negative step: `for i = start, limit, -1 do`
 
 warning: `for` loop from 16 to 1 without a negative step never runs
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | for i = 0x10, 1 do print(i) end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a negative step: `for i = start, limit, -1 do`
 
 warning: `for` loop from -1 to -5 without a negative step never runs
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | for i = -1, -5 do print(i) end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a negative step: `for i = start, limit, -1 do`

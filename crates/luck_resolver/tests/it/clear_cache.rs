@@ -5,10 +5,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
-use luck_resolver::{
-    DirEntry, FileMetadata, FileSystem, FileSystemOs, ResolveOptions, ResolverGeneric,
-};
-use luck_token::LuaVersion;
+use luck_resolver::{DirEntry, FileMetadata, FileSystem, FileSystemOs, ResolverGeneric};
 use parking_lot::Mutex;
 use tempfile::TempDir;
 
@@ -56,12 +53,10 @@ impl FileSystem for PausingFileSystem {
     }
 }
 
-/// A resolver of `version` rooted at `root`, which pauses in its first
-/// listing of `directory` while `change` runs and the cache clears, and
-/// what it resolves `module` from `from_file` to then and afterwards.
+/// A resolver that pauses in its first listing of `directory` while `change`
+/// runs and the cache clears, and what it resolves `module` from `from_file`
+/// to then and afterwards.
 fn resolved_around_a_clear(
-    version: LuaVersion,
-    root: &Path,
     directory: &Path,
     from_file: &Path,
     module: &str,
@@ -74,10 +69,9 @@ fn resolved_around_a_clear(
         listed: listed_sender,
         resume: resume_receiver,
     };
-    let resolver = Arc::new(ResolverGeneric::new_with_file_system(
-        PausingFileSystem { pause: Mutex::new(Some(pause)) },
-        ResolveOptions { version, search_paths: Vec::new(), root: root.to_path_buf() },
-    ));
+    let resolver = Arc::new(ResolverGeneric::new_with_file_system(PausingFileSystem {
+        pause: Mutex::new(Some(pause)),
+    }));
     let racing = {
         let (resolver, from_file, module) =
             (Arc::clone(&resolver), from_file.to_path_buf(), module.to_owned());
@@ -98,41 +92,31 @@ fn canonical_root() -> (TempDir, PathBuf) {
     (directory, root)
 }
 
+/// The paused listing is the first of `root`, which the probe of `foo.luau`
+/// makes, since the requiring module is in `sub` and `..` reads nothing.
 #[test]
-fn a_lua_module_deleted_while_a_resolution_reads_is_gone_after_the_clear() {
+fn a_module_deleted_while_a_resolution_reads_is_gone_after_the_clear() {
     let (_directory, root) = canonical_root();
-    let module = root.join("foo.lua");
-    fs::write(&module, "return 1\n").expect("write foo.lua");
-    let [during, after] = resolved_around_a_clear(
-        LuaVersion::Lua54,
-        &root,
-        &root,
-        &root.join("main.lua"),
-        "foo",
-        || {
-            fs::remove_file(&module).expect("remove foo.lua");
-        },
-    );
+    fs::create_dir_all(root.join("sub")).expect("mkdir sub");
+    let module = root.join("foo.luau");
+    fs::write(&module, "return 1\n").expect("write foo.luau");
+    let [during, after] =
+        resolved_around_a_clear(&root, &root.join("sub/main.luau"), "../foo", || {
+            fs::remove_file(&module).expect("remove foo.luau");
+        });
     assert_eq!(during, Some(module), "the racing resolution answers from what it read");
     assert_eq!(after, None, "nothing it read outlives the clear");
 }
 
 #[test]
-fn a_luau_module_created_while_a_resolution_reads_resolves_after_the_clear() {
+fn a_module_created_while_a_resolution_reads_resolves_after_the_clear() {
     let (_directory, root) = canonical_root();
     let sub = root.join("sub");
     fs::create_dir_all(&sub).expect("mkdir sub");
     let init = sub.join("init.luau");
-    let [during, after] = resolved_around_a_clear(
-        LuaVersion::Luau,
-        &root,
-        &sub,
-        &root.join("main.luau"),
-        "./sub",
-        || {
-            fs::write(&init, "return 1\n").expect("write sub/init.luau");
-        },
-    );
+    let [during, after] = resolved_around_a_clear(&sub, &root.join("main.luau"), "./sub", || {
+        fs::write(&init, "return 1\n").expect("write sub/init.luau");
+    });
     assert_eq!(during, None, "the racing resolution answers from what it read");
     assert_eq!(after, Some(init), "nothing it read outlives the clear");
 }

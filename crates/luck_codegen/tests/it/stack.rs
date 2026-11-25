@@ -9,17 +9,17 @@ use luck_testgen::{
     broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
     with_the_smallest_stack,
 };
-use luck_token::{BinOp, LuaVersion, UnOp};
+use luck_token::{BinOp, UnOp};
 
 #[test]
 fn compacting_fits_the_smallest_stack() {
-    on_the_smallest_stack(deep_and_long_sources(), |source, version| {
+    on_the_smallest_stack(deep_and_long_sources(), |source| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.first());
         for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
             let output = luck_codegen::compact(&parsed.chunk, spelling);
-            let reparsed = luck_parser::parse(&allocator, &output, version);
+            let reparsed = luck_parser::parse(&allocator, &output);
             assert!(reparsed.errors.is_empty(), "the output reparses");
         }
     });
@@ -28,9 +28,9 @@ fn compacting_fits_the_smallest_stack() {
 #[test]
 fn compacting_what_a_failed_parse_leaves_fits_the_smallest_stack() {
     let sources = sources_past_the_nesting_cap().into_iter().chain(broken_sources());
-    on_the_smallest_stack(sources, |source, version| {
+    on_the_smallest_stack(sources, |source| {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(!parsed.errors.is_empty(), "{:?}", source.get(..20));
         for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
             luck_codegen::compact(&parsed.chunk, spelling);
@@ -49,7 +49,7 @@ fn nested_return(synth: Synth<'_>, depth: usize, wrap: Wrap) -> Chunk<'_> {
     }
     let block = synth.block([synth.return_([expr])]);
     assert_eq!(block_nesting_depth(&block), depth, "each wrap adds one level");
-    Chunk::new(LuaVersion::Lua54, block)
+    Chunk::new(block)
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn compacting_a_built_tree_at_the_nesting_cap_fits_the_smallest_stack() {
             let spans = SpanCounter::new();
             let chunk = nested_return(Synth::new(&allocator, &spans), MAX_NESTING_DEPTH, wrap);
             let output = luck_codegen::compact(&chunk, LiteralSpelling::AsWritten);
-            let reparsed = luck_parser::parse(&allocator, &output, LuaVersion::Lua54);
+            let reparsed = luck_parser::parse(&allocator, &output);
             assert!(reparsed.errors.is_empty(), "{label}: {:?}", reparsed.errors.first());
             assert_eq!(block_nesting_depth(&reparsed.chunk.block), MAX_NESTING_DEPTH, "{label}");
         }

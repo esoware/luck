@@ -20,7 +20,7 @@ pub(crate) fn document_highlights(
     match (tree.symbol_of(name).or_else(|| at?.resolved), at) {
         (Some(symbol_id), _) => {
             let symbol = tree.symbol(symbol_id);
-            // The implicit `self` and Lua 5.1 `arg` have no name to mark.
+            // The implicit `self` has no name to mark.
             if !symbol.kind.is_implicit() {
                 spans.push((symbol.definition_span, true));
             }
@@ -29,14 +29,9 @@ pub(crate) fn document_highlights(
                 spans.push((reference.span, reference.kind.is_write()));
             }
         }
-        // A free name under a local `_ENV` is a field of that table, so it's
-        // the same one only under the same `_ENV`.
         (None, Some(global)) => {
             for reference in tree.references() {
-                if reference.resolved.is_none()
-                    && reference.name == global.name
-                    && reference.env == global.env
-                {
+                if reference.resolved.is_none() && reference.name == global.name {
                     spans.push((reference.span, reference.kind.is_write()));
                 }
             }
@@ -61,15 +56,13 @@ pub(crate) fn document_highlights(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use super::*;
     use crate::fixtures::document;
 
     /// The highlights at `utf16_column` on the first line, as the columns
     /// they span and whether each is a write.
-    fn highlighted(text: &str, target: LuaTarget, utf16_column: u32) -> Vec<(u32, u32, bool)> {
-        let document = document(text, target);
+    fn highlighted(text: &str, utf16_column: u32) -> Vec<(u32, u32, bool)> {
+        let document = document(text);
         document_highlights(&document, Position::new(0, utf16_column))
             .into_iter()
             .map(|highlight| {
@@ -87,7 +80,7 @@ mod tests {
 local n = 1
 n += 1
 ";
-        let document = document(text, LuaTarget::Luau);
+        let document = document(text);
         let highlights = document_highlights(&document, Position::new(1, 0));
         let kinds: Vec<_> = highlights.iter().map(|highlight| highlight.kind).collect();
         assert_eq!(
@@ -102,15 +95,15 @@ n += 1
         // `x` is declared at 6, shadowed at 21 and read at 29, and read at 38.
         let text = "local x = 1 do local x = 2 f(x) end f(x)";
         let outer = [(6, 7, true), (38, 39, false)];
-        assert_eq!(highlighted(text, LuaTarget::Lua54, 6), outer);
-        assert_eq!(highlighted(text, LuaTarget::Lua54, 38), outer);
-        assert_eq!(highlighted(text, LuaTarget::Lua54, 30), [(21, 22, true), (29, 30, false)]);
+        assert_eq!(highlighted(text, 6), outer);
+        assert_eq!(highlighted(text, 38), outer);
+        assert_eq!(highlighted(text, 30), [(21, 22, true), (29, 30, false)]);
     }
 
     #[test]
     fn highlight_marks_every_use_of_a_global_and_no_field() {
         let text = "g = 1 print(g, t.g)";
-        assert_eq!(highlighted(text, LuaTarget::Lua54, 12), [(0, 1, true), (12, 13, false)]);
-        assert!(highlighted(text, LuaTarget::Lua54, 17).is_empty(), "a field is no name to match");
+        assert_eq!(highlighted(text, 12), [(0, 1, true), (12, 13, false)]);
+        assert!(highlighted(text, 17).is_empty(), "a field is no name to match");
     }
 }

@@ -1,4 +1,4 @@
-use crate::common::{minify_lua54, reparses};
+use crate::common::{minify_default, reparses};
 
 #[test]
 fn comment_heavy_input_does_not_reserve_source_sized_output() {
@@ -8,16 +8,16 @@ fn comment_heavy_input_does_not_reserve_source_sized_output() {
 return 1",
         "comment ".repeat(8192)
     );
-    let output = minify_lua54(&source);
+    let output = minify_default(&source);
     assert_eq!(output, "return 1");
     assert!(output.capacity() < 4096, "output capacity: {}", output.capacity());
-    assert_eq!(minify_lua54(&output), output);
+    assert_eq!(minify_default(&output), output);
     assert!(reparses(&output));
 }
 
 #[test]
 fn strips_comments_and_whitespace() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 -- comment
 local x = 1 -- inline
@@ -32,7 +32,7 @@ return x
 
 #[test]
 fn output_has_no_double_spaces() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local   x   =   1
 return   x
@@ -43,7 +43,7 @@ return   x
 
 #[test]
 fn chained_calls_produce_valid_output() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 f()
 g()
@@ -60,7 +60,7 @@ h()
 #[test]
 fn minus_does_not_become_comment() {
     // `x - -y` must not become `x--y`, which lexes as a comment.
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 5
 local y = 3
@@ -72,7 +72,7 @@ return x - -y
 
 #[test]
 fn and_or_have_spaces() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = a and b
 local y = a or b
@@ -85,7 +85,7 @@ return x, y
 
 #[test]
 fn strips_trailing_comma_in_table() {
-    let result = minify_lua54("return {1, 2, 3}\n");
+    let result = minify_default("return {1, 2, 3}\n");
     assert!(
         !result.contains(",}") && !result.contains(", }"),
         "Should not have trailing comma, got: {result}"
@@ -94,7 +94,7 @@ fn strips_trailing_comma_in_table() {
 
 #[test]
 fn empty_input_minifies_to_empty_output() {
-    let result = minify_lua54("");
+    let result = minify_default("");
     assert!(
         result.is_empty() || result.trim().is_empty(),
         "Empty input should produce empty or near-empty output, got: {result}"

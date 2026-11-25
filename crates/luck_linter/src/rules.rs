@@ -1,6 +1,5 @@
 mod accessing_uninitialized;
 mod almost_swapped;
-mod ambiguous_newline_call;
 mod bad_string_escape;
 mod builtin_global_write;
 mod comment_directive;
@@ -59,7 +58,6 @@ mod unnecessary_assert;
 mod unnecessary_negation;
 mod unreachable_code;
 mod unused_argument;
-mod unused_label;
 mod unused_lint_filter;
 mod unused_loop_variable;
 mod unused_variable;
@@ -308,7 +306,6 @@ declare_all_lint_rules! {
     redundant_nil_init::RedundantNilInit,
     string_index_to_field::StringIndexToField,
     merge_adjacent_locals::MergeAdjacentLocals,
-    unused_label::UnusedLabel,
     unused_argument::UnusedArgument,
     unused_loop_variable::UnusedLoopVariable,
     set_but_never_read::SetButNeverRead,
@@ -329,7 +326,6 @@ declare_all_lint_rules! {
     duplicate_parameter::DuplicateParameter,
     table_operations::TableOperations,
     unnecessary_assert::UnnecessaryAssert,
-    ambiguous_newline_call::AmbiguousNewlineCall,
     unknown_type::UnknownType,
     roblox_incorrect_color3_new_bounds::RobloxIncorrectColor3NewBounds,
     roblox_suspicious_udim2_new::RobloxSuspiciousUdim2New,
@@ -469,7 +465,7 @@ mod tests {
     #[test]
     fn rule_count_locked() {
         // If this changes, update the rule count in the root README.md.
-        assert_eq!(RuleId::COUNT, 66);
+        assert_eq!(RuleId::COUNT, 64);
     }
 
     #[test]

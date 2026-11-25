@@ -175,10 +175,11 @@ pub(crate) fn in_file(path: &Path, diag: Diagnostic) -> FileDiagnostics {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaTarget, Span};
+    use luck_token::{Span, Variant};
 
     use super::*;
     use crate::fixtures::project_with;
+    use crate::glob::Glob;
 
     #[test]
     fn config_directory_of_a_bare_file_name_is_the_current_directory() {
@@ -190,7 +191,7 @@ mod tests {
     #[test]
     fn rejects_a_circular_extends_chain_where_it_closes() {
         let project = project_with(&[
-            ("a.json", r#"{ "extends": ["b.json"], "lua": "lua54" }"#),
+            ("a.json", r#"{ "extends": ["b.json"], "variant": "standalone" }"#),
             ("b.json", r#"{ "extends": ["a.json"] }"#),
         ]);
         let error = load(&project.path().join("a.json")).unwrap_err();
@@ -204,7 +205,7 @@ mod tests {
     #[test]
     fn root_config_extends_a_file_inside_its_directory() {
         let project = project_with(&[
-            ("luck.json", r#"{ "root": true, "extends": ["base.json"], "lua": "lua54" }"#),
+            ("luck.json", r#"{ "root": true, "extends": ["base.json"], "variant": "standalone" }"#),
             ("base.json", r#"{ "lint": { "extra_globals": ["a"] } }"#),
         ]);
         let loaded = load(&project.path().join("luck.json")).expect("within-boundary extends");
@@ -215,7 +216,7 @@ mod tests {
     #[test]
     fn rejects_a_root_config_extending_outside_its_directory() {
         let project = project_with(&[
-            ("outside.json", r#"{ "lua": "lua53" }"#),
+            ("outside.json", r#"{ "variant": "roblox" }"#),
             ("project/luck.json", r#"{ "root": true, "extends": ["../outside.json"] }"#),
         ]);
         let error = load(&project.path().join("project/luck.json")).unwrap_err();
@@ -237,11 +238,12 @@ mod tests {
     #[test]
     fn extending_one_file_twice_does_not_grow_its_lists() {
         let project = project_with(&[
-            ("base.json", r#"{ "search_paths": ["a"], "lint": { "extra_globals": ["g"] } }"#),
-            ("luck.json", r#"{ "extends": ["base.json", "base.json"], "search_paths": ["b"] }"#),
+            ("base.json", r#"{ "include": ["a/**"], "lint": { "extra_globals": ["g"] } }"#),
+            ("luck.json", r#"{ "extends": ["base.json", "base.json"], "include": ["b/**"] }"#),
         ]);
         let Loaded { config, files } = load(&project.path().join("luck.json")).expect("loads");
-        assert_eq!(config.search_paths, Some(vec!["a".to_owned(), "b".to_owned()]));
+        let include: Vec<&str> = config.include.iter().flatten().map(Glob::pattern).collect();
+        assert_eq!(include, ["a/**", "b/**"]);
         assert_eq!(config.lint.unwrap().extra_globals, vec!["g".to_owned()]);
         assert_eq!(files.len(), 2, "{files:?}");
     }
@@ -249,11 +251,11 @@ mod tests {
     #[test]
     fn non_root_config_extends_a_file_in_a_parent_directory() {
         let project = project_with(&[
-            ("shared.json", r#"{ "lua": "lua52" }"#),
+            ("shared.json", r#"{ "variant": "roblox" }"#),
             ("project/luck.json", r#"{ "extends": ["../shared.json"] }"#),
         ]);
         let loaded = load(&project.path().join("project/luck.json")).expect("loads");
-        assert_eq!(loaded.config.lua, Some(LuaTarget::Lua52));
+        assert_eq!(loaded.config.variant, Some(Variant::Roblox));
     }
 
     #[test]

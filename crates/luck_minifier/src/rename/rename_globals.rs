@@ -1,5 +1,5 @@
 //! The globals `rename_globals` renames: each one a file defines at its top
-//! level before anything there reads it, and declares nowhere.
+//! level before anything there reads it.
 //!
 //! A `do` block at the top level runs where it stands, so its statements
 //! count as the top level's, which keeps the answer the same once a `do`
@@ -32,7 +32,6 @@ pub(super) fn renamable_globals(block: &Block<'_>, scoping: &Scoping) -> Vec<Nam
             if let Some(name) = target_global(target, scoping)
                 && !is_renamable.contains(name.index())
                 && !reads.has(name)
-                && !is_excluded(name, scoping)
             {
                 is_renamable.insert(name.index());
                 renamable.push(name);
@@ -46,13 +45,6 @@ pub(super) fn renamable_globals(block: &Block<'_>, scoping: &Scoping) -> Vec<Nam
 fn global_of(name: &Name<'_>, scoping: &Scoping) -> Option<NameId> {
     let reference = scoping.reference(scoping.reference_of(name)?);
     reference.resolved.is_none().then_some(reference.name)
-}
-
-/// A global a Lua 5.5 `global` statement declares keeps its name, and so
-/// does a 5.2+ `_ENV`, which every global read goes through.
-fn is_excluded(name: NameId, scoping: &Scoping) -> bool {
-    scoping.is_declared_global(name)
-        || scoping.name(name) == "_ENV" && scoping.version().has_env_upvalue()
 }
 
 /// The top level's statements, with each top-level `do` block's in its
@@ -103,8 +95,7 @@ fn function_globals(top_level: &[&Statement<'_>], scoping: &Scoping) -> Vec<Name
                     continue;
                 };
                 let is_read_first = reads.has(name) && !is_assigned_first.contains(name.index());
-                if !is_read_first && !is_excluded(name, scoping) && !is_taken.contains(name.index())
-                {
+                if !is_read_first && !is_taken.contains(name.index()) {
                     is_taken.insert(name.index());
                     function_globals.push(name);
                 }
@@ -121,11 +112,6 @@ fn function_globals(top_level: &[&Statement<'_>], scoping: &Scoping) -> Vec<Name
             | Statement::Return(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_) => reads.visit_stmt(stmt),
@@ -213,26 +199,21 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use luck_allocator::Allocator;
-    use luck_token::LuaVersion;
 
     use super::renamable_globals;
     use crate::binding::analyze;
-    use crate::fixtures::{RENAMING, assert_lua55_renames, assert_luau_renames, minify_with};
+    use crate::fixtures::{RENAMING, assert_renames, minify_with};
     use crate::transform_config::TransformConfig;
 
     fn apply(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &RENAMING)
-    }
-
-    fn apply_luau(source: &str) -> String {
-        minify_with(source, LuaVersion::Luau, &RENAMING)
+        minify_with(source, &RENAMING)
     }
 
     #[test]
     fn global_read_via_typecast_is_not_assign_first() {
         // `g` is read inside a type cast before it's assigned, so it's a real
         // global and must keep its name.
-        let result = apply_luau(
+        let result = apply(
             "\
 h = (g :: any)
 g = 1
@@ -244,7 +225,7 @@ print(h, g)
 
     #[test]
     fn a_global_defined_in_a_top_level_do_block_is_renamed_as_at_the_top_level() {
-        assert_luau_renames(&[
+        assert_renames(&[
             ("do function g() end end g()\n", "do function e()end end e()"),
             (
                 "do local x = f() function g() return x end end g()\n",
@@ -254,15 +235,12 @@ print(h, g)
         ]);
         // Unwrapping the block that scopes nothing changes nothing about it.
         let config = TransformConfig { rename_globals: true, ..TransformConfig::default() };
-        assert_eq!(
-            minify_with("do function g() end end g()\n", LuaVersion::Lua51, &config),
-            "function e()end e()"
-        );
+        assert_eq!(minify_with("do function g() end end g()\n", &config), "function e()end e()");
     }
 
     #[test]
     fn a_global_defined_in_a_function_body_keeps_its_name() {
-        assert_luau_renames(&[(
+        assert_renames(&[(
             "(function() function g() end end)() g()\n",
             "(function()function g()end end)()g()",
         )]);
@@ -290,7 +268,7 @@ print(t, g)
                 "do t[g]+=1 end g=1 print(t,g)",
             ),
         ] {
-            let result = apply_luau(source);
+            let result = apply(source);
             assert_eq!(result, expected);
         }
     }
@@ -299,7 +277,7 @@ print(t, g)
     fn global_read_via_assignment_target_is_not_assign_first() {
         // A target's prefix and index are reads at any depth of the target
         // chain, so `g` is a real global and must keep its name.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 t[g] = 1
@@ -370,7 +348,7 @@ print(t, g)
     fn global_read_by_later_target_is_not_assign_first() {
         // Every target's prefix and index is evaluated before any store, so `g`
         // is read here even though its own target comes first.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 g, t[g] = 1, 2
@@ -399,7 +377,7 @@ print(g)
     fn global_read_via_nested_return_is_not_assign_first() {
         // A return sits outside its block's statement list, and an early one
         // reads `g` before the assignment that follows the block.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 do return g end
@@ -470,7 +448,7 @@ print(g)
     #[test]
     fn global_read_via_function_name_is_not_assign_first() {
         // `function g.f()` and `function g:f()` read `g` to store into it.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 function g.x() end
@@ -512,7 +490,7 @@ print(g)
         // deferred into a function body all leave `g` assign-first, so it's
         // still renamed. In the last case, `h` stays assign-first even though
         // a target beside it reads `g`.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 g = 1
@@ -671,12 +649,12 @@ function g() end
 
     #[test]
     fn global_read_before_function_definition_is_not_renamed() {
-        assert_luau_renames(READ_BEFORE_DEFINITION_CASES);
+        assert_renames(READ_BEFORE_DEFINITION_CASES);
     }
 
     #[test]
     fn nested_read_before_the_local_it_shares_a_name_with_is_a_global_read() {
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 do print(g)
@@ -727,7 +705,7 @@ function g() end
 
     #[test]
     fn read_of_a_nested_local_is_not_a_read_of_the_global() {
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 do local g = f()
@@ -772,7 +750,7 @@ function g() end
     fn assignment_before_any_read_keeps_a_function_global() {
         // The tie between `a` and `g` goes to the earlier binding, so moving
         // `g` out of the function globals would swap their names.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 g = 1
@@ -800,7 +778,7 @@ function g() end
     fn function_defined_before_any_read_stays_renamed() {
         // A read after the definition and a function body's deferred read both
         // leave `g` renamed, and so does an assignment that got there first.
-        assert_luau_renames(&[
+        assert_renames(&[
             (
                 "\
 function g() end
@@ -869,7 +847,7 @@ function g() end
             writeln!(source, "g{i} = f{i}").unwrap();
         }
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         let scoping = analyze(&parsed.chunk, parsed.counts, None);
         let started = Instant::now();
         let renamable = renamable_globals(&parsed.chunk.block, &scoping);
@@ -890,151 +868,5 @@ g = 1
 ",
         );
         assert_eq!(result, "function e()return t end e()t=1");
-    }
-
-    #[test]
-    fn globally_declared_name_is_not_renamed() {
-        assert_lua55_renames(&[
-            (
-                "\
-global g
-g = 1
-",
-                "global g g=1",
-            ),
-            (
-                "\
-g = 1
-global g
-",
-                "g=1 global g",
-            ),
-            (
-                "\
-g = 1
-global g
-g = 2
-",
-                "g=1 global g g=2",
-            ),
-            (
-                "\
-global g = 1
-g = 2
-",
-                "global g=1 g=2",
-            ),
-            (
-                "\
-global a, g
-g = 1
-a = 2
-",
-                "global a,g g=1 a=2",
-            ),
-            ("global <const> g = 1\n", "global<const>g=1"),
-            (
-                "\
-function g() end
-global g
-",
-                "function g()end global g",
-            ),
-            (
-                "\
-global g
-function g() end
-",
-                "global g function g()end",
-            ),
-        ]);
-    }
-
-    #[test]
-    fn name_of_global_function_is_not_renamed() {
-        assert_lua55_renames(&[
-            (
-                "\
-g = 1
-global function g() end
-",
-                "g=1 global function g()end",
-            ),
-            (
-                "\
-function g() end
-global function g() end
-",
-                "function g()end global function g()end",
-            ),
-            (
-                "\
-global function g() return g end
-g()
-",
-                "global function g()return g end g()",
-            ),
-        ]);
-    }
-
-    #[test]
-    fn global_declaration_pins_its_name_from_any_depth() {
-        assert_lua55_renames(&[
-            (
-                "\
-g = 1
-do global g
-g = 2 end
-",
-                "g=1 do global g g=2 end",
-            ),
-            (
-                "\
-g = 1
-if c then global g end
-",
-                "g=1 if c then global g end",
-            ),
-            (
-                "\
-g = 1
-function f() global g
-g = 2 end
-",
-                "g=1 function e()global g g=2 end",
-            ),
-            (
-                "\
-function g() end
-local function f() global function g() end end
-return f
-",
-                "function g()end local function e()global function g()end end return e",
-            ),
-        ]);
-    }
-
-    #[test]
-    fn collective_global_declaration_leaves_every_name_free() {
-        // `global *` declares no name of its own, so renamed globals stay
-        // legal.
-        assert_lua55_renames(&[
-            (
-                "\
-global *
-g = 1
-print(g)
-",
-                "global*e=1 print(e)",
-            ),
-            (
-                "\
-local g = f()
-global *
-g = 1
-",
-                "local e=f()global*e=1",
-            ),
-        ]);
     }
 }

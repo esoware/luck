@@ -1,6 +1,5 @@
 use luck_ast::{AstKind, AstType, Call, Expression, FunctionArgs, GetSpan as _};
-use luck_semantic::{AstNode, AstTypesBitset};
-use luck_stdlib::SemanticAnalysis;
+use luck_semantic::{AstNode, AstTypesBitset, Scoping};
 use luck_token::BinOp;
 
 use crate::call::is_global_call;
@@ -27,18 +26,15 @@ impl Rule for TypeCheckInsideCall {
             return;
         };
         for (_, call) in chain.calls() {
-            if let Some(finding) = check_call(call, context.semantic) {
+            if let Some(finding) = check_call(call, context.scoping()) {
                 context.diagnostic(finding);
             }
         }
     }
 }
 
-fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding> {
-    let scoping = semantic.scoping();
-    let is_type_call = is_global_call(call, "type", scoping)
-        || (semantic.version().is_luau() && is_global_call(call, "typeof", scoping));
-    if !is_type_call {
+fn check_call(call: Call<'_>, scoping: &Scoping) -> Option<Finding> {
+    if !is_global_call(call, "type", scoping) && !is_global_call(call, "typeof", scoping) {
         return None;
     }
     let FunctionArgs::Parenthesized { args, .. } = call.args else {
@@ -60,36 +56,24 @@ fn check_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Finding
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 type = {}
 function type:f(v) return v end
 type:f(1 == 2)",
-            LuaTarget::Lua54,
-        ),
-        ("typeof:f(a == b)", LuaTarget::Luau),
-        (r#"local ok = type(x) == "string""#, LuaTarget::Lua54),
-        ("type(x == 1, y)", LuaTarget::Lua54),
-        (
-            "\
+        "typeof:f(a == b)",
+        r#"local ok = type(x) == "string""#,
+        "type(x == 1, y)",
+        "\
 local function type(v) return v end
 local ok = type(x == 1)",
-            LuaTarget::Lua54,
-        ),
-        // `typeof` isn't a Lua 5.4 builtin, so this one is the program's.
-        ("local ok = typeof(x ~= nil)", LuaTarget::Lua54),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (r#"if type(x == "string") then end"#, LuaTarget::Lua54),
-        (r#"local ok = typeof(x ~= "Instance")"#, LuaTarget::Luau),
-    ];
+    const FAIL: &[&str] =
+        &[r#"if type(x == "string") then end"#, r#"local ok = typeof(x ~= "Instance")"#];
 
     #[test]
     fn test() {

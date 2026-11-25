@@ -1,7 +1,7 @@
 {
   "name": "luck",
   "displayName": "Luck",
-  "description": "Lua/Luau language support: linter, formatter, and language server",
+  "description": "Luau language support: linter, formatter, and language server",
   "version": "0.6.0",
   "publisher": "luck",
   "license": "MIT",
@@ -53,7 +53,7 @@
         "extensions": [
           ".lua"
         ],
-        "configuration": "./language-configuration/lua.json"
+        "configuration": "./language-configuration/luau.json"
       },
       {
         "id": "luau",
@@ -82,8 +82,8 @@
     "grammars": [
       {
         "language": "lua",
-        "scopeName": "source.lua",
-        "path": "./syntaxes/lua.tmLanguage.json"
+        "scopeName": "source.luau",
+        "path": "./syntaxes/luau.tmLanguage.json"
       },
       {
         "language": "luau",
@@ -96,49 +96,49 @@
         "language": "lua",
         "scopes": {
           "namespace": [
-            "variable.other.object.lua"
+            "variable.other.object.luau"
           ],
           "namespace.defaultLibrary": [
-            "variable.other.object.lua"
+            "variable.other.object.luau"
           ],
           "variable": [
-            "variable.other.readwrite.lua"
+            "variable.other.readwrite.luau"
           ],
           "variable.readonly": [
-            "variable.other.constant.lua"
+            "variable.other.constant.luau"
           ],
           "variable.defaultLibrary": [
-            "variable.other.readwrite.lua"
+            "variable.other.readwrite.luau"
           ],
           "property": [
-            "variable.other.property.lua"
+            "variable.other.property.luau"
           ],
           "property.readonly": [
-            "variable.other.constant.property.lua"
+            "variable.other.constant.property.luau"
           ],
           "property.defaultLibrary": [
-            "variable.other.property.lua"
+            "variable.other.property.luau"
           ],
           "property.readonly.defaultLibrary": [
-            "variable.other.constant.property.lua"
+            "variable.other.constant.property.luau"
           ],
           "parameter": [
-            "variable.parameter.lua"
+            "variable.parameter.luau"
           ],
           "function": [
-            "entity.name.function.lua"
+            "entity.name.function.luau"
           ],
           "function.defaultLibrary": [
-            "support.function.lua"
+            "support.function.luau"
           ],
           "method": [
-            "entity.name.function.lua"
+            "entity.name.function.luau"
           ],
           "method.defaultLibrary": [
-            "support.function.lua"
+            "support.function.luau"
           ],
           "type": [
-            "entity.name.type.lua"
+            "entity.name.type.luau"
           ]
         }
       },
@@ -196,11 +196,11 @@
     "snippets": [
       {
         "language": "lua",
-        "path": "./snippets/lua.json"
+        "path": "./snippets/luau.json"
       },
       {
         "language": "luau",
-        "path": "./snippets/lua.json"
+        "path": "./snippets/luau.json"
       }
     ],
     "jsonValidation": [
@@ -481,7 +481,7 @@
       {
         "id": "luck.gettingStarted",
         "title": "Get Started with Luck",
-        "description": "Format, lint, and bundle Lua/Luau with the luck toolchain.",
+        "description": "Format, lint, and bundle Luau with the luck toolchain.",
         "steps": [
           {
             "id": "install",
@@ -493,8 +493,8 @@
           },
           {
             "id": "open",
-            "title": "Open a Lua or Luau file",
-            "description": "Open any `.lua` or `.luau` file to activate the extension. Diagnostics will appear in the Problems panel.",
+            "title": "Open a Luau file",
+            "description": "Open any `.luau` or `.lua` file to activate the extension. Diagnostics will appear in the Problems panel.",
             "completionEvents": [
               "onLanguage:lua",
               "onLanguage:luau"
@@ -503,7 +503,7 @@
           {
             "id": "configure",
             "title": "Create a config file",
-            "description": "Configure target version, formatter style, and lint rules in `luck.json`.\n[Create Config](command:luck.createConfig)",
+            "description": "Configure the Luau variant, formatter style, and lint rules in `luck.json`.\n[Create Config](command:luck.createConfig)",
             "completionEvents": [
               "onCommand:luck.createConfig"
             ]
@@ -527,7 +527,7 @@
     "viewsWelcome": [
       {
         "view": "explorer",
-        "contents": "Open a Lua or Luau file to start using Luck.\n[Open Folder](command:vscode.openFolder)\n[Getting Started](command:luck.openWalkthrough)",
+        "contents": "Open a Luau file to start using Luck.\n[Open Folder](command:vscode.openFolder)\n[Getting Started](command:luck.openWalkthrough)",
         "when": "workbenchState == empty"
       }
     ]

@@ -131,15 +131,13 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::ResolveError;
     use crate::file_system::FileSystemOs;
-    use crate::fixtures::{canonical, luau_project, write_files};
-    use crate::fs_cache::FsCache;
-    use crate::luau::Luau;
+    use crate::fixtures::{canonical, sample_project, write_files};
+    use crate::{ResolveError, Resolver};
 
     #[test]
     fn caches_only_requested_merged_maps_and_reuses_them() {
-        let project = luau_project();
+        let project = sample_project();
         // Cache keys derive from canonical `from_file` paths, so the direct
         // lookups must use the canonical directory too.
         let source_directory = canonical(&project, "src");
@@ -151,26 +149,27 @@ mod tests {
         )
         .expect("write aliases");
         let current = source_directory.join("main.luau");
-        let generation = Arc::default();
-        let luau = Luau::new(&generation);
-        let fs_cache = FsCache::new(FileSystemOs, &generation);
-        let merged = Arc::as_ptr(&luau.aliases().in_effect(&FileSystemOs, &source_directory));
-        assert_eq!(luau.aliases().merged_tables.len(), 1);
-        assert_eq!(luau.aliases().declared_tables.len(), source_directory.ancestors().count());
-        assert_eq!(luau.aliases().in_effect(&FileSystemOs, &source_directory).targets.len(), 64);
+        let resolver = Resolver::new();
+        let merged = Arc::as_ptr(&resolver.aliases().in_effect(&FileSystemOs, &source_directory));
+        assert_eq!(resolver.aliases().merged_tables.len(), 1);
+        assert_eq!(resolver.aliases().declared_tables.len(), source_directory.ancestors().count());
+        assert_eq!(
+            resolver.aliases().in_effect(&FileSystemOs, &source_directory).targets.len(),
+            64
+        );
         for module in ["@alias0/utils", "@ALIAS63/utils", "@alias0/utils"] {
-            let resolved = luau.resolve(&fs_cache, &current, module).expect("resolve cached alias");
-            assert_eq!(resolved.path, source_directory.join("utils.luau"));
-            assert!(!resolved.is_self_alias_shadowed);
-            let reused = luau.aliases().in_effect(&FileSystemOs, &source_directory);
+            let resolution = resolver.resolve(&current, module).expect("resolve cached alias");
+            assert_eq!(resolution.path, source_directory.join("utils.luau"));
+            assert!(!resolution.is_self_alias_shadowed);
+            let reused = resolver.aliases().in_effect(&FileSystemOs, &source_directory);
             assert_eq!(Arc::as_ptr(&reused), merged);
-            assert_eq!(luau.aliases().merged_tables.len(), 1);
+            assert_eq!(resolver.aliases().merged_tables.len(), 1);
         }
     }
 
     #[test]
     fn cached_aliases_preserve_case_shadowing_and_declaring_directory() {
-        let project = luau_project();
+        let project = sample_project();
         let source_directory = canonical(&project, "src");
         let sibling = source_directory.with_file_name("sibling");
         fs::create_dir_all(&sibling).expect("create sibling");
@@ -183,38 +182,34 @@ mod tests {
         );
         let current = source_directory.join("main.luau");
         let sibling_file = sibling.join("main.luau");
-        let generation = Arc::default();
-        let luau = Luau::new(&generation);
-        let fs_cache = FsCache::new(FileSystemOs, &generation);
+        let resolver = Resolver::new();
         for _ in 0..2 {
             for module in ["@SHARED/utils", "@inherited/utils"] {
-                let resolved =
-                    luau.resolve(&fs_cache, &current, module).expect("resolve inherited alias");
-                assert_eq!(resolved.path, source_directory.join("utils.luau"));
+                let resolution =
+                    resolver.resolve(&current, module).expect("resolve inherited alias");
+                assert_eq!(resolution.path, source_directory.join("utils.luau"));
             }
-            let error = luau
-                .resolve(&fs_cache, &sibling_file, "@SHARED/utils")
+            let error = resolver
+                .resolve(&sibling_file, "@SHARED/utils")
                 .expect_err("sibling must not inherit child aliases");
             assert!(matches!(error, ResolveError::NotFound(_)), "{error:?}");
         }
-        assert_eq!(luau.aliases().merged_tables.len(), 2);
+        assert_eq!(resolver.aliases().merged_tables.len(), 2);
     }
 
     #[test]
     fn self_shadowing_is_reported_for_every_request_even_with_a_warm_cache() {
-        let project = luau_project();
+        let project = sample_project();
         let source_directory = canonical(&project, "src");
         write_files(project.path(), &[(".luaurc", r#"{"aliases":{"SeLf":"missing"}}"#)]);
         let current = source_directory.join("init.luau");
-        let generation = Arc::default();
-        let luau = Luau::new(&generation);
-        let fs_cache = FsCache::new(FileSystemOs, &generation);
+        let resolver = Resolver::new();
         for _ in 0..2 {
-            let resolved =
-                luau.resolve(&fs_cache, &current, "@SELF/utils").expect("resolve built-in self");
-            assert_eq!(resolved.path, source_directory.join("utils.luau"));
-            assert!(resolved.is_self_alias_shadowed);
+            let resolution =
+                resolver.resolve(&current, "@SELF/utils").expect("resolve built-in self");
+            assert_eq!(resolution.path, source_directory.join("utils.luau"));
+            assert!(resolution.is_self_alias_shadowed);
         }
-        assert_eq!(luau.aliases().merged_tables.len(), 1);
+        assert_eq!(resolver.aliases().merged_tables.len(), 1);
     }
 }

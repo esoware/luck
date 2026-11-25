@@ -6,7 +6,6 @@ use std::fmt::Write as _;
 use std::{panic, thread};
 
 use luck_ast::{MAX_NESTING_DEPTH, MIN_STACK_BYTES};
-use luck_token::LuaVersion;
 
 const LEVELS: usize = 100_000;
 
@@ -15,26 +14,15 @@ pub fn nested(open: &str, count: usize, innermost: &str, close: &str) -> String 
     format!("{}{innermost}{}", open.repeat(count), close.repeat(count))
 }
 
-fn by_dialect<Lua, Luau>(lua: Lua, luau: Luau) -> Vec<(LuaVersion, String)>
-where
-    Lua: IntoIterator<Item = String>,
-    Luau: IntoIterator<Item = String>,
-{
-    lua.into_iter()
-        .map(|source| (LuaVersion::Lua54, source))
-        .chain(luau.into_iter().map(|source| (LuaVersion::Luau, source)))
-        .collect()
-}
-
 /// One source per construct, each nested as deep as the parser accepts.
-pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
+pub fn sources_at_the_nesting_cap() -> Vec<String> {
     // How many times a construct that nests one, two, three, or four levels
     // fits under the chunk's own. Parentheses the tree leaves out open none,
     // and as many as the cap may be open at once over a tree at it.
     let one = MAX_NESTING_DEPTH - 1;
     let (two, three, four) = (one / 2, one / 3, one / 4);
     let groups = MAX_NESTING_DEPTH;
-    let lua = [
+    vec![
         format!("return {}", nested("(", groups, "x", ")")),
         format!("return {}", nested("(", groups, &nested("{", one, "1", "}"), ")")),
         format!("return {}", nested("f(", one, "x", ")")),
@@ -65,8 +53,6 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         nested("for i = 1, 2 do ", one, "x = 1", " end"),
         nested("for k, v in p do ", one, "x = 1", " end"),
         nested("repeat ", one, "x = 1", " until a"),
-    ];
-    let luau = [
         format!("return {}x", "if a then b else ".repeat(one)),
         format!("return {}", nested("`{", one, "x", "}`")),
         format!("return {}", nested("(", one, "x", " :: T)")),
@@ -77,14 +63,13 @@ pub fn sources_at_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("type X = {}", nested("(A | ", two, "T", ")")),
         format!("type X = {}", nested("typeof(x :: ", two, "x", ")")),
         format!("local x: {} = 1", nested("{", one, "T", "}")),
-    ];
-    by_dialect(lua, luau)
+    ]
 }
 
 /// One source per kind of run, each one level of nesting however long.
-fn long_runs() -> Vec<(LuaVersion, String)> {
+fn long_runs() -> Vec<String> {
     const LINKS: usize = 20_000;
-    let lua = [
+    vec![
         format!("return x{}", "+x".repeat(LINKS)),
         format!("return 1{}", "+1".repeat(LINKS)),
         format!("return x{}", " < x == x".repeat(LINKS)),
@@ -97,18 +82,15 @@ fn long_runs() -> Vec<(LuaVersion, String)> {
         format!("return a{}", ".b[x]:m(x)\"s\"{}".repeat(LINKS)),
         format!("a{} = 1", "[x]".repeat(LINKS)),
         format!("f{}", "()".repeat(LINKS)),
-    ];
-    let luau = [
         format!("return f{}", "<<T>>".repeat(LINKS)),
         format!("a{} += 1", ".b".repeat(LINKS)),
         format!("type X = T{}", "?".repeat(LINKS)),
-    ];
-    by_dialect(lua, luau)
+    ]
 }
 
 /// One source per kind of sibling list, each one level of nesting however
 /// long.
-fn long_lists() -> Vec<(LuaVersion, String)> {
+fn long_lists() -> Vec<String> {
     const ITEMS: usize = 20_000;
     let numbered = |template: &str, separator: &str| {
         (0..ITEMS)
@@ -123,7 +105,7 @@ fn long_lists() -> Vec<(LuaVersion, String)> {
     for i in 1..ITEMS {
         let _ = writeln!(dead_chain, "local function f{i}() f{}() end", i - 1);
     }
-    let lua = [
+    vec![
         "x() ".repeat(ITEMS),
         "x() -- c\n".repeat(ITEMS),
         dead_chain,
@@ -151,10 +133,6 @@ fn long_lists() -> Vec<(LuaVersion, String)> {
         format!("local function f({}) return a0 end return f", numbered("a#", ",")),
         format!("local function f() {} return a0 end return f", numbered("local a# = #", " ")),
         format!("local function f() {} return a0 end return f", numbered("a# = #", " ")),
-        format!("{}::l::", "goto l ".repeat(ITEMS)),
-        numbered("::l#::", " "),
-    ];
-    let luau = [
         format!("return if a then b{} else c", " elseif a then b".repeat(ITEMS)),
         format!("return if false then b{} else c", " elseif false then b".repeat(ITEMS)),
         format!("return `{}`", "{x}".repeat(ITEMS)),
@@ -163,14 +141,13 @@ fn long_lists() -> Vec<(LuaVersion, String)> {
         format!("type X = {{{}}}", numbered("a#: T", ",")),
         format!("type X = (T{}) -> T", ",T".repeat(ITEMS)),
         format!("type X<{}> = T0", numbered("T#", ",")),
-    ];
-    by_dialect(lua, luau)
+    ]
 }
 
 /// One source per construct, each nested far past the cap, where the parser
 /// stops.
-pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
-    let lua = [
+pub fn sources_past_the_nesting_cap() -> Vec<String> {
+    vec![
         format!("return {}", nested("(", LEVELS, "x", ")")),
         format!("return {}", nested("f(", LEVELS, "x", ")")),
         format!("return {}", nested("a[", LEVELS, "x", "]")),
@@ -184,8 +161,6 @@ pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         nested("while a do ", LEVELS, "x = 1", " end"),
         nested("repeat ", LEVELS, "x = 1", " until a"),
         nested("local function f() ", LEVELS, "local x = 1", " end"),
-    ];
-    let luau = [
         format!("return {}x", "if a then b else ".repeat(LEVELS)),
         format!("return {}a{}", "if ".repeat(LEVELS), " then b else c".repeat(LEVELS)),
         format!("return {}", nested("`{", LEVELS, "x", "}`")),
@@ -195,14 +170,13 @@ pub fn sources_past_the_nesting_cap() -> Vec<(LuaVersion, String)> {
         format!("type X = {}T", "() -> ".repeat(LEVELS)),
         format!("type X = {}T", "() -> ...".repeat(LEVELS)),
         format!("type X = {}", nested("typeof(", LEVELS, "x", ")")),
-    ];
-    by_dialect(lua, luau)
+    ]
 }
 
 /// One source per way of breaking input at every level, far past the cap,
 /// which parse recovery reads in loops, in time linear in its length.
-pub fn broken_sources() -> Vec<(LuaVersion, String)> {
-    let lua = [
+pub fn broken_sources() -> Vec<String> {
+    vec![
         format!("return {}x", "(".repeat(LEVELS)),
         format!("return {}x{}", "(".repeat(LEVELS), "]".repeat(LEVELS)),
         format!("return {}x{}", "{".repeat(LEVELS), "end ".repeat(LEVELS)),
@@ -217,8 +191,6 @@ pub fn broken_sources() -> Vec<(LuaVersion, String)> {
         "return 1\n".repeat(LEVELS),
         "f(\"a\n".repeat(LEVELS),
         "x = 'a\\q' .. '\\x' y\n".repeat(LEVELS),
-    ];
-    let luau = [
         format!("return {}x", "`{".repeat(LEVELS)),
         format!("return {}x{}", "`{".repeat(LEVELS), ")".repeat(LEVELS)),
         format!("return {}1{}", "@[deprecated(".repeat(LEVELS), ")]".repeat(LEVELS)),
@@ -229,12 +201,11 @@ continue
 x()
 "
         .repeat(LEVELS),
-    ];
-    by_dialect(lua, luau)
+    ]
 }
 
 /// Every source at the cap, every long run, and every long list.
-pub fn deep_and_long_sources() -> Vec<(LuaVersion, String)> {
+pub fn deep_and_long_sources() -> Vec<String> {
     let mut sources = sources_at_the_nesting_cap();
     sources.extend(long_runs());
     sources.extend(long_lists());
@@ -246,12 +217,12 @@ pub fn deep_and_long_sources() -> Vec<(LuaVersion, String)> {
 /// # Panics
 ///
 /// Panics when a thread can't start, or with what `stage` panics with.
-pub fn on_the_smallest_stack<Sources>(sources: Sources, stage: fn(&str, LuaVersion))
+pub fn on_the_smallest_stack<Sources>(sources: Sources, stage: fn(&str))
 where
-    Sources: IntoIterator<Item = (LuaVersion, String)>,
+    Sources: IntoIterator<Item = String>,
 {
-    for (version, source) in sources {
-        with_the_smallest_stack(|| stage(&source, version));
+    for source in sources {
+        with_the_smallest_stack(|| stage(&source));
     }
 }
 

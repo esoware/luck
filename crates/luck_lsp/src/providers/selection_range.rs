@@ -96,14 +96,13 @@ fn selection_for(document: &DocumentState, position: Position) -> SelectionRange
 #[cfg(test)]
 mod tests {
     use ls_types::Range;
-    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::document;
 
     /// The selection at `offset` on the first line, innermost first.
     fn ranges_at(source: &str, offset: u32) -> Vec<Range> {
-        let document = document(source, LuaTarget::Lua54);
+        let document = document(source);
         assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
         let selection = selection_for(&document, Position::new(0, offset));
         let mut ranges = vec![selection.range];
@@ -184,7 +183,7 @@ mod tests {
 
     #[test]
     fn a_selection_range_parent_contains_its_child() {
-        let document = document("local value = alpha.beta + 1\n", LuaTarget::Lua54);
+        let document = document("local value = alpha.beta + 1\n");
         let selection = selection_for(&document, Position::new(0, 20));
         let mut current = &selection;
         while let Some(parent) = current.parent.as_deref() {

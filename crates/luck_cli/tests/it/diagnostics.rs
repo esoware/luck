@@ -52,16 +52,16 @@ fn lint_json_help_is_null_for_a_rule_with_none() {
     assert!(finding["help"].is_null(), "{stdout}");
 }
 
-/// Lua reads a source as bytes, so a byte that isn't UTF-8 outside a string
+/// Luau reads a source as bytes, so a byte that isn't UTF-8 outside a string
 /// is a parse error, shown in the file as a one-byte encoding shows it.
 #[test]
 fn a_dependency_that_is_not_utf8_reports_its_parse_error_in_place() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "return require(\"dep\")\n");
+    write_file(directory.path(), "main.lua", "return require(\"./dep\")\n");
     fs::write(directory.path().join("dep.lua"), b"return \xFF\n").unwrap();
 
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "-t", "54"])
+        .args(["bundle", "main.lua"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("unexpected byte 0xFF"))
@@ -76,7 +76,7 @@ fn an_entry_that_is_not_utf8_bundles_its_bytes_as_written() {
     fs::write(directory.path().join("main.lua"), b"-- caf\xE9\nreturn '\xFF\xFE'\n").unwrap();
 
     luck_in(directory.path())
-        .args(["bundle", "main.lua", "-t", "51"])
+        .args(["bundle", "main.lua"])
         .assert()
         .success()
         .stdout(b"-- caf\xE9\nreturn '\xFF\xFE'\n".as_slice());

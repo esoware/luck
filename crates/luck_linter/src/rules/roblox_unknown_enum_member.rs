@@ -23,7 +23,7 @@ impl Rule for RobloxUnknownEnumMember {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        host.semantic.target().is_roblox()
+        host.semantic.variant().is_roblox()
     }
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {
@@ -78,39 +78,34 @@ fn unknown_member(prefix: ChainHead<'_>, last_segment: &str, span: Span) -> Find
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local v = Enum.Material.Grass.Value", LuaTarget::LuauRoblox),
-        (
-            "\
+    const PASS: &[&str] = &["local m = Enum.Materialz"];
+
+    const ROBLOX_PASS: &[&str] = &[
+        "local v = Enum.Material.Grass.Value",
+        "\
 local Enum = { Materialz = 1 }
 local m = Enum.Materialz",
-            LuaTarget::LuauRoblox,
-        ),
-        (
-            "\
+        "\
 Enum = { Materialz = 1 }
 local m = Enum.Materialz",
-            LuaTarget::LuauRoblox,
-        ),
-        ("local m = Enum.Materialz", LuaTarget::Luau),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local m = Enum.Materialz", LuaTarget::LuauRoblox),
-        ("local m = Enum.Material.Grassz", LuaTarget::LuauRoblox),
-        ("local n = Enum.Material.Grass.Nome", LuaTarget::LuauRoblox),
+    const ROBLOX_FAIL: &[&str] = &[
+        "local m = Enum.Materialz",
+        "local m = Enum.Material.Grassz",
+        "local n = Enum.Material.Grass.Nome",
         // Only the innermost failing access reports; the outer one stays silent
         // instead of cascading.
-        ("local m = Enum.Materialz.Grass", LuaTarget::LuauRoblox),
+        "local m = Enum.Materialz.Grass",
     ];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::RobloxUnknownEnumMember, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::RobloxUnknownEnumMember, PASS, &[])
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }

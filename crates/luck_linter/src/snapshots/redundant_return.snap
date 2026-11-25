@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: bare `return` at the end of the function has no effect
- --> Lua54:3:5
+ --> Standalone:3:5
 2 |     print(1)
 3 |     return
   |     ^^^^^^
@@ -16,7 +16,7 @@ fix: remove the redundant `return`
   | f()
 
 warning: bare `return` at the end of the function has no effect
- --> Lua54:2:1
+ --> Standalone:2:1
 1 | print(1)
 2 | return
   | ^^^^^^
@@ -26,7 +26,7 @@ fix: remove the redundant `return`
   |
 
 warning: bare `return` at the end of the function has no effect
- --> Lua54:2:5
+ --> Standalone:2:5
 1 | local function f()
 2 |     return
   |     ^^^^^^
@@ -39,7 +39,7 @@ fix: remove the redundant `return`
   | f()
 
 warning: bare `return` at the end of the function has no effect
- --> Lua54:3:5
+ --> Standalone:3:5
 2 |     print(1)
 3 |     return;
   |     ^^^^^^^
@@ -53,7 +53,7 @@ fix: remove the redundant `return`
   | f()
 
 warning: bare `return` at the end of the function has no effect
- --> Lua54:3:9
+ --> Standalone:3:9
 2 |     local g = function()
 3 |         return
   |         ^^^^^^

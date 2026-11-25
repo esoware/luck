@@ -8,8 +8,7 @@ pub struct LexResult {
     pub comments: Vec<Comment>,
     /// Each an E008.
     pub errors: Vec<Diagnostic>,
-    /// The span of each escape of a character Lua 5.1 and Luau define no
-    /// escape for, which they read as the character, from its `\`, in source
-    /// order.
+    /// The span of each escape of a character Luau defines no escape for,
+    /// which it reads as the character, from its `\`, in source order.
     pub lenient_escapes: Vec<Span>,
 }

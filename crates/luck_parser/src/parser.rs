@@ -10,16 +10,16 @@ mod types;
 
 use luck_allocator::{Allocator, AsciiBytes, Box, List, ThinBytes, ThinStr};
 use luck_ast::{
-    AttributedName, BinaryLink, Block, Chunk, ElseIfClause, ElseIfExprClause, Expression, Field,
-    FunctionAttribute, FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment,
-    Name, NameIndex, NumberLiteral, Parameter, Statement, StringLiteral, Suffix, TreeCounts, Type,
+    BinaryLink, Block, Chunk, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionAttribute,
+    FunctionTypeParam, GenericTypeParam, IntegerLiteral, InterpolatedSegment, LocalName, Name,
+    NameIndex, NumberLiteral, Parameter, Statement, StringLiteral, Suffix, TreeCounts, Type,
     TypeField, Var,
 };
 use luck_diagnostics::Diagnostic;
 use luck_lexer::Lexer;
 use luck_token::{
-    LuaVersion, Span, StringValue, Token, TokenKind, decode_interpolated_text, decode_string,
-    read_integer, read_numeral,
+    Span, StringValue, Token, TokenKind, decode_interpolated_text, decode_string, read_integer,
+    read_numeral,
 };
 use rustc_hash::FxHashMap;
 
@@ -40,7 +40,6 @@ macro_rules! name_token {
             | TokenKind::Typeof
             | TokenKind::Read
             | TokenKind::Write
-            | TokenKind::Global
             $(| $other)*
     };
 }
@@ -50,14 +49,10 @@ use name_token;
 /// literals borrow `source`, but for a string's value that decoding rewrote,
 /// which goes in `allocator` too.
 ///
-/// `source` is bytes, as Lua reads it, so a string or a comment in it may
+/// `source` is bytes, as Luau reads it, so a string or a comment in it may
 /// hold any byte.
-pub fn parse<'ast>(
-    allocator: &'ast Allocator,
-    source: &'ast [u8],
-    version: LuaVersion,
-) -> ParseResult<'ast> {
-    parse_source(allocator, source, version, Tokens::Discard)
+pub fn parse<'ast>(allocator: &'ast Allocator, source: &'ast [u8]) -> ParseResult<'ast> {
+    parse_source(allocator, source, Tokens::Discard)
 }
 
 /// [`parse`], keeping every token the parse read in
@@ -66,9 +61,8 @@ pub fn parse<'ast>(
 pub fn parse_with_tokens<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
-    version: LuaVersion,
 ) -> ParseResult<'ast> {
-    parse_source(allocator, source, version, Tokens::Keep)
+    parse_source(allocator, source, Tokens::Keep)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -80,16 +74,15 @@ enum Tokens {
 fn parse_source<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
-    version: LuaVersion,
     tokens: Tokens,
 ) -> ParseResult<'ast> {
-    let lexer = match Lexer::new(source, version) {
+    let lexer = match Lexer::new(source) {
         Ok(lexer) => lexer,
         Err(error) => {
             let block = Block::new(Span::new(0, 0), List::new());
             return ParseResult {
                 source,
-                chunk: Chunk::new(version, block),
+                chunk: Chunk::new(block),
                 comments: Vec::new(),
                 tokens: Vec::new(),
                 groupings: Groupings::default(),
@@ -117,7 +110,6 @@ fn parse_source<'ast>(
         token: placeholder,
         next: placeholder,
         previous_span: Span::new(0, 0),
-        version,
         nesting_depth: 0,
         deepest_level: 0,
         grouping_depth: 0,
@@ -143,8 +135,9 @@ fn parse_source<'ast>(
     parser.parse_chunk()
 }
 
-/// Lua needs only one token of lookahead, so `token` and `next` stand in for
-/// a materialized token stream, which measured slower to write and read back.
+/// The grammar needs only one token of lookahead, so `token` and `next` stand
+/// in for a materialized token stream, which measured slower to write and
+/// read back.
 struct Parser<'ast> {
     allocator: &'ast Allocator,
     source: &'ast [u8],
@@ -155,7 +148,6 @@ struct Parser<'ast> {
     token: Token,
     next: Token,
     previous_span: Span,
-    version: LuaVersion,
     /// Levels open where the parser is, as [`luck_ast::MAX_NESTING_DEPTH`]
     /// counts them.
     nesting_depth: usize,
@@ -205,7 +197,7 @@ struct Scratch<'ast> {
     vars: Vec<Var<'ast>>,
     names: Vec<Name<'ast>>,
     params: Vec<Parameter<'ast>>,
-    attributed_names: Vec<AttributedName<'ast>>,
+    local_names: Vec<LocalName<'ast>>,
     attributes: Vec<FunctionAttribute<'ast>>,
     elseif_clauses: Vec<ElseIfClause<'ast>>,
     elseif_exprs: Vec<ElseIfExprClause<'ast>>,
@@ -226,7 +218,7 @@ struct FunctionScope {
     /// only when its params end in `...`.
     is_vararg: bool,
     /// Whether a loop body encloses this point. `break` or `continue` outside
-    /// one is a compile error in every Lua.
+    /// one is a compile error.
     is_in_loop: bool,
 }
 
@@ -236,7 +228,7 @@ impl<'ast> Parser<'ast> {
     fn parse_chunk(mut self) -> ParseResult<'ast> {
         let start_span = self.token.span;
         let block = self.parse_block().unwrap_or_else(|| Block::new(start_span, List::new()));
-        let chunk = Chunk::new(self.version, block);
+        let chunk = Chunk::new(block);
         if !self.unclosed_blocks.is_empty() {
             label_forgotten_ends(&chunk, self.source, &self.unclosed_blocks, &mut self.errors);
         }
@@ -374,13 +366,13 @@ impl<'ast> Parser<'ast> {
     fn advance_number(&mut self) -> Box<'ast, NumberLiteral<'ast>> {
         let span = self.advance();
         let raw = self.ascii_text(span);
-        let numeral = read_numeral(raw.as_str(), self.version);
+        let numeral = read_numeral(raw.as_str());
         let literal = NumberLiteral::new(numeral.value, Some(raw), span, numeral.is_exact);
         self.alloc(literal)
     }
 
-    /// Luau: consume the current integer, whose kind the caller has matched,
-    /// which the lexer checked fits 64 bits.
+    /// Consume the current integer, whose kind the caller has matched, which
+    /// the lexer checked fits 64 bits.
     fn advance_integer(&mut self) -> Box<'ast, IntegerLiteral<'ast>> {
         let span = self.advance();
         let raw = self.ascii_text(span);
@@ -402,7 +394,7 @@ impl<'ast> Parser<'ast> {
         let has_escape = self.token.has_escape;
         let span = self.advance();
         let raw = span.text(self.source);
-        let value = match decode_string(raw, has_escape, self.version, &mut self.decoded) {
+        let value = match decode_string(raw, has_escape, &mut self.decoded) {
             StringValue::Verbatim(bytes) => bytes,
             StringValue::Decoded => self.take_decoded(),
         };
@@ -417,9 +409,7 @@ impl<'ast> Parser<'ast> {
         }
         let span = token.text_span();
         let raw = span.text(self.source);
-        let decoding =
-            decode_interpolated_text(raw, token.has_escape, self.version, &mut self.decoded);
-        let value = match decoding {
+        let value = match decode_interpolated_text(raw, token.has_escape, &mut self.decoded) {
             StringValue::Verbatim(bytes) => bytes,
             StringValue::Decoded => self.take_decoded(),
         };

@@ -1,19 +1,15 @@
 use luck_allocator::Allocator;
-use luck_ast::{AstKind, Name};
+use luck_ast::Name;
 use luck_semantic::{
-    LabelId, Reference, ReferenceKind, ScopeKind, Scoping, Semantic, SemanticBuilder, Symbol,
-    SymbolId, SymbolKind,
+    Reference, ReferenceKind, ScopeKind, Scoping, Semantic, SemanticBuilder, Symbol, SymbolId,
+    SymbolKind,
 };
-use luck_token::{LuaVersion, Span};
+use luck_token::Span;
 
 use crate::common::{NAMES_OF_EVERY_KIND, parse, semantic_for};
 
-fn scoping_in(allocator: &Allocator, source: &str, version: LuaVersion) -> Scoping {
-    SemanticBuilder::new().build(parse(allocator, source, version)).semantic.into_scoping()
-}
-
 fn scoping_of(allocator: &Allocator, source: &str) -> Scoping {
-    scoping_in(allocator, source, LuaVersion::Lua54)
+    SemanticBuilder::new().build(parse(allocator, source)).semantic.into_scoping()
 }
 
 fn symbol<'scoping>(scoping: &'scoping Scoping, name: &str) -> &'scoping Symbol {
@@ -34,10 +30,6 @@ fn global_names(scoping: &Scoping) -> Vec<&str> {
 
 fn is_assigned_global(scoping: &Scoping, name: &str) -> bool {
     scoping.name_id(name).is_some_and(|id| scoping.is_assigned_global(id))
-}
-
-fn is_declared_global(scoping: &Scoping, name: &str) -> bool {
-    scoping.name_id(name).is_some_and(|id| scoping.is_declared_global(id))
 }
 
 /// Every name node of `semantic`'s tree whose text is `text`, in source
@@ -221,22 +213,6 @@ print(k)",
 }
 
 #[test]
-fn named_vararg_declares_symbol() {
-    // Lua 5.5: `...name` binds the vararg table to a name.
-    let allocator = Allocator::new();
-    let scoping =
-        scoping_in(&allocator, "local function f(...args) return args end", LuaVersion::Lua55);
-    let args_symbol = symbol(&scoping, "args");
-    assert_eq!(args_symbol.kind, SymbolKind::Parameter);
-    let args_references = references(&scoping, "args");
-    assert_eq!(args_references.len(), 1);
-    assert!(
-        args_references[0].resolved == Some(args_symbol.id),
-        "reference must resolve to the vararg binding"
-    );
-}
-
-#[test]
 fn dot_function_declares_no_self() {
     let allocator = Allocator::new();
     let scoping = scoping_of(
@@ -270,136 +246,6 @@ until done",
 }
 
 #[test]
-fn global_function_body_captures_enclosing_local() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local x = 1
-global function f() return x end",
-        LuaVersion::Lua55,
-    );
-    assert!(symbol(&scoping, "x").is_upvalue);
-}
-
-#[test]
-fn global_stmts_record_their_declared_names() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-global a, b <const> = 1, 2
-global c
-global function d() end
-",
-        LuaVersion::Lua55,
-    );
-    for name in ["a", "b", "c", "d"] {
-        assert!(is_declared_global(&scoping, name), "{name}");
-    }
-}
-
-#[test]
-fn declared_globals_record_the_scope_each_declaration_is_in() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "global a do global b, c end local function f() global function d() end end",
-        LuaVersion::Lua55,
-    );
-    let declared: Vec<(&str, usize)> = scoping
-        .declared_globals()
-        .iter()
-        .map(|&(name, scope)| (scoping.name(name), scope.index()))
-        .collect();
-    assert_eq!(declared, [("a", 0), ("b", 1), ("c", 1), ("d", 2)]);
-}
-
-#[test]
-fn local_env_makes_free_names_its_fields() {
-    let allocator = Allocator::new();
-    let scoping = scoping_of(
-        &allocator,
-        "\
-local _ENV = {}
-x = 1
-print(y)",
-    );
-    let env_id = symbol(&scoping, "_ENV").id;
-    assert_eq!(references(&scoping, "y")[0].env, Some(env_id));
-    assert_eq!(scoping.global_references().count(), 0);
-    assert!(!is_assigned_global(&scoping, "x"), "`x = 1` writes the local table");
-}
-
-#[test]
-fn free_name_in_nested_function_captures_local_env() {
-    let allocator = Allocator::new();
-    let scoping = scoping_of(
-        &allocator,
-        "\
-local _ENV = {}
-local function f() return missing end
-return f",
-    );
-    assert!(
-        symbol(&scoping, "_ENV").is_upvalue,
-        "a free name inside a nested function reads _ENV as an upvalue of that function"
-    );
-}
-
-#[test]
-fn local_env_is_an_ordinary_local_before_52() {
-    for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-        let allocator = Allocator::new();
-        let scoping = scoping_in(
-            &allocator,
-            "\
-local _ENV = {}
-print(y)",
-            version,
-        );
-        assert_eq!(references(&scoping, "y")[0].env, None, "{version:?}");
-        assert_eq!(scoping.global_references().count(), 2, "{version:?}");
-        assert!(!scoping.is_env_binding(symbol(&scoping, "_ENV").id), "{version:?}");
-    }
-}
-
-#[test]
-fn local_env_stops_redirecting_free_names_with_its_block() {
-    let allocator = Allocator::new();
-    let scoping = scoping_of(
-        &allocator,
-        "\
-do local _ENV = {} end
-print(y)",
-    );
-    assert_eq!(references(&scoping, "y")[0].env, None);
-}
-
-#[test]
-fn assigning_the_chunk_env_redirects_every_free_name() {
-    let allocator = Allocator::new();
-    let scoping = scoping_of(
-        &allocator,
-        "\
-_ENV = {}
-print(y)",
-    );
-    assert!(scoping.is_env_assigned());
-    assert_eq!(scoping.global_references().count(), 0);
-
-    let lua51 = scoping_in(
-        &allocator,
-        "\
-_ENV = {}
-print(y)",
-        LuaVersion::Lua51,
-    );
-    assert!(!lua51.is_env_assigned());
-    assert_eq!(lua51.global_references().count(), 3);
-}
-
-#[test]
 fn assigned_globals_records_free_name_writes_only() {
     let allocator = Allocator::new();
     let scoping = scoping_of(
@@ -417,151 +263,40 @@ y = 2",
     assert!(!is_assigned_global(&scoping, "y"), "`y` is a local");
 }
 
-#[test]
-fn global_declaration_ends_with_its_block() {
+fn is_host_print(source: &str) -> bool {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local x = 1
-do global x end
-print(x)",
-        LuaVersion::Lua55,
-    );
-    let last_reference = *references(&scoping, "x").last().expect("print(x) references x");
-    assert_eq!(last_reference.resolved, Some(symbol(&scoping, "x").id));
-}
-
-#[test]
-fn global_declaration_initializer_reads_the_enclosing_local() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local x = 1
-global x = x
-print(x)",
-        LuaVersion::Lua55,
-    );
-    let x_references = references(&scoping, "x");
-    assert_eq!(x_references[0].resolved, Some(symbol(&scoping, "x").id));
-    assert_eq!(x_references[1].resolved, None);
-    assert!(is_assigned_global(&scoping, "x"));
-}
-
-#[test]
-fn declared_global_without_initializer_is_not_assigned() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-global x
-global *
-print(y)",
-        LuaVersion::Lua55,
-    );
-    assert!(["x", "y", "print"].iter().all(|name| !is_assigned_global(&scoping, name)));
-}
-
-fn is_host_print(source: &str, version: LuaVersion) -> bool {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(&allocator, source, version);
+    let scoping = scoping_of(&allocator, source);
     let print = *references(&scoping, "print").last().expect("the source references print");
     scoping.is_host_global(print)
 }
 
 #[test]
 fn is_host_global_requires_a_global_the_chunk_leaves_alone() {
-    assert!(is_host_print("print(1)", LuaVersion::Lua54));
+    assert!(is_host_print("print(1)"));
     assert!(!is_host_print(
         "\
 function print() end
-print(1)",
-        LuaVersion::Lua54
+print(1)"
     ));
 }
 
 #[test]
-fn is_host_global_is_false_for_a_local_or_a_field_of_env() {
+fn is_host_global_is_false_for_a_local() {
     assert!(!is_host_print(
         "\
 local print = 1
-print(1)",
-        LuaVersion::Lua54
-    ));
-    assert!(!is_host_print(
-        "\
-local _ENV = {}
-print(1)",
-        LuaVersion::Lua54
-    ));
-    assert!(is_host_print(
-        "\
-local _ENV = {}
-print(1)",
-        LuaVersion::Lua51
+print(1)"
     ));
 }
 
 #[test]
-fn is_host_global_is_false_when_the_chunk_assigns_its_env() {
-    assert!(!is_host_print(
-        "\
-_ENV = {}
-print(1)",
-        LuaVersion::Lua54
-    ));
-    assert!(is_host_print(
-        "\
-_ENV = {}
-print(1)",
-        LuaVersion::Lua51
-    ));
-}
-
-#[test]
-fn is_host_global_is_true_for_a_declared_global_without_a_value() {
-    assert!(is_host_print(
-        "\
-global print
-print(1)",
-        LuaVersion::Lua55
-    ));
-    assert!(!is_host_print(
-        "\
-global print = 1
-print(1)",
-        LuaVersion::Lua55
-    ));
-}
-
-#[test]
-fn global_star_covers_free_names_until_its_block_ends() {
+fn env_is_an_ordinary_name() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-do global *
-a = 1 end
-b = 2",
-        LuaVersion::Lua55,
-    );
-    assert!(references(&scoping, "a")[0].is_declared_global);
-    assert!(!references(&scoping, "b")[0].is_declared_global);
-}
-
-#[test]
-fn global_star_does_not_void_enclosing_locals() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local x = 1
-global *
-print(x)",
-        LuaVersion::Lua55,
-    );
-    assert_eq!(references(&scoping, "x")[0].resolved, Some(symbol(&scoping, "x").id));
+    for (source, globals) in [("local _ENV = {} print(y)", 2), ("_ENV = {} print(y)", 3)] {
+        let scoping = scoping_of(&allocator, source);
+        assert_eq!(scoping.global_references().count(), globals, "{source}");
+        assert!(is_host_print(source), "{source}");
+    }
 }
 
 #[test]
@@ -593,12 +328,11 @@ function t:m() return self end",
 #[test]
 fn type_function_body_sees_a_later_type() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 type function f(t) return g(t) end
 type function g(t) return t end",
-        LuaVersion::Luau,
     );
     assert_eq!(references(&scoping, "g").len(), 0);
 }
@@ -606,7 +340,7 @@ type function g(t) return t end",
 #[test]
 fn type_function_body_sees_no_type_of_a_closed_block() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 do type Closed = number end
@@ -614,7 +348,6 @@ do
 type Open = number
 type function f() return Closed, Open end
 end",
-        LuaVersion::Luau,
     );
     assert_eq!(references(&scoping, "Closed").len(), 1);
     assert_eq!(references(&scoping, "Open").len(), 0);
@@ -623,12 +356,11 @@ end",
 #[test]
 fn type_runtime_names_are_only_known_in_type_functions() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 type T = number
 print(types, T)",
-        LuaVersion::Luau,
     );
     assert_eq!(scoping.global_references().count(), 3);
 }
@@ -692,12 +424,11 @@ local c",
 #[test]
 fn type_alias_typeof_reads_enclosing_local() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local x = 1
 type T = typeof(x)",
-        LuaVersion::Luau,
     );
     let x_references = references(&scoping, "x");
     assert_eq!(x_references.len(), 1);
@@ -726,66 +457,13 @@ end",
 }
 
 #[test]
-fn global_declaration_shadows_enclosing_local() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local x = 1
-global print, x
-print(x)",
-        LuaVersion::Lua55,
-    );
-    assert_eq!(
-        references(&scoping, "x")[0].resolved,
-        None,
-        "after `global x`, the name x refers to the global and voids the enclosing local"
-    );
-}
-
-#[test]
-fn global_function_shadows_enclosing_local() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local f = 1
-global function f() end
-f()",
-        LuaVersion::Lua55,
-    );
-    let last_reference = *references(&scoping, "f").last().expect("f() references f");
-    assert_eq!(
-        last_reference.resolved, None,
-        "after `global function f`, the name f refers to the global and voids the enclosing local"
-    );
-}
-
-#[test]
-fn global_function_body_refers_to_the_global() {
-    let allocator = Allocator::new();
-    let scoping = scoping_in(
-        &allocator,
-        "\
-local f = 1
-global function f() return f end",
-        LuaVersion::Lua55,
-    );
-    assert!(
-        !symbol(&scoping, "f").is_upvalue,
-        "the body of `global function f` sees the global f, so it captures no local f"
-    );
-}
-
-#[test]
 fn param_annotation_typeof_does_not_see_parameters() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local a = 1
 local function f(a: number, b: typeof(a)) return b end",
-        LuaVersion::Luau,
     );
     assert_eq!(
         references(&scoping, "a")[0].resolved,
@@ -798,12 +476,11 @@ local function f(a: number, b: typeof(a)) return b end",
 #[test]
 fn return_annotation_typeof_does_not_see_parameters() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local a = 1
 local function f(a: number): typeof(a) return a end",
-        LuaVersion::Luau,
     );
     assert_eq!(
         references(&scoping, "a")[0].resolved,
@@ -816,7 +493,7 @@ local function f(a: number): typeof(a) return a end",
 #[test]
 fn local_annotation_typeof_does_not_see_sibling_name() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local a = 1
@@ -824,7 +501,6 @@ do
   local a, b: typeof(a) = 2, 3
   print(a, b)
 end",
-        LuaVersion::Luau,
     );
     assert_eq!(
         references(&scoping, "a")[0].resolved,
@@ -837,12 +513,11 @@ end",
 #[test]
 fn numeric_for_annotation_typeof_does_not_see_loop_variable() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local i = 1
 for i: typeof(i) = 1, 2 do print(i) end",
-        LuaVersion::Luau,
     );
     assert_eq!(
         references(&scoping, "i")[0].resolved,
@@ -855,12 +530,11 @@ for i: typeof(i) = 1, 2 do print(i) end",
 #[test]
 fn generic_for_annotation_typeof_does_not_see_loop_variables() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local k = 1
 for k, v: typeof(k) in pairs({}) do print(k, v) end",
-        LuaVersion::Luau,
     );
     assert_eq!(
         references(&scoping, "k")[0].resolved,
@@ -873,12 +547,11 @@ for k, v: typeof(k) in pairs({}) do print(k, v) end",
 #[test]
 fn local_function_annotation_typeof_does_not_see_its_name() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local g = 1
 local function g(z: typeof(g)) return z end",
-        LuaVersion::Luau,
     );
     assert_eq!(
         references(&scoping, "g")[0].resolved,
@@ -889,9 +562,9 @@ local function g(z: typeof(g)) return z end",
 }
 
 #[test]
-fn every_name_finds_what_it_declares_refers_to_or_labels() {
+fn every_name_finds_what_it_declares_or_refers_to() {
     let allocator = Allocator::new();
-    let semantic = semantic_for(&allocator, NAMES_OF_EVERY_KIND, LuaVersion::Lua54);
+    let semantic = semantic_for(&allocator, NAMES_OF_EVERY_KIND);
     let scoping = semantic.scoping();
     let mut found = vec![0usize; scoping.references().len()];
     let mut declared = Vec::new();
@@ -908,9 +581,6 @@ fn every_name_finds_what_it_declares_refers_to_or_labels() {
             assert_eq!(scoping.symbol(id).definition_span, name.span, "{name:?}");
             declared.push(id);
         }
-        if let Some(id) = scoping.label_of(name) {
-            assert_eq!(scoping.name(scoping.label(id).name), name.text.as_str());
-        }
     }
     assert!(found.iter().all(|&count| count == 1), "{found:?}");
     let spelled: Vec<SymbolId> = scoping
@@ -920,8 +590,6 @@ fn every_name_finds_what_it_declares_refers_to_or_labels() {
         .map(|symbol| symbol.id)
         .collect();
     assert_eq!(declared, spelled);
-    let goto = names_of(&semantic, "done")[0];
-    assert_eq!(scoping.label_of(goto).map(LabelId::index), Some(0));
 }
 
 #[test]
@@ -933,7 +601,6 @@ fn resolves_to_local_reads_the_name_s_own_reference() {
 local x = 1
 print(x)
 print(y)",
-        LuaVersion::Lua54,
     );
     let scoping = semantic.scoping();
     let [declared, read] = names_of(&semantic, "x")[..] else {
@@ -943,76 +610,6 @@ print(y)",
     assert!(scoping.resolves_to_local(read));
     assert!(!scoping.resolves_to_local(names_of(&semantic, "y")[0]));
     assert!(scoping.reaches_host_global(names_of(&semantic, "print")[0]));
-}
-
-#[test]
-fn lua51_binds_arg_in_every_vararg_function() {
-    let allocator = Allocator::new();
-    let source = "\
-local arg = 1
-local function f(a, ...) return arg end
-local function g() return arg end
-return arg";
-    let semantic = semantic_for(&allocator, source, LuaVersion::Lua51);
-    let scoping = semantic.scoping();
-    let kinds: Vec<(&str, SymbolKind)> =
-        scoping.symbols().iter().map(|symbol| (scoping.name(symbol.name), symbol.kind)).collect();
-    assert_eq!(
-        kinds,
-        [
-            ("arg", SymbolKind::Local),
-            ("f", SymbolKind::FunctionName),
-            ("a", SymbolKind::Parameter),
-            ("arg", SymbolKind::ImplicitArg),
-            ("g", SymbolKind::FunctionName),
-        ]
-    );
-    let resolved: Vec<Option<usize>> = references(scoping, "arg")
-        .iter()
-        .map(|reference| reference.resolved.map(SymbolId::index))
-        .collect();
-    assert_eq!(resolved, [Some(3), Some(0), Some(0)]);
-    let implicit = &scoping.symbols()[3];
-    let dots = u32::try_from(source.find("...").unwrap()).unwrap();
-    assert_eq!(implicit.definition_span, Span::new(dots, dots));
-    assert!(matches!(semantic.nodes().kind(implicit.declaration), AstKind::VarArgParam(_)));
-    for version in [LuaVersion::Lua52, LuaVersion::Luau] {
-        let later = scoping_in(&allocator, source, version);
-        assert!(
-            references(&later, "arg")
-                .iter()
-                .all(|reference| reference.resolved.map(SymbolId::index) == Some(0)),
-            "{version:?}"
-        );
-    }
-}
-
-#[test]
-fn gotos_reach_the_innermost_visible_label() {
-    let allocator = Allocator::new();
-    let semantic = semantic_for(
-        &allocator,
-        "\
-::a:: ::unused::
-do goto a ::a:: goto a end
-goto a
-local function f() ::a:: goto a end",
-        LuaVersion::Lua52,
-    );
-    let scoping = semantic.scoping();
-    let targets: Vec<Option<usize>> = names_of(&semantic, "a")
-        .into_iter()
-        .map(|name| scoping.label_of(name).map(LabelId::index))
-        .collect();
-    assert_eq!(
-        targets,
-        [Some(0), Some(2), Some(2), Some(2), Some(0), Some(3), Some(3)],
-        "a label names itself, and each goto takes the innermost label of its function"
-    );
-    let used: Vec<bool> = scoping.labels().iter().map(|label| label.is_used).collect();
-    assert_eq!(used, [true, false, true, true]);
-    assert_eq!(scoping.labels()[1].scope.index(), 0);
-    assert_eq!(scoping.labels()[2].scope.index(), 1);
 }
 
 #[test]
@@ -1032,12 +629,11 @@ print(...)",
 #[test]
 fn a_typeof_in_a_nested_function_captures_nothing() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "\
 local x = 1
 local function f(y: typeof(x)) local z: typeof(x) = y end",
-        LuaVersion::Luau,
     );
     assert_eq!(references(&scoping, "x").len(), 2);
     assert!(!symbol(&scoping, "x").is_upvalue, "types never run");
@@ -1046,10 +642,9 @@ local function f(y: typeof(x)) local z: typeof(x) = y end",
 #[test]
 fn a_reference_in_a_type_is_in_a_type() {
     let allocator = Allocator::new();
-    let scoping = scoping_in(
+    let scoping = scoping_of(
         &allocator,
         "local x = 1 local y: typeof(x) = x return function(): typeof(x) end",
-        LuaVersion::Luau,
     );
     let in_type: Vec<bool> =
         references(&scoping, "x").iter().map(|reference| reference.is_in_type).collect();

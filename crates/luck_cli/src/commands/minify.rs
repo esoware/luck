@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use luck_allocator::Allocator;
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::LuaTarget;
 
 use crate::exit::{Exit, operation_error};
 use crate::minify_flags::MinifyFlags;
@@ -15,10 +14,6 @@ use crate::reporter::print_document;
 pub(crate) struct MinifyArgs {
     /// Input file, or - for stdin.
     input: String,
-
-    /// Lua target [default: from the input's extension and luck.json].
-    #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<LuaTarget>,
 
     /// Output file [default: stdout].
     #[arg(short, long, value_name = "PATH")]
@@ -42,7 +37,6 @@ impl MinifyArgs {
     pub(crate) fn run(self) -> Result<(), Exit> {
         let input = Path::new(&self.input);
         let project = one_shot_project(self.config.as_deref(), input)?;
-        let target = self.target.unwrap_or_else(|| project.target_for(Some(input)));
         let transforms = self.minify_flags.apply_to(project.transforms());
 
         let (source, label) = if self.input == "-" {
@@ -56,10 +50,9 @@ impl MinifyArgs {
 
         let original_size = source.len();
 
-        let version = target.version();
-        let minified = luck_minifier::minify(&Allocator::new(), &source, version, &transforms)
-            .map_err(|errors| {
-                print_document(&label, &source, &errors, version);
+        let minified =
+            luck_minifier::minify(&Allocator::new(), &source, &transforms).map_err(|errors| {
+                print_document(&label, &source, &errors);
                 Exit::Failure
             })?;
 
@@ -86,6 +79,8 @@ impl MinifyArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use clap::Parser as _;
 
     use super::MinifyArgs;
@@ -93,13 +88,13 @@ mod tests {
     use crate::commands::Command;
 
     #[test]
-    fn minify_target_is_optional() {
-        let cli = Cli::try_parse_from(["luck", "minify", "x.luau"])
-            .expect("minify parses without target");
-        let Command::Minify(MinifyArgs { input, target, .. }) = cli.command else {
+    fn minify_takes_an_input_and_an_output() {
+        let cli = Cli::try_parse_from(["luck", "minify", "x.luau", "-o", "y.luau"])
+            .expect("minify parses");
+        let Command::Minify(MinifyArgs { input, output, .. }) = cli.command else {
             panic!("expected Command::Minify");
         };
         assert_eq!(input, "x.luau");
-        assert_eq!(target, None);
+        assert_eq!(output.as_deref(), Some(Path::new("y.luau")));
     }
 }

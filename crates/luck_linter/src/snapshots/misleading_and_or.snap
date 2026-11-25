@@ -2,25 +2,25 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `(x and FALSY) or y` always evaluates to `y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = (x and nil) or y
   |           ^^^^^^^^^^^^^^^^
-help: use an `if` statement, or an if-then-else expression in Luau
+help: use an `if` statement or an if-then-else expression
 
 warning: `(x and FALSY) or y` always evaluates to `y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = (x and false) or y
   |           ^^^^^^^^^^^^^^^^^^
-help: use an `if` statement, or an if-then-else expression in Luau
+help: use an `if` statement or an if-then-else expression
 
 warning: `(x and FALSY) or y` always evaluates to `y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = (x and not 1) or y
   |           ^^^^^^^^^^^^^^^^^^
-help: use an `if` statement, or an if-then-else expression in Luau
+help: use an `if` statement or an if-then-else expression
 
 warning: `(x and FALSY) or y` always evaluates to `y`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = x and nil or y
   |           ^^^^^^^^^^^^^^
-help: use an `if` statement, or an if-then-else expression in Luau
+help: use an `if` statement or an if-then-else expression

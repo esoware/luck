@@ -32,7 +32,7 @@ macro_rules! transform_flags {
 }
 
 transform_flags! {
-    /// Luau: drop every type before the other passes run (on by default).
+    /// Drop every type before the other passes run (on by default).
     /// Turn it off to ship a typed library.
     strip_types / no_strip_types,
     remove_dead_code / no_remove_dead_code,

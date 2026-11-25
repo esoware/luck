@@ -27,26 +27,24 @@ impl Rule for DuplicateParameter {
 }
 
 /// Flags each parameter named like an earlier one, or `self` in a colon
-/// method, which already has an implicit `self`. `_` may repeat, and a Lua
-/// 5.5 named vararg counts as the last parameter.
+/// method, which already has an implicit `self`. `_` may repeat.
 ///
-/// Parameters are locals, so no Lua compiles a function with more than
+/// Parameters are locals, so Luau compiles no function with more than
 /// [`MAX_ACTIVE_LOCALS`] of them, and one that has more isn't checked.
 fn check_params(function: FunctionNode<'_>, context: &LintContext<'_, '_>) {
     let params = &function.body.params;
-    let vararg_name = function.body.vararg.as_deref().and_then(|vararg| vararg.name.as_ref());
-    if params.len() + usize::from(vararg_name.is_some()) > MAX_ACTIVE_LOCALS {
+    if params.len() > MAX_ACTIVE_LOCALS {
         return;
     }
-    for (i, param_name) in params.iter().map(|param| &param.name).chain(vararg_name).enumerate() {
-        let name = param_name.text;
+    for (i, param) in params.iter().enumerate() {
+        let name = param.name.text;
         if name == "_" {
             continue;
         }
         let first = params.iter().take(i).find(|earlier| earlier.name.text == name);
         if first.is_some() || (function.is_method && name == "self") {
             let finding =
-                Finding::new(format!("parameter `{name}` is already defined"), param_name.span);
+                Finding::new(format!("parameter `{name}` is already defined"), param.name.span);
             context.diagnostic(match first {
                 Some(earlier) => finding.with_label(earlier.name.span, "first defined here"),
                 None => finding.with_help("a method declared with `:` already has `self`"),
@@ -58,8 +56,6 @@ fn check_params(function: FunctionNode<'_>, context: &LintContext<'_, '_>) {
 #[cfg(test)]
 mod tests {
     use std::fmt::Write as _;
-
-    use luck_token::LuaTarget;
 
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
@@ -75,31 +71,22 @@ mod tests {
         source
     }
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local function f(a, b, c) end", LuaTarget::Lua54),
-        ("local function f(_, _) end", LuaTarget::Lua54),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "local function f(a, b, c) end",
+        "local function f(_, _) end",
+        "\
 local t = {}
 function t.m(self) end",
-            LuaTarget::Lua54,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local function f(a, b, a) end", LuaTarget::Lua54),
-        ("local f = function(x, x) end", LuaTarget::Lua54),
-        ("function f(a, a) end", LuaTarget::Lua54),
-        ("local function f(a, a, a) end", LuaTarget::Lua54),
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "local function f(a, b, a) end",
+        "local f = function(x, x) end",
+        "function f(a, a) end",
+        "local function f(a, a, a) end",
+        "\
 local t = {}
 function t:m(self) end",
-            LuaTarget::Lua54,
-        ),
-        ("global function f(a, a) end", LuaTarget::Lua55),
-        // The named vararg repeats parameter `a`.
-        ("local function f(a, ...a) return a end", LuaTarget::Lua55),
     ];
 
     #[test]
@@ -107,10 +94,8 @@ function t:m(self) end",
         let at_limit = params_then_the_first_again(199);
         // Only Luau's compiler, not luck, rejects this many parameters.
         let past_limit = params_then_the_first_again(200);
-        let pass: Vec<_> =
-            PASS.iter().copied().chain([(past_limit.as_str(), LuaTarget::Luau)]).collect();
-        let fail: Vec<_> =
-            FAIL.iter().copied().chain([(at_limit.as_str(), LuaTarget::Lua54)]).collect();
+        let pass: Vec<_> = PASS.iter().copied().chain([past_limit.as_str()]).collect();
+        let fail: Vec<_> = FAIL.iter().copied().chain([at_limit.as_str()]).collect();
         Tester::new(RuleId::DuplicateParameter, &pass, &fail).test_and_snapshot();
     }
 }

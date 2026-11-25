@@ -1,4 +1,4 @@
-//! Each stage's results over a suite, summarized and listed the way oxc's
+//! Each stage's results over the suite, summarized and listed the way oxc's
 //! `tasks/coverage` snapshots them.
 
 use std::collections::BTreeMap;
@@ -70,12 +70,12 @@ pub(crate) struct CoverageResult<'a> {
     pub result: &'a TestResult,
 }
 
-/// A stage's snapshot of a suite: the summary the console shows, then the
+/// A stage's snapshot of the suite: the summary the console shows, then the
 /// details.
 #[derive(Debug)]
 pub(crate) struct Snapshot {
-    /// The stage and the suite, such as `parser_lua54`, which name the file.
-    name: String,
+    /// The stage, such as `parser`, which names the file.
+    name: &'static str,
     pub summary: String,
     details: String,
 }
@@ -98,7 +98,7 @@ impl fmt::Display for Snapshot {
 /// A stage's snapshot: how many of the files the reference interpreter
 /// compiles luck parsed and passed, and how many of the ones it rejects luck
 /// rejected, then the [`failures`].
-pub(crate) fn coverage(name: String, results: &[CoverageResult<'_>]) -> Snapshot {
+pub(crate) fn coverage(name: &'static str, results: &[CoverageResult<'_>]) -> Snapshot {
     let (negatives, positives): (Vec<&TestResult>, Vec<&TestResult>) =
         results.iter().map(|coverage| coverage.result).partition(|result| result.is_negative());
     let mut summary = format!("{name} Summary:\n");
@@ -170,7 +170,10 @@ pub(crate) struct LintLine {
 /// The linter's snapshot: how many files it ran on and each rule's count, then
 /// the files it couldn't run on, and every diagnostic of the others, by file in
 /// the order given.
-pub(crate) fn lint(name: String, files: &[(&str, &Result<Vec<LintLine>, TestResult>)]) -> Snapshot {
+pub(crate) fn lint(
+    name: &'static str,
+    files: &[(&str, &Result<Vec<LintLine>, TestResult>)],
+) -> Snapshot {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut not_linted = Vec::new();
     let mut listed = String::new();

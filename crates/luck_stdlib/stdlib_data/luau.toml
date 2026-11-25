@@ -1,18 +1,9 @@
-# Standalone Luau standard library: the globals of the open-source Luau
-# VM and CLI (luau, luau-analyze), without Roblox's additions. The Roblox
-# environment is a separate file, luau_roblox.toml, not a layer on top of
-# this one, because the two diverge in both directions: Roblox adds task
-# and its datatypes and deprecates getfenv/setfenv, while only standalone
-# Luau has the 4-arg vector.create. Shared entries are duplicated, and
-# tests/it/drift.rs keeps them in sync.
+# The Luau standard library: the globals of the open-source Luau VM and
+# CLI (luau, luau-analyze). The Roblox library is this one with
+# roblox_api.toml, roblox.toml, and roblox_enums.toml layered over it.
 #
 # A std definition, in the format the luck_stdlib README describes, which
-# `just stdlib` generates the built-in catalog from.
-
-# Coverage notes vs upstream Lua:
-#   - absent from the Luau VM: dofile, loadfile, load, module, io,
-#     package (os keeps its sandboxed clock/date/difftime/time subset)
-#   - kept from Lua 5.1: getfenv, setfenv, newproxy
+# `just stdlib` generates the built-in catalogs from.
 
 # ---- bare-word globals ----
 
@@ -48,7 +39,6 @@ params = [
 kind = "function"
 is_must_use = true
 
-# Luau retains 5.1's environment model (getfenv/setfenv) instead of _ENV.
 [globals.getfenv]
 kind = "function"
 is_must_use = true
@@ -284,7 +274,6 @@ is_pure = true
 is_must_use = true
 params = [{ kind = "string" }]
 
-# Unlike Lua 5.2+, Luau's rep has no separator argument.
 [globals.string.members.rep]
 kind = "function"
 is_pure = true
@@ -724,7 +713,7 @@ params = [{ kind = "number" }]
 [globals.math.members.tau]
 kind = "constant"
 
-# ---- bit32 namespace (Luau retains bit32) ----
+# ---- bit32 namespace ----
 
 [globals.bit32]
 kind = "namespace"
@@ -926,7 +915,7 @@ params = [{ kind = "function" }]
 kind = "function"
 params = [{ kind = "vararg" }]
 
-# ---- debug namespace (Luau-trimmed) ----
+# ---- debug namespace ----
 
 [globals.debug]
 kind = "namespace"
@@ -1403,8 +1392,7 @@ params = [
   { kind = "display", display = "vector" },
 ]
 
-# The 4-arg form is wide mode (LUA_VECTOR_SIZE=4), standalone only;
-# Roblox vectors are 3-wide.
+# The 4-arg form is wide mode, a build with LUA_VECTOR_SIZE=4.
 [globals.vector.members.create]
 kind = "function"
 is_pure = true
@@ -1493,8 +1481,6 @@ params = [{ kind = "display", display = "vector" }]
 [globals.vector.members.zero]
 kind = "constant"
 
-# Luau keeps only clock, date, difftime, and time from os, in both
-# environments.
 [globals.os]
 kind = "namespace"
 

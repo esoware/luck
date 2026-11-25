@@ -6,7 +6,7 @@ use std::slice;
 use luck_allocator::Allocator;
 use luck_diagnostics::{Severity, Tag};
 use luck_stdlib::library_for;
-use luck_token::{LuaTarget, LuaVersion, Span, line_breaks};
+use luck_token::{Span, Variant, line_breaks};
 use serde_json::{Value, json};
 
 use crate::config::LintConfig;
@@ -22,46 +22,41 @@ pub(crate) const CATEGORIES: [Category; 4] =
 
 /// A source a rule's test lints, as oxlint's `TestCase` is.
 ///
-/// It's parsed as its dialect, Lua 5.4 for a plain source, and linted with
-/// the rule's options and the rest of a `luck.json` `lint` section, each
-/// JSON, as oxlint's holds a rule's config and the rest of `.oxlintrc.json`.
+/// It's linted against Luau's standard library, or Roblox's for a case of
+/// [`Tester::with_roblox`], with the rule's options and the rest of a
+/// `luck.json` `lint` section, each JSON, as oxlint's holds a rule's config
+/// and the rest of `.oxlintrc.json`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TestCase<'case> {
     source: &'case str,
-    target: LuaTarget,
+    variant: Variant,
     options: Option<&'case str>,
     lint: Option<&'case str>,
 }
 
 impl<'case> From<&'case str> for TestCase<'case> {
     fn from(source: &'case str) -> Self {
-        (source, LuaTarget::Lua54).into()
+        (source, None).into()
     }
 }
 
-impl<'case> From<(&'case str, LuaTarget)> for TestCase<'case> {
-    fn from((source, target): (&'case str, LuaTarget)) -> Self {
-        (source, target, None).into()
+impl<'case> From<(&'case str, Option<&'case str>)> for TestCase<'case> {
+    fn from((source, options): (&'case str, Option<&'case str>)) -> Self {
+        (source, options, None).into()
     }
 }
 
-impl<'case> From<(&'case str, LuaTarget, Option<&'case str>)> for TestCase<'case> {
-    fn from((source, target, options): (&'case str, LuaTarget, Option<&'case str>)) -> Self {
-        (source, target, options, None).into()
-    }
-}
-
-type FullCase<'case> = (&'case str, LuaTarget, Option<&'case str>, Option<&'case str>);
+type FullCase<'case> = (&'case str, Option<&'case str>, Option<&'case str>);
 
 impl<'case> From<FullCase<'case>> for TestCase<'case> {
-    fn from((source, target, options, lint): FullCase<'case>) -> Self {
-        Self { source, target, options, lint }
+    fn from((source, options, lint): FullCase<'case>) -> Self {
+        Self { source, variant: Variant::Standalone, options, lint }
     }
 }
 
 impl fmt::Display for TestCase<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the {} case `{}`", self.target, self.source)
+        write!(f, "the {} case `{}`", self.variant, self.source)
     }
 }
 
@@ -88,8 +83,29 @@ impl<'case> Tester<'case> {
     where
         Case: Copy + Into<TestCase<'case>>,
     {
-        let cases = |list: &[Case]| list.iter().map(|&case| case.into()).collect();
-        Self { rule, pass: cases(pass), fail: cases(fail) }
+        Self { rule, pass: Vec::new(), fail: Vec::new() }.with(Variant::Standalone, pass, fail)
+    }
+
+    /// Adds cases linted against the Roblox standard library, which come
+    /// after the others in the snapshot.
+    pub(crate) fn with_roblox<Case>(self, pass: &[Case], fail: &[Case]) -> Self
+    where
+        Case: Copy + Into<TestCase<'case>>,
+    {
+        self.with(Variant::Roblox, pass, fail)
+    }
+
+    fn with<Case>(mut self, variant: Variant, pass: &[Case], fail: &[Case]) -> Self
+    where
+        Case: Copy + Into<TestCase<'case>>,
+    {
+        let targeted = |&case: &Case| {
+            let case: TestCase<'case> = case.into();
+            TestCase { variant, ..case }
+        };
+        self.pass.extend(pass.iter().map(targeted));
+        self.fail.extend(fail.iter().map(targeted));
+        self
     }
 
     pub(crate) fn test_and_snapshot(&self) {
@@ -143,10 +159,10 @@ impl<'case> Tester<'case> {
         let config: LintConfig =
             serde_json::from_value(lint).unwrap_or_else(|e| panic!("{case}: {e}"));
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, case.source.as_bytes(), case.target.version());
+        let parse = luck_parser::parse(&allocator, case.source.as_bytes());
         assert!(parse.errors.is_empty(), "{case} doesn't parse: {:?}", parse.errors);
         let mut messages =
-            Linter::new(config).run(&parse, library_for(case.target), FixKind::all(), None);
+            Linter::new(config).run(&parse, library_for(case.variant), FixKind::all(), None);
         assert!(
             messages.iter().all(|message| RuleId::from_name(message.code).is_some()),
             "{case} doesn't compile: {messages:?}"
@@ -162,31 +178,30 @@ impl<'case> Tester<'case> {
 /// A fix that changes nothing or breaks the syntax goes into `problems`
 /// instead.
 fn rendered(case: &TestCase<'_>, messages: &[Message], problems: &mut Vec<String>) -> String {
-    let version = case.target.version();
-    let lines = Lines::new(case.source, version);
+    let lines = Lines::new(case.source);
     let mut text = String::new();
     for message in messages {
         if !text.is_empty() {
             text.push('\n');
         }
-        render_message(&mut text, &lines, case.target, message);
+        render_message(&mut text, &lines, case.variant, message);
         let Some(fix) = &message.fix else {
             continue;
         };
-        match fixed(case.source, slice::from_ref(message), version) {
+        match fixed(case.source, slice::from_ref(message)) {
             Ok(fixed_source) => {
                 let kind = if fix.kind == FixKind::Fix { "fix" } else { "suggestion" };
                 writeln!(text, "{kind}: {}", fix.message).unwrap();
-                render_source(&mut text, &fixed_source, version);
+                render_source(&mut text, &fixed_source);
             }
             Err(problem) => problems.push(format!("{case}: `{}` {problem}", fix.message)),
         }
     }
     if messages.iter().filter(|message| message.fix.is_some()).nth(1).is_some() {
-        match fixed(case.source, messages, version) {
+        match fixed(case.source, messages) {
             Ok(fixed_source) => {
                 text.push_str("\nall fixes:\n");
-                render_source(&mut text, &fixed_source, version);
+                render_source(&mut text, &fixed_source);
             }
             Err(problem) => problems.push(format!("{case}: its fixes together {problem}")),
         }
@@ -195,13 +210,13 @@ fn rendered(case: &TestCase<'_>, messages: &[Message], problems: &mut Vec<String
 }
 
 /// `source` after one round of the fixes of `messages`.
-fn fixed(source: &str, messages: &[Message], version: LuaVersion) -> Result<String, String> {
+fn fixed(source: &str, messages: &[Message]) -> Result<String, String> {
     let Some(fixed_bytes) = fix::apply(source.as_bytes(), messages, FixKind::all()) else {
         return Err("changes nothing".to_owned());
     };
     let fixed_source = String::from_utf8(fixed_bytes).map_err(|e| e.to_string())?;
     let allocator = Allocator::new();
-    let reparse = luck_parser::parse(&allocator, fixed_source.as_bytes(), version);
+    let reparse = luck_parser::parse(&allocator, fixed_source.as_bytes());
     match reparse.errors.first() {
         Some(error) => Err(format!("breaks the syntax, as in `{fixed_source}`: {error}")),
         None => Ok(fixed_source),
@@ -215,7 +230,7 @@ type Mark<'message> = (Span, char, Option<&'message str>);
 /// The message, where it is, the lines its span and labels touch, each
 /// marked under the part it covers, with a line of context around them, as
 /// miette shows oxlint's, and its tag, help, and note.
-fn render_message(text: &mut String, lines: &Lines<'_>, target: LuaTarget, message: &Message) {
+fn render_message(text: &mut String, lines: &Lines<'_>, variant: Variant, message: &Message) {
     writeln!(text, "{}: {}", message.severity.name(), message.message).unwrap();
     let marks: Vec<Mark<'_>> = iter::once((message.span(), '^', None))
         .chain(message.labels.iter().map(|label| (label.span, '-', Some(&*label.message))))
@@ -238,7 +253,7 @@ fn render_message(text: &mut String, lines: &Lines<'_>, target: LuaTarget, messa
     let (line, column) = lines.start(message.span());
     let column_chars = lines.text(line)[..column].chars().count();
     let (line_number, column_number) = (line + 1, column_chars + 1);
-    writeln!(text, "{:width$}--> {target}:{line_number}:{column_number}", "").unwrap();
+    writeln!(text, "{:width$}--> {variant}:{line_number}:{column_number}", "").unwrap();
     let mut last_shown = None;
     for &shown in &shown_lines {
         if last_shown.is_some_and(|last| shown > last + 1) {
@@ -292,8 +307,8 @@ fn render_mark(text: &mut String, lines: &Lines<'_>, shown: usize, width: usize,
 
 /// Every line of `source`, behind a bar that sets it apart from the lines a
 /// message marks.
-fn render_source(text: &mut String, source: &str, version: LuaVersion) {
-    let lines = Lines::new(source, version);
+fn render_source(text: &mut String, source: &str) {
+    let lines = Lines::new(source);
     for line in 0..lines.ranges.len() {
         text.push_str("  |");
         push_shown_line(text, lines.text(line));
@@ -326,7 +341,7 @@ fn shown_width(c: char) -> usize {
     if is_escaped(c) { c.escape_default().count() } else { 1 }
 }
 
-/// A source split into lines where its dialect breaks them.
+/// A source split into lines where Luau breaks them.
 struct Lines<'source> {
     source: &'source str,
     /// Each line's bytes, its line break left out.
@@ -334,10 +349,10 @@ struct Lines<'source> {
 }
 
 impl<'source> Lines<'source> {
-    fn new(source: &'source str, version: LuaVersion) -> Self {
+    fn new(source: &'source str) -> Self {
         let mut ranges = Vec::new();
         let mut line_start = 0;
-        for line_break in line_breaks(source.as_bytes(), version) {
+        for line_break in line_breaks(source.as_bytes()) {
             ranges.push(line_start..line_break.start);
             line_start = line_break.end;
         }
@@ -374,16 +389,13 @@ impl<'source> Lines<'source> {
     }
 }
 
-/// What `answer` says of the host of `source`, parsed for `target` with no
-/// errors and analyzed with the default config.
-pub(crate) fn with_host<T>(
-    source: &str,
-    target: LuaTarget,
-    answer: impl FnOnce(&ContextHost<'_>) -> T,
-) -> T {
+/// What `answer` says of the host of `source`, which parses with no errors,
+/// analyzed against Luau's standard library with the default config.
+pub(crate) fn with_host<T>(source: &str, answer: impl FnOnce(&ContextHost<'_>) -> T) -> T {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse(&allocator, source.as_bytes(), target.version());
+    let parse = luck_parser::parse(&allocator, source.as_bytes());
     assert!(parse.errors.is_empty(), "parse of {source:?}: {:?}", parse.errors);
-    let analysis = Linter::new(LintConfig::default()).analyze(&parse, library_for(target));
+    let analysis =
+        Linter::new(LintConfig::default()).analyze(&parse, library_for(Variant::Standalone));
     answer(&ContextHost::new(&analysis, FixKind::all()))
 }

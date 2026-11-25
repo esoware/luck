@@ -8,24 +8,20 @@ use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
     BinaryLink, BinaryOp, Block, Expression, GetSpan as _, IfStatement, OneOrMore, Statement,
 };
-use luck_token::{BinOp, LuaVersion};
+use luck_token::BinOp;
 use luck_value::ToBoolean as _;
 
 use super::Compressor;
 use super::simplify_parens::Place;
 use crate::expr::fits_at_depth;
 
-/// Whether a statement declares something its block scopes: a local, a
-/// label, a Luau type, or a Lua 5.5 global.
+/// Whether a statement declares something its block scopes: a local or a
+/// type.
 const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::LocalAssignment(_)
         | Statement::LocalFunction(_)
-        | Statement::Label(_)
-        | Statement::TypeDeclaration(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_) => true,
+        | Statement::TypeDeclaration(_) => true,
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::DoBlock(_)
@@ -38,7 +34,6 @@ const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
         | Statement::Return(_)
         | Statement::Break(_)
         | Statement::Continue(_)
-        | Statement::Goto(_)
         | Statement::CompoundAssignment(_)
         | Statement::Error(_) => false,
     }
@@ -46,18 +41,18 @@ const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
 
 /// Whether `block` ends in a statement that has to end the block it's in,
 /// so its statements can't go where others follow them.
-pub(super) fn ends_in_block_end(block: &Block<'_>, version: LuaVersion) -> bool {
-    block.stmts.last().is_some_and(|stmt| stmt.has_to_end_block(version))
+pub(super) fn ends_in_block_end(block: &Block<'_>) -> bool {
+    block.stmts.last().is_some_and(Statement::has_to_end_block)
 }
 
 /// Whether a `do` block's statements can take its place in the block around
 /// it: it scopes nothing, and it ends that block, which `is_last` says, or
 /// its own statements can go on where others follow.
-fn can_unwrap(stmt: &Statement<'_>, is_last: bool, version: LuaVersion) -> bool {
+fn can_unwrap(stmt: &Statement<'_>, is_last: bool) -> bool {
     let Statement::DoBlock(do_block) = stmt else {
         return false;
     };
-    (is_last || !ends_in_block_end(&do_block.block, version))
+    (is_last || !ends_in_block_end(&do_block.block))
         && !do_block.block.stmts.iter().any(is_scoped_declaration)
 }
 
@@ -177,15 +172,14 @@ impl<'ast> Compressor<'_, 'ast> {
     /// place, as in `if true then f() end`, which dead-code removal leaves as
     /// `do f() end`.
     pub(super) fn unwrap_do_blocks(&mut self, block: &mut Block<'ast>) {
-        let version = self.version;
         let last_index = block.stmts.len().saturating_sub(1);
         let mut stmts = block.stmts.iter().enumerate();
-        if !stmts.any(|(i, stmt)| can_unwrap(stmt, i == last_index, version)) {
+        if !stmts.any(|(i, stmt)| can_unwrap(stmt, i == last_index)) {
             return;
         }
         self.unwrapped_stmts.clear();
         for (i, stmt) in mem::take(&mut block.stmts).into_iter().enumerate() {
-            if !can_unwrap(&stmt, i == last_index, version) {
+            if !can_unwrap(&stmt, i == last_index) {
                 self.unwrapped_stmts.push(stmt);
                 continue;
             }
@@ -271,7 +265,6 @@ mod tests {
     use luck_allocator::Allocator;
     use luck_ast::MAX_NESTING_DEPTH;
     use luck_testgen::with_the_smallest_stack;
-    use luck_token::LuaVersion;
 
     use crate::fixtures::{NO_PASSES, minify_with};
     use crate::transform_config::TransformConfig;
@@ -279,7 +272,7 @@ mod tests {
     const STATEMENTS: TransformConfig = TransformConfig { simplify_statements: true, ..NO_PASSES };
 
     fn simplify(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &STATEMENTS)
+        minify_with(source, &STATEMENTS)
     }
 
     #[test]
@@ -293,7 +286,7 @@ mod tests {
             assert_eq!(simplify(source), expected, "source: {source}");
         }
         let both = TransformConfig { remove_dead_code: true, ..STATEMENTS };
-        assert_eq!(minify_with("if true then f() end", LuaVersion::Lua54, &both), "f()");
+        assert_eq!(minify_with("if true then f() end", &both), "f()");
     }
 
     #[test]
@@ -301,29 +294,16 @@ mod tests {
         for source in [
             "do local x=1 end",
             "do local function f()end end",
-            "do goto l::l::end",
+            "do type T=number end",
             "do return 1 end f()",
         ] {
             assert_eq!(simplify(source), source);
         }
-        assert_eq!(
-            minify_with("do type T=number end", LuaVersion::Luau, &STATEMENTS),
-            "do type T=number end"
-        );
-        assert_eq!(
-            minify_with("do global x end", LuaVersion::Lua55, &STATEMENTS),
-            "do global x end"
-        );
     }
 
     #[test]
-    fn unwraps_a_do_break_only_where_break_can_go_on() {
-        let source = "while a do do break end f() end";
-        assert_eq!(minify_with(source, LuaVersion::Lua54, &STATEMENTS), "while a do break f()end");
-        for version in [LuaVersion::Lua51, LuaVersion::Luau] {
-            let output = minify_with(source, version, &STATEMENTS);
-            assert_eq!(output, "while a do do break end f()end", "{version:?}");
-        }
+    fn keeps_a_do_break_that_other_statements_follow() {
+        assert_eq!(simplify("while a do do break end f() end"), "while a do do break end f()end");
     }
 
     #[test]
@@ -348,7 +328,7 @@ mod tests {
             ("if true then if a then if b then x() end end end", "if a and b then x()end"),
             ("if a then if true then if b then x() end end end", "if a and b then x()end"),
         ] {
-            assert_eq!(minify_with(dropped_if, LuaVersion::Lua54, &both), expected, "{dropped_if}");
+            assert_eq!(minify_with(dropped_if, &both), expected, "{dropped_if}");
         }
     }
 
@@ -360,7 +340,7 @@ mod tests {
             ("if (false) then if (true) then f() end end", "if false then f()end"),
             ("if true then return 1 end return 0", "return 1"),
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Lua54, &folding), expected, "{source}");
+            assert_eq!(minify_with(source, &folding), expected, "{source}");
         }
     }
 
@@ -372,8 +352,7 @@ mod tests {
             let ifs = MAX_NESTING_DEPTH - 2;
             let source = format!("{}x(){}", "if a then ".repeat(ifs), " end".repeat(ifs));
             let allocator = Allocator::new();
-            let output =
-                crate::minify(&allocator, source.as_bytes(), LuaVersion::Lua54, &STATEMENTS);
+            let output = crate::minify(&allocator, source.as_bytes(), &STATEMENTS);
             let expected = format!("if a{} then x()end", " and a".repeat(ifs - 1)).into_bytes();
             assert!(output.as_ref() == Ok(&expected), "{:?}", output.map(|text| text.len()));
             assert!(allocator.used_bytes() < 64 * source.len(), "{}", allocator.used_bytes());
@@ -429,7 +408,7 @@ mod tests {
             ("if not x then return 3 end return (f())", "return not x and 3 or f()"),
             ("if a then if (f()) then g() end end", "if a and f()then g()end"),
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Lua54, &both), expected, "{source}");
+            assert_eq!(minify_with(source, &both), expected, "{source}");
         }
     }
 
@@ -461,7 +440,7 @@ mod tests {
                 "return a and 1 or if b then c else d",
             ),
         ] {
-            assert_eq!(minify_with(source, LuaVersion::Luau, &STATEMENTS), expected, "{source}");
+            assert_eq!(minify_with(source, &STATEMENTS), expected, "{source}");
         }
     }
 }

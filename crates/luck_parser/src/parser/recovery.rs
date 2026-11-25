@@ -15,9 +15,9 @@ pub(super) enum Closer {
     Brace,
     /// An interpolated string's next segment, after an expression.
     StringSegment,
-    /// `end` or `until`, each of which ends any block, as in every Lua's
-    /// parser, so a mistaken one ends the block it's in, and the construct
-    /// around that block reports what it was missing.
+    /// `end` or `until`, each of which ends any block, as in Luau's parser,
+    /// so a mistaken one ends the block it's in, and the construct around
+    /// that block reports what it was missing.
     BlockEnd,
     /// `else` or `elseif`.
     Else,
@@ -119,8 +119,8 @@ impl Parser<'_> {
     }
 
     /// Record that the current token isn't the `kind` that closes what
-    /// `opener` opened, as PUC Lua and Luau report it, with the opener
-    /// labeled. Leaves the token in place and returns its span.
+    /// `opener` opened, as Luau reports it, with the opener labeled. Leaves
+    /// the token in place and returns its span.
     #[cold]
     #[inline(never)]
     pub(super) fn report_unclosed(&mut self, kind: TokenKind, opener: Span) -> Span {

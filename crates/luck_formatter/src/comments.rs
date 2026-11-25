@@ -32,8 +32,8 @@ use luck_allocator::Allocator;
 use luck_ast::{Block, GetSpan as _, Statement};
 use luck_parser::ParseResult;
 use luck_token::{
-    Comment, CommentContent, CommentKind, CommentPosition, LuaVersion, Span, Token, TokenKind,
-    has_line_break, index_to_offset, line_breaks,
+    Comment, CommentContent, CommentKind, CommentPosition, Span, Token, TokenKind, has_line_break,
+    index_to_offset, line_breaks,
 };
 use rustc_hash::{FxBuildHasher, FxHashSet};
 
@@ -69,8 +69,6 @@ impl<'text> SyntheticComment<'text> {
 #[derive(Debug)]
 struct Parsed<'ast> {
     source: &'ast [u8],
-    /// The chunk's dialect, which reads the source's line breaks.
-    version: LuaVersion,
     comments: &'ast [Comment],
     tokens: &'ast [Token],
     /// Where the last search of `tokens` stopped, which the next starts from.
@@ -130,10 +128,9 @@ impl<'ast> Comments<'ast> {
             !tokens.is_empty(),
             "a parse to format keeps its tokens, as `parse_with_tokens` does"
         );
-        let version = parse.chunk.version;
         let region_start = |off: &Comment| {
-            own_line_start(source, off.span.start, version)
-                .unwrap_or_else(|| after_line_break(source, off.span.end, version))
+            own_line_start(source, off.span.start)
+                .unwrap_or_else(|| after_line_break(source, off.span.end))
         };
         // An `off` inside an open region changes nothing.
         let mut disabled_ranges = Vec::new();
@@ -160,7 +157,6 @@ impl<'ast> Comments<'ast> {
         }
         let parsed = Parsed {
             source,
-            version,
             comments,
             tokens,
             token_cursor: Cell::new(0),
@@ -327,7 +323,7 @@ impl<'ast> Comments<'ast> {
         };
         let mut separators = Vec::new();
         let mut add_gap = |gap: Span| {
-            let in_gap = line_breaks(gap.text(parsed.source), parsed.version);
+            let in_gap = line_breaks(gap.text(parsed.source));
             separators.extend(
                 in_gap.map(|found| Span::from_indices(found.start, found.end).shifted(gap.start)),
             );
@@ -437,9 +433,8 @@ impl<'ast> Comments<'ast> {
     /// what follows.
     ///
     /// Comments that call arguments or parameters follow lead those instead.
-    /// In Lua 5.1 and Luau a line break before a call's `(` makes a new
-    /// statement of it, and one moved past a function's `(...)` would lead its
-    /// body on the next format.
+    /// A line break before a call's `(` doesn't parse, and one moved past a
+    /// function's `(...)` would lead its body on the next format.
     pub(crate) fn take_trailing(
         &mut self,
         end: u32,
@@ -694,7 +689,7 @@ impl<'ast> Parsed<'ast> {
             let mut crossed = self.tokens_in(gap_start, comment.span.start).peekable();
             let does_cross = crossed.peek().is_some();
             let gap = Span::new(gap_start, comment.span.start).text(self.source);
-            if !crossed.all(is_separator) || has_line_break(gap, self.version) {
+            if !crossed.all(is_separator) || has_line_break(gap) {
                 break;
             }
             has_separator |= does_cross;
@@ -724,9 +719,9 @@ impl<'ast> Parsed<'ast> {
     /// How many comments follow a statement ending at `stmt_end` on its line.
     fn stmt_trailing_count(&self, stmt_end: u32) -> usize {
         let mut gap_start = stmt_end;
-        // Luau ends a line comment at a lone CR but reads no line break
-        // there, so a comment after one is on the same line, where it can't
-        // print without joining it.
+        // A line comment ends at a lone CR, which breaks no line, so a
+        // comment after one is on the same line, where it can't print
+        // without joining it.
         let mut is_after_line_comment = false;
         self.placeable_before(u32::MAX)
             .take_while(|comment| {
@@ -734,8 +729,8 @@ impl<'ast> Parsed<'ast> {
                     return false;
                 }
                 let gap = Span::new(gap_start, comment.span.start).text(self.source);
-                let is_on_the_line = self.is_code_free(gap_start, comment.span.start)
-                    && !has_line_break(gap, self.version);
+                let is_on_the_line =
+                    self.is_code_free(gap_start, comment.span.start) && !has_line_break(gap);
                 gap_start = comment.span.end;
                 is_after_line_comment = comment.kind == CommentKind::Line;
                 is_on_the_line

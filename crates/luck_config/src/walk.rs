@@ -18,7 +18,7 @@ pub struct WalkRoot<'path> {
     pub canonical: &'path Path,
 }
 
-/// A directory or a Lua file a walk reached.
+/// A directory or a source file a walk reached.
 #[derive(Debug, Clone, Copy)]
 pub struct WalkEntry<'walk> {
     /// Under the root the walk reached it from, as that root is spelled.
@@ -27,7 +27,7 @@ pub struct WalkEntry<'walk> {
     pub depth: usize,
 }
 
-/// A Lua file a walk took.
+/// A source file a walk took.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkedFile {
     /// Under the root the walk reached it from, as that root is spelled.
@@ -46,8 +46,8 @@ impl fmt::Display for WalkError {
     }
 }
 
-/// What [`walk_lua_files`] asks of its caller: which project each directory
-/// and Lua file it reaches is in, and whether to go on.
+/// What [`walk_source_files`] asks of its caller: which project each directory
+/// and source file it reaches is in, and whether to go on.
 pub trait WalkVisitor: Sync {
     /// What ends the walk at an entry it can't read.
     type Error: Send;
@@ -83,18 +83,18 @@ pub trait WalkVisitor: Sync {
     fn read_error(&self, error: WalkError) -> Result<(), Self::Error>;
 }
 
-/// The Lua files under `roots`, at most `max_depth` levels down, that their
+/// The source files under `roots`, at most `max_depth` levels down, that their
 /// projects take, past what `.gitignore` and `.luckignore` hide, in the order
 /// the walk reached them.
 ///
-/// A Lua file is a file whose extension is `lua` or `luau`, or a symlink with
+/// A source file is a file whose extension is `lua` or `luau`, or a symlink with
 /// one that leads to a file. The walk follows no symlink, so only a symlink's
 /// target needs the disk to place.
 ///
 /// # Errors
 ///
 /// Returns what `visitor` makes of the first entry that ends the walk.
-pub fn walk_lua_files<Visitor>(
+pub fn walk_source_files<Visitor>(
     roots: &[WalkRoot<'_>],
     max_depth: Option<usize>,
     visitor: &Visitor,
@@ -238,7 +238,8 @@ mod tests {
         let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
         let canonical = FileSystemOs.canonicalize(directory.path()).expect("the project exists");
         let root = WalkRoot { path: directory.path(), canonical: &canonical };
-        let Ok(found) = walk_lua_files(&[root], None, &OneProject { project, max_entered_depth });
+        let Ok(found) =
+            walk_source_files(&[root], None, &OneProject { project, max_entered_depth });
         let mut relative: Vec<String> = found
             .iter()
             .map(|file| {
@@ -252,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn takes_the_lua_files_the_project_includes_past_luckignore() {
+    fn takes_the_source_files_the_project_includes_past_luckignore() {
         let files = [
             ("luck.json", r#"{ "exclude": ["gen/**"] }"#),
             (".luckignore", "ignored.lua\n"),

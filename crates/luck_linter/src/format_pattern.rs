@@ -1,5 +1,5 @@
-//! Each validator reads its format the way the target's `lstrlib.c` and
-//! `loslib.c` do.
+//! Each validator reads its format the way Luau's `lstrlib.cpp` and
+//! `loslib.cpp` do.
 //!
 //! Each validator takes a literal's body without its quotes and returns a
 //! count (specifiers, captures, or values consumed) where one applies, or
@@ -9,16 +9,14 @@
 use std::error::Error;
 use std::fmt;
 
-use luck_token::LuaVersion;
-
-/// `LUA_MAXCAPTURES` in every dialect.
+/// `LUA_MAXCAPTURES`.
 const MAX_CAPTURES: usize = 32;
 
 /// `MAXINTSIZE`, the largest explicit size of a `string.pack` integer.
 const MAX_PACK_INT_SIZE: u32 = 16;
 
-/// The smallest alignment a bare `!` can mean.
-const MIN_NATIVE_ALIGNMENT: u32 = 8;
+/// `MAXALIGN`, the alignment a bare `!` sets.
+const MAX_PACK_ALIGNMENT: u32 = 8;
 
 /// Each `offset` is a byte index into the body the validator was given.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -30,27 +28,17 @@ pub(crate) enum PatternError {
         offset: usize,
         character: char,
     },
-    /// More flags in one `string.format` specifier than Lua allows.
+    /// More flags in one `string.format` specifier than `scanformat` takes.
     BadFlag {
         offset: usize,
         character: char,
     },
-    /// A width longer than the two digits Lua allows.
+    /// A width longer than the two digits `scanformat` takes.
     BadWidth {
         offset: usize,
     },
-    /// A precision longer than the two digits Lua allows.
+    /// A precision longer than the two digits `scanformat` takes.
     BadPrecision {
-        offset: usize,
-    },
-    /// A flag, width, or precision a Lua 5.4+ conversion rejects.
-    BadModifier {
-        offset: usize,
-        modifier: char,
-        conversion: char,
-    },
-    /// A Lua 5.4+ specifier longer than the bound `getformat` enforces.
-    LongSpecifier {
         offset: usize,
     },
     UnterminatedSet {
@@ -99,7 +87,7 @@ pub(crate) enum PatternError {
         offset: usize,
         character: char,
     },
-    /// A `gsub` replacement or `os.date` format ending in a single `%`.
+    /// A `gsub` replacement ending in a single `%`.
     LonePercent {
         offset: usize,
     },
@@ -121,7 +109,6 @@ impl PatternError {
     pub(crate) const fn offset(&self) -> usize {
         match *self {
             Self::TruncatedSpecifier { offset }
-            | Self::LongSpecifier { offset }
             | Self::UnterminatedSet { offset }
             | Self::EmptySet { offset }
             | Self::UnmatchedCapture { offset }
@@ -138,7 +125,6 @@ impl PatternError {
             | Self::BadPrecision { offset }
             | Self::UnknownSpecifier { offset, .. }
             | Self::BadFlag { offset, .. }
-            | Self::BadModifier { offset, .. }
             | Self::BadEscape { offset, .. }
             | Self::InvalidPackOption { offset, .. }
             | Self::VariableLengthPackOption { offset, .. } => offset,
@@ -162,10 +148,6 @@ impl fmt::Display for PatternError {
             Self::BadPrecision { offset } => {
                 write!(f, "precision too long at offset {offset}")
             }
-            Self::BadModifier { offset, modifier, conversion } => {
-                write!(f, "`%{conversion}` can't take `{modifier}` at offset {offset}")
-            }
-            Self::LongSpecifier { offset } => write!(f, "specifier too long at offset {offset}"),
             Self::UnterminatedSet { offset } => {
                 write!(f, "unterminated set at offset {offset}")
             }
@@ -275,7 +257,7 @@ impl<'pattern> Cursor<'pattern> {
     }
 }
 
-pub(crate) fn validate_format(pattern: &str, version: LuaVersion) -> Result<usize, PatternError> {
+pub(crate) fn validate_format(pattern: &str) -> Result<usize, PatternError> {
     let mut cursor = Cursor::new(pattern);
     let mut specifier_count = 0;
 
@@ -291,11 +273,11 @@ pub(crate) fn validate_format(pattern: &str, version: LuaVersion) -> Result<usiz
                 cursor.skip_bytes(1);
                 continue;
             }
-            // Luau: takes any value and no modifiers.
-            Some(b'*') if version.has_star_format() => cursor.skip_bytes(1),
+            // Takes any value and no modifiers.
+            Some(b'*') => cursor.skip_bytes(1),
             Some(_) => {
-                let modifiers = scan_format_modifiers(&mut cursor, version)?;
-                scan_format_conversion(&mut cursor, percent_offset, modifiers, version)?;
+                scan_format_modifiers(&mut cursor)?;
+                scan_format_conversion(&mut cursor, percent_offset)?;
             }
             None => return Err(PatternError::TruncatedSpecifier { offset: percent_offset }),
         }
@@ -305,23 +287,10 @@ pub(crate) fn validate_format(pattern: &str, version: LuaVersion) -> Result<usiz
     Ok(specifier_count)
 }
 
-/// Reads the text between a `%` and its conversion character the way the
-/// target's `getformat` or `scanformat` does, and returns it.
-fn scan_format_modifiers<'pattern>(
-    cursor: &mut Cursor<'pattern>,
-    version: LuaVersion,
-) -> Result<&'pattern str, PatternError> {
+/// Reads the text between a `%` and its conversion character the way
+/// `scanformat` does.
+fn scan_format_modifiers(cursor: &mut Cursor<'_>) -> Result<(), PatternError> {
     let start = cursor.offset();
-    if version.has_checked_format_modifiers() {
-        let modifiers = cursor
-            .take_while(|b| matches!(b, b'-' | b'+' | b'#' | b'0' | b' ' | b'1'..=b'9' | b'.'));
-        // `MAX_FORMAT - 10`, less the conversion character.
-        if modifiers.len() >= 21 {
-            return Err(PatternError::LongSpecifier { offset: start });
-        }
-        return Ok(modifiers);
-    }
-
     let flags = cursor.take_while(|b| matches!(b, b'-' | b'+' | b' ' | b'#' | b'0'));
     // `scanformat` rejects `sizeof(FLAGS)`, six, or more flag bytes.
     if let Some(character) = flags.chars().nth(5) {
@@ -339,77 +308,32 @@ fn scan_format_modifiers<'pattern>(
             return Err(PatternError::BadPrecision { offset: precision_start });
         }
     }
-    Ok(&cursor.pattern[start..cursor.offset()])
-}
-
-/// Checks the conversion character at the cursor against the target, and
-/// on Lua 5.4+ the `modifiers` before it.
-fn scan_format_conversion(
-    cursor: &mut Cursor<'_>,
-    percent_offset: usize,
-    modifiers: &str,
-    version: LuaVersion,
-) -> Result<(), PatternError> {
-    let Some(conversion) = cursor.peek() else {
-        return Err(PatternError::TruncatedSpecifier { offset: percent_offset });
-    };
-    let is_known_conversion = match conversion {
-        b'c' | b'd' | b'i' | b'o' | b'u' | b'x' | b'X' | b'e' | b'E' | b'f' | b'g' | b'G'
-        | b'q' | b's' => true,
-        b'a' | b'A' => version.has_hex_float_format(),
-        b'p' => version.has_pointer_format(),
-        _ => false,
-    };
-    if !is_known_conversion {
-        return Err(PatternError::UnknownSpecifier {
-            offset: cursor.offset(),
-            character: cursor.peek_char(),
-        });
-    }
-    if version.has_checked_format_modifiers()
-        && let Some(rejected_index) = rejected_modifier(modifiers.as_bytes(), conversion)
-    {
-        return Err(PatternError::BadModifier {
-            offset: cursor.offset() - modifiers.len() + rejected_index,
-            modifier: char::from(modifiers.as_bytes()[rejected_index]),
-            conversion: char::from(conversion),
-        });
-    }
-    cursor.skip_bytes(1);
     Ok(())
 }
 
-/// The index in `modifiers` of the first byte Lua 5.4's `checkformat` rejects
-/// for a known `conversion`. The flag and precision sets are the ones
-/// `str_format` hands it.
-fn rejected_modifier(modifiers: &[u8], conversion: u8) -> Option<usize> {
-    let (flags, has_precision): (&[u8], bool) = match conversion {
-        // "specifier '%q' cannot have modifiers"
-        b'q' => return (!modifiers.is_empty()).then_some(0),
-        b'c' | b'p' => (b"-", false),
-        b'd' | b'i' => (b"-+0 ", true),
-        b'u' => (b"-0", true),
-        b'o' | b'x' | b'X' => (b"-#0", true),
-        b'a' | b'A' | b'e' | b'E' | b'f' | b'g' | b'G' => (b"-+#0 ", true),
-        // The remaining known conversion, `s`.
-        _ => (b"-", true),
-    };
-    let after_two_digits = |from: usize| {
-        from + modifiers[from..].iter().take(2).take_while(|b| b.is_ascii_digit()).count()
-    };
-
-    let mut index = modifiers.iter().take_while(|b| flags.contains(b)).count();
-    // A width can't start with `0`.
-    if modifiers.get(index) != Some(&b'0') {
-        index = after_two_digits(index);
-        if has_precision && modifiers.get(index) == Some(&b'.') {
-            index = after_two_digits(index + 1);
+/// Checks the conversion character at the cursor, which `str_format`
+/// switches on.
+fn scan_format_conversion(
+    cursor: &mut Cursor<'_>,
+    percent_offset: usize,
+) -> Result<(), PatternError> {
+    match cursor.peek() {
+        Some(
+            b'c' | b'd' | b'i' | b'o' | b'u' | b'x' | b'X' | b'e' | b'E' | b'f' | b'g' | b'G'
+            | b'q' | b's',
+        ) => {
+            cursor.skip_bytes(1);
+            Ok(())
         }
+        Some(_) => Err(PatternError::UnknownSpecifier {
+            offset: cursor.offset(),
+            character: cursor.peek_char(),
+        }),
+        None => Err(PatternError::TruncatedSpecifier { offset: percent_offset }),
     }
-    (index < modifiers.len()).then_some(index)
 }
 
-pub(crate) fn validate_lua_pattern(pattern: &str) -> Result<usize, PatternError> {
+pub(crate) fn validate_luau_pattern(pattern: &str) -> Result<usize, PatternError> {
     let mut cursor = Cursor::new(pattern);
     // One entry per capture so far, true once its `)` has been read.
     let mut captures: Vec<bool> = Vec::new();
@@ -482,7 +406,7 @@ fn scan_escape(cursor: &mut Cursor<'_>, captures: &[bool]) -> Result<(), Pattern
             scan_set(cursor)?;
             Ok(())
         }
-        // A class or a literal. Lua's `match_class` treats an unknown letter
+        // A class or a literal. Luau's `match_class` treats an unknown letter
         // as itself rather than rejecting it.
         _ => Ok(()),
     }
@@ -608,9 +532,6 @@ fn scan_x_alignment(cursor: &mut Cursor<'_>) -> Result<u32, PatternError> {
 }
 
 /// Reads one option with the cursor on its first byte, as `getoption` does.
-///
-/// A size the build decides reads as its smallest, so a size-dependent error
-/// never fires on only one platform.
 fn scan_pack_option(cursor: &mut Cursor<'_>) -> Result<PackOption, PatternError> {
     let option_offset = cursor.offset();
     let character = cursor.peek_char();
@@ -622,8 +543,8 @@ fn scan_pack_option(cursor: &mut Cursor<'_>) -> Result<PackOption, PatternError>
     let parsed = match option {
         b'b' | b'B' => fixed_size(1),
         b'h' | b'H' => fixed_size(2),
-        b'l' | b'L' | b'j' | b'J' | b'T' | b'f' => fixed_size(4),
-        b'd' | b'n' => fixed_size(8),
+        b'j' | b'J' | b'T' | b'f' => fixed_size(4),
+        b'l' | b'L' | b'd' | b'n' => fixed_size(8),
         b'i' | b'I' => fixed_size(scan_limited_size(cursor, 4)?),
         b's' => PackOption::Sized { size: scan_limited_size(cursor, 4)?, is_variable_length: true },
         b'z' => PackOption::ZeroTerminated,
@@ -636,7 +557,7 @@ fn scan_pack_option(cursor: &mut Cursor<'_>) -> Result<PackOption, PatternError>
         }
         b'x' => PackOption::Padding,
         b'X' => PackOption::AlignToNext,
-        b'!' => PackOption::SetMaxAlignment(scan_limited_size(cursor, MIN_NATIVE_ALIGNMENT)?),
+        b'!' => PackOption::SetMaxAlignment(scan_limited_size(cursor, MAX_PACK_ALIGNMENT)?),
         b' ' | b'<' | b'>' | b'=' => PackOption::Control,
         // A digit lands here when it follows an option that takes no size.
         _ => return Err(PatternError::InvalidPackOption { offset: option_offset, character }),
@@ -668,29 +589,20 @@ fn scan_limited_size(cursor: &mut Cursor<'_>, default: u32) -> Result<u32, Patte
 pub(crate) fn validate_gsub_replacement(
     body: &str,
     capture_count: Option<usize>,
-    version: LuaVersion,
 ) -> Result<(), PatternError> {
-    let is_strict = version.has_strict_gsub_replacement();
     let mut bytes = body.bytes().enumerate();
     while let Some((index, byte)) = bytes.next() {
         if byte != b'%' {
             continue;
         }
         let Some((next_index, next)) = bytes.next() else {
-            return if is_strict {
-                Err(PatternError::LonePercent { offset: index })
-            } else {
-                Ok(())
-            };
+            return Err(PatternError::LonePercent { offset: index });
         };
         if next == b'%' {
             continue;
         }
         if !next.is_ascii_digit() {
-            if is_strict {
-                return Err(PatternError::BadReplacementEscape { offset: next_index });
-            }
-            continue;
+            return Err(PatternError::BadReplacementEscape { offset: next_index });
         }
         if let Some(known_capture_count) = capture_count
             && usize::from(next - b'0') > known_capture_count.max(1)
@@ -702,39 +614,22 @@ pub(crate) fn validate_gsub_replacement(
 }
 
 /// After an optional leading `!` (UTC), it's either exactly `*t` or text
-/// with conversion specifiers.
-///
-/// Builds differ in the set they accept, so every specifier that exists on
-/// any platform of the dialect passes.
-pub(crate) fn validate_os_date(body: &str, version: LuaVersion) -> Result<(), PatternError> {
-    if !version.has_checked_date_format() || body.strip_prefix('!').unwrap_or(body) == "*t" {
+/// with conversion specifiers, each one of `LUA_STRFTIMEOPTIONS`. A `%`
+/// that ends the format is text.
+pub(crate) fn validate_os_date(body: &str) -> Result<(), PatternError> {
+    // `os_date` reads its format as a C string, which ends at the first NUL.
+    let format = body.find('\0').map_or(body, |end| &body[..end]);
+    if format.strip_prefix('!').unwrap_or(format) == "*t" {
         return Ok(());
     }
-    let has_options = version.has_date_format_options();
-    let mut bytes = body.bytes().enumerate();
-    while let Some((index, byte)) = bytes.next() {
+    let mut bytes = format.bytes().enumerate();
+    while let Some((_, byte)) = bytes.next() {
         if byte != b'%' {
             continue;
         }
-        let Some((next_index, next)) = bytes.next() else {
-            return if has_options {
-                Err(PatternError::LonePercent { offset: index })
-            } else {
-                Ok(())
-            };
-        };
-        let mut is_second_byte_in =
-            |set: &[u8]| bytes.next().is_some_and(|(_, second)| set.contains(&second));
-        let is_valid = match next {
-            b'E' if has_options => is_second_byte_in(b"cCxXyY"),
-            b'O' if has_options => is_second_byte_in(b"deHImMSuUVwWy"),
-            b'#' if has_options => is_second_byte_in(b"cxdHIjmMpSUwWyY"),
-            single => {
-                b"aAbBcdHIjmMpSUwWxXyYzZ%".contains(&single)
-                    || (has_options && b"CDeFgGhnrRtTuV".contains(&single))
-            }
-        };
-        if !is_valid {
+        if let Some((next_index, next)) = bytes.next()
+            && !b"aAbBcdHIjmMpSUwWxXyYzZ%".contains(&next)
+        {
             return Err(PatternError::BadDateSpecifier { offset: next_index });
         }
     }
@@ -747,103 +642,100 @@ mod tests {
 
     #[test]
     fn format_two_specifiers() {
-        assert_eq!(validate_format("%d %s", LuaVersion::Lua54).unwrap(), 2);
+        assert_eq!(validate_format("%d %s").unwrap(), 2);
     }
 
     #[test]
     fn format_width_precision() {
-        assert_eq!(validate_format("%5.2f", LuaVersion::Lua54).unwrap(), 1);
+        assert_eq!(validate_format("%5.2f").unwrap(), 1);
     }
 
     #[test]
     fn format_literal_percent() {
-        assert_eq!(validate_format("%%", LuaVersion::Lua54).unwrap(), 0);
+        assert_eq!(validate_format("%%").unwrap(), 0);
     }
 
     #[test]
     fn format_quoted() {
-        assert_eq!(validate_format("%q", LuaVersion::Lua54).unwrap(), 1);
+        assert_eq!(validate_format("%q").unwrap(), 1);
     }
 
     #[test]
     fn format_left_aligned() {
-        assert_eq!(validate_format("%-10s", LuaVersion::Lua54).unwrap(), 1);
+        assert_eq!(validate_format("%-10s").unwrap(), 1);
     }
 
     #[test]
     fn format_truncated() {
-        assert!(matches!(
-            validate_format("%", LuaVersion::Lua54),
-            Err(PatternError::TruncatedSpecifier { .. })
-        ));
+        assert!(matches!(validate_format("%"), Err(PatternError::TruncatedSpecifier { .. })));
     }
 
     #[test]
     fn format_unknown_specifier() {
         // `%z` is valid in patterns but not in format specs.
         assert!(matches!(
-            validate_format("%z", LuaVersion::Lua54),
+            validate_format("%z"),
             Err(PatternError::UnknownSpecifier { character: 'z', .. })
         ));
     }
 
     #[test]
     fn pattern_no_captures() {
-        assert_eq!(validate_lua_pattern("abc").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("abc").unwrap(), 0);
     }
 
     #[test]
     fn pattern_one_capture() {
-        assert_eq!(validate_lua_pattern("(%a+)").unwrap(), 1);
+        assert_eq!(validate_luau_pattern("(%a+)").unwrap(), 1);
     }
 
     #[test]
     fn pattern_two_captures() {
-        assert_eq!(validate_lua_pattern("(%d)(%a)").unwrap(), 2);
+        assert_eq!(validate_luau_pattern("(%d)(%a)").unwrap(), 2);
     }
 
     #[test]
     fn pattern_simple_set() {
-        assert_eq!(validate_lua_pattern("[a-z]").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("[a-z]").unwrap(), 0);
     }
 
     #[test]
     fn pattern_unterminated_set() {
-        assert!(matches!(validate_lua_pattern("[a-"), Err(PatternError::UnterminatedSet { .. })));
+        assert!(matches!(validate_luau_pattern("[a-"), Err(PatternError::UnterminatedSet { .. })));
     }
 
     #[test]
     fn pattern_empty_set() {
-        assert!(matches!(validate_lua_pattern("[]"), Err(PatternError::EmptySet { .. })));
+        assert!(matches!(validate_luau_pattern("[]"), Err(PatternError::EmptySet { .. })));
     }
 
     #[test]
     fn pattern_word_class() {
-        assert_eq!(validate_lua_pattern("%w").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("%w").unwrap(), 0);
     }
 
     #[test]
     fn pattern_back_reference() {
         assert!(matches!(
-            validate_lua_pattern("%9"),
+            validate_luau_pattern("%9"),
             Err(PatternError::BadBackReference { offset: 1 })
         ));
     }
 
     #[test]
     fn pattern_balanced_match() {
-        assert_eq!(validate_lua_pattern("%bab").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("%bab").unwrap(), 0);
     }
 
     #[test]
     fn pattern_frontier() {
-        assert_eq!(validate_lua_pattern("%f[%a]").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("%f[%a]").unwrap(), 0);
     }
 
     #[test]
     fn pattern_frontier_truncated() {
         assert!(matches!(
-            validate_lua_pattern("%f"),
+            validate_luau_pattern("%f"),
             Err(PatternError::TruncatedSpecifier { .. }
                 | PatternError::BadEscape { character: 'f', .. })
         ));
@@ -852,13 +744,13 @@ mod tests {
     #[test]
     fn pattern_reads_a_quantifier_with_nothing_to_repeat_as_a_literal() {
         for pattern in ["*", "+a", "-", "?", "^-?%d+$", "(*)", "(a)%1*", "%f[a]*", "a**"] {
-            validate_lua_pattern(pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+            validate_luau_pattern(pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
         }
     }
 
     #[test]
     fn pattern_back_reference_without_quantifier() {
-        assert_eq!(validate_lua_pattern("(a)%1").unwrap(), 1);
+        assert_eq!(validate_luau_pattern("(a)%1").unwrap(), 1);
     }
 
     #[test]
@@ -914,40 +806,29 @@ mod tests {
     }
 
     #[test]
-    fn format_conversions_follow_the_target() {
-        validate_format("%a", LuaVersion::Lua51).unwrap_err();
-        assert_eq!(validate_format("%a", LuaVersion::Lua52).unwrap(), 1);
-        validate_format("%a", LuaVersion::Luau).unwrap_err();
-        validate_format("%p", LuaVersion::Lua53).unwrap_err();
-        assert_eq!(validate_format("%p", LuaVersion::Lua54).unwrap(), 1);
-        assert_eq!(validate_format("%*", LuaVersion::Luau).unwrap(), 1);
-        validate_format("%5*", LuaVersion::Luau).unwrap_err();
-        validate_format("%*", LuaVersion::Lua54).unwrap_err();
-    }
-
-    #[test]
-    fn format_checks_modifiers_only_on_lua54() {
-        assert_eq!(validate_format("%#d", LuaVersion::Lua53).unwrap(), 1);
-        assert_eq!(validate_format("%5q", LuaVersion::Luau).unwrap(), 1);
-        for pattern in ["%#d", "%5q", "%.3c", "%05s", "%+x", "%123d", "%.123f"] {
-            assert!(validate_format(pattern, LuaVersion::Lua54).is_err(), "{pattern}");
-        }
-        for pattern in ["%-5.2s", "%05.2f", "%#x", "%+d", "% i", "%5c", "%-p"] {
-            assert_eq!(validate_format(pattern, LuaVersion::Lua54).unwrap(), 1, "{pattern}");
+    fn format_takes_a_star_and_no_hex_float_or_pointer() {
+        assert_eq!(validate_format("%*").unwrap(), 1);
+        for pattern in ["%5*", "%a", "%A", "%p"] {
+            assert!(validate_format(pattern).is_err(), "{pattern}");
         }
     }
 
     #[test]
-    fn format_limits_flag_runs_by_target() {
-        assert_eq!(validate_format("%-----d", LuaVersion::Lua53).unwrap(), 1);
+    fn format_takes_any_flags_and_two_digit_width_and_precision() {
+        for pattern in ["%#d", "%5q", "%.3c", "%05s", "%+x", "%-5.2s", "%05.2f", "% i", "%99.99f"] {
+            assert_eq!(validate_format(pattern).unwrap(), 1, "{pattern}");
+        }
+        for pattern in ["%123d", "%.123f"] {
+            assert!(validate_format(pattern).is_err(), "{pattern}");
+        }
+    }
+
+    #[test]
+    fn format_limits_flag_runs() {
+        assert_eq!(validate_format("%-----d").unwrap(), 1);
         assert!(matches!(
-            validate_format("%------d", LuaVersion::Lua53),
+            validate_format("%------d"),
             Err(PatternError::BadFlag { offset: 6, .. })
-        ));
-        assert_eq!(validate_format("%------d", LuaVersion::Lua54).unwrap(), 1);
-        assert!(matches!(
-            validate_format(&format!("%{}d", "-".repeat(21)), LuaVersion::Lua54),
-            Err(PatternError::LongSpecifier { .. })
         ));
     }
 
@@ -955,32 +836,35 @@ mod tests {
     fn pattern_rejects_bad_back_references() {
         for pattern in ["%0", "%1", "(a)%2", "(%1)"] {
             assert!(
-                matches!(validate_lua_pattern(pattern), Err(PatternError::BadBackReference { .. })),
+                matches!(
+                    validate_luau_pattern(pattern),
+                    Err(PatternError::BadBackReference { .. })
+                ),
                 "{pattern}"
             );
         }
-        assert_eq!(validate_lua_pattern("(a)(b)%2").unwrap(), 2);
+        assert_eq!(validate_luau_pattern("(a)(b)%2").unwrap(), 2);
     }
 
     #[test]
     fn pattern_limits_captures() {
-        assert_eq!(validate_lua_pattern(&"()".repeat(32)).unwrap(), 32);
+        assert_eq!(validate_luau_pattern(&"()".repeat(32)).unwrap(), 32);
         assert!(matches!(
-            validate_lua_pattern(&"()".repeat(33)),
+            validate_luau_pattern(&"()".repeat(33)),
             Err(PatternError::TooManyCaptures { .. })
         ));
     }
 
     #[test]
     fn pattern_reads_unknown_letter_as_itself() {
-        assert_eq!(validate_lua_pattern("%y%Q").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("%y%Q").unwrap(), 0);
     }
 
     #[test]
     fn pattern_keeps_leading_close_bracket_as_member() {
-        assert_eq!(validate_lua_pattern("[]]").unwrap(), 0);
-        assert_eq!(validate_lua_pattern("[^]a]").unwrap(), 0);
-        assert!(matches!(validate_lua_pattern("[]a"), Err(PatternError::UnterminatedSet { .. })));
+        assert_eq!(validate_luau_pattern("[]]").unwrap(), 0);
+        assert_eq!(validate_luau_pattern("[^]a]").unwrap(), 0);
+        assert!(matches!(validate_luau_pattern("[]a"), Err(PatternError::UnterminatedSet { .. })));
     }
 
     #[test]
@@ -1050,31 +934,51 @@ mod tests {
     }
 
     #[test]
-    fn gsub_replacement_escapes_follow_the_target() {
-        validate_gsub_replacement("%x", None, LuaVersion::Lua51).unwrap();
-        validate_gsub_replacement("a%", None, LuaVersion::Lua51).unwrap();
+    fn pack_aligns_each_option_to_its_own_size() {
+        assert_eq!(validate_pack_format("!5 j J T f", false).unwrap(), 4);
+        for pattern in ["!5 l", "!5 L", "!5 d", "!5 n"] {
+            assert!(
+                matches!(
+                    validate_pack_format(pattern, false),
+                    Err(PatternError::BadPackAlignment { .. })
+                ),
+                "{pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn gsub_replacement_takes_only_digit_and_percent_escapes() {
         assert!(matches!(
-            validate_gsub_replacement("%x", None, LuaVersion::Luau),
+            validate_gsub_replacement("%x", None),
             Err(PatternError::BadReplacementEscape { .. })
         ));
         assert!(matches!(
-            validate_gsub_replacement("a%", None, LuaVersion::Lua54),
+            validate_gsub_replacement("a%", None),
             Err(PatternError::LonePercent { .. })
         ));
     }
 
     #[test]
-    fn os_date_specifiers_follow_the_target() {
-        validate_os_date("%Q%", LuaVersion::Lua51).unwrap();
-        validate_os_date("%F %T %Ec %Od %#x", LuaVersion::Lua54).unwrap();
-        assert!(matches!(
-            validate_os_date("%E!", LuaVersion::Lua54),
-            Err(PatternError::BadDateSpecifier { .. })
-        ));
-        assert!(matches!(
-            validate_os_date("%F", LuaVersion::Luau),
-            Err(PatternError::BadDateSpecifier { .. })
-        ));
-        validate_os_date("100%", LuaVersion::Luau).unwrap();
+    fn os_date_takes_the_c89_specifiers() {
+        validate_os_date("%a %A %b %B %c %d %H %I %j %m %M %p %S %U %w %W %x %X %y %Y %z %Z %%")
+            .unwrap();
+        for format in ["%F", "%T", "%Ec", "%Od", "%#x", "%Q"] {
+            assert!(
+                matches!(validate_os_date(format), Err(PatternError::BadDateSpecifier { .. })),
+                "{format}"
+            );
+        }
+    }
+
+    #[test]
+    fn os_date_reads_a_trailing_percent_as_text() {
+        validate_os_date("100%").unwrap();
+    }
+
+    #[test]
+    fn os_date_reads_up_to_the_first_nul() {
+        validate_os_date("%d\0%Q").unwrap();
+        validate_os_date("*t\0x").unwrap();
     }
 }

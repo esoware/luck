@@ -27,13 +27,16 @@ fn init_failure_leaves_no_partial_project() {
 }
 
 #[test]
-fn bad_init_target_exits_usage_and_writes_nothing() {
+fn bad_init_variant_exits_usage_and_writes_nothing() {
     let directory = TempDir::new().unwrap();
 
     luck_in(directory.path())
-        .args(["init", "-t", "lua99"])
+        .args(["init", "--variant", "bogus"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"));
+        .stderr(predicate::str::contains("invalid value 'bogus' for '--variant <VARIANT>'"))
+        .stderr(predicate::str::contains(
+            "invalid variant `bogus`: expected `standalone` or `roblox`",
+        ));
     assert!(!directory.path().join("luck.json").exists());
 }

@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::convert::Infallible;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -45,49 +44,28 @@ impl<K, V> SharedCache<K, V> {
 }
 
 impl<K: Eq + Hash, V: Clone> SharedCache<K, V> {
-    pub(crate) fn get<Q>(&self, key: &Q) -> Option<V>
-    where
-        K: Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
-    {
-        self.map.read().get(key).cloned()
-    }
-
     /// The value kept for `key`, or else what `make` makes, which is kept
     /// unless another thread kept one first or a clear came while `make`
     /// ran.
     ///
     /// `make` runs outside the lock, so threads that miss `key` together each
     /// make a value.
-    pub(crate) fn get_or_try_insert_with<Q, E>(
-        &self,
-        key: &Q,
-        make: impl FnOnce() -> Result<V, E>,
-    ) -> Result<V, E>
-    where
-        K: Borrow<Q>,
-        Q: Eq + Hash + ToOwned<Owned = K> + ?Sized,
-    {
-        if let Some(kept) = self.get(key) {
-            return Ok(kept);
-        }
-        let started = *self.generation.clears.read();
-        let value = make()?;
-        let clears = self.generation.clears.read();
-        if *clears != started {
-            return Ok(value);
-        }
-        Ok(self.map.write().entry(key.to_owned()).or_insert(value).clone())
-    }
-
-    /// [`Self::get_or_try_insert_with`] for a `make` that can't fail.
     pub(crate) fn get_or_insert_with<Q>(&self, key: &Q, make: impl FnOnce() -> V) -> V
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ToOwned<Owned = K> + ?Sized,
     {
-        let Ok(value) = self.get_or_try_insert_with(key, || Ok::<V, Infallible>(make()));
-        value
+        let kept = self.map.read().get(key).cloned();
+        if let Some(kept) = kept {
+            return kept;
+        }
+        let started = *self.generation.clears.read();
+        let value = make();
+        let clears = self.generation.clears.read();
+        if *clears != started {
+            return value;
+        }
+        self.map.write().entry(key.to_owned()).or_insert(value).clone()
     }
 
     /// Only inside [`Generation::clear`], so no value made before the clear

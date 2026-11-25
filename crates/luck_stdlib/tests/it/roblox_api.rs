@@ -168,7 +168,7 @@ fn regenerate_roblox_api() {
     generated.push_str(
         "# Source: Roblox API dump, MaximumADHD/Roblox-Client-Tracker (roblox branch).\n",
     );
-    generated.push_str("# The constant sets luau_roblox.toml's params name, which `just stdlib`\n");
+    generated.push_str("# The constant sets roblox.toml's params name, which `just stdlib`\n");
     generated.push_str("# layers it over.\n");
     generated.push_str("# Settings-provider classes (settings() / UserSettings() children) are\n");
     generated.push_str(
@@ -240,7 +240,7 @@ fn write_enum_file(dump: &serde_json::Value) -> Result<(), Box<dyn Error>> {
     generated
         .push_str("# Each [enums.<Type>] is an Enum-shaped namespace of the Enum global, and\n");
     generated.push_str("# each item an EnumItem-shaped read-only constant, which `just stdlib`\n");
-    generated.push_str("# layers over luau_roblox.toml.\n");
+    generated.push_str("# layers over roblox.toml.\n");
     for (name, is_deprecated, items) in &enum_types {
         writeln!(generated, "\n[enums.{name}]")?;
         if *is_deprecated {

@@ -7,13 +7,12 @@
 use luck_allocator::Allocator;
 use luck_ast::{AstKind, Chunk, Expression, GetSpan as _, Name, Visit};
 use luck_semantic::{Scoping, SemanticBuilder};
-use luck_token::LuaVersion;
 
 use crate::common::for_each_valid_source;
 
-fn assert_tables_agree(source: &str, version: LuaVersion) {
+fn assert_tables_agree(source: &str) {
     let allocator = Allocator::new();
-    let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+    let parsed = luck_parser::parse(&allocator, source.as_bytes());
     let chunk = allocator.alloc(parsed.chunk);
     let built = SemanticBuilder::new()
         .with_counts(parsed.counts)
@@ -75,8 +74,7 @@ fn answers(scoping: &Scoping, chunk: &Chunk<'_>) -> String {
     impl<'tree> Visit<'tree> for Roles<'_> {
         fn visit_name(&mut self, name: &'tree Name<'tree>) {
             let Self(scoping, roles) = self;
-            let role =
-                (scoping.symbol_of(name), scoping.reference_of(name), scoping.label_of(name));
+            let role = (scoping.symbol_of(name), scoping.reference_of(name));
             roles.push(format!("{name:?} {role:?}"));
         }
     }
@@ -88,14 +86,10 @@ fn answers(scoping: &Scoping, chunk: &Chunk<'_>) -> String {
     format!(
         "{:?}",
         (
-            scoping.version(),
             scoping.scopes(),
             scoping.symbols(),
             scoping.references(),
-            scoping.labels(),
             scoping.names().collect::<Vec<_>>(),
-            scoping.declared_globals(),
-            scoping.is_env_assigned(),
             resolved,
             within,
             roles.1,
@@ -107,8 +101,8 @@ fn answers(scoping: &Scoping, chunk: &Chunk<'_>) -> String {
 fn a_rebuild_into_another_tree_s_tables_answers_as_a_fresh_build() {
     let allocator = Allocator::new();
     let mut previous = None;
-    for_each_valid_source(|source, version| {
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+    for_each_valid_source(|source| {
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         let chunk = allocator.alloc(parsed.chunk);
         let builder = SemanticBuilder::new().with_counts(parsed.counts);
         let fresh = builder.build(chunk).semantic.into_scoping();
@@ -116,7 +110,7 @@ fn a_rebuild_into_another_tree_s_tables_answers_as_a_fresh_build() {
             Some(scoping) => builder.rebuild(chunk, scoping).semantic.into_scoping(),
             None => builder.build(chunk).semantic.into_scoping(),
         };
-        assert_eq!(answers(&rebuilt, chunk), answers(&fresh, chunk), "{version:?}\n{source}");
+        assert_eq!(answers(&rebuilt, chunk), answers(&fresh, chunk), "{source}");
         previous = Some(rebuilt);
     });
 }

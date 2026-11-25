@@ -291,7 +291,7 @@ impl<'chain> ChainCallees<'chain> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_semantic::SemanticBuilder;
-    use luck_token::{LuaTarget, LuaVersion};
+    use luck_token::Variant;
 
     use super::*;
     use crate::layering::layer;
@@ -340,9 +340,9 @@ params = [{ kind = "vararg" }]
     fn shape_of(source: &str, name: &str) -> Option<String> {
         let allocator = Allocator::new();
         let definition = StdlibDefinition::parse(SHAPED_LIBRARY).expect("the library parses");
-        let library = layer(&allocator, &StdlibLibrary::empty(LuaTarget::Lua54), &definition)
+        let library = layer(&allocator, &StdlibLibrary::empty(Variant::Standalone), &definition)
             .expect("the library layers");
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let chunk = allocator.alloc(parsed.chunk);
         let semantic = SemanticBuilder::new().with_nodes(true).build(chunk).semantic;

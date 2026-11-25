@@ -7,10 +7,9 @@
 use std::{iter, slice};
 
 use luck_ast::{
-    Assignment, Attribute, AttributedName, Block, CompoundAssignment, Expression,
-    FunctionAttribute, FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment,
-    LocalFunctionKind, NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration,
-    TypeDeclarationValue,
+    Assignment, Block, CompoundAssignment, Expression, FunctionAttribute, FunctionName, GenericFor,
+    GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind, LocalName, NumericFor,
+    ReturnStatement, Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
 };
 
 use crate::CollapseSimpleStatement;
@@ -58,15 +57,6 @@ impl<'ast> Formatter<'ast> {
                 self.name(name);
                 self.write_function_body(&local_function.body);
             }
-            // Lua 5.5
-            Statement::GlobalFunction(global_function) => {
-                self.token("global");
-                self.space();
-                self.token("function");
-                self.space();
-                self.name(global_function.name);
-                self.write_function_body(&global_function.body);
-            }
             Statement::DoBlock(do_block) => {
                 self.token("do");
                 self.write_body_then_end(&do_block.block);
@@ -90,49 +80,8 @@ impl<'ast> Formatter<'ast> {
             Statement::GenericFor(generic_for) => self.write_generic_for(generic_for),
             Statement::Return(return_stmt) => self.write_return(return_stmt),
             Statement::Break(_) => self.token("break"),
-            // Luau
             Statement::Continue(_) => self.token("continue"),
-            // Lua 5.2+
-            Statement::Goto(goto) => {
-                self.token("goto");
-                self.space();
-                self.name(goto.name);
-            }
-            // Lua 5.2+
-            Statement::Label(label) => {
-                self.token("::");
-                self.name(label.name);
-                self.token("::");
-            }
-            // Lua 5.5
-            Statement::GlobalDeclaration(global) => {
-                self.token("global");
-                self.space();
-                if let Some(attribute) = &global.attribute {
-                    self.write_attribute(attribute);
-                    self.space();
-                }
-                self.write_attributed_names_inline(&global.names);
-                if !global.exprs.is_empty() {
-                    self.space();
-                    self.token("=");
-                    self.space();
-                    self.write_assigned_values(&global.exprs);
-                }
-            }
-            // Lua 5.5
-            Statement::GlobalStar(global_star) => {
-                self.token("global");
-                self.space();
-                if let Some(attribute) = &global_star.attribute {
-                    self.write_attribute(attribute);
-                    self.space();
-                }
-                self.token("*");
-            }
-            // Luau
             Statement::CompoundAssignment(compound) => self.write_compound_assignment(compound),
-            // Luau
             Statement::TypeDeclaration(declaration) => self.write_type_declaration(declaration),
             // A parse-recovery placeholder has no text to print.
             Statement::Error(_) => {}
@@ -273,18 +222,7 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    /// Never broken onto several lines.
-    fn write_attributed_names_inline(&mut self, names: &[AttributedName<'ast>]) {
-        for (i, name) in names.iter().enumerate() {
-            if i > 0 {
-                self.token(",");
-                self.space();
-            }
-            self.write_attributed_name(name);
-        }
-    }
-
-    fn write_attributed_name(&mut self, name: &AttributedName<'ast>) {
+    fn write_local_name(&mut self, name: &LocalName<'ast>) {
         self.node(
             || name.span(),
             |f| {
@@ -294,21 +232,6 @@ impl<'ast> Formatter<'ast> {
                     f.space();
                     f.write_type(annotation);
                 }
-                if let Some(attribute) = &name.attribute {
-                    f.space();
-                    f.write_attribute(attribute);
-                }
-            },
-        );
-    }
-
-    fn write_attribute(&mut self, attribute: &Attribute<'ast>) {
-        self.node(
-            || attribute.span,
-            |f| {
-                f.token("<");
-                f.name(attribute.name);
-                f.token(">");
             },
         );
     }
@@ -320,10 +243,6 @@ impl<'ast> Formatter<'ast> {
         }
         self.token(if local.kind.is_const() { "const" } else { "local" });
         self.space();
-        if let Some(attribute) = &local.attribute {
-            self.write_attribute(attribute);
-            self.space();
-        }
         // Names get their own group so a long binding list breaks
         // independently of the value list.
         self.group(|f| {
@@ -332,7 +251,7 @@ impl<'ast> Formatter<'ast> {
                     f.token(",");
                     f.soft_line_or_space();
                 }
-                f.write_attributed_name(name);
+                f.write_local_name(name);
             }
         });
         if !local.exprs.is_empty() {
@@ -419,7 +338,7 @@ impl<'ast> Formatter<'ast> {
         self.token("for");
         self.space();
         self.name(numeric_for.name);
-        // Luau: `: T` on the loop variable.
+        // `: T` on the loop variable.
         if let Some(annotation) = &numeric_for.type_annotation {
             self.token(":");
             self.space();

@@ -1,5 +1,3 @@
-use luck_token::LuaVersion;
-
 use crate::node::AstNodes;
 use crate::require_site::RequireSite;
 use crate::scoping::Scoping;
@@ -21,10 +19,6 @@ impl<'ast> Semantic<'ast> {
         requires: Vec<RequireSite<'ast>>,
     ) -> Self {
         Self { scoping, nodes, requires }
-    }
-
-    pub const fn version(&self) -> LuaVersion {
-        self.scoping.version()
     }
 
     pub const fn scoping(&self) -> &Scoping {

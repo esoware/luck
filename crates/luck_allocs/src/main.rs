@@ -101,12 +101,10 @@ fn run(report: Report) -> io::Result<()> {
 /// last.
 fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()] {
     HEAP.reset();
-    let (source, target) = (file.source_text.as_slice(), file.target);
-    let version = target.version();
+    let (source, variant) = (file.source_text.as_slice(), file.variant);
 
-    let ((), lexer) = record_stats_in(allocator, || drop(luck_lexer::lex(source, version)));
-    let (mut parse, parser) =
-        record_stats_in(allocator, || luck_parser::parse(allocator, source, version));
+    let ((), lexer) = record_stats_in(allocator, || drop(luck_lexer::lex(source)));
+    let (mut parse, parser) = record_stats_in(allocator, || luck_parser::parse(allocator, source));
     assert!(parse.errors.is_empty(), "{}: {:?}", file.file_name, parse.errors);
     let ((), semantic) = record_stats_in(allocator, || {
         drop(
@@ -120,14 +118,14 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     });
     let every_rule = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
-        drop(every_rule.run(&parse, library_for(target), FixKind::empty(), None));
+        drop(every_rule.run(&parse, library_for(variant), FixKind::empty(), None));
     });
     let ((), codegen) = record_stats_in(allocator, || {
         drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));
     });
     // The formatter reads the tokens `parse_with_tokens` keeps, the lexer's,
     // which the parser stage measures `parse` without.
-    parse.tokens = luck_lexer::lex(source, version).tokens;
+    parse.tokens = luck_lexer::lex(source).tokens;
     let options = FormatOptions::default();
     let ((), formatter) = record_stats_in(allocator, || {
         drop(luck_formatter::format_parsed(allocator, &parse, &options));

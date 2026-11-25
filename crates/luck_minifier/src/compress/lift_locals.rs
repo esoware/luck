@@ -25,22 +25,20 @@ use std::fmt::Write as _;
 
 use luck_allocator::{Allocator, Box, List};
 use luck_ast::{
-    AttributedName, Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind,
-    LocalFunction, LocalFunctionKind, Name, Statement, Type, Var, Visit, VisitMut,
+    Block, Expression, FunctionBody, LocalAssignment, LocalAssignmentKind, LocalFunction,
+    LocalFunctionKind, LocalName, Name, Statement, Type, Var, Visit, VisitMut,
 };
 use luck_data_structures::BitSet;
 use luck_semantic::{NameId, Scoping, SymbolId};
-use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
+use luck_token::MAX_ACTIVE_LOCALS;
 use rustc_hash::FxHashMap;
 
 use super::Compressor;
 use super::merge_locals::{declared_count, is_bare_local};
 use super::simplify_statements::ends_in_block_end;
-use crate::binding::{
-    IMPLICIT_VARARG_TABLE_NAME, METHOD_RECEIVER_NAME, NameIndexes, declares_env, has_fixed_binding,
-};
+use crate::binding::{METHOD_RECEIVER_NAME, NameIndexes, has_fixed_binding};
 use crate::limits::{
-    GENERIC_FOR_STATE_REGISTERS, MAX_REGISTERS, NUMERIC_FOR_STATE_REGISTERS, parameter_locals,
+    MAX_REGISTERS, NUMERIC_FOR_REGISTERS, generic_for_registers, parameter_locals,
 };
 use crate::transform_config::TransformConfig;
 
@@ -66,7 +64,6 @@ impl<'ast> Compressor<'_, 'ast> {
 /// The lift of every function body of a tree.
 struct Lifter<'walk, 'ast> {
     allocator: &'ast Allocator,
-    version: LuaVersion,
     config: TransformConfig,
     scoping: &'walk Scoping,
     name_indexes: &'walk mut NameIndexes,
@@ -118,7 +115,6 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         };
         Self {
             allocator,
-            version: scoping.version(),
             config,
             scoping,
             name_indexes,
@@ -197,23 +193,23 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
     }
 
     /// Whether a `local` is a shape a lift can take: initialized names with
-    /// no attribute or annotation, all distinct where names are kept.
+    /// no annotation, all distinct where names are kept.
     fn can_lift_assignment(&self, local: &LocalAssignment<'_>) -> bool {
         // A bare `local x` resets x to nil, which a lifted one wouldn't once a
         // sibling has used the shared slot. A type annotation would be lost,
         // since the hoisted declaration is a bare `local x`.
         !local.exprs.is_empty()
-            && !has_fixed_binding(local, self.scoping)
-            && local.names.iter().all(|attributed| attributed.type_annotation.is_none())
+            && !has_fixed_binding(local)
+            && local.names.iter().all(|local_name| local_name.type_annotation.is_none())
             && (!self.keeps_names() || self.has_distinct_names(&local.names))
     }
 
     /// Past [`MAX_ACTIVE_LOCALS`] names, more than one function holds, none
     /// count as distinct.
-    fn has_distinct_names(&self, names: &[AttributedName<'_>]) -> bool {
+    fn has_distinct_names(&self, names: &[LocalName<'_>]) -> bool {
         names.len() <= MAX_ACTIVE_LOCALS
-            && names.iter().enumerate().all(|(i, attributed)| {
-                let name = self.name_of(&attributed.name);
+            && names.iter().enumerate().all(|(i, local_name)| {
+                let name = self.name_of(&local_name.name);
                 names.iter().take(i).all(|earlier| self.name_of(&earlier.name) != name)
             })
     }
@@ -285,22 +281,19 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                         && local
                             .names
                             .iter()
-                            .all(|attributed| self.can_lift_name(&attributed.name));
+                            .all(|local_name| self.can_lift_name(&local_name.name));
                     self.declarations.push(can_lift);
-                    for attributed in &local.names {
+                    for local_name in &local.names {
                         if can_lift {
-                            self.join(&attributed.name);
+                            self.join(&local_name.name);
                         }
-                        self.open(&attributed.name);
+                        self.open(&local_name.name);
                     }
                     lifts |= can_lift;
                     keeps_declaration |= !can_lift;
                 }
                 Statement::LocalFunction(local_function) => {
-                    // A 5.2+ `_ENV` hoisted to the top would redirect every
-                    // global read before it.
                     let can_lift = local_function.kind == LocalFunctionKind::Local
-                        && !declares_env(&local_function.name, self.scoping)
                         && self.can_lift_name(&local_function.name);
                     self.declarations.push(can_lift);
                     if can_lift {
@@ -315,7 +308,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                     if lifts_inner
                         && !keeps
                         && self.config.simplify_statements
-                        && !ends_in_block_end(&do_block.block, self.version)
+                        && !ends_in_block_end(&do_block.block)
                     {
                         self.unwrapped_blocks += 1;
                     }
@@ -349,18 +342,13 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                     self.collect_block(&generic_for.block);
                     self.close_names(open_loop);
                 }
-                Statement::Label(_)
-                | Statement::TypeDeclaration(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_) => keeps_declaration = true,
+                Statement::TypeDeclaration(_) => keeps_declaration = true,
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
                 | Statement::FunctionDecl(_)
                 | Statement::Return(_)
                 | Statement::Break(_)
                 | Statement::Continue(_)
-                | Statement::Goto(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::Error(_) => {}
             }
@@ -387,19 +375,13 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         self.by_name.clear();
         self.unwrapped_blocks = 0;
         if self.keeps_names() {
-            // A method's `self` and a 5.1 vararg function's `arg` are in
-            // scope everywhere in its body, and no body says whether it has
-            // them.
-            for implicit in [METHOD_RECEIVER_NAME, IMPLICIT_VARARG_TABLE_NAME] {
-                if let Some(name_id) = self.scoping.name_id(implicit) {
-                    self.open_name(name_id);
-                }
+            // A method's `self` is in scope everywhere in its body, and no
+            // body says whether it has one.
+            if let Some(name_id) = self.scoping.name_id(METHOD_RECEIVER_NAME) {
+                self.open_name(name_id);
             }
             for param in &body.params {
                 self.open(&param.name);
-            }
-            if let Some(name) = body.vararg.as_ref().and_then(|vararg| vararg.name.as_ref()) {
-                self.open(name);
             }
         }
         self.collect_block(&body.block);
@@ -410,8 +392,8 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
             lifted_count * LIFTED_DECLARATION_BYTES + self.unwrapped_blocks * UNWRAPPED_DO_BYTES;
         // Each name and its comma, and `local ` and a separator unless the
         // names join a bare `local` that opens the body.
-        let joins_first = self.config.merge_locals
-            && body.block.stmts.first().is_some_and(|first| is_bare_local(first, self.scoping));
+        let joins_first =
+            self.config.merge_locals && body.block.stmts.first().is_some_and(is_bare_local);
         let header = if joins_first { 0 } else { LIFTED_DECLARATION_BYTES };
         let cost = hoisted * 2 + header;
         (lifted_count > 0 && saved > cost).then_some(hoisted)
@@ -421,8 +403,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
     fn lift(&mut self, body: &mut FunctionBody<'ast>) {
         if let Some(hoisted_count) = self.collect(body) {
             let parameters = parameter_locals(body);
-            let mut pressure =
-                Pressure { version: self.version, locals: parameters, registers: parameters };
+            let mut pressure = Pressure { locals: parameters, registers: parameters };
             pressure.measure(&body.block, Active { locals: parameters, registers: parameters });
             if pressure.fits(hoisted_count) {
                 self.rewrite(body);
@@ -451,11 +432,10 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         let mut names = List::with_capacity_in(self.hoisted.len(), allocator);
         for &hoisted in &self.hoisted {
             let name = Name::new(hoisted.into(), Some(self.name_indexes.next()), span);
-            names.push(AttributedName::new(name, None, None), allocator);
+            names.push(LocalName::new(name, None), allocator);
         }
         let declaration = Statement::new_local_assignment(
             span,
-            None,
             names,
             List::new(),
             LocalAssignmentKind::Local,
@@ -505,11 +485,6 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                 | Statement::Return(_)
                 | Statement::Break(_)
                 | Statement::Continue(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => {}
@@ -525,7 +500,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
         let (span, targets, values) = match stmt.take() {
             Statement::LocalAssignment(local) => {
                 let LocalAssignment { span, names, exprs, .. } = local.unbox();
-                let names = names.into_iter().map(|attributed| target(attributed.name));
+                let names = names.into_iter().map(|local_name| target(local_name.name));
                 (span, List::from_iter_in(names, allocator), exprs)
             }
             Statement::LocalFunction(local_function) => {
@@ -546,11 +521,6 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
             | Statement::Return(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::Goto(_)
-            | Statement::Label(_)
-            | Statement::GlobalDeclaration(_)
-            | Statement::GlobalFunction(_)
-            | Statement::GlobalStar(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
             | Statement::Error(_)) => {
@@ -596,7 +566,6 @@ impl<'ast> VisitMut<'ast> for Retexter<'_, 'ast> {
 /// evaluated together, outside closures, types, and parentheses.
 #[derive(Clone, Copy)]
 struct Pressure {
-    version: LuaVersion,
     locals: usize,
     registers: usize,
 }
@@ -639,9 +608,7 @@ impl Pressure {
                 | Statement::CompoundAssignment(_)
                 | Statement::FunctionDecl(_)
                 | Statement::LocalFunction(_)
-                | Statement::Return(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_) => {
+                | Statement::Return(_) => {
                     let mut counter = ExprCounter(0);
                     counter.visit_stmt(stmt);
                     self.registers = self.registers.max(active.registers + counter.0);
@@ -671,10 +638,9 @@ impl Pressure {
                 Statement::NumericFor(numeric_for) => {
                     let bounds = [&numeric_for.start, &numeric_for.limit];
                     self.evaluate(active, bounds.into_iter().chain(&numeric_for.step));
-                    let state_locals = self.version.numeric_for_state_locals();
                     let loop_active = Active {
-                        locals: active.locals + state_locals + 1,
-                        registers: active.registers + NUMERIC_FOR_STATE_REGISTERS + 1,
+                        locals: active.locals + 1,
+                        registers: active.registers + NUMERIC_FOR_REGISTERS,
                     };
                     self.locals = self.locals.max(loop_active.locals);
                     self.measure(&numeric_for.block, loop_active);
@@ -682,19 +648,15 @@ impl Pressure {
                 Statement::GenericFor(generic_for) => {
                     self.evaluate(active, &generic_for.exprs);
                     let names = generic_for.names.len();
-                    let state_locals = self.version.generic_for_state_locals();
                     let loop_active = Active {
-                        locals: active.locals + state_locals + names,
-                        registers: active.registers + GENERIC_FOR_STATE_REGISTERS + names,
+                        locals: active.locals + names,
+                        registers: active.registers + generic_for_registers(names),
                     };
                     self.locals = self.locals.max(loop_active.locals);
                     self.measure(&generic_for.block, loop_active);
                 }
                 Statement::Break(_)
                 | Statement::Continue(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalStar(_)
                 | Statement::TypeDeclaration(_)
                 | Statement::Error(_) => {}
             }
@@ -725,9 +687,10 @@ impl<'tree> Visit<'tree> for ExprCounter {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
+    use luck_token::MAX_ACTIVE_LOCALS;
 
     use crate::fixtures::{NO_PASSES, assert_outputs, minify_with};
+    use crate::limits::MAX_REGISTERS;
     use crate::transform_config::TransformConfig;
 
     const LIFTING: TransformConfig = TransformConfig { lift_locals: true, ..NO_PASSES };
@@ -735,15 +698,11 @@ mod tests {
         TransformConfig { rename_locals: true, ..LIFTING };
 
     fn apply(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &LIFTING)
+        minify_with(source, &LIFTING)
     }
 
     fn rename_and_lift(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &RENAMING_AND_LIFTING)
-    }
-
-    fn apply_luau(source: &str) -> String {
-        minify_with(source, LuaVersion::Luau, &LIFTING)
+        minify_with(source, &RENAMING_AND_LIFTING)
     }
 
     #[test]
@@ -797,7 +756,7 @@ end
 return g
 ";
         assert_eq!(
-            minify_with(source, LuaVersion::Lua54, &config),
+            minify_with(source, &config),
             "local function g()local a,b do a=x+1 end do b=x+2 end return 1 end return g"
         );
     }
@@ -814,7 +773,7 @@ local function h() return a end
 return f
 ";
         assert_eq!(
-            minify_with(source, LuaVersion::Lua54, &config),
+            minify_with(source, &config),
             "local function f()local a,b do a=g()print(a)end do b=g()print(b)end end return f"
         );
     }
@@ -833,7 +792,6 @@ return f
         assert_eq!(
             minify_with(
                 "local function f(c)local r g(function()r=1 end)if c then local a=h()print(a)end return r end",
-                LuaVersion::Lua54,
                 &merging
             ),
             "local function f(c)local a,r g(function()r=1 end)if c then a=h()print(a)end return r end"
@@ -1002,22 +960,6 @@ end
                 ),
             ],
         );
-        assert_eq!(
-            minify_with(
-                "\
-local function f(...args)
-  do local args = 1 print(args) end
-  do local a = 1 print(a) end
-  do local b = 2 print(b) end
-end
-return f
-",
-                LuaVersion::Lua55,
-                &LIFTING
-            ),
-            "local function f(...args)local a,b do local args=1 print(args)end do a=1 print(a)end \
-             do b=2 print(b)end end return f"
-        );
     }
 
     #[test]
@@ -1039,7 +981,7 @@ return w
         let (names, _) = hoisted.split_once(' ').expect("names end at the next statement");
         let name_count = names.split(',').count();
         assert!(
-            name_count + 101 <= 249,
+            name_count + 101 <= MAX_REGISTERS,
             "{name_count} hoisted locals leave no room for the call's 101 registers"
         );
     }
@@ -1112,7 +1054,7 @@ return f
             format!("local function f(p: typeof({function})) end"),
             format!("local function f(): typeof({function}) end"),
         ] {
-            let result = apply_luau(&source);
+            let result = apply(&source);
             assert!(result.contains(lifted), "{source}\n{result}");
         }
     }
@@ -1120,7 +1062,7 @@ return f
     #[test]
     fn a_read_in_a_type_captures_nothing() {
         assert_outputs(
-            apply_luau,
+            apply,
             &[
                 (
                     "\
@@ -1159,7 +1101,7 @@ end
     /// captured.
     #[test]
     fn a_function_in_a_type_lifts_what_its_closures_read() {
-        let result = apply_luau(
+        let result = apply(
             "\
 local function f()
   do
@@ -1185,7 +1127,7 @@ end
     #[test]
     fn a_type_function_reads_like_a_closure() {
         // `x` in the type function is a global the hoisted `x` would capture.
-        let result = apply_luau(
+        let result = apply(
             "\
 local function f()
   do local x = 1 print(x) end

@@ -42,7 +42,7 @@ impl Rule for MisleadingAndOr {
                         "`(x and FALSY) or y` always evaluates to `y`",
                         pair.span(context),
                     )
-                    .with_help("use an `if` statement, or an if-then-else expression in Luau"),
+                    .with_help("use an `if` statement or an if-then-else expression"),
                 );
             }
         }
@@ -65,7 +65,7 @@ mod tests {
         "local r = (x and nil) or y",
         "local r = (x and false) or y",
         "local r = (x and not 1) or y",
-        // Lua precedence: `and` binds tighter than `or`, so this is the same shape
+        // Luau precedence: `and` binds tighter than `or`, so this is the same shape
         // with no parens.
         "local r = x and nil or y",
     ];

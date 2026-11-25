@@ -16,8 +16,8 @@ pub(crate) fn name_at(document: &DocumentState, offset: u32) -> Option<(NodeId, 
 /// The local the name at `offset` declares or refers to, and that name's
 /// span.
 ///
-/// The implicit `self` and Lua 5.1 `arg` have no name that declares them, so
-/// only their references find them.
+/// The implicit `self` has no name that declares it, so only its references
+/// find it.
 pub(crate) fn local_at(document: &DocumentState, offset: u32) -> Option<(SymbolId, Span)> {
     let (_, name) = name_at(document, offset)?;
     let tree = document.scoping();
@@ -85,16 +85,14 @@ pub(crate) fn is_unterminated(document: &DocumentState, literal: &StringLiteral<
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use super::*;
     use crate::fixtures::document;
 
     /// The kind of text at each `|` in `marked`, which the text holds without
     /// them.
-    fn kinds_at_marks(marked: &str, target: LuaTarget) -> Vec<TextKind> {
+    fn kinds_at_marks(marked: &str) -> Vec<TextKind> {
         let text = marked.replace('|', "");
-        let document = document(&text, target);
+        let document = document(&text);
         let mut offsets = Vec::new();
         for (index, (position, _)) in marked.match_indices('|').enumerate() {
             offsets.push(u32::try_from(position - index).expect("a small offset"));
@@ -105,39 +103,37 @@ mod tests {
     #[test]
     fn a_string_cut_off_by_its_line_holds_its_end() {
         use TextKind::{Code, Comment, String};
-        for (marked, target, expected) in [
-            ("x = `{|y}tail|", LuaTarget::Luau, vec![Code, String]),
-            ("x = `{y}ta|il`|", LuaTarget::Luau, vec![String, Code]),
-            ("x = `|tail|", LuaTarget::Luau, vec![String, String]),
-            ("x = `|", LuaTarget::Luau, vec![String]),
-            ("x = `a|`|", LuaTarget::Luau, vec![String, Code]),
-            ("x = \"a|bc|", LuaTarget::Lua54, vec![String, String]),
-            ("x = \"abc\"|", LuaTarget::Lua54, vec![Code]),
+        for (marked, expected) in [
+            ("x = `{|y}tail|", vec![Code, String]),
+            ("x = `{y}ta|il`|", vec![String, Code]),
+            ("x = `|tail|", vec![String, String]),
+            ("x = `|", vec![String]),
+            ("x = `a|`|", vec![String, Code]),
+            ("x = \"a|bc|", vec![String, String]),
+            ("x = \"abc\"|", vec![Code]),
             (
                 r#"x = "a\"|
 y = 1|"#,
-                LuaTarget::Lua54,
                 vec![String, Code],
             ),
-            ("x = [[a|", LuaTarget::Lua54, vec![String]),
-            ("x = [[a]]|", LuaTarget::Lua54, vec![Code]),
-            ("--[[ a|", LuaTarget::Lua54, vec![Comment]),
-            ("--[[ a ]]|", LuaTarget::Lua54, vec![Code]),
-            ("x = 1 |--[==[ a ]]|", LuaTarget::Lua54, vec![Code, Comment]),
+            ("x = [[a|", vec![String]),
+            ("x = [[a]]|", vec![Code]),
+            ("--[[ a|", vec![Comment]),
+            ("--[[ a ]]|", vec![Code]),
+            ("x = 1 |--[==[ a ]]|", vec![Code, Comment]),
             (
                 "\
 --[[ a
 x = \"b|\"
 |",
-                LuaTarget::Lua54,
                 vec![Comment, Comment],
             ),
-            ("--[[ a [[ b ]]|", LuaTarget::Lua51, vec![Code]),
-            ("--[[]]|", LuaTarget::Lua54, vec![Code]),
-            ("--[[]|", LuaTarget::Lua54, vec![Comment]),
-            ("--[==[ ]=] ]==]|", LuaTarget::Lua54, vec![Code]),
+            ("--[[ a [[ b ]]|", vec![Code]),
+            ("--[[]]|", vec![Code]),
+            ("--[[]|", vec![Comment]),
+            ("--[==[ ]=] ]==]|", vec![Code]),
         ] {
-            assert_eq!(kinds_at_marks(marked, target), expected, "{marked:?}");
+            assert_eq!(kinds_at_marks(marked), expected, "{marked:?}");
         }
     }
 
@@ -147,7 +143,7 @@ x = \"b|\"
 local value = 1
 do local value = value end
 return value, other";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         let symbol_at = |offset| local_at(&document, offset).map(|(symbol, _)| symbol.index());
         // The outer `value` is declared at 6, read at 33, and returned at 50.
         assert_eq!(symbol_at(6), Some(0));

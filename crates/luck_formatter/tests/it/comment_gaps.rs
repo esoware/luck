@@ -7,8 +7,8 @@ use luck_formatter::{
     format,
 };
 use luck_parser::ParseResult;
-use luck_testgen::{generate_full_grammar, generate_runtime_safe, lua_fixtures, tree_shape};
-use luck_token::{LuaVersion, Span, TokenKind, index_to_offset};
+use luck_testgen::{generate_full_grammar, generate_runtime_safe, luau_fixtures, tree_shape};
+use luck_token::{Span, TokenKind, index_to_offset};
 
 const SEED_COUNT: u64 = 8;
 const STATEMENT_BUDGET: usize = 25;
@@ -59,23 +59,19 @@ impl Shape {
 
 /// `source` with a comment of `shape` after every token.
 ///
-/// That's but where no comment is allowed, after a Luau attribute's `@`, and
-/// where a line break would change what the source means, before a call's `(`
-/// in Lua 5.1 and Luau, which reads it as a new statement.
-fn with_a_comment_in_every_gap(source: &str, version: LuaVersion, shape: Shape) -> String {
+/// That's but where no comment is allowed, after an attribute's `@`, and
+/// where a line break doesn't parse, before a call's `(`.
+fn with_a_comment_in_every_gap(source: &str, shape: Shape) -> String {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse_with_tokens(&allocator, source.as_bytes(), version);
+    let parse = luck_parser::parse_with_tokens(&allocator, source.as_bytes());
     let mut commented = String::new();
     let mut copied = 0;
     for (index, pair) in parse.tokens.windows(2).enumerate() {
         let [token, next] = pair else {
             continue;
         };
-        let is_before_call = next.kind == TokenKind::LeftParen;
         if token.kind == TokenKind::At
-            || (shape.breaks_the_line()
-                && is_before_call
-                && version.has_ambiguous_call_newline_error())
+            || (shape.breaks_the_line() && next.kind == TokenKind::LeftParen)
         {
             continue;
         }
@@ -135,13 +131,13 @@ fn option_sets() -> [FormatOptions; 3] {
     ]
 }
 
-fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion) {
+fn assert_comments_keep_the_tree(label: &str, source: &str) {
     let allocator = Allocator::new();
-    let original = luck_parser::parse(&allocator, source.as_bytes(), version);
+    let original = luck_parser::parse(&allocator, source.as_bytes());
     let expected_shape = tree_shape(&original.chunk);
     for shape in Shape::ALL {
-        let commented = with_a_comment_in_every_gap(source, version, shape);
-        let commented_parse = luck_parser::parse(&allocator, commented.as_bytes(), version);
+        let commented = with_a_comment_in_every_gap(source, shape);
+        let commented_parse = luck_parser::parse(&allocator, commented.as_bytes());
         assert!(
             commented_parse.errors.is_empty(),
             "{label}, {shape:?}: the commented source parses: {:?}\n{commented}",
@@ -150,19 +146,17 @@ fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion)
         let written = comment_texts(&commented_parse);
         for (set, options) in option_sets().iter().enumerate() {
             let case = format!("{label}, {shape:?}, option set {set}");
-            let output = String::from_utf8(
-                format(&allocator, commented.as_bytes(), version, options).output,
-            )
-            .unwrap();
-            let again =
-                String::from_utf8(format(&allocator, output.as_bytes(), version, options).output)
+            let output =
+                String::from_utf8(format(&allocator, commented.as_bytes(), options).output)
                     .unwrap();
+            let again =
+                String::from_utf8(format(&allocator, output.as_bytes(), options).output).unwrap();
             assert!(
                 again == output,
                 "{case}: not idempotent:\n{}",
                 first_difference(&output, &again)
             );
-            let formatted = luck_parser::parse(&allocator, output.as_bytes(), version);
+            let formatted = luck_parser::parse(&allocator, output.as_bytes());
             assert!(formatted.errors.is_empty(), "{case}: {:?}\n{output}", formatted.errors);
             assert_eq!(
                 tree_shape(&formatted.chunk),
@@ -183,23 +177,21 @@ fn assert_comments_keep_the_tree(label: &str, source: &str, version: LuaVersion)
 
 #[test]
 fn a_comment_in_any_gap_of_a_fixture_keeps_its_tree() {
-    let fixtures: Vec<_> = lua_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
+    let fixtures: Vec<_> =
+        luau_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
     assert!(!fixtures.is_empty(), "no fixture outside `errors/`");
     for fixture in fixtures {
         let label = fixture.relative_path.display().to_string();
-        assert_comments_keep_the_tree(&label, &fixture.source, fixture.version);
+        assert_comments_keep_the_tree(&label, &fixture.source);
     }
 }
 
 #[test]
 fn a_comment_in_any_gap_of_a_generated_program_keeps_its_tree() {
-    for version in LuaVersion::ALL {
-        for seed in 0..SEED_COUNT {
-            let full = generate_full_grammar(seed, version, STATEMENT_BUDGET);
-            assert_comments_keep_the_tree(&format!("full seed {seed} {version:?}"), &full, version);
-            let runtime = generate_runtime_safe(seed, version, STATEMENT_BUDGET);
-            let label = format!("runtime seed {seed} {version:?}");
-            assert_comments_keep_the_tree(&label, &runtime, version);
-        }
+    for seed in 0..SEED_COUNT {
+        let full = generate_full_grammar(seed, STATEMENT_BUDGET);
+        assert_comments_keep_the_tree(&format!("full seed {seed}"), &full);
+        let runtime = generate_runtime_safe(seed, STATEMENT_BUDGET);
+        assert_comments_keep_the_tree(&format!("runtime seed {seed}"), &runtime);
     }
 }

@@ -9,8 +9,8 @@
 //!
 //! - `allocator` - The arena syntax trees live in, and arenas for threads
 //!   (always on)
-//! - `token` - Spans, `LuaVersion` and `LuaTarget`, tokens, literal value
-//!   semantics (always on)
+//! - `token` - Spans, `Variant`, tokens, literal value semantics (always
+//!   on)
 //! - `lexer` - Tokenizer (always on)
 //! - `ast` - AST nodes and their builder, `Visit`, `VisitMut`, `AstKind`,
 //!   `GetSpan`, `ContentEq` (always on)
@@ -26,8 +26,8 @@
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
 //! - `semantic` - Scoping, compile-time checks, the node table, and `require`
 //!   sites, in one pass (feature `semantic`)
-//! - `stdlib` - Each target's standard library, the std definitions that
-//!   layer a host's library over one, and what a chunk reaches in it
+//! - `stdlib` - The Luau and Roblox standard libraries, the std definitions
+//!   that layer a host's library over one, and what a chunk reaches in it
 //!   (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `stdlib`)
@@ -52,11 +52,10 @@
 //!
 //! ```
 //! use luck::allocator::Allocator;
-//! use luck::token::LuaVersion;
 //!
 //! let mut allocator = Allocator::new();
 //! for source in [&b"local x = 1"[..], b"return x"] {
-//!     let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
+//!     let parsed = luck::parser::parse(&allocator, source);
 //!     assert!(parsed.errors.is_empty());
 //!     // The parse borrows the arena, so it goes first.
 //!     drop(parsed);
@@ -70,7 +69,6 @@
 //! use std::thread;
 //!
 //! use luck::allocator::AllocatorPool;
-//! use luck::token::LuaVersion;
 //!
 //! let pool = AllocatorPool::new(2);
 //! thread::scope(|scope| {
@@ -78,7 +76,7 @@
 //!         let pool = &pool;
 //!         scope.spawn(move || {
 //!             let allocator = pool.get();
-//!             let parsed = luck::parser::parse(&allocator, source, LuaVersion::Lua54);
+//!             let parsed = luck::parser::parse(&allocator, source);
 //!             assert!(parsed.errors.is_empty());
 //!         });
 //!     }
@@ -93,11 +91,9 @@
 //! # #[cfg(feature = "formatter")] {
 //! use luck::allocator::Allocator;
 //! use luck::formatter::FormatOptions;
-//! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let formatted =
-//!     luck::formatter::format(&allocator, b"local x=1", LuaVersion::Lua54, &FormatOptions::default());
+//! let formatted = luck::formatter::format(&allocator, b"local x=1", &FormatOptions::default());
 //! assert_eq!(formatted.output, b"local x = 1\n");
 //! # }
 //! ```
@@ -108,20 +104,14 @@
 //! # #[cfg(feature = "minifier")] {
 //! use luck::allocator::Allocator;
 //! use luck::minifier::TransformConfig;
-//! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let minified = luck::minifier::minify(
-//!     &allocator,
-//!     b"return 1 + 2",
-//!     LuaVersion::Lua54,
-//!     &TransformConfig::default(),
-//! );
+//! let minified = luck::minifier::minify(&allocator, b"return 1 + 2", &TransformConfig::default());
 //! assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 //! # }
 //! ```
 //!
-//! Lint, with feature `linter`, against a target's standard library. A
+//! Lint, with feature `linter`, against a variant's standard library. A
 //! `linter::Linter` compiles its settings once and lints parse after parse,
 //! and its `fix` applies the fixes of the kinds asked for until none is left,
 //! returning the fixed source's parse and diagnostics:
@@ -130,17 +120,17 @@
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
 //! use luck::linter::{FixKind, LintConfig, Linter};
-//! use luck::token::LuaTarget;
+//! use luck::token::Variant;
 //!
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());
-//! let stdlib = luck::stdlib::library_for(LuaTarget::Lua54);
-//! let parse = luck::parser::parse(&allocator, b"print(undefined_name)", LuaTarget::Lua54.version());
+//! let stdlib = luck::stdlib::library_for(Variant::Standalone);
+//! let parse = luck::parser::parse(&allocator, b"print(undefined_name)");
 //! let diags = linter.run(&parse, stdlib, FixKind::empty(), None);
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = linter.fix(&allocator, b"unpack(t)", stdlib, FixKind::Fix, None);
-//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"table.unpack(t)"[..]));
+//! let fixed = linter.fix(&allocator, b"return table.getn(t)", stdlib, FixKind::all(), None);
+//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"return #t"[..]));
 //! # }
 //! ```
 //!
@@ -150,10 +140,9 @@
 //! # #[cfg(feature = "codegen")] {
 //! use luck::allocator::Allocator;
 //! use luck::codegen::LiteralSpelling;
-//! use luck::token::LuaVersion;
 //!
 //! let allocator = Allocator::new();
-//! let parsed = luck::parser::parse(&allocator, b"local x = ( a + b ) * ( c )", LuaVersion::Lua54);
+//! let parsed = luck::parser::parse(&allocator, b"local x = ( a + b ) * ( c )");
 //! let output = luck::codegen::compact(&parsed.chunk, LiteralSpelling::AsWritten);
 //! assert_eq!(output, b"local x=(a+b)*c");
 //! # }
@@ -169,16 +158,11 @@
 //!
 //! use luck::allocator::ThreadAllocators;
 //! use luck::bundler::{BundleOptions, DynamicRequire};
-//! use luck::token::LuaVersion;
 //!
-//! let options = BundleOptions {
-//!     version: LuaVersion::Lua54,
-//!     search_paths: &[],
-//!     project_root: Path::new("src"),
-//!     dynamic_require: DynamicRequire::default(),
-//! };
+//! let options =
+//!     BundleOptions { project_root: Path::new("src"), dynamic_require: DynamicRequire::default() };
 //! let arenas = ThreadAllocators::new();
-//! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.lua"), &options).unwrap();
+//! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.luau"), &options).unwrap();
 //! std::io::Write::write_all(&mut std::io::stdout(), &bundle.output).unwrap();
 //! # }
 //! ```

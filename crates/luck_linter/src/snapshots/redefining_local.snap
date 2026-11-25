@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: local `x` is redeclared in the same block
- --> Lua54:2:7
+ --> Standalone:2:7
 1 | do local x = 1
   |          - first declared here
 2 | local x = 2
@@ -10,7 +10,7 @@ warning: local `x` is redeclared in the same block
 3 | print(x) end
 
 warning: local `x` is redeclared in the same block
- --> Lua54:2:7
+ --> Standalone:2:7
 1 | local x = 1
   |       - first declared here
 2 | local x = 2
@@ -18,7 +18,7 @@ warning: local `x` is redeclared in the same block
 3 | local x = 3
 
 warning: local `x` is redeclared in the same block
- --> Lua54:3:7
+ --> Standalone:3:7
 1 | local x = 1
   |       - first declared here
 2 | local x = 2
@@ -26,14 +26,14 @@ warning: local `x` is redeclared in the same block
   |       ^
 
 warning: local `f` is redeclared in the same block
- --> Lua54:2:16
+ --> Standalone:2:16
 1 | local function f() end
   |                - first declared here
 2 | local function f() end
   |                ^
 
 warning: local `x0` is redeclared in the same block
-   --> Lua54:200:7
+   --> Standalone:200:7
   1 | local x0 = 1
     |       -- first declared here
   2 | local x1 = 1

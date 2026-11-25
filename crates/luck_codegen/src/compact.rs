@@ -5,7 +5,6 @@ mod types;
 
 use luck_ast::Chunk;
 use luck_data_structures::CodeBuffer;
-use luck_token::LuaVersion;
 
 use crate::separator::{Classes, NUMBER, OTHER, WORD, class_of, merges_after};
 
@@ -16,8 +15,8 @@ pub enum LiteralSpelling {
     /// wrote them, and one built in code the shortest way its value reads
     /// back.
     AsWritten,
-    /// The shortest way its value reads back in the chunk's version, or as
-    /// the tree spells it when that's no longer, as a minifier wants.
+    /// The shortest way its value reads back, or as the tree spells it when
+    /// that's no longer, as a minifier wants.
     Shortest,
 }
 
@@ -38,7 +37,6 @@ pub fn compact_into(chunk: &Chunk<'_>, spelling: LiteralSpelling, output: Vec<u8
     let mut printer = Printer {
         output: CodeBuffer::from(output),
         last: OTHER,
-        version: chunk.version,
         is_shortest: spelling == LiteralSpelling::Shortest,
     };
     printer.print_block(&chunk.block);
@@ -55,7 +53,6 @@ struct Printer {
     output: CodeBuffer,
     /// The class of the last piece written.
     last: Classes,
-    version: LuaVersion,
     /// Whether literals take [`LiteralSpelling::Shortest`].
     is_shortest: bool,
 }

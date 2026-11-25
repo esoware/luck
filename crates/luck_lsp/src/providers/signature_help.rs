@@ -54,8 +54,8 @@ pub(crate) fn signature_help(
                 .is_some_and(|token| token.kind == TokenKind::Comma && token.span.end <= offset)
         })
         .count();
-    // Semantic resolution handles shaped locals (`f:read(` after
-    // `local f = io.open(...)`) and literal receivers (`("x"):rep(`), and
+    // Semantic resolution handles shaped locals (`g:GetService(` after
+    // `local g = game`) and literal receivers (`("x"):rep(`), and
     // gives a shadowed base no help. Method params exclude `self`, matching
     // the argument count inside the parens.
     let callee = document.semantic().resolve_callee(call)?;
@@ -156,10 +156,10 @@ fn param_documentation(param: &StdlibParam<'_>) -> Option<Documentation> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaTarget, index_to_offset};
+    use luck_token::index_to_offset;
 
     use super::*;
-    use crate::fixtures::document;
+    use crate::fixtures::{document, roblox_document};
 
     fn active_signature(help: &SignatureHelp) -> &SignatureInformation {
         &help.signatures[help.active_signature.unwrap_or(0) as usize]
@@ -168,21 +168,25 @@ mod tests {
     #[test]
     fn signature_help_resolves_shaped_local_method() {
         let text = "\
-local f = io.open('x')
-f:setvbuf('full', 512)";
-        let document = document(text, LuaTarget::Lua54);
+local g = game
+g:FindFirstChild('x', true)";
+        let document = roblox_document(text);
         // Cursor inside the second argument.
-        let help =
-            signature_help(&document, Position::new(1, 18)).expect("file method signature help");
+        let help = signature_help(&document, Position::new(1, 23))
+            .expect("instance method signature help");
         let signature = active_signature(&help);
-        assert!(signature.label.starts_with("f:setvbuf("), "method rendering: {}", signature.label);
+        assert!(
+            signature.label.starts_with("g:FindFirstChild("),
+            "method rendering: {}",
+            signature.label
+        );
         assert_eq!(help.active_parameter, Some(1), "cursor is in arg 2");
     }
 
     #[test]
     fn signature_help_marks_method_active_param_excluding_self() {
         let text = "local p = game:GetService('Players')";
-        let document = document(text, LuaTarget::LuauRoblox);
+        let document = roblox_document(text);
         let utf16_column = index_to_offset(text.find("'Players'").expect("literal") + 3);
         let help = signature_help(&document, Position::new(0, utf16_column))
             .expect("GetService signature help");
@@ -199,7 +203,7 @@ f:setvbuf('full', 512)";
         let text = "\
 local string = 1
 string.format('x')";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         assert!(
             signature_help(&document, Position::new(1, 15)).is_none(),
             "shadowed base must not show stdlib signatures"
@@ -209,7 +213,7 @@ string.format('x')";
     #[test]
     fn signature_help_finds_a_call_at_stmt_position() {
         let text = "collectgarbage('collect')";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         let help =
             signature_help(&document, Position::new(0, 16)).expect("statement-position call");
         assert!(
@@ -220,7 +224,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_ends_at_the_closing_paren() {
-        let document = document("print(1)", LuaTarget::Lua54);
+        let document = document("print(1)");
         let help = signature_help(&document, Position::new(0, 8));
         assert!(help.is_none(), "the cursor is past `)`, outside the call: {help:?}");
     }
@@ -228,7 +232,7 @@ string.format('x')";
     #[test]
     fn signature_help_counts_commas_before_the_cursor() {
         let text = "string.rep(\"a\" , 3 )";
-        let document = document(text, LuaTarget::Lua54);
+        let document = document(text);
         let before_comma =
             signature_help(&document, Position::new(0, 15)).expect("inside the call");
         assert_eq!(before_comma.active_parameter, Some(0), "no comma before the cursor yet");
@@ -239,7 +243,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_reads_the_innermost_call_around_the_cursor() {
-        let document = document("print(string.rep(\"a\", 2), 3)", LuaTarget::Lua54);
+        let document = document("print(string.rep(\"a\", 2), 3)");
         let label_at = |utf16_column| {
             let help = signature_help(&document, Position::new(0, utf16_column))?;
             Some((active_signature(&help).label.clone(), help.active_parameter))
@@ -254,7 +258,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_stays_inside_an_unclosed_argument_list() {
-        let document = document("print(1", LuaTarget::Lua54);
+        let document = document("print(1");
         assert!(
             signature_help(&document, Position::new(0, 7)).is_some(),
             "the closing paren hasn't been typed yet"
@@ -263,7 +267,7 @@ string.format('x')";
 
     #[test]
     fn signature_help_offers_nothing_inside_a_comment_argument() {
-        let document = document("print(--[[ note ]] 1)", LuaTarget::Lua54);
+        let document = document("print(--[[ note ]] 1)");
         assert!(signature_help(&document, Position::new(0, 13)).is_none());
     }
 }

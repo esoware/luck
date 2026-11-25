@@ -38,28 +38,31 @@ fn bare_config_name_applies_a_relative_include() {
 #[test]
 fn bare_config_name_loads_a_root_config_with_extends() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "base.json", r#"{"lua":"lua54"}"#);
+    write_file(project.path(), "base.json", r#"{"variant":"standalone"}"#);
     write_file(project.path(), "luck.json", r#"{"root":true,"extends":["base.json"]}"#);
     write_file(project.path(), "main.lua", "print(1)\n");
     luck_in(project.path()).args(["check", "-c", "luck.json"]).assert().success();
 }
 
-/// `bundle` and `graph` resolve a project's modules as `build` does, from its
-/// root and `search_paths`, however the entry is named.
+/// `bundle` and `graph` resolve a project's modules as `build` does, through
+/// the `.luaurc` aliases above the entry, however the entry is named.
 #[test]
-fn bundle_and_graph_resolve_through_the_project_s_search_paths() {
+fn bundle_and_graph_resolve_through_the_project_s_aliases() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{"search_paths":["src/?.lua","lib/?.lua"]}"#);
-    write_file(project.path(), "src/main.lua", "return require(\"util\").answer\n");
+    write_file(project.path(), "luck.json", "{}");
+    write_file(project.path(), ".luaurc", r#"{"aliases":{"lib":"./lib"}}"#);
+    write_file(project.path(), "src/main.lua", "return require(\"@lib/util\").answer\n");
     write_file(project.path(), "lib/util.lua", "return { answer = 42 }\n");
     for command in ["bundle", "graph"] {
         luck_in(&project.path().join("src")).args([command, "main.lua"]).assert().success();
+        luck_in(project.path()).args([command, "src/main.lua"]).assert().success();
     }
+    write_file(project.path(), ".luaurc", "{}");
     luck_in(project.path())
-        .args(["bundle", "src/main.lua", "-s", "src/?.lua"])
+        .args(["bundle", "src/main.lua"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("module not found: `util`"));
+        .stderr(predicate::str::contains("E004"));
 }
 
 #[test]
@@ -201,7 +204,7 @@ fn a_config_error_names_the_place_in_the_file() {
 #[test]
 fn lint_reads_the_std_definitions_a_config_names() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{ "lua": "lua51", "std": ["love.toml"] }"#);
+    write_file(project.path(), "luck.json", r#"{ "std": ["love.toml"] }"#);
     write_file(
         project.path(),
         "love.toml",

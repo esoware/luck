@@ -42,9 +42,7 @@ pub struct Parameter<'ast> {
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct VarArgParam<'ast> {
     pub span: Span,
-    /// Lua 5.5: `...name`.
-    pub name: Option<Name<'ast>>,
-    /// Luau: `: T`, which may be a generic pack (`T...`).
+    /// `: T`, which may be a generic pack (`T...`).
     pub type_annotation: Option<Box<'ast, Type<'ast>>>,
 }
 

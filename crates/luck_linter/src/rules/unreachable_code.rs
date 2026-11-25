@@ -10,9 +10,9 @@ use crate::rule::{Rule, declare_lint_rule};
 
 /// Flags code no path through its function's control-flow graph reaches.
 ///
-/// That's code after a `return`, `break`, `goto`, call of the host's `error`,
-/// or loop that never ends, after a branch every path of which leaves, and
-/// in a `while` whose condition is always false.
+/// That's code after a call of the host's `error`, a loop that never ends,
+/// or a statement every path through which leaves by `return`, `break`, or
+/// `continue`, and code in a `while` whose condition is always false.
 ///
 /// Each run of unreachable statements in a block is one finding. A block
 /// whose statement is unreachable is part of that statement's finding, and a
@@ -46,7 +46,8 @@ impl Rule for UnreachableCode {
                 report(run.take(), context);
                 continue;
             }
-            if !can_reach || is_declaration(stmt) {
+            // A type declaration emits no code, and its whole block sees it.
+            if !can_reach || matches!(stmt, Statement::TypeDeclaration(_)) {
                 continue;
             }
             let span = stmt.span();
@@ -75,37 +76,6 @@ fn is_entered(block: &AstNode<'_>, graph: &FlowGraph, context: &LintContext<'_, 
     graph.can_run(owner.span().start)
 }
 
-/// A statement the compiler reads without emitting code for it, which no
-/// path running past it changes: a Luau type, which its whole block sees,
-/// or a Lua 5.5 `global` declaration that assigns nothing.
-fn is_declaration(stmt: &Statement<'_>) -> bool {
-    match stmt {
-        // Luau, Lua 5.5
-        Statement::TypeDeclaration(_) | Statement::GlobalStar(_) => true,
-        // Lua 5.5
-        Statement::GlobalDeclaration(declaration) => declaration.exprs.is_empty(),
-        Statement::Assignment(_)
-        | Statement::FunctionCall(_)
-        | Statement::DoBlock(_)
-        | Statement::WhileLoop(_)
-        | Statement::RepeatLoop(_)
-        | Statement::IfStatement(_)
-        | Statement::NumericFor(_)
-        | Statement::GenericFor(_)
-        | Statement::FunctionDecl(_)
-        | Statement::LocalFunction(_)
-        | Statement::LocalAssignment(_)
-        | Statement::Return(_)
-        | Statement::Break(_)
-        | Statement::Continue(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalFunction(_)
-        | Statement::CompoundAssignment(_)
-        | Statement::Error(_) => false,
-    }
-}
-
 fn report(run: Option<Span>, context: &LintContext<'_, '_>) {
     if let Some(span) = run {
         context.diagnostic(Finding::new("unreachable code", span).with_tag(Tag::Unnecessary));
@@ -114,96 +84,55 @@ fn report(run: Option<Span>, context: &LintContext<'_, '_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 local function error() end
 error('go on')
 print(1)",
-            LuaTarget::Lua54,
-        ),
-        ("while true do print(1) break end", LuaTarget::Lua54),
-        (
-            "\
+        "while true do print(1) break end",
+        "\
 local x = 1
 print(x)",
-            LuaTarget::Lua54,
-        ),
         // A `;` separator isn't code.
-        ("while true do break; end", LuaTarget::Lua54),
-        // The `goto` reaches the label after `break`.
-        ("while c do if x then goto a end break ::a:: print(1) end", LuaTarget::Lua54),
-        (
-            "\
+        "while true do break; end",
+        "for i = 1, 3 do if i then continue end print(i) end",
+        "\
 local function f(x: T)
   do return end
   type T = number
 end",
-            LuaTarget::Luau,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        // From Lua 5.2 a `break` can sit mid-block, so a statement can follow it.
-        ("while true do break print(1) end", LuaTarget::Lua54),
-        ("for i = 1, 3 do break print(1) print(2) end", LuaTarget::Lua54),
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "for i = 1, 3 do if i then break else continue end print(i) end",
+        "\
 local function f()
   do return end
   print(1)
 end",
-            LuaTarget::Lua51,
-        ),
-        (
-            "\
+        "\
 error('stop')
 print(1)",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 while true do print(1) end
 print(2)",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local function f(x)
   if x then return 1 else return 2 end
   print(x)
 end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
-goto skip
-print(1)
-::skip::
-print(2)",
-            LuaTarget::Lua54,
-        ),
-        ("while false do print(1) end", LuaTarget::Lua54),
-        (
-            "\
+        "while false do print(1) end",
+        "\
 local function f(x)
   do return end
   if x then print(x) end
 end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 do return end
 local function g() print(1) end",
-            LuaTarget::Lua54,
-        ),
-        ("while c do break ::a:: print(1) end", LuaTarget::Lua54),
     ];
 
     #[test]

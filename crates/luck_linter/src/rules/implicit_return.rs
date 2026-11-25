@@ -56,55 +56,43 @@ impl Rule for ImplicitReturn {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("function f(x) if x then return 1 else return 2 end end", LuaTarget::Lua54),
-        ("function f() print() end", LuaTarget::Lua54),
+    const PASS: &[&str] = &[
+        "function f(x) if x then return 1 else return 2 end end",
+        "function f() print() end",
         // A bare `return` at the end is explicit, so nothing falls through.
-        ("function f() return end", LuaTarget::Lua54),
-        ("type T = number", LuaTarget::Luau),
+        "function f() return end",
+        "type T = number",
         // `while true do ... return end` always returns.
-        ("function f() while true do return 1 end end", LuaTarget::Lua54),
+        "function f() while true do return 1 end end",
         // `continue` ends the repeat, so `return 2` runs.
-        (
-            "\
+        "\
 local function f(x)
  if x then return 1 end
  repeat continue until true
  return 2
 end",
-            LuaTarget::Luau,
-        ),
         // `1` is always truthy, so nothing falls through.
-        ("local function f(x) while 1 do if x then return 1 end end end", LuaTarget::Lua54),
+        "local function f(x) while 1 do if x then return 1 end end end",
         // No path returns a value, so no `nil` is implicit.
-        ("local function f(x) if not x then return end print(x) end", LuaTarget::Lua54),
+        "local function f(x) if not x then return end print(x) end",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("function f(x) if x then return 1 end end", LuaTarget::Lua54),
-        ("local function f(x) if x then return 1 end end", LuaTarget::Lua54),
-        ("local f = function(x) if x then return 1 end end", LuaTarget::Lua54),
-        ("global function f(x) if x then return 1 end end", LuaTarget::Lua55),
-        ("type function t1(a) if a then return a end end", LuaTarget::Luau),
+    const FAIL: &[&str] = &[
+        "function f(x) if x then return 1 end end",
+        "local function f(x) if x then return 1 end end",
+        "local f = function(x) if x then return 1 end end",
+        "type function t1(a) if a then return a end end",
         // The outer function never returns, so only the inner one fires.
-        ("function f() local function g(x) if x then return 1 end end end", LuaTarget::Lua54),
-        ("function f(x, y) if x then return 1 elseif y then return 2 end end", LuaTarget::Lua54),
+        "function f() local function g(x) if x then return 1 end end end",
+        "function f(x, y) if x then return 1 elseif y then return 2 end end",
         // The loop body may never run, so the function can fall through.
-        ("function f() for i = 1, 10 do return i end end", LuaTarget::Lua54),
+        "function f() for i = 1, 10 do return i end end",
         // The `break` path falls off the end.
-        (
-            "local function f(c, d) if c then return 1 end while true do if d then break end end end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "local function f(x, y) if x then return end if y then return 1 end end",
-            LuaTarget::Lua54,
-        ),
+        "local function f(c, d) if c then return 1 end while true do if d then break end end end",
+        "local function f(x, y) if x then return end if y then return 1 end end",
     ];
 
     #[test]

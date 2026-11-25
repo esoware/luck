@@ -1,6 +1,6 @@
 //! # `luck_linter`
 //!
-//! Lua/Luau linter with scope-aware analysis, auto-fixes, and suppression
+//! Luau linter with scope-aware analysis, auto-fixes, and suppression
 //! comments.
 //!
 //! Rules fall into four categories: correctness, suspicious, style, and
@@ -15,12 +15,12 @@
 //! use luck_allocator::Allocator;
 //! use luck_linter::{FixKind, LintConfig, Linter};
 //! use luck_stdlib::library_for;
-//! use luck_token::LuaTarget;
+//! use luck_token::Variant;
 //!
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());
-//! let parse = luck_parser::parse(&allocator, b"print(1)", LuaTarget::Lua54.version());
-//! let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), None);
+//! let parse = luck_parser::parse(&allocator, b"print(1)");
+//! let diags = linter.run(&parse, library_for(Variant::Standalone), FixKind::empty(), None);
 //! assert!(diags.is_empty());
 //! ```
 

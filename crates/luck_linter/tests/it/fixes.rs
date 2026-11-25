@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter, RuleId};
 use luck_stdlib::library_for;
-use luck_token::LuaTarget;
+use luck_token::Variant;
 
 use crate::common::{enable, lint, lint_bytes};
 
@@ -10,7 +10,7 @@ use crate::common::{enable, lint, lint_bytes};
 fn fixed(source: &str, config: &LintConfig, fixes: FixKind) -> String {
     let allocator = Allocator::new();
     let result = Linter::new(config.clone())
-        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), fixes, None)
+        .fix(&allocator, source.as_bytes(), library_for(Variant::Standalone), fixes, None)
         .expect("the fixes converge");
     assert!(result.parse.errors.is_empty(), "{:?}", result.parse.errors);
     String::from_utf8(result.parse.source.to_owned()).unwrap()
@@ -23,7 +23,7 @@ local unused = nil
 return 1";
     let config = enable(RuleId::RedundantNilInit);
     let fix_kinds = |fixes: FixKind| -> Vec<(&str, Option<FixKind>)> {
-        lint_bytes(source.as_bytes(), LuaTarget::Lua54, &config, fixes)
+        lint_bytes(source.as_bytes(), Variant::Standalone, &config, fixes)
             .iter()
             .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
             .collect()
@@ -50,7 +50,7 @@ local unused = nil
 return 1";
     let config = enable(RuleId::RedundantNilInit);
     let result = Linter::new(config.clone())
-        .fix(&allocator, source.as_bytes(), library_for(LuaTarget::Lua54), FixKind::Fix, None)
+        .fix(&allocator, source.as_bytes(), library_for(Variant::Standalone), FixKind::Fix, None)
         .expect("the fixes converge");
     assert_eq!(
         result.parse.source,
@@ -59,7 +59,7 @@ local unused
 return 1"
     );
     let fixed_source = str::from_utf8(result.parse.source).unwrap();
-    assert_eq!(result.messages, lint(fixed_source, LuaTarget::Lua54, &config));
+    assert_eq!(result.messages, lint(fixed_source, &config));
 }
 
 /// A fix that copies code keeps the bytes of a string that isn't UTF-8, as
@@ -69,7 +69,7 @@ fn a_fix_copies_bytes_that_are_not_utf8_as_written() {
     let allocator = Allocator::new();
     let source = b"local a = 'caf\xE9'\nlocal b = '\xFF' -- d\xE9j\xE0\nreturn a, b";
     let result = Linter::new(enable(RuleId::MergeAdjacentLocals))
-        .fix(&allocator, source, library_for(LuaTarget::Lua51), FixKind::Fix, None)
+        .fix(&allocator, source, library_for(Variant::Standalone), FixKind::Fix, None)
         .expect("the fixes converge");
     assert_eq!(result.parse.source, b"local a, b = 'caf\xE9', '\xFF' -- d\xE9j\xE0\nreturn a, b");
 }
@@ -106,9 +106,13 @@ if (x == 1) then end";
 }
 
 #[test]
-fn deprecated_loadstring_fix_switches_to_load() {
-    let fixed = fixed("local f = loadstring('return 1')", &LintConfig::default(), FixKind::Fix);
-    assert_eq!(fixed, "local f = load('return 1')");
+fn deprecated_ypcall_fix_switches_to_pcall() {
+    let allocator = Allocator::new();
+    let source = b"local ok = ypcall(print, 1)";
+    let result = Linter::new(LintConfig::default())
+        .fix(&allocator, source, library_for(Variant::Roblox), FixKind::Fix, None)
+        .expect("the fixes converge");
+    assert_eq!(result.parse.source, b"local ok = pcall(print, 1)");
 }
 
 #[test]

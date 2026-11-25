@@ -1,11 +1,10 @@
 use luck_minifier::TransformConfig;
-use luck_token::LuaVersion;
 
-use crate::common::{minify_lua54, minify_luau, minify_with, reparses};
+use crate::common::{minify_default, minify_with, reparses};
 
 #[test]
 fn folds_arithmetic() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 1 + 2
 return x
@@ -17,7 +16,7 @@ return x
 
 #[test]
 fn folds_string_concat() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = \"hello\" .. \" world\"
 return x
@@ -28,7 +27,7 @@ return x
 
 #[test]
 fn folds_not_true() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = not true
 return x
@@ -39,7 +38,7 @@ return x
 
 #[test]
 fn folds_the_length_of_a_string_literal_by_its_value() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = #\"h\\101llo\"
 return x
@@ -50,7 +49,7 @@ return x
 
 #[test]
 fn keeps_division_by_zero() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 1 / 0
 return x
@@ -61,7 +60,7 @@ return x
 
 #[test]
 fn folds_exponentiation() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 2 ^ 5
 return x
@@ -72,7 +71,7 @@ return x
 
 #[test]
 fn folds_multiplication_that_overflows_to_infinity() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 1e308 * 10
 return x
@@ -89,7 +88,6 @@ fn disabled_folding_keeps_arithmetic() {
 local x = 1 + 2
 return x
 ",
-        LuaVersion::Lua54,
         &config,
     );
     assert!(result.contains('+'), "Folding should be disabled: {result}");
@@ -125,13 +123,13 @@ return s ^ y
 local s = -2
 return s ^ 2
 ",
-            "return 4.",
+            "return 4",
         ),
     ];
     for (source, expected) in cases {
-        let result = minify_lua54(source);
+        let result = minify_default(source);
         assert_eq!(result, expected, "source: {source}");
-        assert_eq!(minify_lua54(&result), result, "must be idempotent");
+        assert_eq!(minify_default(&result), result, "must be idempotent");
     }
     for (source, expected) in [
         (
@@ -156,19 +154,15 @@ return -s
             "return-(1+2)",
         ),
     ] {
-        let result = minify_with(source, LuaVersion::Lua54, &no_folding);
+        let result = minify_with(source, &no_folding);
         assert_eq!(result, expected, "source: {source}");
-        assert_eq!(
-            minify_with(&result, LuaVersion::Lua54, &no_folding),
-            result,
-            "must be idempotent"
-        );
+        assert_eq!(minify_with(&result, &no_folding), result, "must be idempotent");
     }
 }
 
 #[test]
 fn shortens_trailing_zero() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 1.0
 return x
@@ -179,7 +173,7 @@ return x
 
 #[test]
 fn shortens_leading_zero() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 0.5
 return x
@@ -190,29 +184,18 @@ return x
 
 #[test]
 fn shortens_large_round_numbers() {
-    // 5.4 has integer/float subtypes: `1e6` is a float, so the
-    // integer literal must stay spelled as an integer.
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = 1000000
 return x
 ",
     );
-    assert!(result.contains("1000000"), "Got: {result}");
-
-    // Luau's single number type makes the scientific form safe.
-    let luau_result = minify_luau(
-        "\
-local x = 1000000
-return x
-",
-    );
-    assert!(luau_result.contains("1e6"), "Got: {luau_result}");
+    assert!(result.contains("1e6"), "Got: {result}");
 }
 
 #[test]
 fn removes_parens_around_literal() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 local x = (42)
 return x
@@ -229,7 +212,7 @@ fn keeps_parens_around_a_call_only_where_they_truncate_its_values() {
         ("local x = (foo()) return x", "local e=foo()return e"),
         ("local x, y = (foo()) return x, y", "local e,t=(foo())return e,t"),
     ] {
-        assert_eq!(minify_lua54(source), expected, "source: {source}");
+        assert_eq!(minify_default(source), expected, "source: {source}");
     }
 }
 
@@ -237,7 +220,7 @@ fn keeps_parens_around_a_call_only_where_they_truncate_its_values() {
 fn keeps_parens_around_left_nested_concat() {
     // Concat is right-associative, so (a .. b) .. c differs from
     // a .. b .. c and the parens must survive.
-    let result = minify_lua54("return (a .. b) .. c\n");
+    let result = minify_default("return (a .. b) .. c\n");
     assert!(reparses(&result), "Parse errors\nOutput: {result}");
     assert!(
         result.contains('('),
@@ -248,7 +231,7 @@ fn keeps_parens_around_left_nested_concat() {
 #[test]
 fn keeps_parens_around_returned_call() {
     // (f()) truncates f's multiple returns, so the parens must be kept.
-    let result = minify_lua54("return (f())\n");
+    let result = minify_default("return (f())\n");
     assert!(
         result.contains("(f())"),
         "Parens around f() in return must be preserved (multi-return truncation): {result}"
@@ -257,7 +240,7 @@ fn keeps_parens_around_returned_call() {
 
 #[test]
 fn strips_default_for_step() {
-    let result = minify_lua54("for i = 1, 10, 1 do print(i) end\n");
+    let result = minify_default("for i = 1, 10, 1 do print(i) end\n");
     assert!(
         !result.contains(",1 do")
             && !result.contains(",1,")
@@ -269,7 +252,7 @@ fn strips_default_for_step() {
 
 #[test]
 fn dead_local_with_call_extracts_side_effect() {
-    let result = minify_lua54("local unused = foo()\n");
+    let result = minify_default("local unused = foo()\n");
     assert!(
         result.contains("foo("),
         "Side-effectful call should be preserved even when result unused: {result}"
@@ -280,14 +263,14 @@ fn dead_local_with_call_extracts_side_effect() {
 #[test]
 fn metamethod_safe_dead_code_preserves_variable_ops() {
     // x + 1 is not pure: x may carry a side-effecting __add metamethod.
-    let result = minify_lua54("local unused = x + 1\n");
+    let result = minify_default("local unused = x + 1\n");
     assert!(result.contains('+'), "Should preserve x + 1 (metamethod side effects), got: {result}");
 }
 
 #[test]
 fn metamethod_safe_dead_code_removes_literal_ops() {
     // 1 + 2 is pure: literal numbers carry no metamethods.
-    let result = minify_lua54("local unused = 1 + 2\n");
+    let result = minify_default("local unused = 1 + 2\n");
     assert!(!result.contains('+'), "Should remove literal 1 + 2 (no metamethods), got: {result}");
 }
 
@@ -299,7 +282,7 @@ local x = setmetatable({}, {__add = function() return nil end})
 if true then return x + 1 end
 return 0
 ";
-    let result = minify_lua54(source);
+    let result = minify_default(source);
     assert!(
         !result.contains(" and "),
         "Should not simplify to and/or (metamethod may return falsy), got: {result}"
@@ -308,7 +291,7 @@ return 0
 
 #[test]
 fn metamethod_safe_truthiness_simplifies_literal_ops() {
-    let result = minify_lua54(
+    let result = minify_default(
         "\
 if true then return 1 + 2 end
 return 0

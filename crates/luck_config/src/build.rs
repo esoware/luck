@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use luck_minifier::TransformConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_token::LuaTarget;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::{EntryConfig, ProfileOverrides};
@@ -12,7 +11,6 @@ use crate::project::Project;
 /// One bundle `luck build` writes, with the settings its profile gives it.
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
-    pub target: LuaTarget,
     pub entry: PathBuf,
     pub output: PathBuf,
     pub minify: bool,
@@ -60,7 +58,6 @@ impl BuildKeys {
                 return Err(format!("entry file not found: `{}`", entry.display()));
             }
             Ok(BuildConfig {
-                target: project.target_for(Some(&entry)),
                 entry,
                 output,
                 minify,

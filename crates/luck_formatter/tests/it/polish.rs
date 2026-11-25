@@ -4,52 +4,36 @@ use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,
     SpaceAfterFunction,
 };
-use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_with};
 
 #[test]
 fn hex_prefix_lowered_by_default() {
     // The default, `Preserve`, keeps digit case but still lowercases `0X`.
-    assert_format_with(
-        "local x = 0XB0\n",
-        "local x = 0xB0\n",
-        LuaVersion::Luau,
-        &FormatOptions::default(),
-    );
+    assert_format_with("local x = 0XB0\n", "local x = 0xB0\n", &FormatOptions::default());
 }
 
 #[test]
 fn hex_digits_lowered_when_configured() {
     let options = FormatOptions { hexadecimal_case: HexCase::Lower, ..FormatOptions::default() };
-    assert_format_with("local x = 0XDEad\n", "local x = 0xdead\n", LuaVersion::Luau, &options);
+    assert_format_with("local x = 0XDEad\n", "local x = 0xdead\n", &options);
 }
 
 #[test]
 fn hex_digits_uppered_when_configured() {
     let options = FormatOptions { hexadecimal_case: HexCase::Upper, ..FormatOptions::default() };
-    assert_format_with("local x = 0xdead\n", "local x = 0xDEAD\n", LuaVersion::Luau, &options);
+    assert_format_with("local x = 0xdead\n", "local x = 0xDEAD\n", &options);
 }
 
 #[test]
 fn decimal_exponent_lowered() {
-    assert_format_with(
-        "local x = 1E10\n",
-        "local x = 1e10\n",
-        LuaVersion::Lua54,
-        &FormatOptions::default(),
-    );
+    assert_format_with("local x = 1E10\n", "local x = 1e10\n", &FormatOptions::default());
 }
 
 #[test]
 fn hex_prefix_lowered_while_digits_uppered() {
     let options = FormatOptions { hexadecimal_case: HexCase::Upper, ..FormatOptions::default() };
-    assert_format_with(
-        "local x = 0Xb0 + 1e5\n",
-        "local x = 0xB0 + 1e5\n",
-        LuaVersion::Luau,
-        &options,
-    );
+    assert_format_with("local x = 0Xb0 + 1e5\n", "local x = 0xB0 + 1e5\n", &options);
 }
 
 #[test]
@@ -87,7 +71,7 @@ do
 \tlocal x = 1
 end
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_format_with(input, expected, &options);
 }
 
 #[test]
@@ -108,7 +92,7 @@ do
 
 end
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_format_with(input, expected, &options);
 }
 
 #[test]
@@ -131,7 +115,7 @@ local function f()
 
 end
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_format_with(input, expected, &options);
 }
 
 #[test]
@@ -152,7 +136,7 @@ if x then
 \tlocal y = 1
 end
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_format_with(input, expected, &options);
 }
 
 fn sorting_requires_options() -> FormatOptions {
@@ -160,7 +144,7 @@ fn sorting_requires_options() -> FormatOptions {
 }
 
 fn assert_sorted(input: &str, expected: &str) {
-    assert_format_with(input, expected, LuaVersion::Lua54, &sorting_requires_options());
+    assert_format_with(input, expected, &sorting_requires_options());
 }
 
 #[test]
@@ -183,7 +167,6 @@ local Apple = require(Packages.Apple)
 local Apple = require(Packages.Apple)
 local Zebra = require(script.Parent.Zebra)
 ",
-        LuaVersion::Luau,
         &sorting_requires_options(),
     );
 }
@@ -408,7 +391,7 @@ end
 ";
     assert_sorted(input, expected);
 
-    let luau_input = "\
+    let functions_input = "\
 type function f()
 \tlocal zeta = require(\"zeta\")
 \tlocal alpha = require(\"alpha\")
@@ -418,7 +401,7 @@ x += function()
 \tlocal alpha = require(\"alpha\")
 end
 ";
-    let luau_expected = "\
+    let functions_expected = "\
 type function f()
 \tlocal zeta = require(\"zeta\")
 \tlocal alpha = require(\"alpha\")
@@ -428,7 +411,7 @@ x += function()
 \tlocal zeta = require(\"zeta\")
 end
 ";
-    assert_format_with(luau_input, luau_expected, LuaVersion::Luau, &sorting_requires_options());
+    assert_sorted(functions_input, functions_expected);
 }
 
 #[test]
@@ -483,7 +466,6 @@ local function f()
 \treturn 1
 end
 ",
-        LuaVersion::Lua54,
         &FormatOptions::default(),
     );
 }
@@ -505,7 +487,6 @@ local function f ()
 end
 f()
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -527,7 +508,6 @@ local function f()
 end
 f ()
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -549,7 +529,6 @@ local function f ()
 end
 f ()
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -558,21 +537,21 @@ f ()
 fn call_parens_input_preserves_bare_string() {
     let options =
         FormatOptions { call_parentheses: CallParentheses::Input, ..FormatOptions::default() };
-    assert_format_with("print\"hi\"\n", "print \"hi\"\n", LuaVersion::Lua54, &options);
+    assert_format_with("print\"hi\"\n", "print \"hi\"\n", &options);
 }
 
 #[test]
 fn call_parens_input_preserves_parenthesized_string() {
     let options =
         FormatOptions { call_parentheses: CallParentheses::Input, ..FormatOptions::default() };
-    assert_format_with("print(\"hi\")\n", "print(\"hi\")\n", LuaVersion::Lua54, &options);
+    assert_format_with("print(\"hi\")\n", "print(\"hi\")\n", &options);
 }
 
 #[test]
 fn call_parens_input_preserves_bare_table() {
     let options =
         FormatOptions { call_parentheses: CallParentheses::Input, ..FormatOptions::default() };
-    assert_format_with("print{1, 2}\n", "print { 1, 2 }\n", LuaVersion::Lua54, &options);
+    assert_format_with("print{1, 2}\n", "print { 1, 2 }\n", &options);
 }
 
 #[test]
@@ -596,7 +575,7 @@ local y = 2
 fn magic_trailing_comma_off_keeps_packed_table() {
     let options = FormatOptions { magic_trailing_comma: false, ..FormatOptions::default() };
     let input = "local t = { 1, 2, 3, }\n";
-    assert_format_with(input, "local t = { 1, 2, 3 }\n", LuaVersion::Lua54, &options);
+    assert_format_with(input, "local t = { 1, 2, 3 }\n", &options);
 }
 
 #[test]
@@ -612,7 +591,7 @@ local t = {
 \t3,
 }
 ";
-    assert_format_with(input, expected, LuaVersion::Lua54, &options);
+    assert_format_with(input, expected, &options);
 }
 
 #[test]
@@ -655,14 +634,13 @@ local t = {
 \t4, 5, 6,
 }
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
 
 #[test]
 fn magic_trailing_comma_on_expands_call_args_via_table() {
-    // No dialect allows a trailing comma after the last argument, so the
+    // The grammar allows no trailing comma after the last argument, so the
     // option can only reach a call through a table argument.
     let options = FormatOptions { magic_trailing_comma: true, ..FormatOptions::default() };
     assert_format_with(
@@ -674,7 +652,6 @@ f({
 \t3,
 })
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -792,16 +769,6 @@ local a = require(\"a\")
 }
 
 #[test]
-fn sort_requires_keeps_the_close_order_of_to_be_closed_variables() {
-    // To-be-closed variables close in reverse declaration order.
-    let input = "\
-local z <close> = require(\"z\")
-local a <close> = require(\"a\")
-";
-    assert_sorted(input, input);
-}
-
-#[test]
 fn magic_trailing_comma_formats_a_wrapped_fill_idempotently() {
     // The comma a width-wrapped fill adds must not read as a magic trailing
     // comma on the next pass.
@@ -817,7 +784,6 @@ local t = {
 \t10,
 }
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -830,7 +796,7 @@ do
 
 end
 ";
-    assert_format_with(input, input, LuaVersion::Lua54, &preserving_gaps_options());
+    assert_format_with(input, input, &preserving_gaps_options());
 }
 
 #[test]
@@ -848,7 +814,6 @@ do
 
 end
 ",
-        LuaVersion::Lua54,
         &preserving_gaps_options(),
     );
 }
@@ -866,7 +831,7 @@ if a then
 
 end
 ";
-    assert_format_with(input, input, LuaVersion::Lua54, &options);
+    assert_format_with(input, input, &options);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 -- all idiomatic, all zero-diagnostic material under default settings.
 
 local config
-if os.getenv("MODE") == "fast" then
+if math.random() < 0.5 then
 	config = { retries = 1 }
 else
 	config = { retries = 3 }

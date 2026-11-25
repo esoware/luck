@@ -1,7 +1,6 @@
 use luck_ast::{AstKind, AstType, Call, Expression, StringLiteral};
-use luck_semantic::{AstNode, AstTypesBitset};
-use luck_stdlib::SemanticAnalysis;
-use luck_token::{BinOp, LuaVersion};
+use luck_semantic::{AstNode, AstTypesBitset, Scoping};
+use luck_token::BinOp;
 
 use crate::binary::operator_pairs;
 use crate::call::{CallArgs, is_global_call};
@@ -33,7 +32,7 @@ impl Rule for UnknownType {
         for pair in operator_pairs(run) {
             if matches!(pair.op, BinOp::Eq | BinOp::Ne)
                 && let (Some(lhs), Some(rhs)) = (pair.lhs, pair.rhs)
-                && let Some((function, literal)) = type_comparison(lhs, rhs, context.semantic)
+                && let Some((function, literal)) = type_comparison(lhs, rhs, context.scoping())
             {
                 check_literal(function, literal, context);
             }
@@ -49,12 +48,11 @@ enum TypeFunction {
 }
 
 impl TypeFunction {
-    /// The one `call` calls with one argument: `type`, or on Luau `typeof`.
-    fn of_call(call: Call<'_>, semantic: &SemanticAnalysis<'_>) -> Option<Self> {
-        let scoping = semantic.scoping();
+    /// The one `call` calls with one argument.
+    fn of_call(call: Call<'_>, scoping: &Scoping) -> Option<Self> {
         let function = if is_global_call(call, "type", scoping) {
             Self::Type
-        } else if semantic.version().is_luau() && is_global_call(call, "typeof", scoping) {
+        } else if is_global_call(call, "typeof", scoping) {
             Self::Typeof
         } else {
             return None;
@@ -78,22 +76,22 @@ fn check_literal(
     let Some(name) = literal.as_str() else {
         return;
     };
-    let primitives = primitive_type_names(context.semantic.version());
-    if primitives.contains(&name) {
+    if PRIMITIVE_TYPE_NAMES.contains(&name) {
         return;
     }
     // Roblox `typeof` also returns datatype names (`"Instance"`,
     // `"Vector3"`) that aren't in this list, so only case typos of a
     // primitive are flagged there.
     let is_roblox_typeof =
-        function == TypeFunction::Typeof && context.semantic.target().is_roblox();
-    let case_match = primitives.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
+        function == TypeFunction::Typeof && context.semantic.variant().is_roblox();
+    let case_match =
+        PRIMITIVE_TYPE_NAMES.iter().find(|primitive| primitive.eq_ignore_ascii_case(name));
     if is_roblox_typeof && case_match.is_none() {
         return;
     }
     let suggestion = case_match
         .copied()
-        .or_else(|| closest(name, primitives.iter().copied(), |distance, _| distance <= 2));
+        .or_else(|| closest(name, PRIMITIVE_TYPE_NAMES, |distance, _| distance <= 2));
     let mut finding = Finding::new(
         format!("`{name}` is not a value that `{}` can return", function.name()),
         literal.span,
@@ -109,14 +107,14 @@ fn check_literal(
 fn type_comparison<'ast>(
     lhs: &'ast Expression<'ast>,
     rhs: &'ast Expression<'ast>,
-    semantic: &SemanticAnalysis<'_>,
+    scoping: &Scoping,
 ) -> Option<(TypeFunction, &'ast StringLiteral<'ast>)> {
     for (call_side, literal_side) in [(lhs, rhs), (rhs, lhs)] {
         let Expression::Suffixed(chain) = call_side else {
             continue;
         };
         let Some(function) =
-            chain.last_call().and_then(|call| TypeFunction::of_call(call, semantic))
+            chain.last_call().and_then(|call| TypeFunction::of_call(call, scoping))
         else {
             continue;
         };
@@ -128,61 +126,52 @@ fn type_comparison<'ast>(
     None
 }
 
-const fn primitive_type_names(version: LuaVersion) -> &'static [&'static str] {
-    if version.is_luau() {
-        &[
-            "nil", "boolean", "number", "string", "table", "function", "thread", "userdata",
-            "buffer", "vector", "integer",
-        ]
-    } else {
-        &["nil", "boolean", "number", "string", "table", "function", "thread", "userdata"]
-    }
-}
+const PRIMITIVE_TYPE_NAMES: [&str; 11] = [
+    "nil", "boolean", "number", "string", "table", "function", "thread", "userdata", "buffer",
+    "vector", "integer",
+];
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (r#"local ok = type(x) == "nil""#, LuaTarget::Lua54),
-        (r#"local ok = type(x) == "boolean""#, LuaTarget::Lua54),
-        (r#"local ok = type(x) == "number""#, LuaTarget::Lua54),
-        (r#"local ok = type(x) == "string""#, LuaTarget::Lua54),
-        (r#"local ok = type(x) == "table""#, LuaTarget::Lua54),
-        (r#"local ok = type(x) == "function""#, LuaTarget::Lua54),
-        (r#"local ok = type(x) == "buffer""#, LuaTarget::Luau),
-        // `typeof` isn't a Lua 5.4 builtin, so there's nothing to check.
-        (r#"local ok = typeof(x) == "strng""#, LuaTarget::Lua54),
-        (
-            "\
+    const PASS: &[&str] = &[
+        r#"local ok = type(x) == "nil""#,
+        r#"local ok = type(x) == "boolean""#,
+        r#"local ok = type(x) == "number""#,
+        r#"local ok = type(x) == "string""#,
+        r#"local ok = type(x) == "table""#,
+        r#"local ok = type(x) == "function""#,
+        r#"local ok = type(x) == "buffer""#,
+        r#"local ok = typeof(x) == "vector""#,
+        "\
 local type = function() end
 local ok = type(x) == \"strng\"",
-            LuaTarget::Lua54,
-        ),
-        (r#"local ok = typeof(x) == "Instance""#, LuaTarget::LuauRoblox),
-        (r#"local ok = name == "strng""#, LuaTarget::Lua54),
-        ("local ok = type(x) == expected", LuaTarget::Lua54),
+        r#"local ok = name == "strng""#,
+        "local ok = type(x) == expected",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (r#"local ok = type(x) == "strng""#, LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        r#"local ok = type(x) == "strng""#,
         // Within 2 of `number`, which comes first, and within 1 of `buffer`.
-        (r#"local ok = type(x) == "nuffer""#, LuaTarget::Luau),
-        (r#"local ok = "nll" == type(x)"#, LuaTarget::Lua54),
-        (r#"local ok = type(x) ~= "Number""#, LuaTarget::Lua54),
-        // `buffer` is a Luau-only primitive, which PUC Lua's `type` never returns.
-        (r#"local ok = type(x) == "buffer""#, LuaTarget::Lua54),
-        (r#"local ok = type"x" == "strng""#, LuaTarget::Lua54),
-        (r#"local ok = type{} == "strng""#, LuaTarget::Lua54),
-        (r#"local ok = typeof(x) == "tabel""#, LuaTarget::Luau),
-        (r#"local ok = typeof(x) == "Number""#, LuaTarget::LuauRoblox),
+        r#"local ok = type(x) == "nuffer""#,
+        r#"local ok = "nll" == type(x)"#,
+        r#"local ok = type(x) ~= "Number""#,
+        r#"local ok = type"x" == "strng""#,
+        r#"local ok = type{} == "strng""#,
+        r#"local ok = typeof(x) == "tabel""#,
+        r#"local ok = typeof(x) == "Instance""#,
     ];
+
+    const ROBLOX_PASS: &[&str] = &[r#"local ok = typeof(x) == "Instance""#];
+
+    const ROBLOX_FAIL: &[&str] = &[r#"local ok = typeof(x) == "Number""#];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::UnknownType, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::UnknownType, PASS, FAIL)
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }

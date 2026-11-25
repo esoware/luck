@@ -8,15 +8,15 @@ use crate::span::GetSpan as _;
 use crate::stmt::{Block, Statement};
 use crate::types::Type;
 
-/// The deepest tree `luck_parser` builds, in every dialect, in the levels
-/// [`Visit::descend`] counts.
+/// The deepest tree `luck_parser` builds, in the levels [`Visit::descend`]
+/// counts.
 ///
 /// Luau's parser counts a level for each statement in a block and each
-/// expression, and stops past 1,000, and Lua's stops at 200. Nesting a
-/// construct on itself takes at most two levels here for each of Luau's, and
-/// the deepest, 1,000 nested function declarations, takes 2,001: the chunk's
-/// block, then a body and a block for each. So luck reads any construct
-/// nested on itself as deep as either does.
+/// expression, and stops past 1,000. Nesting a construct on itself takes at
+/// most two levels here for each of Luau's, and the deepest, 1,000 nested
+/// function declarations, takes 2,001: the chunk's block, then a body and a
+/// block for each. So luck reads any construct nested on itself as deep as
+/// Luau does.
 ///
 /// Every traversal recurses once per level, so this is what bounds their
 /// stack, to [`MIN_STACK_BYTES`].

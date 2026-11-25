@@ -21,7 +21,7 @@ impl Rule for RobloxIncorrectColor3NewBounds {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        host.semantic.target().is_roblox()
+        host.semantic.variant().is_roblox()
     }
 
     /// A call statement's value goes unused, so it isn't checked.
@@ -48,29 +48,30 @@ fn check_call(call: Call<'_>, context: &LintContext<'_, '_>) {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local c = Color3.new(0, 0.5, 1)", LuaTarget::LuauRoblox),
-        ("local r = 255 local c = Color3.new(r, 0, 0)", LuaTarget::LuauRoblox),
-        ("local Color3 = {} local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
-        ("Color3 = {} local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
-        ("local c = Color3.new(255, 0, 0)", LuaTarget::Luau),
-        ("local c = Color3.fromRGB(255, 0, 0)", LuaTarget::LuauRoblox),
+    const PASS: &[&str] = &["local c = Color3.new(255, 0, 0)"];
+
+    const ROBLOX_PASS: &[&str] = &[
+        "local c = Color3.new(0, 0.5, 1)",
+        "local r = 255 local c = Color3.new(r, 0, 0)",
+        "local Color3 = {} local c = Color3.new(255, 0, 0)",
+        "Color3 = {} local c = Color3.new(255, 0, 0)",
+        "local c = Color3.fromRGB(255, 0, 0)",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local c = Color3.new(255, 0, 0)", LuaTarget::LuauRoblox),
-        ("local c = Color3.new(- -2, 0, 0)", LuaTarget::LuauRoblox),
-        ("local c = Color3.new(-1, 0, 0)", LuaTarget::LuauRoblox),
-        ("local c = Color3.new(0.5, 1.5, 0)", LuaTarget::LuauRoblox),
+    const ROBLOX_FAIL: &[&str] = &[
+        "local c = Color3.new(255, 0, 0)",
+        "local c = Color3.new(- -2, 0, 0)",
+        "local c = Color3.new(-1, 0, 0)",
+        "local c = Color3.new(0.5, 1.5, 0)",
     ];
 
     #[test]
     fn test() {
-        Tester::new(RuleId::RobloxIncorrectColor3NewBounds, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::RobloxIncorrectColor3NewBounds, PASS, &[])
+            .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .test_and_snapshot();
     }
 }

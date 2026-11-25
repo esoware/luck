@@ -1,13 +1,12 @@
 //! # `luck_stdlib`
 //!
-//! The standard library of each target luck reads, Lua 5.1 to 5.5, Luau, and
-//! Roblox, the std definitions that layer a host's library over one, and
-//! what a chunk's names and calls reach in it.
+//! The standard library of each variant, standalone Luau and Roblox, the std
+//! definitions that layer a host's library over one, and what a chunk's names
+//! and calls reach in it.
 //!
-//! [`library_for`] returns a target's built-in [`StdlibLibrary`], a static
-//! library with signatures, overloads, value shapes, and deprecations, and
-//! [`is_preloaded_module`] whether a `require` returns one of its libraries.
-//! A [`StdlibDefinition`] is one std definition file, which describes a
+//! [`library_for`] returns a variant's built-in [`StdlibLibrary`], a static
+//! library with signatures, overloads, value shapes, and deprecations. A
+//! [`StdlibDefinition`] is one std definition file, which describes a
 //! library such as LOVE's or Neovim's in the format the built-in libraries
 //! are written in, and [`Stdlib::layer`] layers it over a library. [`analyze`]
 //! builds a chunk's `luck_semantic::Semantic` and reads it against a
@@ -20,7 +19,7 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_stdlib::{Stdlib, StdlibDefinition};
-//! use luck_token::LuaTarget;
+//! use luck_token::Variant;
 //!
 //! let definition = StdlibDefinition::parse(
 //!     r#"
@@ -33,11 +32,11 @@
 //! "#,
 //! )
 //! .expect("a valid std definition");
-//! let stdlib = Stdlib::new(LuaTarget::Lua51).layer(&definition).expect("it layers");
+//! let stdlib = Stdlib::new(Variant::Standalone).layer(&definition).expect("it layers");
 //!
 //! let allocator = Allocator::new();
 //! let source = b"local greeting = 1 print(greeting, love)";
-//! let parsed = luck_parser::parse(&allocator, source, stdlib.target().version());
+//! let parsed = luck_parser::parse(&allocator, source);
 //! let chunk = allocator.alloc(parsed.chunk);
 //! let (analysis, errors) = luck_stdlib::analyze(chunk, parsed.counts, stdlib.library());
 //! assert!(errors.is_empty());
@@ -62,7 +61,7 @@ pub use analysis::{SemanticAnalysis, analyze};
 pub use replace_template::expand_replace_template;
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use stdlib::Stdlib;
-pub use stdlib_catalog::{is_preloaded_module, library_for};
+pub use stdlib_catalog::library_for;
 pub use stdlib_definition::StdlibDefinition;
 pub use stdlib_map::StdlibMap;
 pub use stdlib_model::{

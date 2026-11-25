@@ -16,9 +16,9 @@ enum Follower {
     Nothing,
     /// A binary operator.
     Operator(BinOp),
-    /// Luau: `::`, which follows only a simple expression.
+    /// `::`, which follows only a simple expression.
     Cast,
-    /// A field, an index, a call, or a Luau instantiation, which follows only
+    /// A field, an index, a call, or a type instantiation, which follows only
     /// a name, a chain, or parentheses.
     Suffix,
 }
@@ -42,7 +42,7 @@ impl Slot {
     pub const FREE: Self = Self { level: 0, follower: Follower::Nothing };
     /// A chain's prefix, before its first suffix.
     pub const PREFIX: Self = Self { level: 0, follower: Follower::Suffix };
-    /// Luau: a cast's operand, before its `::`.
+    /// A cast's operand, before its `::`.
     pub const CAST_OPERAND: Self = Self { level: 0, follower: Follower::Cast };
 
     /// The operand of `run` at `index`, its first at 0, where the run is in
@@ -94,14 +94,12 @@ impl Expression<'_> {
                 Follower::Cast | Follower::Suffix => true,
                 Follower::Nothing => false,
             },
-            // Luau: the `else` branch reads on through whatever follows.
+            // The `else` branch reads on through whatever follows.
             Self::IfExpression(_) => slot.follower != Follower::Nothing,
-            // Luau: a type that ends in a bare name reads on through `<` as
-            // its generic arguments, any type through `|` and `&` as a union
-            // or an intersection, and Luau rejects a cast of a cast.
+            // A type that ends in a bare name reads on through `<` as its
+            // generic arguments, and Luau rejects a cast of a cast.
             Self::TypeCast(cast) => match slot.follower {
-                Follower::Operator(BinOp::Lt) => ends_in_bare_name(&cast.ty),
-                Follower::Operator(op) => matches!(op, BinOp::BitOr | BinOp::BitAnd),
+                Follower::Operator(op) => op == BinOp::Lt && ends_in_bare_name(&cast.ty),
                 Follower::Cast | Follower::Suffix => true,
                 Follower::Nothing => false,
             },
@@ -251,7 +249,7 @@ mod tests {
             assert!(!bare.needs_parens(Slot::PREFIX), "{bare:?}");
         }
         assert!(!synth.single_value(synth.vararg()).needs_parens(Slot::PREFIX));
-        for wrapped in [synth.string("s"), synth.table([]), synth.number_i64(1), synth.vararg()] {
+        for wrapped in [synth.string("s"), synth.table([]), synth.number_f64(1.0), synth.vararg()] {
             assert!(wrapped.needs_parens(Slot::PREFIX), "{wrapped:?}");
             assert!(!wrapped.needs_parens(Slot::CAST_OPERAND), "{wrapped:?}");
         }

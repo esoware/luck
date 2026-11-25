@@ -21,7 +21,7 @@ fn bench_linter(criterion: &mut Criterion) {
             bencher.iter(|| {
                 linter.run(
                     black_box(&parse_result),
-                    library_for(file.target),
+                    library_for(file.variant),
                     FixKind::empty(),
                     None,
                 )
@@ -38,7 +38,7 @@ fn bench_linter(criterion: &mut Criterion) {
                 for parse_result in &parse_results {
                     black_box(linter.run(
                         black_box(parse_result),
-                        library_for(project.target),
+                        library_for(project.variant),
                         FixKind::empty(),
                         None,
                     ));

@@ -33,13 +33,13 @@ pub(crate) enum Command {
     /// Print the dependency graph of an entry file.
     Graph(graph::GraphArgs),
 
-    /// Lint Lua/Luau source files.
+    /// Lint Luau source files.
     Lint(lint::LintArgs),
 
-    /// Format Lua/Luau source files.
+    /// Format Luau source files.
     Fmt(fmt::FmtArgs),
 
-    /// Check Lua/Luau source files for syntax and compile errors.
+    /// Check Luau source files for syntax and compile errors.
     Check(check::CheckArgs),
 
     /// Run the language server (LSP) over stdio, or TCP with --socket.

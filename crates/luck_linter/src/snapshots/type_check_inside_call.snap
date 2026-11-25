@@ -2,13 +2,13 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 error: comparison is inside the `type()` call, did you mean `type(x) == "string"`?
- --> Lua54:1:4
+ --> Standalone:1:4
 1 | if type(x == "string") then end
   |    ^^^^^^^^^^^^^^^^^^^
 help: move the comparison outside: `type(x) == "string"`
 
 error: comparison is inside the `type()` call, did you mean `type(x) == "string"`?
- --> Luau:1:12
+ --> Standalone:1:12
 1 | local ok = typeof(x ~= "Instance")
   |            ^^^^^^^^^^^^^^^^^^^^^^^
 help: move the comparison outside: `type(x) == "string"`

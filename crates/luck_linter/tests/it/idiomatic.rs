@@ -2,18 +2,18 @@
 //! is a false positive.
 
 use luck_linter::LintConfig;
-use luck_testgen::lua_fixtures;
+use luck_testgen::luau_fixtures;
 
 use crate::common::lint;
 
 #[test]
 fn default_lint_is_silent_on_idiomatic_fixtures() {
     let mut fixture_count = 0;
-    for fixture in lua_fixtures() {
+    for fixture in luau_fixtures() {
         if !fixture.relative_path.starts_with("idiomatic") {
             continue;
         }
-        let diags = lint(&fixture.source, fixture.version.into(), &LintConfig::default());
+        let diags = lint(&fixture.source, &LintConfig::default());
         assert!(diags.is_empty(), "false positives in {}: {diags:?}", fixture.path.display());
         fixture_count += 1;
     }

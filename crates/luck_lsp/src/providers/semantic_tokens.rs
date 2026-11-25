@@ -10,10 +10,9 @@ use ls_types::{
 };
 use luck_ast::{
     Assignment, ChainHead, Expression, Field, FunctionDecl, FunctionName, FunctionTypeParam,
-    GenericPackType, GenericTypeParam, GlobalDeclaration, GlobalFunction, LocalAssignment,
-    LocalFunction, Name, NamedType, NumericFor, Parameter, Suffix, SuffixedExpression,
-    TableConstructor, Type, TypeDeclaration, TypeDeclarationValue, TypeField, Var, VarArgParam,
-    Visit,
+    GenericPackType, GenericTypeParam, LocalAssignment, LocalFunction, Name, NamedType, NumericFor,
+    Parameter, Suffix, SuffixedExpression, TableConstructor, Type, TypeDeclaration,
+    TypeDeclarationValue, TypeField, Var, Visit,
 };
 use luck_semantic::SymbolKind;
 use luck_stdlib::{SemanticAnalysis, StdlibEntry};
@@ -309,8 +308,8 @@ impl<'document> Classifier<'document> {
         }
     }
 
-    /// Marks the name `callee` calls, through parentheses, casts, and Luau
-    /// type instantiations.
+    /// Marks the name `callee` calls, through parentheses, casts, and type
+    /// instantiations.
     fn mark_callee(&mut self, callee: ChainHead<'_>) {
         let mut current = callee;
         loop {
@@ -319,7 +318,7 @@ impl<'document> Classifier<'document> {
                     self.shapes.insert(name.span.start, ValueShape::Called);
                     return;
                 }
-                Some((before, Suffix::TypeInstantiation { .. })) => before, // Luau
+                Some((before, Suffix::TypeInstantiation { .. })) => before,
                 Some((_, Suffix::Index { .. } | Suffix::Call(_) | Suffix::MethodCall(_))) => {
                     return;
                 }
@@ -331,7 +330,7 @@ impl<'document> Classifier<'document> {
                     Expression::Parenthesized(parenthesized) => {
                         ChainHead::from(&parenthesized.expr)
                     }
-                    Expression::TypeCast(cast) => ChainHead::from(&cast.expr), // Luau
+                    Expression::TypeCast(cast) => ChainHead::from(&cast.expr),
                     Expression::Nil(_)
                     | Expression::False(_)
                     | Expression::True(_)
@@ -431,33 +430,13 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
     }
 
     fn visit_local_assignment(&mut self, local_assignment: &'ast LocalAssignment<'ast>) {
-        for (i, attributed) in local_assignment.names.iter().enumerate() {
-            self.declaration(&attributed.name, local_assignment.exprs.get(i));
-            if let Some(annotation) = &attributed.type_annotation {
+        for (i, local_name) in local_assignment.names.iter().enumerate() {
+            self.declaration(&local_name.name, local_assignment.exprs.get(i));
+            if let Some(annotation) = &local_name.type_annotation {
                 self.visit_type(annotation);
             }
         }
         for expr in &local_assignment.exprs {
-            self.visit_expr(expr);
-        }
-    }
-
-    // Lua 5.5
-    fn visit_global_declaration(&mut self, global_declaration: &'ast GlobalDeclaration<'ast>) {
-        let leading = global_declaration.attribute.as_deref();
-        for attributed in &global_declaration.names {
-            if let Some(text) = attributed.name.written() {
-                let mut classification = Classification::value(TokenType::Variable, text);
-                if attributed
-                    .attribute_or(leading)
-                    .is_some_and(|attribute| attribute.name.text == "const")
-                {
-                    classification.modifiers |= MODIFIER_READONLY;
-                }
-                self.push(attributed.name.span, classification);
-            }
-        }
-        for expr in &global_declaration.exprs {
             self.visit_expr(expr);
         }
     }
@@ -468,12 +447,6 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         }
         self.declaration(&local_function.name, None);
         self.visit_function_body(&local_function.body);
-    }
-
-    // Lua 5.5
-    fn visit_global_function(&mut self, global_function: &'ast GlobalFunction<'ast>) {
-        self.plain(&global_function.name, TokenType::Function);
-        self.visit_function_body(&global_function.body);
     }
 
     /// `function f()` declares a function, and `function a.b.c()` and
@@ -513,16 +486,6 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         }
     }
 
-    // Lua 5.5 names a vararg, and Luau types one.
-    fn visit_var_arg_param(&mut self, var_arg_param: &'ast VarArgParam<'ast>) {
-        if let Some(name) = &var_arg_param.name {
-            self.declaration(name, None);
-        }
-        if let Some(annotation) = &var_arg_param.type_annotation {
-            self.visit_type(annotation);
-        }
-    }
-
     fn visit_numeric_for(&mut self, numeric_for: &'ast NumericFor<'ast>) {
         self.declaration(&numeric_for.name, None);
         if let Some(annotation) = &numeric_for.type_annotation {
@@ -556,7 +519,6 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         }
     }
 
-    // Luau
     fn visit_type_declaration(&mut self, type_declaration: &'ast TypeDeclaration<'ast>) {
         let token_type = match &type_declaration.value {
             TypeDeclarationValue::Alias(_) => TokenType::Type,
@@ -566,13 +528,12 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         self.walk_type_declaration(type_declaration);
     }
 
-    // Luau
     fn visit_generic_type_param(&mut self, generic_type_param: &'ast GenericTypeParam<'ast>) {
         self.plain(&generic_type_param.name, TokenType::Type);
         self.walk_generic_type_param(generic_type_param);
     }
 
-    // Luau: a primitive keeps its grammar scope.
+    /// A primitive keeps its grammar scope.
     fn visit_type(&mut self, ty: &'ast Type<'ast>) {
         if let Type::Name(name) = ty {
             if !matches!(
@@ -596,7 +557,6 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         }
     }
 
-    // Luau
     fn visit_named_type(&mut self, named_type: &'ast NamedType<'ast>) {
         if let Some(prefix) = &named_type.prefix {
             self.plain(prefix, TokenType::Variable);
@@ -605,12 +565,10 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         self.walk_named_type(named_type);
     }
 
-    // Luau
     fn visit_generic_pack_type(&mut self, generic_pack_type: &'ast GenericPackType<'ast>) {
         self.plain(&generic_pack_type.name, TokenType::Type);
     }
 
-    // Luau
     fn visit_type_field(&mut self, type_field: &'ast TypeField<'ast>) {
         if let TypeField::Named { name, .. } = type_field {
             self.plain(name, TokenType::Property);
@@ -618,7 +576,6 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
         self.walk_type_field(type_field);
     }
 
-    // Luau
     fn visit_function_type_param(&mut self, function_type_param: &'ast FunctionTypeParam<'ast>) {
         if let Some(name) = &function_type_param.name {
             self.plain(name, TokenType::Parameter);
@@ -629,7 +586,7 @@ impl<'ast> Visit<'ast> for Classifier<'ast> {
 
 const fn symbol_classify(kind: SymbolKind) -> Classification {
     match kind {
-        SymbolKind::Parameter | SymbolKind::ImplicitSelf | SymbolKind::ImplicitArg => {
+        SymbolKind::Parameter | SymbolKind::ImplicitSelf => {
             Classification::plain(TokenType::Parameter)
         }
         SymbolKind::FunctionName => Classification::plain(TokenType::Function),
@@ -667,16 +624,23 @@ const fn member_classify(entry: &StdlibEntry<'_>) -> Classification {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::{LuaTarget, index_to_offset};
+    use luck_token::index_to_offset;
 
     use super::*;
     use crate::document::span_text;
-    use crate::fixtures::document;
+    use crate::fixtures::{document, roblox_document};
 
-    fn parse_document(source: &str, target: LuaTarget) -> DocumentState {
-        let document = document(source, target);
+    fn parsed(document: DocumentState) -> DocumentState {
         assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
         document
+    }
+
+    fn parse_document(source: &str) -> DocumentState {
+        parsed(document(source))
+    }
+
+    fn parse_roblox_document(source: &str) -> DocumentState {
+        parsed(roblox_document(source))
     }
 
     fn full_tokens(document: &DocumentState) -> Vec<SemanticToken> {
@@ -735,25 +699,16 @@ mod tests {
     }
 
     #[test]
-    fn all_targets_color_globals_locals_properties_and_calls() {
-        for target in [
-            LuaTarget::Lua51,
-            LuaTarget::Lua52,
-            LuaTarget::Lua53,
-            LuaTarget::Lua54,
-            LuaTarget::Lua55,
-            LuaTarget::Luau,
-            LuaTarget::LuauRoblox,
-        ] {
-            let document = parse_document(
-                "\
+    fn both_variants_color_globals_locals_properties_and_calls() {
+        let source = "\
 Players = Services.Players
 local object = {field = Players}
 if not object:IsA('Tool') and not object:IsA('HopperBin') then
   if 0 < #getPlayer(arg1[1], arg2) then print(object.field) end
-end",
-                target,
-            );
+end";
+        for (variant, document) in
+            [("standalone", parse_document(source)), ("roblox", parse_roblox_document(source))]
+        {
             let tokens = highlights(&document);
             for (name, kind) in [
                 ("Players", "variable"),
@@ -766,7 +721,7 @@ end",
                 ("arg2", "variable"),
             ] {
                 let token = tokens.iter().find(|token| token.text == name).expect(name);
-                assert_eq!(token.kind, kind, "{target:?}: {tokens:?}");
+                assert_eq!(token.kind, kind, "{variant}: {tokens:?}");
             }
             assert_eq!(
                 tokens
@@ -794,7 +749,6 @@ local value: Alias<number> = {}
 local item = {field = value}
 local chosen = value :: module.Member<number>
 ",
-            LuaTarget::Luau,
         );
         let tokens = highlights(&document);
         for name in ["Alias", "T", "Member"] {
@@ -824,7 +778,6 @@ local value: number = 1
 local text: string = ''
 local shape: typeof(value) = value
 function handler(arg: boolean): number return value end",
-            LuaTarget::Luau,
         );
         let tokens = highlights(&document);
         assert!(
@@ -849,7 +802,6 @@ local saved = callback
 function object:method<T>(value: T): T return value end
 object:method<<number>>(callback<<number>>(1))
 ",
-            LuaTarget::Luau,
         );
         let tokens = highlights(&document);
         for token in tokens.iter().filter(|token| token.text == "callback") {
@@ -869,7 +821,6 @@ local alias = print
 local math = {floor = function(value) return value end}
 math.floor(alias)
 ",
-            LuaTarget::Lua54,
         );
         let tokens = highlights(&document);
         assert!(
@@ -882,27 +833,15 @@ math.floor(alias)
 
     #[test]
     fn real_readonly_bindings_propagate_to_references() {
-        for (source, target) in [
-            (
-                "\
-local limit <const> = 1
-print(limit)",
-                LuaTarget::Lua54,
-            ),
-            (
-                "\
+        let tokens = highlights(&parse_document(
+            "\
 const limit = 1
 print(limit)",
-                LuaTarget::Luau,
-            ),
-        ] {
-            let tokens = highlights(&parse_document(source, target));
-            for token in tokens.iter().filter(|token| token.text == "limit") {
-                assert!(
-                    token.modifiers.iter().any(|modifier| modifier == "readonly"),
-                    "{tokens:?}"
-                );
-            }
+        ));
+        let limits: Vec<&Highlight> = tokens.iter().filter(|token| token.text == "limit").collect();
+        assert_eq!(limits.len(), 2, "{tokens:?}");
+        for token in limits {
+            assert!(token.modifiers.iter().any(|modifier| modifier == "readonly"), "{tokens:?}");
         }
     }
 
@@ -910,7 +849,6 @@ print(limit)",
     fn utf16_positions_in_interpolations_and_half_open_ranges_across_crlf() {
         let document = parse_document(
             "local text = `\u{1F600} {object.field}`\r\nPlayers = Services.Players\r\n",
-            LuaTarget::Luau,
         );
         let tokens = highlights(&document);
         let object = tokens.iter().find(|token| token.text == "object").expect("object");
@@ -932,7 +870,7 @@ print(limit)",
 
     #[test]
     fn semantic_tokens_classify_nested_enum_item() {
-        let document = parse_document("local m = Enum.Material.Grass", LuaTarget::LuauRoblox);
+        let document = parse_roblox_document("local m = Enum.Material.Grass");
         let tokens = full_tokens(&document);
         // m, Enum, Material, Grass. The last token is `Grass`; it must be
         // classified as a stdlib property (defaultLibrary | readonly = 6),
@@ -949,14 +887,14 @@ print(limit)",
 
     #[test]
     fn deprecated_namespaces_carry_the_deprecated_modifier() {
-        let document = parse_document("local g = Enum.Genre\n", LuaTarget::LuauRoblox);
+        let document = parse_roblox_document("local g = Enum.Genre\n");
         let tokens = highlights(&document);
         let genre = tokens.iter().find(|token| token.text == "Genre").expect("Genre");
         assert_eq!(genre.kind, "namespace", "{tokens:?}");
         for modifier in ["deprecated", "readonly", "defaultLibrary"] {
             assert!(genre.modifiers.iter().any(|name| name == modifier), "{modifier}: {tokens:?}");
         }
-        let live = parse_document("local m = Enum.Material\n", LuaTarget::LuauRoblox);
+        let live = parse_roblox_document("local m = Enum.Material\n");
         let live_tokens = highlights(&live);
         let material = live_tokens.iter().find(|token| token.text == "Material").expect("Material");
         assert!(!material.modifiers.iter().any(|name| name == "deprecated"), "{live_tokens:?}");
@@ -964,20 +902,20 @@ print(limit)",
 
     #[test]
     fn semantic_tokens_classify_shaped_method_calls() {
-        let document = parse_document(
+        let document = parse_roblox_document(
             "\
-local f = io.open('x')
-local n = f:read('n')",
-            LuaTarget::Lua54,
+local g = game
+local c = g:FindFirstChild('x')",
         );
         let tokens = full_tokens(&document);
-        // `read` must be METHOD (5) with defaultLibrary (1 << 2).
-        let read = tokens
+        // `FindFirstChild` must be METHOD (5) with defaultLibrary (1 << 2).
+        let find = tokens
             .iter()
-            .find(|token| token.length == 4 && token.token_type == 5)
-            .unwrap_or_else(|| panic!("method token for read: {tokens:?}"));
+            .find(|token| token.length == index_to_offset("FindFirstChild".len()))
+            .unwrap_or_else(|| panic!("method token for FindFirstChild: {tokens:?}"));
+        assert_eq!(find.token_type, 5, "method: {tokens:?}");
         assert_eq!(
-            read.token_modifiers_bitset & MODIFIER_DEFAULT_LIBRARY,
+            find.token_modifiers_bitset & MODIFIER_DEFAULT_LIBRARY,
             MODIFIER_DEFAULT_LIBRARY,
             "defaultLibrary expected on shaped method: {tokens:?}"
         );
@@ -985,8 +923,7 @@ local n = f:read('n')",
 
     #[test]
     fn semantic_tokens_classify_get_service_method() {
-        let document =
-            parse_document("local p = game:GetService('RunService')", LuaTarget::LuauRoblox);
+        let document = parse_roblox_document("local p = game:GetService('RunService')");
         let tokens = full_tokens(&document);
         let get_service = tokens
             .iter()
@@ -1001,43 +938,12 @@ local n = f:read('n')",
     }
 
     #[test]
-    fn a_to_be_closed_local_is_readonly() {
-        // Manual 3.3.8: a to-be-closed variable behaves like a constant local.
-        let tokens = highlights(&parse_document("local h <close> = nil\n", LuaTarget::Lua54));
-        let declaration = tokens.iter().find(|token| token.text == "h").expect("h");
-        assert!(
-            declaration.modifiers.iter().any(|modifier| modifier == "readonly"),
-            "`<close>` can't be assigned, same as `<const>`: {tokens:?}"
-        );
-    }
-
-    #[test]
-    fn a_global_function_name_is_a_function_token() {
-        let tokens = highlights(&parse_document(
-            "\
-global function setup()
-end
-",
-            LuaTarget::Lua55,
-        ));
-        let name = tokens.iter().find(|token| token.text == "setup").expect("setup");
-        assert_eq!(name.kind, "function", "{tokens:?}");
-    }
-
-    #[test]
-    fn a_binding_that_can_t_be_written_is_readonly_everywhere() {
-        for (source, target, name) in [
-            ("const function f() end f()", LuaTarget::Luau, "f"),
-            ("for i = 1, 2 do print(i) end", LuaTarget::Lua55, "i"),
-            ("local <const> a, b = 1, 2 print(a, b)", LuaTarget::Lua55, "b"),
-            ("global <const> limit = 1", LuaTarget::Lua55, "limit"),
-        ] {
-            let tokens = highlights(&parse_document(source, target));
-            let named: Vec<&Highlight> = tokens.iter().filter(|token| token.text == name).collect();
-            assert!(!named.is_empty(), "{source}: {tokens:?}");
-            for token in named {
-                assert!(token.modifiers.iter().any(|modifier| modifier == "readonly"), "{source}");
-            }
+    fn a_const_function_is_readonly_everywhere() {
+        let tokens = highlights(&parse_document("const function f() end f()"));
+        let named: Vec<&Highlight> = tokens.iter().filter(|token| token.text == "f").collect();
+        assert_eq!(named.len(), 2, "{tokens:?}");
+        for token in named {
+            assert!(token.modifiers.iter().any(|modifier| modifier == "readonly"), "{tokens:?}");
         }
     }
 
@@ -1048,7 +954,6 @@ end
 t.run = function() end
 t.go(t.x, (t.cast :: any)(), t.later)
 ",
-            LuaTarget::Luau,
         ));
         let kinds: Vec<(&str, &str)> =
             tokens.iter().map(|token| (token.text.as_str(), token.kind.as_str())).collect();
@@ -1074,7 +979,7 @@ t.go(t.x, (t.cast :: any)(), t.later)
         // `a.b(c)` can't be assigned, so recovery names it with an empty
         // identifier spanning the whole call. `highlights` asserts that no
         // two tokens overlap and that each has a length.
-        let document = document("a.b(c), d = 1\n", LuaTarget::Lua54);
+        let document = document("a.b(c), d = 1\n");
         assert!(!document.parse().errors.is_empty(), "the target must be invalid");
         let tokens = highlights(&document);
         assert!(

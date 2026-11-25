@@ -65,7 +65,6 @@ luck_minifier        = { workspace = true }
 luck_parser          = { workspace = true }
 luck_semantic        = { workspace = true }
 luck_stdlib          = { workspace = true }
-luck_token           = { workspace = true }
 
 flate2 = { workspace = true }
 rayon  = { workspace = true }

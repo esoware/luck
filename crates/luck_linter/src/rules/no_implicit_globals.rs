@@ -39,41 +39,32 @@ impl Rule for NoImplicitGlobals {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
+    const PASS: &[(&str, Option<&str>, Option<&str>)] = &[
         (
             "\
 local print = function() end
 print(\"x\")",
-            LuaTarget::Lua54,
             None,
             None,
         ),
-        (
-            "myCustomGlobal()",
-            LuaTarget::Lua54,
-            None,
-            Some(r#"{"extra_globals": ["myCustomGlobal"]}"#),
-        ),
-        ("_ = 1", LuaTarget::Lua54, None, None),
+        ("myCustomGlobal()", None, Some(r#"{"extra_globals": ["myCustomGlobal"]}"#)),
+        ("_ = 1", None, None),
     ];
 
-    const FAIL: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
-        (r#"print("x")"#, LuaTarget::Lua54, None, None),
-        ("myCustomGlobal()", LuaTarget::Lua54, None, None),
+    const FAIL: &[(&str, Option<&str>, Option<&str>)] = &[
+        (r#"print("x")"#, None, None),
+        ("myCustomGlobal()", None, None),
         (
             "\
 print(\"x\")
 myCustomGlobal()",
-            LuaTarget::Lua54,
             None,
             Some(r#"{"extra_globals": ["myCustomGlobal"]}"#),
         ),
-        ("g = 1", LuaTarget::Lua54, None, None),
+        ("g = 1", None, None),
     ];
 
     #[test]

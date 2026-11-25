@@ -2,47 +2,52 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: built-in global `print` is overwritten here, consider a local or a different name
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | print = 5
   | ^^^^^
 
 warning: built-in global `print` is overwritten here, consider a local or a different name
- --> Lua54:1:10
+ --> Standalone:1:10
 1 | function print() end
   |          ^^^^^
 
 warning: built-in global `table.foo` is overwritten here, consider a local or a different name
- --> Lua54:1:10
+ --> Standalone:1:10
 1 | function table.foo() end
   |          ^^^^^^^^^
 
 warning: built-in global `string:shout` is overwritten here, consider a local or a different name
- --> Lua54:1:10
+ --> Standalone:1:10
 1 | function string:shout() end
   |          ^^^^^^^^^^^^
 
 warning: built-in global `table.insert` is overwritten here, consider a local or a different name
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | table.insert = function() end
   | ^^^^^^^^^^^^
 
 warning: built-in global `string` is overwritten here, consider a local or a different name
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | string["format"] = 1
   | ^^^^^^^^^^^^^^^^
 
 warning: built-in global `math.pi` is overwritten here, consider a local or a different name
- --> Lua54:1:4
+ --> Standalone:1:4
 1 | do math.pi = 3 end
   |    ^^^^^^^
 
+warning: built-in global `math.pi` is overwritten here, consider a local or a different name
+ --> Standalone:1:1
+1 | math.pi += 1
+  | ^^^^^^^
+
 warning: built-in global `math.huge` is overwritten here, consider a local or a different name
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | math.huge = 1
   | ^^^^^^^^^
 
 warning: built-in global `table` is overwritten here, consider a local or a different name
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | table = {}
   | ^^^^^
 2 | table.insert = 1

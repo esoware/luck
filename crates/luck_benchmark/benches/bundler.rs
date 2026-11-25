@@ -2,7 +2,6 @@ use luck_allocator::ThreadAllocators;
 use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use luck_benchmark_files::bundle_project_root;
 use luck_bundler::{BundleOptions, DynamicRequire};
-use luck_token::LuaVersion;
 use rayon::ThreadPoolBuilder;
 
 fn bench_bundler(criterion: &mut Criterion) {
@@ -15,14 +14,8 @@ fn bench_bundler(criterion: &mut Criterion) {
         .expect("nothing built the global pool before");
 
     let root = bundle_project_root();
-    let entry_path = root.join("main.lua");
-    let search_paths = vec!["?.lua".to_owned(), "?/init.lua".to_owned()];
-    let options = BundleOptions {
-        version: LuaVersion::Lua54,
-        search_paths: &search_paths,
-        project_root: &root,
-        dynamic_require: DynamicRequire::default(),
-    };
+    let entry_path = root.join("main.luau");
+    let options = BundleOptions { project_root: &root, dynamic_require: DynamicRequire::default() };
     let mut arenas = ThreadAllocators::new();
     let mut bundle = || {
         arenas.reset();

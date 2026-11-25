@@ -83,28 +83,6 @@
         }
       ]
     },
-    "lua": {
-      "description": "Dialect of every file but a `.luau` one (default `lua54`). Either key\ncan name any dialect, so a Roblox or Rojo tree that keeps Luau in\n`.lua` files sets `\"lua\": \"roblox\"`.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/LuaTarget"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "luau": {
-      "description": "Dialect of `.luau` files (default `luau`).",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/LuaTarget"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "luck_preamble": {
       "description": "Whether `luck build` names luck and its version at the top of each\nbundle (default `false`).",
       "type": [
@@ -166,18 +144,8 @@
         "null"
       ]
     },
-    "search_paths": {
-      "description": "The Lua search path templates a `require` tries in order, relative to\nthe `luck.json` directory (default `?.lua` and `?/init.lua`). Luau\nresolves relative and `@alias` requires instead.",
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "type": "string"
-      }
-    },
     "std": {
-      "description": "Std definition files, relative to this file's directory, that layer\na host's globals, fields, and functions, such as LOVE's or Neovim's,\nover each dialect's standard library, in order. Each is TOML in the\nformat of luck's own `stdlib_data`, which\n<https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>\ndescribes.",
+      "description": "Std definition files, relative to this file's directory, that layer a\nhost's globals, fields, and functions over the variant's standard\nlibrary, in order. Each is TOML in the format of luck's own\n`stdlib_data`, which\n<https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>\ndescribes.",
       "type": [
         "array",
         "null"
@@ -190,6 +158,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/TransformConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "variant": {
+      "description": "Where every `.lua` and `.luau` file runs (default `standalone`):\n`\"standalone\"` for standalone Luau, or `\"roblox\"` for Roblox, whose globals,\nservices, and enums join Luau's standard library.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Variant"
         },
         {
           "type": "null"
@@ -460,7 +439,7 @@
           "minimum": 0
         },
         "magic_trailing_comma": {
-          "description": "When true, a trailing comma in a table constructor keeps the table\nbroken, as in Black and Prettier: one field per line, or still packed\nwhen it's a list the source packed several to a line. Defaults to\n`true`. Argument lists can't carry one, since no dialect allows a comma\nafter the last argument.",
+          "description": "When true, a trailing comma in a table constructor keeps the table\nbroken, as in Black and Prettier: one field per line, or still packed\nwhen it's a list the source packed several to a line. Defaults to\n`true`. Argument lists can't carry one, since the grammar allows no\ncomma after the last argument.",
           "type": [
             "boolean",
             "null"
@@ -555,27 +534,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "LuaTarget": {
-      "description": "A Lua dialect: Lua 5.1 to 5.5, Luau, or Luau on Roblox.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "lua51",
-            "lua52",
-            "lua53",
-            "lua54",
-            "lua55",
-            "luau"
-          ]
-        },
-        {
-          "description": "Luau on Roblox: the same syntax as `Luau`, with the Roblox stdlib.",
-          "type": "string",
-          "const": "roblox"
-        }
-      ]
     },
     "OverrideConfig": {
       "description": "Settings for the files some globs match, over the rest of the config.",
@@ -675,7 +633,7 @@
       "type": "object",
       "properties": {
         "paths": {
-          "description": "Modules that can't be required. A trailing `.*` also covers\nsubmodules: `forbidden.*` matches `forbidden` and `forbidden.sub`.",
+          "description": "Modules that can't be required, each a require path as written, such\nas `@pkg/internal` or `./legacy`. A trailing `/*` also covers every\npath under one: `@pkg/*` matches `@pkg` and `@pkg/sub/x`. An alias\nmatches in any case.",
           "type": "array",
           "items": {
             "type": "string"
@@ -752,10 +710,6 @@
         },
         "almost_swapped": {
           "description": "looks like a failed variable swap; use `a, b = b, a`",
-          "$ref": "#/$defs/RuleLevel"
-        },
-        "ambiguous_newline_call": {
-          "description": "call arguments open on a new line, which reads ambiguously",
           "$ref": "#/$defs/RuleLevel"
         },
         "bad_string_escape": {
@@ -843,7 +797,7 @@
           "$ref": "#/$defs/RuleLevel"
         },
         "integer_parsing": {
-          "description": "integer literal the target Lua version can't represent exactly",
+          "description": "integer literal a double can't represent exactly",
           "$ref": "#/$defs/RuleLevel"
         },
         "invalid_lint_filter": {
@@ -855,7 +809,7 @@
           "$ref": "#/$defs/RuleLevel"
         },
         "manual_table_clone": {
-          "description": "manual table copy; use `table.clone` or `table.move`",
+          "description": "manual table copy; use `table.clone`",
           "$ref": "#/$defs/RuleLevel"
         },
         "merge_adjacent_locals": {
@@ -990,10 +944,6 @@
           "description": "function parameter is declared but never referenced",
           "$ref": "#/$defs/RuleLevel"
         },
-        "unused_label": {
-          "description": "label declared but never targeted by a `goto` in the same function",
-          "$ref": "#/$defs/RuleLevel"
-        },
         "unused_lint_filter": {
           "description": "`allow` directive that silences nothing",
           "$ref": "#/$defs/RuleLevel"
@@ -1084,12 +1034,28 @@
           "default": true
         },
         "strip_types": {
-          "description": "Luau: drop every type annotation, cast, instantiation, and `type`\ndeclaration before the other passes run. Types never run, so this\nchanges no behavior, but a typed library's users lose its types.",
+          "description": "Drop every type annotation, cast, instantiation, and `type`\ndeclaration before the other passes run. Types never run, so this\nchanges no behavior, but a typed library's users lose its types.",
           "type": "boolean",
           "default": true
         }
       },
       "additionalProperties": false
+    },
+    "Variant": {
+      "description": "The Luau variant: standalone Luau, or Luau on Roblox.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "standalone"
+          ]
+        },
+        {
+          "description": "Luau on Roblox, with the Roblox stdlib.",
+          "type": "string",
+          "const": "roblox"
+        }
+      ]
     }
   }
 }

@@ -1,44 +1,28 @@
-use std::fmt::Write as _;
-
 use predicates::prelude::*;
 use tempfile::TempDir;
 
 use crate::common::{luck_in, write_file};
 
 #[test]
-fn minify_discovers_transforms_from_input_even_with_explicit_target() {
+fn minify_discovers_transforms_from_the_input_s_project() {
     let project = TempDir::new().expect("project");
     let elsewhere = TempDir::new().expect("cwd");
     write_file(project.path(), "luck.json", r#"{"transforms":{"fold_constants":false}}"#);
     let source = write_file(project.path(), "main.lua", "return 1 + 2");
-    luck_in(elsewhere.path())
-        .arg("minify")
-        .arg(source)
-        .args(["-t", "54"])
-        .assert()
-        .success()
-        .stdout("return 1+2");
+    luck_in(elsewhere.path()).arg("minify").arg(source).assert().success().stdout("return 1+2");
 }
 
 #[test]
-fn explicit_config_extends_controls_target_and_transforms() {
+fn explicit_config_extends_its_transforms() {
     let directory = TempDir::new().expect("directory");
-    write_file(
-        directory.path(),
-        "base.json",
-        r#"{"luau":"lua54","transforms":{"fold_constants":false}}"#,
-    );
+    write_file(directory.path(), "base.json", r#"{"transforms":{"fold_constants":false}}"#);
     write_file(directory.path(), "chosen.json", r#"{"extends":["base.json"]}"#);
-    write_file(directory.path(), "main.luau", "return 0xA.8 + 1");
+    write_file(directory.path(), "main.luau", "return 1 + 2");
     luck_in(directory.path())
         .args(["minify", "main.luau", "-c", "chosen.json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("+1"));
-    luck_in(directory.path())
-        .args(["minify", "main.luau", "-c", "chosen.json", "-t", "luau"])
-        .assert()
-        .code(1);
+        .stdout("return 1+2");
 }
 
 #[test]
@@ -139,43 +123,14 @@ fn bundle_minification_uses_discovered_and_explicit_config() {
         .stdout(predicate::str::contains("1+2"));
 }
 
-/// Renaming a bundle's globals keeps the global loader's prefixed name.
-///
-/// A Lua 5.1 function with no upvalue left for a local loader reaches the
-/// bundle's loader through a global, whose name no host global shares.
 #[test]
-fn renaming_a_bundles_globals_keeps_its_global_loader_name() {
-    let directory = TempDir::new().expect("directory");
-    let mut locals = String::new();
-    for i in 0..59 {
-        writeln!(locals, "local u{i} = {i}").unwrap();
-    }
-    let sum = (0..59).map(|i| format!("u{i}")).collect::<Vec<_>>().join(" + ");
-    let entry = format!(
-        "\
-{locals}local function f()
-  return require(\"dep\"), {sum}
-end
-print(f())
-"
-    );
-    write_file(directory.path(), "main.lua", &entry);
-    write_file(directory.path(), "dep.lua", "return 1");
-    luck_in(directory.path())
-        .args(["bundle", "main.lua", "-t", "51", "--minify", "--rename-globals"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("function __luck_require("));
-}
-
-#[test]
-fn invalid_config_is_not_bypassed_by_target_override() {
+fn minify_and_bundle_reject_an_invalid_or_missing_config() {
     let directory = TempDir::new().expect("directory");
     write_file(directory.path(), "main.lua", "return 1");
     write_file(directory.path(), "luck.json", r#"{"transforms":{"fold_constnats":false}}"#);
     for operation in ["minify", "bundle"] {
         luck_in(directory.path())
-            .args([operation, "main.lua", "-t", "54"])
+            .args([operation, "main.lua"])
             .assert()
             .code(2)
             .stderr(predicate::str::contains("fold_constnats"));

@@ -201,9 +201,9 @@ pub(crate) struct LintArgs {
     #[arg(long)]
     print_config: bool,
 
-    /// Read source from stdin, using PATH only to pick the config and target
-    /// and to label diagnostics; --fix writes the fixed source to stdout and
-    /// any findings to stderr.
+    /// Read source from stdin, using PATH only to pick the config and to
+    /// label diagnostics; --fix writes the fixed source to stdout and any
+    /// findings to stderr.
     #[arg(long, value_name = "PATH")]
     stdin_filepath: Option<String>,
 }
@@ -317,7 +317,7 @@ impl LintArgs {
         let source = read_stdin_source()?;
 
         let path = Some(Path::new(stdin_path));
-        let (stdlib, linter) = (project.stdlib_for(path).library(), project.linter_for(path));
+        let (stdlib, linter) = (project.stdlib().library(), project.linter_for(path));
         let allocator = Allocator::new();
         let fixes = self.fixes();
         let (current_source, messages, fix_error) =
@@ -334,9 +334,8 @@ impl LintArgs {
 
         let (finding_errors, total_warnings) = severity_counts(&messages);
         let total_errors = finding_errors + usize::from(fix_error.is_some());
-        let version = stdlib.target.version();
 
-        let source_file = SourceFile { label: stdin_path, text: Some(current_source), version };
+        let source_file = SourceFile { label: stdin_path, text: Some(current_source) };
         let diags = messages.into_iter().map(|message| message.diagnostic);
         let rendered = self.rendered(source_file, diags, verbosity);
         let _ = if self.format.is_for_tools() && fixes.is_empty() {
@@ -394,8 +393,7 @@ impl LintArgs {
         let source = match FileSystemOs.read(file_path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                let version = file.project.target_for(Some(file_path)).version();
-                let source_file = SourceFile { label: &label, text: None, version };
+                let source_file = SourceFile { label: &label, text: None };
                 let diag = Diagnostic::e010(&label, &error);
                 // A skipped file fails the run, so CI can't pass with files
                 // left unlinted.
@@ -409,7 +407,7 @@ impl LintArgs {
             }
         };
 
-        let stdlib = file.project.stdlib_for(Some(file_path)).library();
+        let stdlib = file.project.stdlib().library();
         let linter = file.project.linter_for(Some(file_path));
         let (fixed, fixed_messages, fix_error) =
             fixed_or_linted(&linter, allocator, &source, stdlib, self.fixes(), timings);
@@ -427,8 +425,7 @@ impl LintArgs {
         };
 
         let (finding_errors, warning_count) = severity_counts(&messages);
-        let version = stdlib.target.version();
-        let source_file = SourceFile { label: &label, text: Some(current_source), version };
+        let source_file = SourceFile { label: &label, text: Some(current_source) };
         let diags = messages.into_iter().map(|message| message.diagnostic);
         let rendered = self.rendered(source_file, diags, verbosity);
         // Fixes that couldn't be made or written fail the run, as an unread
@@ -489,7 +486,7 @@ fn fixed_or_linted<'ast>(
     (source, linted(linter, allocator, source, stdlib, timings), fix_error)
 }
 
-/// `source`'s messages, parsed into `allocator` as `stdlib`'s target.
+/// `source`'s messages, parsed into `allocator` and linted against `stdlib`.
 fn linted(
     linter: &Linter,
     allocator: &Allocator,
@@ -497,7 +494,7 @@ fn linted(
     stdlib: &StdlibLibrary<'_>,
     timings: Option<&RuleTimings>,
 ) -> Vec<Message> {
-    let parse = luck_parser::parse(allocator, source, stdlib.target.version());
+    let parse = luck_parser::parse(allocator, source);
     linter.run(&parse, stdlib, FixKind::empty(), timings)
 }
 
@@ -564,7 +561,7 @@ mod tests {
     use clap::Parser as _;
     use clap::error::ErrorKind;
     use luck_stdlib::library_for;
-    use luck_token::{LuaTarget, LuaVersion};
+    use luck_token::Variant;
 
     use super::*;
     use crate::cli::Cli;
@@ -593,8 +590,8 @@ mod tests {
         project.linter_for(None).config().clone()
     }
 
-    fn lint_source(source: &str, target: LuaTarget, linter: &Linter) -> Vec<Message> {
-        linted(linter, &Allocator::new(), source.as_bytes(), library_for(target), None)
+    fn lint_source(source: &str, variant: Variant, linter: &Linter) -> Vec<Message> {
+        linted(linter, &Allocator::new(), source.as_bytes(), library_for(variant), None)
     }
 
     #[test]
@@ -685,8 +682,9 @@ mod tests {
 
     #[test]
     fn lint_config_honors_luck_json_rules() {
-        let (_directory, config_arg) =
-            project_with_config(r#"{"lua":"lua54","lint":{"rules":{"empty_block":"error"}}}"#);
+        let (_directory, config_arg) = project_with_config(
+            r#"{"variant":"standalone","lint":{"rules":{"empty_block":"error"}}}"#,
+        );
 
         let lint_config = resolved_lint_config(&lint_args(&["-c", &config_arg]));
         assert_eq!(lint_config.rules.level(RuleId::EmptyBlock), Some(RuleLevel::Error));
@@ -695,7 +693,7 @@ mod tests {
     #[test]
     fn lint_cli_levels_win_over_config() {
         let (_directory, config_arg) = project_with_config(
-            r#"{"lua":"lua54","lint":{"categories":{"style":"off"},"rules":{"empty_block":"error"}}}"#,
+            r#"{"variant":"standalone","lint":{"categories":{"style":"off"},"rules":{"empty_block":"error"}}}"#,
         );
 
         let lint_config = resolved_lint_config(&lint_args(&[
@@ -712,7 +710,7 @@ mod tests {
 
     #[test]
     fn lint_level_flags_set_a_category_to_their_own_level() {
-        let (_directory, config_arg) = project_with_config(r#"{"lua":"lua54"}"#);
+        let (_directory, config_arg) = project_with_config(r#"{"variant":"standalone"}"#);
 
         for (flag, level) in
             [("-A", RuleLevel::Off), ("-W", RuleLevel::Warn), ("-D", RuleLevel::Error)]
@@ -724,7 +722,7 @@ mod tests {
 
     #[test]
     fn lint_level_flags_apply_in_command_line_order() {
-        let (_directory, config_arg) = project_with_config(r#"{"lua":"lua54"}"#);
+        let (_directory, config_arg) = project_with_config(r#"{"variant":"standalone"}"#);
         let level_after = |flags: &[&str]| {
             let command_line: Vec<&str> =
                 ["-c", config_arg.as_str()].iter().chain(flags).copied().collect();
@@ -761,13 +759,9 @@ mod tests {
         let source = "\
 local unused = 1
 print(undefined_var)";
-        let diags = lint_source(source, LuaTarget::Lua54, &Linter::new(LintConfig::default()));
+        let diags = lint_source(source, Variant::Standalone, &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
-        let file = SourceFile {
-            label: "a.lua",
-            text: Some(source.as_bytes()),
-            version: LuaVersion::Lua54,
-        };
+        let file = SourceFile { label: "a.lua", text: Some(source.as_bytes()) };
         let lines_when = |verbosity: Verbosity| {
             let shown = diags.iter().map(|message| message.diagnostic.clone());
             let rendered = args.rendered(file, shown, verbosity);
@@ -784,13 +778,9 @@ print(undefined_var)";
     #[test]
     fn a_silent_run_renders_nothing() {
         let linter = Linter::new(LintConfig::default());
-        let diags = lint_source("print(undefined_var)", LuaTarget::Lua54, &linter);
+        let diags = lint_source("print(undefined_var)", Variant::Standalone, &linter);
         assert!(!diags.is_empty(), "{diags:?}");
-        let file = SourceFile {
-            label: "a.lua",
-            text: Some(b"print(undefined_var)"),
-            version: LuaVersion::Lua54,
-        };
+        let file = SourceFile { label: "a.lua", text: Some(b"print(undefined_var)") };
         let shown = diags.into_iter().map(|message| message.diagnostic);
         let rendered = lint_args(&["--silent"]).rendered(file, shown, Verbosity::Normal);
         assert!(rendered.is_empty(), "{}", String::from_utf8_lossy(&rendered));
@@ -814,26 +804,24 @@ print(undefined_var)";
     }
 
     #[test]
-    fn lint_roblox_luau_does_not_flag_game_global() {
-        // With `"luau":"roblox"`, a `.luau` file using `game` must lint clean,
-        // because target selection is per-file from the config dialect.
-        let (directory, config_arg) = project_with_config(r#"{"luau":"roblox"}"#);
+    fn lint_roblox_does_not_flag_game_global() {
+        // With `"variant":"roblox"`, a file using `game` must lint clean.
+        let (directory, config_arg) = project_with_config(r#"{"variant":"roblox"}"#);
 
         let args = lint_args(&["-c", &config_arg]);
         let project = working_project(args.config.as_deref()).expect("config resolves");
-        let luau_file = directory.path().join("main.luau");
-        let linter = project.linter_for(Some(&luau_file));
-        let target = project.target_for(Some(&luau_file));
-        assert_eq!(target, LuaTarget::LuauRoblox);
+        let linter = project.linter_for(Some(&directory.path().join("main.luau")));
+        let variant = project.variant();
+        assert_eq!(variant, Variant::Roblox);
 
-        let diags = lint_source("print(game)", target, &linter);
+        let diags = lint_source("print(game)", variant, &linter);
         assert!(
             diags.iter().all(|diag| diag.code != "undefined_variable"),
             "roblox global `game` should not be undefined"
         );
 
         // Standalone Luau (the default) does flag it; that contrast is the point.
-        let standalone_diags = lint_source("print(game)", LuaTarget::Luau, &linter);
+        let standalone_diags = lint_source("print(game)", Variant::Standalone, &linter);
         assert!(standalone_diags.iter().any(|diag| diag.code == "undefined_variable"));
     }
 }

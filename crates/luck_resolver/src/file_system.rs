@@ -10,7 +10,7 @@ use crate::path::strip_verbatim_prefix;
 /// Everything a resolver reads goes through this, so a caller can resolve
 /// against files only it holds, such as an editor's unsaved buffers.
 pub trait FileSystem: Send + Sync {
-    /// Bytes, since a Lua source need not be UTF-8.
+    /// Bytes, since a source need not be UTF-8.
     ///
     /// # Errors
     ///

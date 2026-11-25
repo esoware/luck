@@ -71,7 +71,6 @@ mod tests {
         PartialResultParams, Position, ReferenceContext, TextDocumentIdentifier,
         TextDocumentPositionParams, WorkDoneProgressParams,
     };
-    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::{document, session, uri};
@@ -85,7 +84,6 @@ function t:m()
   return self
 end
 ",
-            LuaTarget::Lua54,
         );
         let uri = uri();
         let params = ReferenceParams {

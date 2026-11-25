@@ -27,7 +27,7 @@ impl fmt::Display for Construct {
     }
 }
 
-/// Whether `kind` can open a statement in some dialect.
+/// Whether `kind` can open a statement, or is the `;` that may follow one.
 pub(super) const fn is_stmt_start(kind: TokenKind) -> bool {
     match kind {
         name_token!(
@@ -38,8 +38,6 @@ pub(super) const fn is_stmt_start(kind: TokenKind) -> bool {
                 | TokenKind::Repeat
                 | TokenKind::Function
                 | TokenKind::Local
-                | TokenKind::Goto
-                | TokenKind::DoubleColon
                 | TokenKind::Semicolon
                 | TokenKind::Return
                 | TokenKind::Break
@@ -70,14 +68,12 @@ pub(super) const fn is_stmt_start(kind: TokenKind) -> bool {
         | TokenKind::Caret
         | TokenKind::Hash
         | TokenKind::Ampersand
-        | TokenKind::Tilde
         | TokenKind::Pipe
-        | TokenKind::ShiftLeft
-        | TokenKind::ShiftRight
         | TokenKind::Dot
         | TokenKind::DotDot
         | TokenKind::DotDotDot
         | TokenKind::Colon
+        | TokenKind::DoubleColon
         | TokenKind::Comma
         | TokenKind::Equal
         | TokenKind::EqualEqual
@@ -124,7 +120,7 @@ const fn can_follow_last_stmt(kind: TokenKind) -> bool {
 }
 
 /// Whether `kind` after `continue` makes it a name: a call, a field, an
-/// index, or an assignment target, as Luau reads it.
+/// index, or an assignment target, as Luau's parser reads it.
 const fn continues_a_name(kind: TokenKind) -> bool {
     matches!(
         kind,
@@ -162,8 +158,8 @@ impl<'ast> Parser<'ast> {
         self.counts.blocks += 1;
 
         let start = self.scratch.stmts.len();
-        // 5.1 and Luau have no empty statement (block ::= {stat [';']}), so
-        // a `;` may only follow a statement.
+        // There's no empty statement (`block ::= {stat [';']}`), so a `;` may
+        // only follow a statement.
         let mut can_take_separator = false;
         loop {
             if self.is_at(TokenKind::Semicolon) {
@@ -183,7 +179,7 @@ impl<'ast> Parser<'ast> {
                 _ if self.is_at_expected_closer() => break,
                 _ => self.report_unexpected_in_block(),
             };
-            if stmt.has_to_end_block(self.version) {
+            if stmt.has_to_end_block() {
                 self.end_block_after(&stmt);
             }
             self.scratch.stmts.push(stmt);
@@ -198,16 +194,16 @@ impl<'ast> Parser<'ast> {
         Some(Block::new(start_span.merge(end_span), stmts))
     }
 
-    /// A run of `;`, which does nothing: each is an empty statement in 5.2+,
-    /// and in 5.1 and Luau one may follow a statement.
+    /// A run of `;`, which does nothing, each an error but a first that
+    /// follows a statement.
     fn skip_semicolons(&mut self, can_take_separator: bool) {
-        let mut can_take = can_take_separator || self.version.has_empty_stmt();
+        let mut can_take = can_take_separator;
         while self.is_at(TokenKind::Semicolon) {
             let span = self.advance();
             if !can_take {
                 self.error(span, "unexpected token `;`");
             }
-            can_take = self.version.has_empty_stmt();
+            can_take = false;
         }
     }
 
@@ -290,23 +286,13 @@ impl<'ast> Parser<'ast> {
             TokenKind::Repeat => self.parse_repeat_loop(),
             TokenKind::Return => self.parse_return_stmt(),
             TokenKind::Break => Statement::Break(self.advance_loop_exit("`break` outside a loop")),
-            // Lua 5.2+
-            TokenKind::Goto => self.parse_goto_stmt(),
-            // Lua 5.2+
-            TokenKind::DoubleColon if self.version.has_goto() => self.parse_label_stmt(),
-            // Luau `@` attribute on function declarations.
-            TokenKind::At if self.version.has_function_attributes() => {
-                self.parse_attributed_function()
-            }
-            // Luau
+            TokenKind::At => self.parse_attributed_function(),
             TokenKind::Continue if !continues_a_name(next) => {
                 Statement::Continue(self.advance_loop_exit("`continue` outside a loop"))
             }
-            // Luau
             TokenKind::Type if next.is_name() || next == TokenKind::Function => {
                 self.parse_type_declaration(None)
             }
-            // Luau
             TokenKind::Export
                 if matches!(
                     next,
@@ -315,16 +301,8 @@ impl<'ast> Parser<'ast> {
             {
                 self.parse_export_stmt(List::new())
             }
-            // Luau
             TokenKind::Const if next.is_name() || next == TokenKind::Function => {
                 self.parse_local_stmt(List::new())
-            }
-            // Lua 5.5
-            TokenKind::Global
-                if next.is_name()
-                    || matches!(next, TokenKind::Less | TokenKind::Star | TokenKind::Function) =>
-            {
-                self.parse_global_stmt()
             }
             name_token!(TokenKind::LeftParen) => self.parse_assignment_or_call(),
             _ => self.report_unexpected_in_block(),
@@ -494,31 +472,14 @@ impl<'ast> Parser<'ast> {
         Statement::new_repeat_loop(span, block, condition, self.allocator)
     }
 
-    fn parse_goto_stmt(&mut self) -> Statement<'ast> {
-        let goto_span = self.advance();
-        let name = self.expect_identifier_recover();
-        let span = goto_span.merge(name.span);
-        Statement::new_goto(span, name, self.allocator)
-    }
-
-    fn parse_label_stmt(&mut self) -> Statement<'ast> {
-        let colons_open = self.advance();
-        let name = self.expect_identifier_recover();
-        let colons_close = self.expect(TokenKind::DoubleColon);
-        let span = colons_open.merge(colons_close);
-        Statement::new_label(span, name, self.allocator)
-    }
-
     fn parse_assignment_or_call(&mut self) -> Statement<'ast> {
         let start = self.token.span.start;
         let groupings_start = self.groupings.len();
         let expr = self.parse_expr(0);
         let grouping = self.groupings.around_since(groupings_start, expr.span());
 
-        // Luau compound assignment: `var op= expr`.
-        if let Some(op) = CompoundOp::from_token_kind(self.peek())
-            && self.version.has_compound_assignment()
-        {
+        // Compound assignment: `var op= expr`.
+        if let Some(op) = CompoundOp::from_token_kind(self.peek()) {
             self.advance();
             let target = self.ungrouped_target(expr, grouping);
             let value = self.parse_expr(0);

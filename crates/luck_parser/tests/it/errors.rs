@@ -3,10 +3,10 @@ use std::ops::Range;
 use luck_allocator::Allocator;
 use luck_ast::{Expression, FunctionArgs, Statement};
 use luck_parser::ParseResult;
-use luck_token::{LuaVersion, Span};
+use luck_token::Span;
 
 fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Lua54)
+    luck_parser::parse(allocator, source.as_bytes())
 }
 
 #[test]
@@ -42,7 +42,7 @@ local y = 10",
     assert!(!result.errors.is_empty(), "should have errors from first statement");
     let has_valid_local = result.chunk.block.stmts.iter().any(|stmt| {
         matches!(stmt, Statement::LocalAssignment(local) if {
-            local.names.last().is_some_and(|attributed| attributed.name.text == "y")
+            local.names.last().is_some_and(|local_name| local_name.name.text == "y")
         })
     });
     assert!(has_valid_local, "second statement should parse correctly after error recovery");
@@ -87,15 +87,15 @@ fn unmatched_paren_in_expr_position_is_an_error() {
 
 /// Each broken source is its one error, with that text, and the statement
 /// after it parses as it would have.
-fn assert_one_error_then_the_rest(cases: &[(LuaVersion, &str, &str, &str)]) {
-    for &(version, broken, message, text) in cases {
+fn assert_one_error_then_the_rest(cases: &[(&str, &str, &str)]) {
+    for &(broken, message, text) in cases {
         let source = format!(
             "\
 {broken}
 local after = 1"
         );
         let allocator = Allocator::new();
-        let result = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let result = parse(&allocator, &source);
         let errors: Vec<(&str, &[u8])> = result
             .errors
             .iter()
@@ -116,15 +116,12 @@ local after = 1"
 /// after the broken one parses as it would have.
 #[test]
 fn a_broken_construct_is_one_error_and_the_rest_parses() {
-    let lua = LuaVersion::Lua54;
-    let luau = LuaVersion::Luau;
     assert_one_error_then_the_rest(&[
-        (lua, "x = f(g(h(", "unexpected token `local` in an expression", "local"),
-        (lua, "x = (a]", "expected `)` to close `(`, found `]`", "]"),
-        (lua, "x = t[f(a]", "expected `)` to close `(`, found `]`", "]"),
-        (lua, "x = {a, b)", "expected `}` to close `{`, found `)`", ")"),
+        ("x = f(g(h(", "unexpected token `local` in an expression", "local"),
+        ("x = (a]", "expected `)` to close `(`, found `]`", "]"),
+        ("x = t[f(a]", "expected `)` to close `(`, found `]`", "]"),
+        ("x = {a, b)", "expected `}` to close `{`, found `)`", ")"),
         (
-            lua,
             "\
 x = 1
 end",
@@ -132,28 +129,20 @@ end",
             "end",
         ),
         (
-            lua,
             "\
 x = 1
 ) ) )",
             "unexpected token `)` (unmatched `)`)",
             ")",
         ),
-        (lua, "return 1", "`return` must be the last statement in its block", "local"),
+        ("return 1", "`return` must be the last statement in its block", "local"),
         (
-            lua,
             "function f() return 1 x = 2 end",
             "`return` must be the last statement in its block",
             "x",
         ),
+        ("while a do break x() end", "`break` must be the last statement in its block", "x"),
         (
-            LuaVersion::Lua51,
-            "while a do break x() end",
-            "`break` must be the last statement in its block",
-            "x",
-        ),
-        (
-            luau,
             "\
 while a do continue
 x() end",
@@ -163,26 +152,24 @@ x() end",
     ]);
 }
 
-/// Lua 5.1 and Luau take one `;` after a statement, a last one included, and
-/// 5.2+ any number but after a `return`, whose own `;` ends its block.
+/// One `;` may follow a statement, a last one included, and a `return`
+/// takes its own.
 #[test]
-fn semicolons_follow_each_grammar() {
+fn a_semicolon_follows_a_statement() {
     let allocator = Allocator::new();
-    for (version, source, is_valid) in [
-        (LuaVersion::Lua51, "x = 1; y = 2;", true),
-        (LuaVersion::Lua51, "x = 1;;", false),
-        (LuaVersion::Lua51, "do ; end", false),
-        (LuaVersion::Lua51, "while a do break; end", true),
-        (LuaVersion::Lua51, "while a do break;; end", false),
-        (LuaVersion::Luau, "while a do continue; end", true),
-        (LuaVersion::Luau, "while a do continue;; end", false),
-        (LuaVersion::Lua54, "do ;; end x = 1;;", true),
-        (LuaVersion::Lua54, "while a do break;; end", true),
-        (LuaVersion::Lua54, "return;", true),
-        (LuaVersion::Lua54, "return 1;;", false),
+    for (source, is_valid) in [
+        ("x = 1; y = 2;", true),
+        ("x = 1;;", false),
+        ("do ; end", false),
+        ("while a do break; end", true),
+        ("while a do break;; end", false),
+        ("while a do continue; end", true),
+        ("while a do continue;; end", false),
+        ("return;", true),
+        ("return 1;;", false),
     ] {
-        let result = luck_parser::parse(&allocator, source.as_bytes(), version);
-        assert_eq!(result.errors.is_empty(), is_valid, "{version:?} {source}: {:?}", result.errors);
+        let result = parse(&allocator, source);
+        assert_eq!(result.errors.is_empty(), is_valid, "{source}: {:?}", result.errors);
     }
 }
 
@@ -190,24 +177,20 @@ fn semicolons_follow_each_grammar() {
 /// expression or type is one error where it breaks.
 #[test]
 fn a_broken_string_expression_or_type_is_one_error_and_the_rest_parses() {
-    let lua = LuaVersion::Lua54;
-    let luau = LuaVersion::Luau;
     assert_one_error_then_the_rest(&[
-        (lua, "f(\"abc)", "unterminated string", "\"abc)"),
-        (lua, r#"x = "a\qb" .. c"#, r"invalid escape sequence `\q`", r"\q"),
+        ("f(\"abc)", "unterminated string", "\"abc)"),
+        (r#"x = "a\xqb" .. c"#, "`\\x` escape requires exactly 2 hex digits, got 0", r"\x"),
         (
-            lua,
             "x = [[abc",
             "unterminated long bracket string",
             "\
 [[abc
 local after = 1",
         ),
-        (luau, "local s = `{function() + }tail`", "unexpected token `+`", "+"),
-        (luau, "local s = `{x}tail", "unterminated interpolated string", "}tail"),
-        (luau, "local s = `tail", "unterminated interpolated string", "`tail"),
+        ("local s = `{function() + }tail`", "unexpected token `+`", "+"),
+        ("local s = `{x}tail", "unterminated interpolated string", "}tail"),
+        ("local s = `tail", "unterminated interpolated string", "`tail"),
         (
-            lua,
             "\
 f(function()
   local y = 1
@@ -216,7 +199,6 @@ f(function()
             ")",
         ),
         (
-            lua,
             "\
 if a then
   f(x
@@ -226,20 +208,19 @@ end",
             "expected `)` to close `(`, found `else`",
             "else",
         ),
-        (lua, "repeat x() end", "expected `until` to close `repeat`, found `end`", "end"),
-        (lua, "local t = {1, 2 3}", "expected `}` to close `{`, found number `3`", "3"),
-        (lua, "print(a, b c, d)", "expected `)` to close `(`, found identifier `c`", "c"),
+        ("repeat x() end", "expected `until` to close `repeat`, found `end`", "end"),
+        ("local t = {1, 2 3}", "expected `}` to close `{`, found number `3`", "3"),
+        ("print(a, b c, d)", "expected `)` to close `(`, found identifier `c`", "c"),
         (
-            lua,
             "x = = 1",
             "unexpected token `=` in an expression (use `==` for comparison, not `=`)",
             "=",
         ),
-        (lua, "local a = 1 + * 2", "unexpected token `*` in an expression", "*"),
-        (lua, "function f(a b) end", "expected `)` to close `(`, found identifier `b`", "b"),
-        (luau, "local x: A<B = 1", "expected `>` to close `<`, found `=`", "="),
-        (luau, "type X = {a: number", "expected `}` to close `{`, found `local`", "local"),
-        (luau, "local s = `a{b c}`", "expected `}` to close `{`, found identifier `c`", "c"),
+        ("local a = 1 + * 2", "unexpected token `*` in an expression", "*"),
+        ("function f(a b) end", "expected `)` to close `(`, found identifier `b`", "b"),
+        ("local x: A<B = 1", "expected `>` to close `<`, found `=`", "="),
+        ("type X = {a: number", "expected `}` to close `{`, found `local`", "local"),
+        ("local s = `a{b c}`", "expected `}` to close `{`, found identifier `c`", "c"),
     ]);
 }
 
@@ -331,22 +312,22 @@ fn constructs_left_open_at_the_end_are_one_error() {
 #[test]
 fn an_unclosed_construct_is_labeled_where_it_opened() {
     let allocator = Allocator::new();
-    for (version, source, opener) in [
-        (LuaVersion::Lua54, "local function f() return 1", "function"),
-        (LuaVersion::Lua54, "x = function() end + function()", "function"),
-        (LuaVersion::Lua54, "if a then b() else", "if"),
-        (LuaVersion::Lua54, "while a do", "while"),
-        (LuaVersion::Lua54, "for i = 1, 2 do", "for"),
-        (LuaVersion::Lua54, "for k in pairs(t) do", "for"),
-        (LuaVersion::Lua54, "do", "do"),
-        (LuaVersion::Lua54, "repeat", "repeat"),
-        (LuaVersion::Lua54, "x = f(a", "("),
-        (LuaVersion::Lua54, "x = {1,", "{"),
-        (LuaVersion::Lua54, "x = t[1", "["),
-        (LuaVersion::Luau, "local x: A<B", "<"),
-        (LuaVersion::Luau, "local s = `a{b c}`", "{"),
+    for (source, opener) in [
+        ("local function f() return 1", "function"),
+        ("x = function() end + function()", "function"),
+        ("if a then b() else", "if"),
+        ("while a do", "while"),
+        ("for i = 1, 2 do", "for"),
+        ("for k in pairs(t) do", "for"),
+        ("do", "do"),
+        ("repeat", "repeat"),
+        ("x = f(a", "("),
+        ("x = {1,", "{"),
+        ("x = t[1", "["),
+        ("local x: A<B", "<"),
+        ("local s = `a{b c}`", "{"),
     ] {
-        let result = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let result = parse(&allocator, source);
         let [error] = result.errors.as_slice() else {
             panic!("{source:?}: {:?}", result.errors);
         };

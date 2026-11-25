@@ -10,7 +10,6 @@ use crate::groupings::Groupings;
 #[derive(Debug)]
 pub struct ParseResult<'ast> {
     pub source: &'ast [u8],
-    /// The tree, in the version the source was parsed as.
     pub chunk: Chunk<'ast>,
     pub comments: Vec<Comment>,
     /// Every token the parse read, as [`luck_lexer::lex`] gives them, from

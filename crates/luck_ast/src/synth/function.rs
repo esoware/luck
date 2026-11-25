@@ -17,7 +17,7 @@ pub struct FunctionSignature<'ast> {
 }
 
 impl<'ast> Synth<'ast> {
-    /// A Luau function attribute in the plain `@name` form.
+    /// A function attribute in the plain `@name` form.
     ///
     /// # Panics
     ///
@@ -26,7 +26,7 @@ impl<'ast> Synth<'ast> {
         FunctionAttribute::new(self.next_span(), self.name(name), None)
     }
 
-    /// A Luau function attribute in the bracketed `@[name(args)]` form.
+    /// A function attribute in the bracketed `@[name(args)]` form.
     ///
     /// # Panics
     ///
@@ -72,9 +72,8 @@ impl<'ast> Synth<'ast> {
         Parameter::new(self.name(name), Some(self.boxed(ty)))
     }
 
-    /// Lua 5.5's named `...name` form isn't supported, so `name` is `None`.
     pub fn vararg_param(&self, type_annotation: Option<Type<'ast>>) -> VarArgParam<'ast> {
-        VarArgParam::new(self.next_span(), None, type_annotation.map(|ty| self.boxed(ty)))
+        VarArgParam::new(self.next_span(), type_annotation.map(|ty| self.boxed(ty)))
     }
 
     pub(super) fn params(&self, names: &[&str]) -> Vec<Parameter<'ast>> {
@@ -150,7 +149,6 @@ mod tests {
         };
         assert_eq!(function_def.body.params.len(), 1);
         let vararg = function_def.body.vararg.as_ref().expect("vararg present");
-        assert!(vararg.name.is_none());
         assert!(vararg.type_annotation.is_none());
     }
 
@@ -159,7 +157,6 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let vararg = synth.vararg_param(Some(synth.ty_named("number")));
-        assert!(vararg.name.is_none());
         assert!(vararg.type_annotation.is_some());
     }
 

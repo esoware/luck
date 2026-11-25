@@ -34,7 +34,6 @@ impl Rule for BuiltinGlobalWrite {
             }
             return;
         }
-        // Luau
         if let AstKind::CompoundAssignment(compound) = kind {
             return check_var_target(&compound.var, context);
         }
@@ -48,7 +47,7 @@ impl Rule for BuiltinGlobalWrite {
 ///
 /// Names in the config's extra globals belong to the user, even when they
 /// collide with a stdlib name. Globals the stdlib model marks writable
-/// (`_G`, Roblox's `shared`, `_PROMPT`) exist to be set.
+/// (`_G`, Roblox's `shared`) exist to be set.
 fn is_overwritable_builtin(semantic: &SemanticAnalysis<'_>, reference: &Reference) -> bool {
     semantic.is_read_only_global(semantic.scoping().name(reference.name))
         && !semantic.is_extra_global(reference.name)
@@ -68,15 +67,15 @@ fn check_name_write(name: &Name<'_>, context: &LintContext<'_, '_>) {
     let tree = context.scoping();
     if let Some(reference) = tree.reference_of(name).map(|id| tree.reference(id))
         && reference.kind.is_write()
-        && tree.is_global(reference)
+        && reference.is_global()
         && is_overwritable_builtin(context.semantic, reference)
     {
         context.diagnostic(overwrite_finding(name.text.as_str(), reference.span));
     }
 }
 
-/// A field of a stdlib value, such as `package.loaded` or a Roblox
-/// instance's property, isn't the library. Neither is a `path` that no
+/// A field of a stdlib value, such as a Roblox instance's property, isn't
+/// the library. Neither is a `path` that no
 /// longer reaches the host's global.
 fn writes_namespace_member<'path>(
     semantic: &SemanticAnalysis<'_>,
@@ -96,7 +95,7 @@ fn writes_namespace_member<'path>(
     let Some(StdlibEntry::Namespace(namespace)) = semantic.stdlib().lookup(path) else {
         return false;
     };
-    // So is a leaf the model marks writable (`package.path = ...`).
+    // So is a leaf the model marks writable.
     leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
 }
 
@@ -154,17 +153,14 @@ fn check_function_name(function_name: &FunctionName<'_>, context: &LintContext<'
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
+    const PASS: &[(&str, Option<&str>, Option<&str>)] = &[
         (
             "\
 local print = 1
 print = 5",
-            LuaTarget::Lua54,
             None,
             None,
         ),
@@ -172,7 +168,6 @@ print = 5",
             "\
 local table = {}
 table.insert = 1",
-            LuaTarget::Lua54,
             None,
             None,
         ),
@@ -180,24 +175,17 @@ table.insert = 1",
             "\
 local table = {}
 function table.foo() end",
-            LuaTarget::Lua54,
             None,
             None,
         ),
-        ("_G.foo = 1", LuaTarget::Lua54, None, None),
-        // The model marks `package.path` writable.
-        ("package.path = package.path .. ';./?.lua'", LuaTarget::Lua54, None, None),
-        // `_PROMPT` exists to be set.
-        ("_PROMPT = '> '", LuaTarget::Lua54, None, None),
-        ("shared.score = 1", LuaTarget::LuauRoblox, None, None),
-        ("print(table.concat({}))", LuaTarget::Lua54, None, None),
+        ("_G.foo = 1", None, None),
+        ("print(table.concat({}))", None, None),
         // `setting_global` covers globals that aren't builtins.
-        ("my_module_state = 5", LuaTarget::Lua54, None, None),
+        ("my_module_state = 5", None, None),
         (
             "\
 vim = 5
 vim.api = 1",
-            LuaTarget::Lua54,
             None,
             Some(r#"{"extra_globals": ["vim"]}"#),
         ),
@@ -208,49 +196,40 @@ vim.api = 1",
 table = 5
 table.insert = 1
 function table.foo() end",
-            LuaTarget::Lua54,
             None,
             Some(r#"{"extra_globals": ["table"]}"#),
         ),
-        // `package.preload` exists to be filled.
-        ("package.preload.foo = function() end", LuaTarget::Lua54, None, None),
-        // Clearing a loaded module is documented.
-        ("package.loaded[name] = nil", LuaTarget::Lua54, None, None),
-        // This sets a property, not a builtin.
-        ("script.Parent.Visible = false", LuaTarget::LuauRoblox, None, None),
-        (
-            "\
-local _ENV = {}
-table.insert = 1",
-            LuaTarget::Lua54,
-            None,
-            None,
-        ),
-        ("function package.preload.foo() end", LuaTarget::Lua54, None, None),
     ];
 
-    const FAIL: &[(&str, LuaTarget, Option<&str>, Option<&str>)] = &[
-        ("print = 5", LuaTarget::Lua54, None, None),
-        ("function print() end", LuaTarget::Lua54, None, None),
-        ("function table.foo() end", LuaTarget::Lua54, None, None),
-        ("function string:shout() end", LuaTarget::Lua54, None, None),
-        ("table.insert = function() end", LuaTarget::Lua54, None, None),
-        (r#"string["format"] = 1"#, LuaTarget::Lua54, None, None),
-        ("do math.pi = 3 end", LuaTarget::Lua54, None, None),
-        // Only leaves the model marks writable, like `package.path`, are exempt.
-        ("math.huge = 1", LuaTarget::Lua54, None, None),
+    const FAIL: &[(&str, Option<&str>, Option<&str>)] = &[
+        ("print = 5", None, None),
+        ("function print() end", None, None),
+        ("function table.foo() end", None, None),
+        ("function string:shout() end", None, None),
+        ("table.insert = function() end", None, None),
+        (r#"string["format"] = 1"#, None, None),
+        ("do math.pi = 3 end", None, None),
+        ("math.pi += 1", None, None),
+        ("math.huge = 1", None, None),
         (
             "\
 table = {}
 table.insert = 1",
-            LuaTarget::Lua54,
             None,
             None,
         ),
     ];
 
+    const ROBLOX_PASS: &[&str] = &[
+        "shared.score = 1",
+        // This sets a property, not a builtin.
+        "script.Parent.Visible = false",
+    ];
+
     #[test]
     fn test() {
-        Tester::new(RuleId::BuiltinGlobalWrite, PASS, FAIL).test_and_snapshot();
+        Tester::new(RuleId::BuiltinGlobalWrite, PASS, FAIL)
+            .with_roblox(ROBLOX_PASS, &[])
+            .test_and_snapshot();
     }
 }

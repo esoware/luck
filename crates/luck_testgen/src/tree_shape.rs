@@ -5,17 +5,16 @@
 //! argument has parentheses, where a run of operators that group the same
 //! either way splits, and the parentheses the tree keeps where they change
 //! nothing. It keeps them only to truncate a call or `...` to one value,
-//! which changes something only at the end of a list, or to keep a Luau
-//! integer literal under `-` from reading as a negative literal.
+//! which changes something only at the end of a list, or to keep an integer
+//! literal under `-` from reading as a negative literal.
 
 use luck_ast::{
-    Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs,
-    FunctionAttribute, FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList,
-    GenericTypeParam, IfStatement, Name, NumberLiteral, Parameter, Statement, StringLiteral,
-    Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration,
-    TypeDeclarationValue, TypeField, Var,
+    BinaryLink, BinaryOp, Block, Chunk, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList, GenericTypeParam, IfStatement,
+    LocalName, Name, Parameter, Statement, StringLiteral, Suffix, SuffixedExpression,
+    TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue, TypeField, Var,
 };
-use luck_token::{Associativity, LuaNumber, UnOp};
+use luck_token::{Associativity, UnOp};
 
 /// `chunk` as one node per line, its children indented below it.
 ///
@@ -50,14 +49,6 @@ impl Printer {
 
     const fn close(&mut self) {
         self.depth -= 1;
-    }
-
-    /// A number by its value, which keeps an integer and a float apart.
-    fn number(literal: &NumberLiteral<'_>) -> String {
-        match literal.value {
-            LuaNumber::Int(value) => format!("int {value}"),
-            LuaNumber::Float(value) => format!("float {value:?}"),
-        }
     }
 
     fn string(literal: &StringLiteral<'_>) -> String {
@@ -136,47 +127,19 @@ impl Printer {
             }
             Statement::LocalAssignment(assignment) => {
                 self.open(&format!("LocalAssignment {:?}", assignment.kind));
-                self.attribute(assignment.attribute.as_deref());
-                self.attributed_names(&assignment.names);
+                self.local_names(&assignment.names);
                 self.exprs("values", &assignment.exprs);
                 self.close();
             }
             Statement::Return(return_stmt) => self.exprs("Return", &return_stmt.exprs),
             Statement::Break(_) => self.line("Break"),
-            // Luau
             Statement::Continue(_) => self.line("Continue"),
-            // Lua 5.2+
-            Statement::Goto(goto) => self.line(&format!("Goto {}", goto.name.text)),
-            // Lua 5.2+
-            Statement::Label(label) => self.line(&format!("Label {}", label.name.text)),
-            // Lua 5.5
-            Statement::GlobalDeclaration(declaration) => {
-                self.open("GlobalDeclaration");
-                self.attribute(declaration.attribute.as_deref());
-                self.attributed_names(&declaration.names);
-                self.exprs("values", &declaration.exprs);
-                self.close();
-            }
-            // Lua 5.5
-            Statement::GlobalFunction(function) => {
-                self.open(&format!("GlobalFunction {}", function.name.text));
-                self.function_body(&function.body);
-                self.close();
-            }
-            // Lua 5.5
-            Statement::GlobalStar(star) => {
-                self.open("GlobalStar");
-                self.attribute(star.attribute.as_ref());
-                self.close();
-            }
-            // Luau
             Statement::CompoundAssignment(assignment) => {
                 self.open(&format!("CompoundAssignment {:?}", assignment.op));
                 self.var(&assignment.var);
                 self.expr(&assignment.expr);
                 self.close();
             }
-            // Luau
             Statement::TypeDeclaration(declaration) => self.type_declaration(declaration),
             Statement::Error(_) => self.line("Error"),
         }
@@ -237,10 +200,7 @@ impl Printer {
             Expression::Nil(_) => self.line("Nil"),
             Expression::False(_) => self.line("False"),
             Expression::True(_) => self.line("True"),
-            Expression::Number(literal) => {
-                self.line(&format!("Number {}", Self::number(literal)));
-            }
-            // Luau
+            Expression::Number(literal) => self.line(&format!("Number {:?}", literal.value)),
             Expression::Integer(literal) => self.line(&format!("Integer {}", literal.value)),
             Expression::StringLiteral(literal) => {
                 self.line(&format!("String {}", Self::string(literal)));
@@ -268,8 +228,8 @@ impl Printer {
             Expression::BinaryOp(binary) => self.binary(binary),
             Expression::UnaryOp(unary) => {
                 self.open(&format!("UnaryOp {:?}", unary.op));
-                // Luau: `-1i` is a negative integer literal, while `-(1i)`
-                // negates an integer, which raises.
+                // `-1i` is a negative integer literal, while `-(1i)` negates
+                // an integer, which raises.
                 if unary.op == UnOp::Neg
                     && let Expression::Parenthesized(parenthesized) = &unary.operand
                     && let Expression::Integer(literal) = parenthesized.expr.unwrap_parentheses()
@@ -280,7 +240,6 @@ impl Printer {
                 }
                 self.close();
             }
-            // Luau
             Expression::IfExpression(if_expr) => {
                 self.open("IfExpression");
                 self.expr(&if_expr.condition);
@@ -294,7 +253,6 @@ impl Printer {
                 self.expr(&if_expr.else_expr);
                 self.close();
             }
-            // Luau
             Expression::InterpolatedString(interpolated) => {
                 self.open("InterpolatedString");
                 for segment in &interpolated.segments {
@@ -304,7 +262,6 @@ impl Printer {
                 self.line(&format!("text {}", Self::string(&interpolated.tail)));
                 self.close();
             }
-            // Luau
             Expression::TypeCast(cast) => {
                 self.open("TypeCast");
                 self.expr(&cast.expr);
@@ -352,7 +309,6 @@ impl Printer {
                 self.args("args", &call.args);
                 self.close();
             }
-            // Luau
             Suffix::TypeInstantiation { type_args, .. } => {
                 self.open("TypeInstantiation");
                 self.type_args(type_args);
@@ -461,8 +417,7 @@ impl Printer {
             self.parameter(param);
         }
         if let Some(vararg) = &body.vararg {
-            let name = vararg.name.map_or_else(String::new, |name| format!(" {}", name.text));
-            self.open(&format!("VarArgParam{name}"));
+            self.open("VarArgParam");
             self.optional_type(vararg.type_annotation.as_deref());
             self.close();
         }
@@ -481,18 +436,11 @@ impl Printer {
         self.close();
     }
 
-    fn attributed_names(&mut self, names: &[AttributedName<'_>]) {
+    fn local_names(&mut self, names: &[LocalName<'_>]) {
         for name in names {
             self.open(&format!("name {}", name.name.text));
             self.optional_type(name.type_annotation.as_deref());
-            self.attribute(name.attribute.as_deref());
             self.close();
-        }
-    }
-
-    fn attribute(&mut self, attribute: Option<&Attribute<'_>>) {
-        if let Some(Attribute { name, .. }) = attribute {
-            self.line(&format!("attribute {}", name.text));
         }
     }
 
@@ -688,34 +636,29 @@ fn without_parentheses<'tree, 'ast>(ty: &'tree Type<'ast>) -> &'tree Type<'ast> 
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::LuaVersion;
 
     use super::*;
 
-    fn shape(source: &str, version: LuaVersion) -> String {
+    fn shape(source: &str) -> String {
         let allocator = Allocator::new();
-        let parsed = luck_parser::parse(&allocator, source.as_bytes(), version);
+        let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         tree_shape(&parsed.chunk)
     }
 
     #[test]
     fn what_a_printer_may_change_prints_the_same() {
-        let version = LuaVersion::Luau;
         assert_eq!(
-            shape("f 'a\\x41' ; local t = {1, 2,}\ntype T = | A | B x = 0XFF", version),
-            shape("f(\"aA\") local t = {1, 2} type T = A | B x = 0xff", version)
+            shape("f 'a\\x41' ; local t = {1, 2,}\ntype T = | A | B x = 0XFF"),
+            shape("f(\"aA\") local t = {1, 2} type T = A | B x = 0xff")
         );
         assert_eq!(
-            shape(
-                "x = (-(3)) + ((a - b) - c) local y = (f()), g() type U = (A | (B | C))",
-                version
-            ),
-            shape("x = -3 + (a - b - c) local y = f(), g() type U = A | B | C", version)
+            shape("x = (-(3)) + ((a - b) - c) local y = (f()), g() type U = (A | (B | C))"),
+            shape("x = -3 + (a - b - c) local y = f(), g() type U = A | B | C")
         );
         assert_eq!(
-            shape("x = ((a - b) + c) - d y = a .. (b .. (c .. d)) z = 2 ^ (3 ^ 4)", version),
-            shape("x = a - b + c - d y = a .. b .. c .. d z = 2 ^ 3 ^ 4", version)
+            shape("x = ((a - b) + c) - d y = a .. (b .. (c .. d)) z = 2 ^ (3 ^ 4)"),
+            shape("x = a - b + c - d y = a .. b .. c .. d z = 2 ^ 3 ^ 4")
         );
     }
 
@@ -724,32 +667,22 @@ mod tests {
         let links = 2_000;
         for op in ["+", ".."] {
             let source = format!("return x{}", format!(" {op} x").repeat(links));
-            let longest_line = shape(&source, LuaVersion::Lua54).lines().map(str::len).max();
+            let longest_line = shape(&source).lines().map(str::len).max();
             assert!(longest_line.is_some_and(|width| width < 20), "{op}: {longest_line:?}");
         }
     }
 
     #[test]
     fn a_change_in_meaning_prints_differently() {
-        let version = LuaVersion::Lua54;
-        assert_ne!(shape("x = (a or b) and c", version), shape("x = a or b and c", version));
-        assert_ne!(shape("x = a - b - c", version), shape("x = a - (b - c)", version));
-        assert_ne!(shape("f(g())", version), shape("f((g()))", version));
-        assert_ne!(shape("return {f()}", version), shape("return {(f())}", version));
-        assert_ne!(shape("x = a .. b .. c", version), shape("x = (a .. b) .. c", version));
-        assert_ne!(shape("x = a - b - c - d", version), shape("x = a - (b - c) - d", version));
-        assert_ne!(
-            shape("x = a .. b .. c .. d", version),
-            shape("x = a .. (b .. c) .. d", version)
-        );
-        assert_ne!(shape("x = a - b + c", version), shape("x = a + b - c", version));
-        assert_ne!(shape(r#"x = "\xFE""#, version), shape(r#"x = "\xFF""#, version));
-        assert_ne!(shape("x = -(1i)", LuaVersion::Luau), shape("x = -1i", LuaVersion::Luau));
-    }
-
-    #[test]
-    fn a_unicode_escape_past_u_10ffff_compares_by_value() {
-        let version = LuaVersion::Lua54;
-        assert_eq!(shape(r#"f "\u{90FFFF}""#, version), shape(r"f('\u{90FFFF}')", version));
+        assert_ne!(shape("x = (a or b) and c"), shape("x = a or b and c"));
+        assert_ne!(shape("x = a - b - c"), shape("x = a - (b - c)"));
+        assert_ne!(shape("f(g())"), shape("f((g()))"));
+        assert_ne!(shape("return {f()}"), shape("return {(f())}"));
+        assert_ne!(shape("x = a .. b .. c"), shape("x = (a .. b) .. c"));
+        assert_ne!(shape("x = a - b - c - d"), shape("x = a - (b - c) - d"));
+        assert_ne!(shape("x = a .. b .. c .. d"), shape("x = a .. (b .. c) .. d"));
+        assert_ne!(shape("x = a - b + c"), shape("x = a + b - c"));
+        assert_ne!(shape(r#"x = "\xFE""#), shape(r#"x = "\xFF""#));
+        assert_ne!(shape("x = -(1i)"), shape("x = -1i"));
     }
 }

@@ -1,5 +1,4 @@
 use luck_ast::{Call, Expression, FunctionArgs, Name, StringLiteral, Suffix, SuffixedExpression};
-use luck_token::LuaVersion;
 
 use crate::id::ReferenceId;
 use crate::scoping::Scoping;
@@ -7,10 +6,9 @@ use crate::scoping::Scoping;
 /// A call of the host's global `require`, which loads a module.
 ///
 /// It calls the name, as `require(path)` or `require "path"`, or the field
-/// the global table holds it in, as `_G.require(path)` or Lua 5.2+'s
-/// `_ENV.require(path)`. A method call, a call of a local or of a global the
-/// chunk writes, and a call under a local `_ENV` or one the chunk assigns
-/// load nothing the chunk can know of, so they're no site.
+/// the global table holds it in, as `_G.require(path)`. A method call and a
+/// call of a local or of a global the chunk writes load nothing the chunk
+/// can know of, so they're no site.
 #[derive(Debug, Clone, Copy)]
 pub struct RequireSite<'ast> {
     /// Its callee is the name, or the global table and the field.
@@ -22,17 +20,14 @@ pub struct RequireSite<'ast> {
 
 /// The non-method call `chain` opens with when it calls a name `require`, or
 /// reads `require` from the global table `prefix` names and calls it, as
-/// `_G.require(path)` or Lua 5.2+'s `_ENV.require(path)`.
+/// `_G.require(path)`.
 pub(crate) fn require_call<'ast>(
     chain: &'ast SuffixedExpression<'ast>,
     prefix: &Name<'_>,
-    version: LuaVersion,
 ) -> Option<Call<'ast>> {
     let callee_suffixes = if prefix.text == "require" {
         0
-    } else if (prefix.text == "_G" || (prefix.text == "_ENV" && version.has_env_upvalue()))
-        && is_key(chain.suffixes.first(), "require")
-    {
+    } else if prefix.text == "_G" && is_key(chain.suffixes.first(), "require") {
         1
     } else {
         return None;

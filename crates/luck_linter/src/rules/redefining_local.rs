@@ -30,7 +30,7 @@ impl Rule for RedefiningLocal {
             return;
         };
         // Each name the block declares, in order. Every one stays active
-        // until the block ends, so no Lua compiles a block with more than
+        // until the block ends, so Luau compiles no block with more than
         // `MAX_ACTIVE_LOCALS`, and the rest of one isn't checked.
         let mut declarations: Vec<(&str, Span)> = Vec::new();
         let mut declare = |declared: &'ast Name<'ast>| {
@@ -56,8 +56,8 @@ impl Rule for RedefiningLocal {
             if let Statement::LocalFunction(local_function) = stmt {
                 declare(&local_function.name);
             } else if let Statement::LocalAssignment(local) = stmt {
-                for attributed in &local.names {
-                    declare(&attributed.name);
+                for local_name in &local.names {
+                    declare(&local_name.name);
                 }
             }
         }
@@ -67,8 +67,6 @@ impl Rule for RedefiningLocal {
 #[cfg(test)]
 mod tests {
     use std::fmt::Write as _;
-
-    use luck_token::LuaTarget;
 
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
@@ -83,49 +81,31 @@ mod tests {
         source
     }
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const PASS: &[&str] = &[
+        "\
 do local x = 1 end
 do local x = 2 end",
-            LuaTarget::Lua54,
-        ),
         // Inner block shadowing is `shadowing`'s job.
-        (
-            "\
+        "\
 local x = 1
 do local x = 2 end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local _ = 1
 local _ = 2",
-            LuaTarget::Lua54,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 do local x = 1
 local x = 2
 print(x) end",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local x = 1
 local x = 2
 local x = 3",
-            LuaTarget::Lua54,
-        ),
-        (
-            "\
+        "\
 local function f() end
 local function f() end",
-            LuaTarget::Lua54,
-        ),
     ];
 
     #[test]
@@ -133,10 +113,8 @@ local function f() end",
         let at_limit = locals_then_the_first_again(199);
         // Only Luau's compiler, not luck, rejects this many active locals.
         let past_limit = locals_then_the_first_again(201);
-        let pass: Vec<_> =
-            PASS.iter().copied().chain([(past_limit.as_str(), LuaTarget::Luau)]).collect();
-        let fail: Vec<_> =
-            FAIL.iter().copied().chain([(at_limit.as_str(), LuaTarget::Lua54)]).collect();
+        let pass: Vec<_> = PASS.iter().copied().chain([past_limit.as_str()]).collect();
+        let fail: Vec<_> = FAIL.iter().copied().chain([at_limit.as_str()]).collect();
         Tester::new(RuleId::RedefiningLocal, &pass, &fail).test_and_snapshot();
     }
 }

@@ -142,20 +142,7 @@ fn lint_line_numbers_do_not_count_a_form_feed_as_a_newline() {
 
     assert!(
         stderr.contains("main.lua:2:8"),
-        "Lua counts only CR and LF as line breaks, so the finding is on line 2:\n{stderr}"
-    );
-}
-
-#[test]
-fn lint_column_does_not_count_a_bom() {
-    let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "\u{feff}return missingglobal\n");
-
-    let stderr = stderr_text(&run(directory.path(), &["lint", "main.lua"]));
-
-    assert!(
-        stderr.contains("main.lua:1:8"),
-        "a BOM is not a column, so the finding is at 1:8:\n{stderr}"
+        "Luau counts only LF as a line break, so the finding is on line 2:\n{stderr}"
     );
 }
 

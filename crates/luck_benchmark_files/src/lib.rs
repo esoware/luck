@@ -3,7 +3,7 @@
 //! The pinned files and projects that the benches, the minified-size
 //! snapshot, and the allocation snapshots all measure, downloaded once into
 //! the gitignored `cache/` directory next to this crate's `Cargo.toml`.
-//! `luck_conformance` downloads and unpacks its suites with the same
+//! `luck_conformance` downloads and unpacks its suite with the same
 //! [`fetch_bytes`] and [`extract_once`].
 
 mod benchmark_files;

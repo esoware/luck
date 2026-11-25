@@ -108,13 +108,12 @@ where
 mod tests {
     use ls_types::Position;
     use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
-    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::{document, document_linted_by, uri};
 
     fn convert(diagnostic: Diagnostic) -> LspDiagnostic {
-        let document = document("local x = 1", LuaTarget::Lua54);
+        let document = document("local x = 1");
         let mut diags = to_lsp(&uri(), &document, &[Message { diagnostic, fix: None }]);
         assert_eq!(diags.len(), 1, "{diags:?}");
         diags.remove(0)
@@ -125,7 +124,7 @@ mod tests {
         let mut config = LintConfig::default();
         config.categories.set_level(Category::Correctness, RuleLevel::Off);
         config.rules.set_level(rule, RuleLevel::Warn);
-        let document = document_linted_by(text, LuaTarget::Lua54, config);
+        let document = document_linted_by(text, config);
         let lints = document.lint(&|| false).expect("nothing cancels it");
         to_lsp(&uri(), &document, &lints)
     }
@@ -182,7 +181,7 @@ print(x)",
     fn tags_unnecessary_and_deprecated_code() {
         let unused = linted("local unused = 1", RuleId::UnusedVariable);
         assert_eq!(unused[0].tags, Some(vec![DiagnosticTag::UNNECESSARY]), "{unused:?}");
-        let deprecated = linted("return unpack(t)", RuleId::Deprecated);
+        let deprecated = linted("return table.getn(t)", RuleId::Deprecated);
         assert_eq!(deprecated[0].tags, Some(vec![DiagnosticTag::DEPRECATED]), "{deprecated:?}");
     }
 

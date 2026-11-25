@@ -476,7 +476,7 @@ impl Server {
         self.session.workspace().clear();
         self.walk_workspace();
         // Every open document gets a new version of the same text under the
-        // new settings, whether or not its dialect or extra globals changed,
+        // new settings, whether or not its target or extra globals changed,
         // so a lint under the old ones has nothing to publish.
         let reloaded: Vec<(Uri, Arc<Document>)> = self
             .documents

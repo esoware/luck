@@ -24,7 +24,7 @@
 //! request runs on that pool against the version current when it arrived.
 //! A version an edit or a close replaces stops its lint, and a request the
 //! client cancels before it starts never runs. Each project keeps one
-//! resolver per scheme, which the client's file watcher clears.
+//! resolver, which the client's file watcher clears.
 //!
 //! A request at a position finds the innermost node there in the analysis's
 //! [`luck_semantic::AstNodes`] and walks up through its parents, and a name

@@ -70,12 +70,13 @@ return _x",
 local x = 1
 x = x + 1
 return x",
-        // The `goto` path reads the initializer.
+        // The `continue` path reads the initializer.
         "\
 local x = 1
-if c then goto skip end
-x = 2
-::skip::
+repeat
+  if c then continue end
+  x = 2
+until true
 print(x)",
         "\
 local x = 1

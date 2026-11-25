@@ -1,4 +1,4 @@
-//! Comments that tell a tool what to do: Luau's `--!` hot comments, and luck's
+//! Comments that tell a tool what to do: `--!` hot comments, and luck's
 //! directives.
 //!
 //! A directive is a comment that opens with `luck:`, past its delimiters and
@@ -12,15 +12,15 @@
 //!   Nothing else may follow, so a misspelled `start` can't quietly shrink a
 //!   region to one statement. Only these may follow `#luck:`.
 
-use crate::{Comment, CommentKind, LuaVersion, Span, is_lua_whitespace};
+use crate::{Comment, CommentKind, Span, is_luau_whitespace};
 
 /// What a comment tells a tool, which the lexer reads once from its text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentContent {
     /// Prose, which no tool reads.
     Plain,
-    /// A Luau `--!` hot comment, such as `--!strict`. Luau keeps `--!` alone,
-    /// or before a space or a tab, for prose.
+    /// A `--!` hot comment, such as `--!strict`. Luau keeps `--!` alone, or
+    /// before a space or a tab, for prose.
     HotComment,
     FormatOff,
     FormatOn,
@@ -34,11 +34,9 @@ pub enum CommentContent {
 }
 
 impl CommentContent {
-    /// What a comment of `kind` says in `version`, from its `text`, delimiters
-    /// included.
-    pub fn of(text: &[u8], kind: CommentKind, version: LuaVersion) -> Self {
+    /// What a comment of `kind` says, from its `text`, delimiters included.
+    pub fn of(text: &[u8], kind: CommentKind) -> Self {
         if kind == CommentKind::Line
-            && version.has_hot_comments()
             && let Some(word) = text.strip_prefix(b"--!")
         {
             return if word.first().is_some_and(|&b| b != b' ' && b != b'\t') {
@@ -269,14 +267,14 @@ fn block_body(text: &[u8]) -> &[u8] {
 }
 
 fn read_command(command: &[u8], is_file_wide: bool) -> Result<Command<'_>, Invalid<'_>> {
-    let (word, rest) = split_at(trim_start(command), |b| b == b'(' || is_lua_whitespace(b));
+    let (word, rest) = split_at(trim_start(command), |b| b == b'(' || is_luau_whitespace(b));
     let verb = match word {
         b"allow" => LintVerb::Allow,
         b"deny" => LintVerb::Deny,
         b"warn" => LintVerb::Warn,
         b"" if rest.is_empty() => return Err(Invalid::Empty),
         _ => {
-            let (whole_word, after_word) = split_at(trim_start(command), is_lua_whitespace);
+            let (whole_word, after_word) = split_at(trim_start(command), is_luau_whitespace);
             return if is_file_wide {
                 Err(Invalid::FileWide(whole_word))
             } else {
@@ -294,7 +292,7 @@ fn read_format_command<'text>(
     match word {
         b"ignore" => Ok(Command::FormatIgnore),
         b"format" => {
-            let (setting, _) = split_at(trim_start(rest), is_lua_whitespace);
+            let (setting, _) = split_at(trim_start(rest), is_luau_whitespace);
             match setting {
                 b"off" => Ok(Command::FormatOff),
                 b"on" => Ok(Command::FormatOn),
@@ -320,12 +318,12 @@ fn split_at(text: &[u8], ends: impl Fn(u8) -> bool) -> (&[u8], &[u8]) {
 }
 
 fn trim_start(text: &[u8]) -> &[u8] {
-    split_at(text, |b| !is_lua_whitespace(b)).1
+    split_at(text, |b| !is_luau_whitespace(b)).1
 }
 
 fn trim(text: &[u8]) -> &[u8] {
     let start = trim_start(text);
-    let trailing = start.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
+    let trailing = start.iter().rev().take_while(|&&b| is_luau_whitespace(b)).count();
     &start[..start.len() - trailing]
 }
 

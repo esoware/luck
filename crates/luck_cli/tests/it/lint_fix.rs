@@ -12,16 +12,24 @@ fn make_read_only(path: &Path) {
     fs::set_permissions(path, permissions).expect("set read-only");
 }
 
+/// A directory whose `luck.json` names the Roblox variant, where `stats()`, which a fix
+/// grows into `game:GetService("Stats")`, is deprecated.
+fn roblox_directory() -> TempDir {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "luck.json", r#"{"variant":"roblox"}"#);
+    directory
+}
+
 #[test]
 fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
-    let directory = TempDir::new().unwrap();
+    let directory = roblox_directory();
 
     let output = luck_in(directory.path())
         .args(["lint", "--fix", "--format", "json", "--stdin-filepath", "buffer.lua"])
         .write_stdin(
             "\
-local t = unpack({})
-return t, missingglobal",
+local s = stats()
+return s, missingglobal",
         )
         .output()
         .expect("luck runs");
@@ -29,8 +37,8 @@ return t, missingglobal",
     assert_eq!(
         stdout_text(&output),
         "\
-local t = table.unpack({})
-return t, missingglobal",
+local s = game:GetService(\"Stats\")
+return s, missingglobal",
         "`--fix` over stdin writes the fixed source to stdout, and nothing else may follow it"
     );
 }
@@ -41,21 +49,21 @@ return t, missingglobal",
 /// renderer panic also exits 1, so the rendered location is the proof.
 #[test]
 fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
-    let directory = TempDir::new().unwrap();
+    let directory = roblox_directory();
 
     luck_in(directory.path())
         .args(["lint", "--fix", "--stdin-filepath", "buffer.lua"])
         .write_stdin(
             "\
-local t = unpack({})
-return t, missingglobal",
+local s = stats()
+return s, missingglobal",
         )
         .assert()
         .code(1)
         .stdout(
             "\
-local t = table.unpack({})
-return t, missingglobal",
+local s = game:GetService(\"Stats\")
+return s, missingglobal",
         )
         .stderr(predicate::str::contains("buffer.lua:2:11"));
 }
@@ -150,13 +158,13 @@ fn lint_fix_exits_failure_when_a_file_cannot_be_written() {
         directory.path(),
         "main.lua",
         "\
-local t = unpack({})
+local t = nil
 return t
 ",
     );
     make_read_only(&path);
 
-    let output = run(directory.path(), &["lint", "--fix", "main.lua"]);
+    let output = run(directory.path(), &["lint", "--fix", "-W", "redundant_nil_init", "main.lua"]);
 
     assert_eq!(
         output.status.code(),

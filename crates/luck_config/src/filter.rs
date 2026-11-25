@@ -80,7 +80,7 @@ impl ProjectFilter {
         let is_taken = self
             .include
             .as_ref()
-            .map_or_else(|| is_lua_file(path), |include| include.is_match_candidate(&candidate));
+            .map_or_else(|| is_source_file(path), |include| include.is_match_candidate(&candidate));
         is_taken && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
     }
 
@@ -99,7 +99,7 @@ impl ProjectFilter {
 }
 
 /// What `**/*.lua` and `**/*.luau` match, without a glob.
-fn is_lua_file(path: &Path) -> bool {
+fn is_source_file(path: &Path) -> bool {
     path.file_name().is_some_and(|file_name| {
         let name = file_name.as_encoded_bytes();
         name.ends_with(b".lua") || name.ends_with(b".luau")

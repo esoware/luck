@@ -12,8 +12,7 @@ use luck_ast::{GetSpan as _, Statement};
 use luck_parser::ParseResult;
 use luck_semantic::AstNodes;
 use luck_token::{
-    CommentContent, DirectiveError, LintDirective, LintExtent, LintVerb, LuaVersion, Span,
-    has_line_break,
+    CommentContent, DirectiveError, LintDirective, LintExtent, LintVerb, Span, has_line_break,
 };
 
 use crate::rules::{RuleId, RuleTable};
@@ -122,7 +121,7 @@ impl Directives {
         for region in open_regions {
             directives.cover(region.entry, region.from, FILE_END);
         }
-        directives.cover_statements(nodes, source, parse.chunk.version);
+        directives.cover_statements(nodes, source);
         directives.intervals.sort_unstable_by_key(|interval| (interval.target, interval.rank()));
         directives
     }
@@ -201,7 +200,7 @@ impl Directives {
     /// isn't inside the innermost one around the directive is neither of the
     /// first two, so a directive never reaches past the statement it's
     /// written in.
-    fn cover_statements(&mut self, nodes: &AstNodes<'_>, source: &[u8], version: LuaVersion) {
+    fn cover_statements(&mut self, nodes: &AstNodes<'_>, source: &[u8]) {
         if !self.list.iter().any(|directive| directive.extent == LintExtent::Statement) {
             return;
         }
@@ -234,7 +233,7 @@ impl Directives {
                 around.is_none_or(|outer| (outer.start..outer.end).contains(&stmt.start))
             };
             let trailed = last_closed.filter(|stmt| {
-                is_inside(stmt) && !has_line_break(Span::new(stmt.end, at).text(source), version)
+                is_inside(stmt) && !has_line_break(Span::new(stmt.end, at).text(source))
             });
             let next = remaining.peek().copied().filter(is_inside);
             if let Some(stmt) = trailed.or(next).or(around) {
@@ -344,16 +343,16 @@ impl Cover<'_> {
 mod tests {
     use luck_allocator::Allocator;
     use luck_stdlib::library_for;
-    use luck_token::LuaTarget;
+    use luck_token::Variant;
 
     use super::*;
 
-    /// The directives of `source`, which parses as Lua 5.4.
+    /// The directives of `source`, which parses with no errors.
     fn directives_of(source: &str) -> Directives {
         let allocator = Allocator::new();
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let stdlib = library_for(LuaTarget::Lua54);
+        let stdlib = library_for(Variant::Standalone);
         let (semantic, _) = luck_stdlib::analyze(&parse.chunk, parse.counts, stdlib);
         Directives::new(&parse, semantic.semantic().nodes())
     }

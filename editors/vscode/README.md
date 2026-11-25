@@ -1,29 +1,29 @@
 # Luck for VS Code
 
-Lua/Luau language support powered by the luck toolchain:
+Luau language support powered by the luck toolchain:
 
 - **Diagnostics** from `luck_linter` on every change, with the rules `luck lint` runs on the same project, each linking to its rule, with the places it's about as related locations, and unused code faded and deprecated code struck through, a `require` that doesn't resolve shown where it's named, as `luck build` reports it, and a `luck.json` that doesn't load shown as an error on the file
 - **Formatting** + range formatting from `luck_formatter`
 - **Hover** with stdlib signatures, deprecation, and must-use / pure markers
 - **Completion** of stdlib globals, namespace members, locals, keywords, and constant string arguments such as Roblox service names
 - **Signature help** with active-parameter tracking
-- **Go to definition**, find references, and rename for locals, and across the workspace for the members of a module's table, such as `util.greet` from `local util = require("util")`, and `require` paths jump to the module file
+- **Go to definition**, find references, and rename for locals, and across the workspace for the members of a module's table, such as `util.greet` from `local util = require("./util")`, and `require` paths jump to the module file
 - **Document and workspace symbols**
 - **Code actions**: a quick fix per fix or suggestion, `source.fixAll.luck` for every fix that keeps what the code does (suggestions, such as renaming an unused variable to `_x`, stay quick fixes), "disable rule for this statement"
-- **JS/TS-style highlighting** for Lua and Luau: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough
+- **JS/TS-style highlighting**: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough
 - **Document highlights**, folding ranges, selection ranges, document links
-- **Snippets** for common Lua patterns
-- **TextMate grammar** for both Lua and Luau (type annotations, string interpolation, attributes, generics)
+- **Snippets** for common Luau patterns
+- **TextMate grammar** for Luau, in `.lua` and `.luau` files alike (type annotations, string interpolation, attributes, generics)
 - Status bar item, dedicated output channels, restart-server command
 
-Supports Lua 5.1, 5.2, 5.3, 5.4, 5.5, and Luau, standalone or with the Roblox API.
+Supports Luau, standalone or with the Roblox API. Every `.lua` and `.luau` file is read as Luau.
 
 ## Quick start
 
 1. Install the extension.
 2. Open a `.lua` or `.luau` file. Parse errors show up right away.
 3. Format with `Shift+Alt+F` or enable `editor.formatOnSave`.
-4. Configure target version, formatter style, and lint rules by running `Luck: Create luck.json` from the command palette.
+4. Configure the variant, formatter style, and lint rules by running `Luck: Create luck.json` from the command palette.
 
 ## Commands
 
@@ -42,6 +42,6 @@ All commands are under the `Luck:` prefix in the command palette:
 
 ## Configuration highlights
 
-- Formatter style, lint rules, target version, and globals are all read from `luck.json` / `.editorconfig` by the server (`.lua` files follow the `lua` key and `.luau` files the `luau` key). There are no editor settings for them.
+- Formatter style, lint rules, the variant (`standalone` or `roblox`), and globals are all read from `luck.json` / `.editorconfig` by the server. There are no editor settings for them.
 - `luck.server.path` is an explicit path to the `luck` binary, overriding the bundled one.
 - `luck.trace.server` traces LSP messages for debugging.

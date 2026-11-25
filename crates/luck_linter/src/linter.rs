@@ -54,8 +54,8 @@ impl Linter {
         &self.config
     }
 
-    /// `parse`'s analysis against `stdlib`, a library of the dialect it was
-    /// parsed as, with the config's extra globals defined.
+    /// `parse`'s analysis against `stdlib`, with the config's extra globals
+    /// defined.
     pub fn analyze<'ast>(
         &self,
         parse: &'ast ParseResult<'ast>,
@@ -74,9 +74,8 @@ impl Linter {
     ///
     /// A parse with errors yields its errors, each an E008, and no rules run,
     /// so neither config nor a directive turns one off. So does a clean parse
-    /// of a chunk Lua refuses to compile, with the errors semantic analysis
-    /// finds, such as a write to a `<const>` local or more locals than a
-    /// function holds.
+    /// of a chunk Luau refuses to compile, with the errors semantic analysis
+    /// finds, such as a write to a `const` local.
     ///
     /// # Panics
     ///
@@ -379,7 +378,7 @@ mod tests {
 
     use luck_allocator::Allocator;
     use luck_stdlib::library_for;
-    use luck_token::{LuaTarget, LuaVersion};
+    use luck_token::Variant;
 
     use super::*;
     use crate::config::RuleLevel;
@@ -398,9 +397,9 @@ mod tests {
 local x = nil -- luck: deny(redundant_nil_init)
 local y = nil
 print(x, y)";
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes());
         let linter = Linter::new(silent());
-        let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+        let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
         let diags = linter
             .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
             .expect("nothing cancels it");
@@ -413,9 +412,9 @@ print(x, y)";
     fn a_cancelled_lint_returns_nothing() {
         let allocator = Allocator::new();
         let source = "local x = nil -- luck: deny(redundant_nil_init)";
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes());
         let linter = Linter::new(silent());
-        let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+        let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
         let cancelled = linter.run_analyzed(&analysis, FixKind::empty(), None, &|| true);
         assert_eq!(cancelled, None, "a rule only a directive runs stops too");
     }
@@ -427,9 +426,9 @@ print(x, y)";
 -- luck: allow(undefined_variable)
 local x = 1
 print(x)";
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes());
         let questions = |linter: &Linter| {
-            let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+            let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
             let asked = AtomicUsize::new(0);
             let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
             let whole = linter
@@ -445,7 +444,7 @@ print(x)";
         let (asked_without, _) = questions(&Linter::new(without_filter));
         assert_eq!(asked, asked_without + 1, "one more, just before the filter");
 
-        let analysis = linter.analyze(&parse, library_for(LuaTarget::Lua54));
+        let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
         let answered = AtomicUsize::new(0);
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed) + 1 == asked;
         let stopped = linter.run_analyzed(&analysis, FixKind::empty(), None, &cancels_last);
@@ -459,8 +458,9 @@ print(x)";
         config.rules.set_level(RuleId::CompareNan, RuleLevel::Warn);
         let linter = Linter::new(config);
         for (source, expected) in [("print(1)", 0), ("print(x == 0/0)", 1)] {
-            let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
-            let diags = linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), None);
+            let parse = luck_parser::parse(&allocator, source.as_bytes());
+            let diags =
+                linter.run(&parse, library_for(Variant::Standalone), FixKind::empty(), None);
             assert_eq!(diags.len(), expected, "{source}: {diags:?}");
         }
     }
@@ -473,10 +473,10 @@ print(x)";
         config.rules.set_level(RuleId::UndefinedVariable, RuleLevel::Warn);
         let linter = Linter::new(config);
         let source = "print(x == 0/0, x == 1)";
-        let parse = luck_parser::parse(&allocator, source.as_bytes(), LuaVersion::Lua54);
+        let parse = luck_parser::parse(&allocator, source.as_bytes());
         let timings = RuleTimings::new();
         let diags =
-            linter.run(&parse, library_for(LuaTarget::Lua54), FixKind::empty(), Some(&timings));
+            linter.run(&parse, library_for(Variant::Standalone), FixKind::empty(), Some(&timings));
         assert_eq!(diags.len(), 3, "{diags:?}");
         let mut calls: Vec<(&str, u64)> =
             timings.sorted().iter().map(|timing| (timing.rule.name(), timing.calls)).collect();

@@ -33,7 +33,7 @@ impl Rule for RedundantNilInit {
 }
 
 fn check_local(local: &LocalAssignment<'_>, context: &LintContext<'_, '_>) -> Option<Finding> {
-    // Luau requires a `const` to have an initializer.
+    // A `const` needs its initializer.
     if local.kind.is_const() {
         return None;
     }
@@ -109,46 +109,41 @@ fn last_binding_end(local: &LocalAssignment<'_>) -> u32 {
     let Some(last) = local.names.last() else {
         return local.span.start;
     };
-    let annotation_end = last.type_annotation.as_ref().map(|annotation| annotation.span().end);
-    let attribute_end = last.attribute.as_ref().map(|attribute| attribute.span.end);
-    annotation_end.into_iter().chain(attribute_end).fold(last.name.span.end, u32::max)
+    last.type_annotation.as_ref().map_or(last.name.span.end, |annotation| annotation.span().end)
 }
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local x = 1", LuaTarget::Lua54),
-        ("local x", LuaTarget::Lua54),
-        ("local a, b = nil, 1", LuaTarget::Lua54),
+    const PASS: &[&str] = &[
+        "local x = 1",
+        "local x",
+        "local a, b = nil, 1",
         // Dropping the nil here would change `b` from `nil` to the second return
         // value of `f()`.
-        ("local a, b = f(), nil", LuaTarget::Lua54),
+        "local a, b = f(), nil",
         // Likewise after a `...`.
-        ("local function g(...) local a, b = ..., nil end", LuaTarget::Lua54),
-        // Luau requires an initializer on `const`.
-        ("const x = nil", LuaTarget::Luau),
+        "local function g(...) local a, b = ..., nil end",
+        // A `const` needs its initializer.
+        "const x = nil",
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        ("local x = nil", LuaTarget::Lua54),
-        ("local a, b = nil, nil", LuaTarget::Lua54),
-        ("local x <const> = nil", LuaTarget::Lua54),
-        ("local a, b = 1, nil", LuaTarget::Lua54),
-        ("local a, b = (x), (nil)", LuaTarget::Lua54),
-        ("local c = (nil)", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "local x = nil",
+        "local a, b = nil, nil",
+        "local a, b = 1, nil",
+        "local a, b = (x), (nil)",
+        "local c = (nil)",
         // The fix should keep the annotation.
-        ("local x: number? = nil", LuaTarget::Luau),
+        "local x: number? = nil",
         // The fix shouldn't delete the comment.
-        ("local x --[[why]] = nil", LuaTarget::Lua54),
+        "local x --[[why]] = nil",
         // No fix, since it would delete the comment.
-        ("local x = --[[why]] nil", LuaTarget::Lua54),
-        ("local a, b = 1, --[[why]] nil", LuaTarget::Lua54),
-        ("export local x = nil", LuaTarget::Luau),
+        "local x = --[[why]] nil",
+        "local a, b = 1, --[[why]] nil",
+        "export local x = nil",
     ];
 
     #[test]

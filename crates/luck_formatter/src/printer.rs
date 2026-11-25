@@ -237,7 +237,6 @@ pub(crate) fn print(
         base_indent_columns,
         output: CodeBuffer::with_capacity(capacity),
         is_crlf: options.line_endings == LineEndings::Windows,
-        crlf_end: None,
         line_start: 0,
         display_column: 0,
         indent_level: 0,
@@ -305,13 +304,10 @@ struct Printer<'ast, 'layout> {
     /// A tab in `base_indent` measures `columns_per_indent` too.
     base_indent_columns: usize,
     output: CodeBuffer,
-    /// Each LF that isn't half of a CRLF or an LFCR prints as CRLF. Verbatim
-    /// text and long strings can hold either already, and another CR would
-    /// be another line break.
+    /// Each LF that isn't half of a CRLF prints as CRLF. Verbatim text and
+    /// long strings can hold a CRLF already, and a long string reads one as
+    /// a single LF, so adding a CR to every other LF keeps its value.
     is_crlf: bool,
-    /// Where the latest CRLF made of an LF ends. A CR written right after it
-    /// makes it an LF again, as half of an LFCR.
-    crlf_end: Option<usize>,
     line_start: usize,
     display_column: usize,
     indent_level: usize,
@@ -817,9 +813,6 @@ impl<'ast> Printer<'ast, '_> {
             self.output.print_byte(b' ');
             self.display_column += 1;
         }
-        if self.crlf_end == Some(self.output.len()) {
-            self.keep_lf_before_cr(content);
-        }
         if !width.is_multiline() {
             self.output.print_bytes(content);
             self.display_column += width.columns();
@@ -849,36 +842,20 @@ impl<'ast> Printer<'ast, '_> {
         self.is_pending_indent = matches!(content.last(), Some(b'\n' | b'\r'));
     }
 
-    /// The CRLF the output ends in, made of an LF, goes back to an LF when
-    /// `content` starts with a CR, as half of an LFCR.
-    fn keep_lf_before_cr(&mut self, content: &[u8]) {
-        if content.first() == Some(&b'\r') {
-            self.crlf_end = None;
-            self.output.truncate(self.output.len() - 2);
-            self.output.print_byte(b'\n');
-            self.line_start = self.output.len();
-        }
-    }
-
     /// Writes `content`, which spans lines, with each LF that isn't half of
-    /// a CRLF or an LFCR as CRLF.
+    /// a CRLF as CRLF.
     fn print_crlf(&mut self, content: &[u8]) {
         let mut written = 0;
-        let mut is_crlf_last = false;
         for i in memchr::memchr_iter(b'\n', content) {
             let previous =
                 if i == 0 { self.output.as_bytes().last() } else { Some(&content[i - 1]) };
-            if previous != Some(&b'\r') && content.get(i + 1) != Some(&b'\r') {
+            if previous != Some(&b'\r') {
                 self.output.print_bytes(&content[written..i]);
                 self.output.print_byte(b'\r');
                 written = i;
-                is_crlf_last = i + 1 == content.len();
             }
         }
         self.output.print_bytes(&content[written..]);
-        if is_crlf_last {
-            self.crlf_end = Some(self.output.len());
-        }
     }
 
     /// A plain line break on a line nothing is written on yet adds nothing, so
@@ -910,16 +887,13 @@ impl<'ast> Printer<'ast, '_> {
     }
 
     /// A line break as CRLF, or as LF after a CR. The output ends in a blank
-    /// line when it ends in two LFs, the last of them made CRLF.
+    /// line when it ends in an LF and then a CRLF, so blank lines never stack.
     fn print_crlf_line_break(&mut self, is_blank_line: bool) {
-        while !(self.crlf_end == Some(self.output.len())
-            && self.output.as_bytes().ends_with(b"\n\r\n"))
-        {
+        while !self.output.as_bytes().ends_with(b"\n\r\n") {
             if self.output.as_bytes().last() == Some(&b'\r') {
                 self.output.print_byte(b'\n');
             } else {
                 self.output.print_bytes(b"\r\n");
-                self.crlf_end = Some(self.output.len());
             }
             if !is_blank_line {
                 break;
@@ -979,7 +953,6 @@ fn skip_conditional<'elements, 'ast>(
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_token::LuaVersion;
 
     use crate::comments::Comments;
     use crate::ir::Formatter;
@@ -991,7 +964,7 @@ mod tests {
         build: impl Fn(&mut Formatter<'_>),
     ) -> String {
         let allocator = Allocator::new();
-        let mut f = Formatter::new(&allocator, LuaVersion::Lua54, options, Comments::none(), None);
+        let mut f = Formatter::new(&allocator, options, Comments::none(), None);
         build(&mut f);
         String::from_utf8(f.print(base_indent.as_bytes())).unwrap()
     }

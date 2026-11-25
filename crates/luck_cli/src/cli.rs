@@ -11,9 +11,9 @@ use crate::verbosity::Verbosity;
 #[command(
     name = "luck",
     version,
-    about = "Lua/Luau bundler, minifier, formatter, linter, and language server",
-    long_about = "Lua/Luau bundler, minifier, formatter, linter, and language server.\nA bundle is a single file whose modules load lazily through a small inline loader, with no external runtime.",
-    after_help = "Examples:\n  luck init\n  luck build\n  luck bundle src/main.lua -t 54 -o dist/bundle.lua\n  luck minify input.luau -o output.luau\n  luck graph src/main.lua -t 54 --format dot"
+    about = "Luau bundler, minifier, formatter, linter, and language server",
+    long_about = "Luau bundler, minifier, formatter, linter, and language server.\nA bundle is a single file whose modules load lazily through a small inline loader, with no external runtime.",
+    after_help = "Examples:\n  luck init\n  luck build\n  luck bundle src/main.luau -o dist/bundle.luau\n  luck minify input.luau -o output.luau\n  luck graph src/main.luau --format dot"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]

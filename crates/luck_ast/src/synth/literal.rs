@@ -1,5 +1,5 @@
 use luck_allocator::ThinBytes;
-use luck_token::{BinOp, LuaNumber, UnOp, write_long_string};
+use luck_token::{BinOp, UnOp, write_long_string};
 
 use crate::expr::{Expression, InterpolatedSegment};
 use crate::leaf::{IntegerLiteral, NumberLiteral, StringLiteral};
@@ -22,43 +22,32 @@ impl<'ast> Synth<'ast> {
     /// its sign, payload, and signaling state, since only a target-specific
     /// runtime construction can rebuild a bit-exact NaN.
     pub fn number_f64(&self, value: f64) -> Expression<'ast> {
-        self.number_value(LuaNumber::Float(value))
-    }
-
-    /// An integer on Lua 5.3+, which is also what an unpinned synthesizer
-    /// assumes, and a float on a version pinned to a single-number dialect
-    /// (5.1, 5.2, Luau), where one outside `[-2^53, 2^53]` rounds to the
-    /// nearest double. For Luau's separate exact integer type, use
-    /// [`Synth::integer_i64`].
-    ///
-    /// Negatives use unary minus, but for `i64::MIN`, which no integer
-    /// negates to: it's a literal on 5.3+, which prints as the hex that
-    /// wraps to it.
-    pub fn number_i64(&self, value: i64) -> Expression<'ast> {
-        if self.version.is_some_and(|version| !version.has_integer_subtype()) {
-            return self.number_f64(LuaNumber::Int(value).to_f64());
-        }
-        self.number_value(LuaNumber::Int(value))
-    }
-
-    /// The literal of `value`, under a `-` when it's negative, or `0/0` for
-    /// NaN.
-    fn number_value(&self, value: LuaNumber) -> Expression<'ast> {
-        let Some((is_negative, magnitude)) = value.literal_magnitude() else {
-            let zero = || self.number(LuaNumber::Float(0.0));
+        if value.is_nan() {
+            let zero = || self.number(0.0);
             return self.binary_op(zero(), BinOp::Div, zero());
-        };
-        let literal = self.number(magnitude);
-        if is_negative { self.unary_op(UnOp::Neg, literal) } else { literal }
+        }
+        let literal = self.number(value.abs());
+        if value.is_sign_negative() { self.unary_op(UnOp::Neg, literal) } else { literal }
     }
 
-    /// Luau: an exact 64-bit integer literal, which prints as hex when it's
+    /// The double nearest to `value`, which rounds one outside
+    /// `[-2^53, 2^53]`, as [`Synth::number_f64`] builds it. For the exact
+    /// integer type, use [`Synth::integer_i64`].
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the nearest double is the number a numeral of `value` reads as"
+    )]
+    pub fn number_i64(&self, value: i64) -> Expression<'ast> {
+        self.number_f64(value as f64)
+    }
+
+    /// An exact 64-bit integer literal, which prints as hex when it's
     /// negative, as the bit pattern a literal can't carry a sign for.
     pub fn integer_i64(&self, value: i64) -> Expression<'ast> {
         Expression::Integer(self.boxed(IntegerLiteral::new(value, None, self.next_span())))
     }
 
-    fn number(&self, value: LuaNumber) -> Expression<'ast> {
+    fn number(&self, value: f64) -> Expression<'ast> {
         Expression::Number(self.boxed(NumberLiteral::new(value, None, self.next_span(), true)))
     }
 
@@ -81,8 +70,8 @@ impl<'ast> Synth<'ast> {
     }
 
     /// A string literal spelled in long brackets, `[[...]]`, at the lowest
-    /// level every version reads back as `content`. Content with a carriage
-    /// return, which Lua normalizes, or a NUL byte, which ends a Luau source,
+    /// level that reads back as `content`. Content with a carriage return,
+    /// which a long bracket's CRLF loses, or a NUL byte, which ends a source,
     /// is [`Synth::string`] instead.
     pub fn long_string(&self, content: &str) -> Expression<'ast> {
         let mut spelling = Vec::new();
@@ -105,7 +94,7 @@ impl<'ast> Synth<'ast> {
         Expression::VarArg(self.next_span())
     }
 
-    /// A Luau backtick string from text and expressions in source order:
+    /// A backtick string from text and expressions in source order:
     /// `` `hi {name}!` `` is `[Text("hi "), Expr(name), Text("!")]`.
     ///
     /// Each text is a value, which the printers escape. Adjacent text parts
@@ -134,12 +123,10 @@ impl<'ast> Synth<'ast> {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use super::*;
     use crate::fixtures::Fixture;
 
-    fn number_value(expr: &Expression<'_>) -> LuaNumber {
+    fn number_value(expr: &Expression<'_>) -> f64 {
         let Expression::Number(literal) = expr else {
             panic!("expected number, found {expr:?}");
         };
@@ -158,14 +145,14 @@ mod tests {
     fn number_f64_puts_a_negative_value_under_a_minus() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        assert_eq!(number_value(&synth.number_f64(1.5)), LuaNumber::Float(1.5));
-        assert_eq!(number_value(&synth.number_f64(3.0)), LuaNumber::Float(3.0));
-        assert_eq!(number_value(&synth.number_f64(f64::INFINITY)), LuaNumber::Float(f64::INFINITY));
+        assert_eq!(number_value(&synth.number_f64(1.5)), 1.5);
+        assert_eq!(number_value(&synth.number_f64(3.0)), 3.0);
+        assert_eq!(number_value(&synth.number_f64(f64::INFINITY)), f64::INFINITY);
         for negative in [-2.5, -0.0, f64::NEG_INFINITY] {
             let Expression::UnaryOp(negation) = synth.number_f64(negative) else {
                 panic!("a literal carries no sign");
             };
-            assert_eq!(number_value(&negation.operand), LuaNumber::Float(negative.abs()));
+            assert_eq!(number_value(&negation.operand).to_bits(), negative.abs().to_bits());
         }
     }
 
@@ -186,38 +173,33 @@ mod tests {
                 panic!("expected one division");
             };
             assert_eq!(link.op, BinOp::Div);
-            assert_eq!(number_value(&division.first), LuaNumber::Float(0.0));
-            assert_eq!(number_value(&link.operand), LuaNumber::Float(0.0));
+            assert_eq!(number_value(&division.first).to_bits(), 0.0f64.to_bits());
+            assert_eq!(number_value(&link.operand).to_bits(), 0.0f64.to_bits());
         }
     }
 
     #[test]
-    fn number_i64_builds_what_the_pinned_dialect_reads() {
+    fn number_i64_builds_the_nearest_double() {
         let fixture = Fixture::default();
-        let unpinned = fixture.synth();
-        assert_eq!(number_value(&unpinned.number_i64(42)), LuaNumber::Int(42));
-        assert_eq!(number_value(&unpinned.number_i64(i64::MIN)), LuaNumber::Int(i64::MIN));
-        let Expression::UnaryOp(negated) = unpinned.number_i64(-7) else {
+        let synth = fixture.synth();
+        assert_eq!(number_value(&synth.number_i64(42)), 42.0);
+        let Expression::UnaryOp(negated) = synth.number_i64(-7) else {
             panic!("expected a negation");
         };
-        assert_eq!(number_value(&negated.operand), LuaNumber::Int(7));
-
-        let luau = fixture.synth().with_version(LuaVersion::Luau);
-        assert_eq!(number_value(&luau.number_i64(42)), LuaNumber::Float(42.0));
-        let Expression::UnaryOp(negated_min) = luau.number_i64(i64::MIN) else {
+        assert_eq!(number_value(&negated.operand), 7.0);
+        let Expression::UnaryOp(negated_min) = synth.number_i64(i64::MIN) else {
             panic!("expected a negation");
         };
-        let two_to_63 = LuaNumber::Float(9_223_372_036_854_775_808.0);
-        assert_eq!(number_value(&negated_min.operand), two_to_63);
+        assert_eq!(number_value(&negated_min.operand), 9_223_372_036_854_775_808.0);
         // 2^53 + 1, the first integer a double can't hold.
-        let rounded = number_value(&luau.number_i64(0x20_0000_0000_0001));
-        assert_eq!(rounded, LuaNumber::Float(9_007_199_254_740_992.0));
+        let rounded = number_value(&synth.number_i64(0x20_0000_0000_0001));
+        assert_eq!(rounded, 9_007_199_254_740_992.0);
     }
 
     #[test]
     fn integer_i64_keeps_every_bit_pattern() {
         let fixture = Fixture::default();
-        let synth = fixture.synth().with_version(LuaVersion::Luau);
+        let synth = fixture.synth();
         for value in [0, 0x20_0000_0000_0001, -1, i64::MIN] {
             let Expression::Integer(integer) = synth.integer_i64(value) else {
                 panic!("expected integer literal");

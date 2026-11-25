@@ -2,28 +2,28 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: duplicate condition `a` in `if`/`elseif` chain
- --> Lua54:1:27
+ --> Standalone:1:27
 1 | if a then print(1) elseif a then print(2) end
   |                           ^
   |    - first checked here
 help: this branch is unreachable unless the condition has side effects
 
 warning: duplicate condition `a` in `if`/`elseif` chain
- --> Lua54:1:40
+ --> Standalone:1:40
 1 | if a then x() elseif b then y() elseif a then z() end
   |                                        ^
   |    - first checked here
 help: this branch is unreachable unless the condition has side effects
 
 warning: duplicate condition `a == 1` in `if`/`elseif` chain
- --> Lua54:1:25
+ --> Standalone:1:25
 1 | if a==1 then x() elseif a == 1 then y() elseif ( a ) then z() end
   |                         ^^^^^^
   |    ---- first checked here
 help: this branch is unreachable unless the condition has side effects
 
 warning: duplicate condition `c0` in `if`/`elseif` chain
- --> Lua54:4:8
+ --> Standalone:4:8
 1 | if c then x()
 2 | elseif c0 then x()
   |        -- first checked here
@@ -34,7 +34,7 @@ warning: duplicate condition `c0` in `if`/`elseif` chain
 help: this branch is unreachable unless the condition has side effects
 
 warning: duplicate condition `c1` in `if`/`elseif` chain
- --> Lua54:5:8
+ --> Standalone:5:8
 2 | elseif c0 then x()
 3 | elseif c1 then x()
   |        -- first checked here

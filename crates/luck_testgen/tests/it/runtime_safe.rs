@@ -1,8 +1,8 @@
 //! Regressions for `generate_runtime_safe`: each pinned program breaks the
-//! parse-and-run guarantee on the stock interpreters.
+//! parse-and-run guarantee on stock Luau.
 
 use luck_testgen::generate_runtime_safe;
-use luck_token::{LuaVersion, MAX_ACTIVE_LOCALS};
+use luck_token::MAX_ACTIVE_LOCALS;
 
 fn tab_depth(line: &str) -> usize {
     line.chars().take_while(|c| *c == '\t').count()
@@ -40,7 +40,7 @@ fn shadow_depth(stmt: &str, name: &str, depth: usize) -> Option<usize> {
 
 #[test]
 fn final_prints_take_the_length_of_tables_only() {
-    let program = generate_runtime_safe(42, LuaVersion::Luau, 30);
+    let program = generate_runtime_safe(42, 30);
     for line in program.lines() {
         let Some((name, value)) = final_print(line) else {
             continue;
@@ -60,7 +60,7 @@ fn final_prints_take_the_length_of_tables_only() {
 
 #[test]
 fn print_statements_never_print_a_table() {
-    let program = generate_runtime_safe(42, LuaVersion::Lua54, 30);
+    let program = generate_runtime_safe(42, 30);
     let printed_table = program.lines().find(|line| line.trim_start().starts_with("print({"));
     assert_eq!(
         printed_table, None,
@@ -71,7 +71,7 @@ fn print_statements_never_print_a_table() {
 
 #[test]
 fn final_prints_never_report_a_local_function() {
-    let program = generate_runtime_safe(42, LuaVersion::Lua55, 30);
+    let program = generate_runtime_safe(42, 30);
     for line in program.lines() {
         let Some((name, value)) = final_print(line) else {
             continue;
@@ -90,7 +90,7 @@ fn final_prints_never_report_a_local_function() {
 
 #[test]
 fn while_bodies_never_write_their_counter() {
-    let program = generate_runtime_safe(7, LuaVersion::Lua54, 120);
+    let program = generate_runtime_safe(7, 120);
     let lines: Vec<&str> = program.lines().collect();
     for (header_index, header) in lines.iter().enumerate() {
         let Some((counter, _)) =
@@ -126,7 +126,7 @@ fn while_bodies_never_write_their_counter() {
 
 #[test]
 fn until_conditions_read_their_counter_not_a_body_local() {
-    let program = generate_runtime_safe(7, LuaVersion::Lua54, 120);
+    let program = generate_runtime_safe(7, 120);
     let lines: Vec<&str> = program.lines().collect();
     for (header_index, header) in lines.iter().enumerate() {
         if header.trim_start() != "repeat" {
@@ -160,7 +160,7 @@ fn until_conditions_read_their_counter_not_a_body_local() {
 
 #[test]
 fn function_returns_add_a_number_not_a_shadowing_string() {
-    let program = generate_runtime_safe(7, LuaVersion::Lua54, 120);
+    let program = generate_runtime_safe(7, 120);
     let lines: Vec<&str> = program.lines().collect();
     for (header_index, header) in lines.iter().enumerate() {
         let Some(param) = header
@@ -189,11 +189,11 @@ fn function_returns_add_a_number_not_a_shadowing_string() {
 
 #[test]
 fn module_scope_stays_within_the_local_limit() {
-    let program = generate_runtime_safe(42, LuaVersion::Lua54, 500);
+    let program = generate_runtime_safe(42, 500);
     let module_locals = program.lines().filter(|line| line.starts_with("local ")).count();
     assert!(
         module_locals <= MAX_ACTIVE_LOCALS,
-        "{module_locals} module-scope locals: PUC-Rio Lua rejects a function with more than \
-         {MAX_ACTIVE_LOCALS}, so the program must stay within the limit to parse"
+        "{module_locals} module-scope locals: Luau's compiler rejects a function with more \
+         than {MAX_ACTIVE_LOCALS}, so the program must stay within the limit to compile"
     );
 }

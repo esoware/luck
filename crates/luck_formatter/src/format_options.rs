@@ -19,7 +19,7 @@ pub struct FormatOptions {
     /// broken, as in Black and Prettier: one field per line, or still packed
     /// when it's a list the source packed several to a line.
     ///
-    /// Argument lists can't carry one, since no dialect allows a comma after
+    /// Argument lists can't carry one, since the grammar allows no comma after
     /// the last argument.
     pub magic_trailing_comma: bool,
 }

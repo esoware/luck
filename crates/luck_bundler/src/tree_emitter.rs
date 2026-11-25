@@ -3,15 +3,15 @@ use std::{mem, vec};
 use luck_allocator::{Allocator, List};
 use luck_ast::{Block, Chunk, Expression, Statement, VisitMut};
 use luck_diagnostics::FileDiagnostics;
-use luck_token::{LuaVersion, chunk_header};
+use luck_token::chunk_header;
 
 use crate::graph::DependencyGraph;
-use crate::plan::Plan;
+use crate::plan::{Plan, may_overflow};
 use crate::rewrite::{LoaderNames, overflow_errors, rewrite_module};
 use crate::text_emitter::{self, HOLE};
 
 /// The bundle as a tree, and the lines its printed form opens with: the
-/// entry's shebang and its Luau hot comments, which take effect only there.
+/// entry's shebang and its hot comments, which take effect only there.
 ///
 /// Each module keeps the tree its own parse gave it, rewritten where the text
 /// splices, and everything around them is the tree the text parses to, which
@@ -20,26 +20,25 @@ use crate::text_emitter::{self, HOLE};
 pub(crate) fn emit<'ast>(
     allocator: &'ast Allocator,
     graph: &mut DependencyGraph<'ast>,
-    version: LuaVersion,
 ) -> Result<(Chunk<'ast>, Vec<u8>), Vec<FileDiagnostics>> {
     let entry_id = graph.entry_id;
     let entry = &graph[entry_id];
     let header = chunk_header(entry.source, entry.shebang, entry.hot_comments.iter().copied());
     if graph.modules.len() == 1 && entry.dependencies.is_empty() {
         let block = graph[entry_id].block.take();
-        return Ok((Chunk::new(version, block), header));
+        return Ok((Chunk::new(block), header));
     }
 
-    let plan = Plan::new(graph, version);
+    let plan = Plan::new(graph);
     let names = LoaderNames::new(allocator, &plan.prefix);
     let mut bodies = Vec::with_capacity(graph.modules.len());
     let mut errors = Vec::new();
     for wrapped in plan.wrapped_modules() {
         let module = &mut graph[wrapped.id];
         let mut block = module.block.take();
-        rewrite_module(allocator, &mut block, module, &plan, &names, version);
-        if wrapped.wrapper.may_overflow(module) {
-            errors.extend(overflow_errors(&block, module, wrapped.wrapper));
+        rewrite_module(allocator, &mut block, module, &plan, &names);
+        if may_overflow(module) {
+            errors.extend(overflow_errors(&block, module));
         }
         bodies.push(block);
     }
@@ -47,8 +46,8 @@ pub(crate) fn emit<'ast>(
         return Err(errors);
     }
 
-    let skeleton = allocator.alloc_slice_copy(&text_emitter::skeleton(graph, &plan, version));
-    let mut chunk = luck_parser::parse(allocator, skeleton, version).chunk;
+    let skeleton = allocator.alloc_slice_copy(&text_emitter::skeleton(graph, &plan));
+    let mut chunk = luck_parser::parse(allocator, skeleton).chunk;
     let mut filler = Filler { allocator, prefix: &plan.prefix, bodies: bodies.into_iter() };
     filler.visit_chunk(&mut chunk);
     Ok((chunk, header))

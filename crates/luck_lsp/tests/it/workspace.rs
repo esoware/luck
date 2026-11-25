@@ -23,14 +23,14 @@ return M
 ";
 
 const MAIN: &str = "\
-local util = require(\"util\")
+local util = require(\"./util\")
 util.greet(\"you\")
 print(util.shout())
 ";
 
 /// A project of `files`, each written under the returned directory, with a
 /// `luck.json` that pins its root, so no config above the temp directory
-/// decides how it resolves.
+/// decides its settings.
 fn project(files: &[(&str, &str)]) -> TempDir {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
@@ -212,10 +212,10 @@ fn a_file_changed_on_disk_is_read_again() {
     assert_eq!(references(&mut client, &util, Position::new(1, 12), false).len(), 3);
 
     let other_path = directory.path().join("other.lua");
-    fs::write(&other_path, "require(\"util\").greet()\n").expect("write other.lua");
+    fs::write(&other_path, "require(\"./util\").greet()\n").expect("write other.lua");
     client.file_changed(&other_path, FileChangeType::CREATED);
     let found = references(&mut client, &util, Position::new(1, 12), false);
-    assert!(places(&found).contains(&("other.lua", Position::new(0, 16))), "{found:?}");
+    assert!(places(&found).contains(&("other.lua", Position::new(0, 18))), "{found:?}");
 }
 
 #[test]
@@ -223,8 +223,7 @@ fn a_folder_added_to_the_workspace_is_walked() {
     let directory = project(&[("util.lua", UTIL)]);
     let sub = directory.path().join("sub");
     fs::create_dir_all(&sub).expect("mkdir sub");
-    fs::write(sub.join("luck.json"), r#"{ "search_paths": ["../?.lua"] }"#).expect("luck.json");
-    fs::write(sub.join("main.lua"), MAIN).expect("write sub/main.lua");
+    fs::write(sub.join("main.lua"), MAIN.replace("./util", "../util")).expect("write sub/main.lua");
     let util = uri_of(directory.path(), "util.lua");
     let mut client = Client::start();
     client.open(&util, UTIL);
@@ -270,7 +269,7 @@ fn the_walk_reports_a_config_nested_past_the_limit() {
 #[test]
 fn a_require_that_does_not_resolve_is_reported_until_its_module_exists() {
     let text = "\
-local missing = require(\"missing\")
+local missing = require(\"./missing\")
 print(missing)
 ";
     let directory = project(&[("main.lua", text)]);
@@ -281,8 +280,8 @@ print(missing)
     let diags = client.diagnostics(&main, Some(1));
     let [diag] = diags.as_slice() else { panic!("one unresolved require: {diags:?}") };
     assert_eq!(diag.code, Some(NumberOrString::String("E004".to_owned())));
-    assert_eq!(diag.message.lines().next(), Some("module not found: `missing`"));
-    assert_eq!(diag.range, Range::new(Position::new(0, 24), Position::new(0, 33)));
+    assert_eq!(diag.message.lines().next(), Some("module not found: `./missing`"));
+    assert_eq!(diag.range, Range::new(Position::new(0, 24), Position::new(0, 35)));
 
     let missing = directory.path().join("missing.lua");
     fs::write(&missing, "return {}\n").expect("write missing.lua");

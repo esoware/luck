@@ -6,7 +6,7 @@ use ls_types::{
 };
 use luck_ast::{GetSpan as _, Statement};
 use luck_linter::{Fix, FixKind, Message};
-use luck_token::{Span, has_line_break, is_lua_whitespace};
+use luck_token::{Span, has_line_break, is_luau_whitespace};
 use rustc_hash::FxHashMap;
 
 use crate::document::DocumentState;
@@ -158,10 +158,9 @@ fn disable_edit(document: &DocumentState, start: u32, rule: &str) -> Option<Text
             (stmt.span().start <= start).then(|| stmt.span().end)
         })?;
     let rest = &document.text()[statement_end as usize..];
-    let blank_length = rest.bytes().take_while(|&b| is_lua_whitespace(b)).count();
+    let blank_length = rest.bytes().take_while(|&b| is_luau_whitespace(b)).count();
     let blank = &rest[..blank_length];
-    let is_line_end =
-        blank_length == rest.len() || has_line_break(blank.as_bytes(), document.version());
+    let is_line_end = blank_length == rest.len() || has_line_break(blank.as_bytes());
     let new_text = if is_line_end {
         format!(" -- luck: allow({rule})")
     } else {
@@ -210,7 +209,6 @@ mod tests {
     use ls_types::{PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams};
     use luck_diagnostics::{Diagnostic as LuckDiagnostic, Severity};
     use luck_linter::{Category, LintConfig, RuleId, RuleLevel, TextEdit as LinterTextEdit};
-    use luck_token::LuaTarget;
 
     use super::*;
     use crate::fixtures::{document_linted_by, uri};
@@ -225,7 +223,7 @@ mod tests {
 
     /// `text` linted under `config`, and its lints.
     fn linted(text: &str, config: &LintConfig) -> (DocumentState, Vec<Message>) {
-        let document = document_linted_by(text, LuaTarget::Lua54, config.clone());
+        let document = document_linted_by(text, config.clone());
         let lints = document.lint(&|| false).expect("nothing cancels it");
         (document, lints)
     }

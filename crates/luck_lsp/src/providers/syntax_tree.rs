@@ -133,24 +133,21 @@ impl fmt::Write for PrettyDump {
 #[cfg(test)]
 mod tests {
     use luck_ast::MAX_NESTING_DEPTH;
-    use luck_testgen::{generate_full_grammar, lua_fixtures, on_the_smallest_stack};
-    use luck_token::{LuaTarget, LuaVersion};
+    use luck_testgen::{generate_full_grammar, luau_fixtures, on_the_smallest_stack};
 
     use super::*;
     use crate::fixtures::document;
 
     #[test]
     fn a_dump_lays_the_tree_out_as_pretty_debug_does() {
-        let mut sources: Vec<(LuaVersion, String)> =
-            lua_fixtures().into_iter().map(|fixture| (fixture.version, fixture.source)).collect();
-        for version in LuaVersion::ALL {
-            sources.extend((0..20).map(|seed| (version, generate_full_grammar(seed, version, 25))));
-        }
-        for (version, text) in sources {
-            let document = document(&text, version.into());
+        let mut sources: Vec<String> =
+            luau_fixtures().into_iter().map(|fixture| fixture.source).collect();
+        sources.extend((0..20).map(|seed| generate_full_grammar(seed, 25)));
+        for text in sources {
+            let document = document(&text);
             let expected = format!("{:#?}", document.parse().chunk);
             if expected.len() <= MAX_DUMP_BYTES {
-                assert_eq!(syntax_tree(&document), expected, "{version:?}\n{text}");
+                assert_eq!(syntax_tree(&document), expected, "{text}");
             }
         }
     }
@@ -168,8 +165,8 @@ mod tests {
             "local function f() ".repeat(levels),
             " end".repeat(levels)
         );
-        on_the_smallest_stack([(LuaVersion::Lua54, source)], |text, _| {
-            let document = document(text, LuaTarget::Lua54);
+        on_the_smallest_stack([source], |text| {
+            let document = document(text);
             assert!(document.parse().errors.is_empty(), "{:?}", document.parse().errors);
             let dump = syntax_tree(&document);
             assert!(dump.len() <= MAX_DUMP_BYTES + 64, "{}", dump.len());
@@ -181,7 +178,7 @@ mod tests {
     fn large_files_dump_within_the_bound() {
         let chain = vec!["1"; 2000].join("+");
         let text = format!("local x = {chain}\n").repeat(40);
-        let document = document(&text, LuaTarget::Lua54);
+        let document = document(&text);
         let dump = syntax_tree(&document);
         assert!(dump.len() <= MAX_DUMP_BYTES + 64, "{}", dump.len());
         assert!(dump.ends_with("cut off here"), "the dump says it stopped early");

@@ -2,6 +2,12 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: global environment `_G` used
+ --> Standalone:1:1
+1 | _G.value = 1
+  | ^^
+help: prefer a module or an explicitly passed dependency
+
+warning: global environment `_G` used
  --> Roblox:1:1
 1 | _G.value = shared.value; shared = {}
   | ^^
@@ -17,10 +23,4 @@ warning: global environment `shared` used
  --> Roblox:1:26
 1 | _G.value = shared.value; shared = {}
   |                          ^^^^^^
-help: prefer a module or an explicitly passed dependency
-
-warning: global environment `_G` used
- --> Lua54:1:1
-1 | _G.value = 1
-  | ^^
 help: prefer a module or an explicitly passed dependency

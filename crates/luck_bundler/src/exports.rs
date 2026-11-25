@@ -1,6 +1,6 @@
-use luck_ast::{Block, Chunk, GetSpan as _, LocalAssignment, LocalFunction, Statement};
+use luck_ast::{Block, GetSpan as _, LocalAssignment, LocalFunction, Statement};
 use luck_semantic::{ScopeKind, Scoping, SymbolId};
-use luck_token::{LuaVersion, Span, line_breaks};
+use luck_token::{Span, line_breaks};
 use rustc_hash::FxHashSet;
 
 use crate::module::contains_span;
@@ -15,8 +15,6 @@ use crate::text_emitter::Edit;
 /// its meaning. An export a closure can write after the module returns, or a
 /// later local hides from the module's end, lives in the export table itself,
 /// the RFC's desugared `_EXP`, so the write raises as a frozen table does.
-///
-/// Empty on a target without value exports.
 #[derive(Debug, Default)]
 pub(crate) struct Exports<'ast> {
     /// Exports that stay locals, in declaration order.
@@ -34,11 +32,10 @@ pub(crate) struct Exports<'ast> {
 }
 
 impl<'ast> Exports<'ast> {
-    /// The plan for `chunk`, whose names `source` holds and `scoping`
-    /// resolves, which is empty unless it exports a value.
-    pub(crate) fn new(chunk: &Chunk<'_>, scoping: &Scoping, source: &'ast [u8]) -> Self {
-        let block = &chunk.block;
-        if !chunk.version.has_value_exports() || !has_value_exports(block) {
+    /// The plan for `block`, a chunk's, whose names `source` holds and
+    /// `scoping` resolves, which is empty unless it exports a value.
+    pub(crate) fn new(block: &Block<'_>, scoping: &Scoping, source: &'ast [u8]) -> Self {
+        if !has_value_exports(block) {
             return Self::default();
         }
         // A later local of the export's own scope hides it from the module's
@@ -81,11 +78,6 @@ impl<'ast> Exports<'ast> {
                 | Statement::LocalFunction(_)
                 | Statement::LocalAssignment(_)
                 | Statement::Return(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
                 | Statement::Break(_)
                 | Statement::Continue(_)
                 | Statement::CompoundAssignment(_)
@@ -160,14 +152,12 @@ impl<'ast> Exports<'ast> {
         &self,
         block: &Block<'_>,
         source: &[u8],
-        version: LuaVersion,
         prefix: &str,
-        edits: &mut Vec<(Span, Edit<'_>)>,
+        edits: &mut Vec<(Span, Edit)>,
     ) {
-        let lowering = TextLowerer { source, version, prefix };
+        let lowering = TextLowerer { source, prefix };
         for stmt in &block.stmts {
             let (span, text) = match stmt {
-                // Luau
                 Statement::TypeDeclaration(type_declaration) if type_declaration.is_exported => {
                     (export_keyword_at(type_declaration.span.start), String::new())
                 }
@@ -189,11 +179,6 @@ impl<'ast> Exports<'ast> {
                 | Statement::LocalFunction(_)
                 | Statement::LocalAssignment(_)
                 | Statement::Return(_)
-                | Statement::Goto(_)
-                | Statement::Label(_)
-                | Statement::GlobalDeclaration(_)
-                | Statement::GlobalFunction(_)
-                | Statement::GlobalStar(_)
                 | Statement::Break(_)
                 | Statement::Continue(_)
                 | Statement::CompoundAssignment(_)
@@ -226,11 +211,6 @@ fn has_value_exports(block: &Block<'_>) -> bool {
         | Statement::GenericFor(_)
         | Statement::FunctionDecl(_)
         | Statement::Return(_)
-        | Statement::Goto(_)
-        | Statement::Label(_)
-        | Statement::GlobalDeclaration(_)
-        | Statement::GlobalFunction(_)
-        | Statement::GlobalStar(_)
         | Statement::Break(_)
         | Statement::Continue(_)
         | Statement::CompoundAssignment(_)
@@ -250,7 +230,6 @@ fn is_written_from_a_closure(scoping: &Scoping, symbol: SymbolId) -> bool {
 
 struct TextLowerer<'input> {
     source: &'input [u8],
-    version: LuaVersion,
     prefix: &'input str,
 }
 
@@ -298,7 +277,7 @@ impl TextLowerer<'_> {
 
     /// `span`'s line breaks as plain newlines, so the line map stays 1:1.
     fn push_line_breaks(&self, span: Span, text: &mut String) {
-        for _ in line_breaks(span.text(self.source), self.version) {
+        for _ in line_breaks(span.text(self.source)) {
             text.push('\n');
         }
     }

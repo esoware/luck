@@ -62,7 +62,7 @@ fn trees_that_differ_anywhere_else_differ() {
         ),
         (synth.name_expr("a"), synth.name_expr("b")),
         (synth.nil(), synth.boolean(false)),
-        (synth.number_i64(1), synth.number_f64(1.0)),
+        (synth.integer_i64(1), synth.number_f64(1.0)),
         (synth.string("a"), synth.string("b")),
         (
             synth.call(synth.name_expr("f"), []),

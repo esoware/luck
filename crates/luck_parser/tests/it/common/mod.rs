@@ -4,14 +4,14 @@ use std::iter;
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, Suffix, SuffixedExpression, Var};
 use luck_parser::ParseResult;
-use luck_token::{BinOp, LuaVersion};
+use luck_token::BinOp;
 
 pub(crate) fn assert_no_errors(result: &ParseResult<'_>) {
     assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
 }
 
-pub(crate) fn parse_luau<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
-    luck_parser::parse(allocator, source.as_bytes(), LuaVersion::Luau)
+pub(crate) fn parse_str<'ast>(allocator: &'ast Allocator, source: &'ast str) -> ParseResult<'ast> {
+    luck_parser::parse(allocator, source.as_bytes())
 }
 
 /// The last initializer of a `local ... = <expr>` first statement.

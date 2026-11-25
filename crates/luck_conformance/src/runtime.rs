@@ -9,8 +9,8 @@ use std::{env, thread};
 
 use crate::execute::{MODE, Verdict};
 use crate::snapshot::TestResult;
-use crate::status::{self, Variant};
-use crate::suite::{Suite, SuiteFile};
+use crate::status::{self, Rewrite};
+use crate::suite::SuiteFile;
 
 /// Far past the second the slowest test takes, so only a program that never
 /// ends hits it.
@@ -25,15 +25,14 @@ enum Ending {
     TimedOut,
 }
 
-pub(crate) fn is_runnable(suite: &Suite, file: &SuiteFile) -> bool {
-    status::not_runnable(suite.target, &file.name).is_none()
+pub(crate) fn is_runnable(file: &SuiteFile) -> bool {
+    status::not_runnable(&file.name).is_none()
 }
 
 /// The original must return, and each program luck wrote for it must return
 /// the same, unless [`status::known_difference`] says it can't. A stage that
 /// wrote nothing has its failure in its own snapshot.
 pub(crate) fn check(
-    suite: &Suite,
     root: &Path,
     file: &SuiteFile,
     formatted: Option<&[u8]>,
@@ -46,7 +45,7 @@ pub(crate) fn check(
     if !matches!(original, Ending::Verdict(Verdict::Returned(_))) {
         return TestResult::GenericError("Original", describe(&original));
     }
-    for (variant, written) in [(Variant::Formatted, formatted), (Variant::Minified, minified)] {
+    for (rewrite, written) in [(Rewrite::Formatted, formatted), (Rewrite::Minified, minified)] {
         let Some(program) = written else {
             continue;
         };
@@ -54,15 +53,15 @@ pub(crate) fn check(
             Ok(ending) => ending,
             Err(error) => return TestResult::GenericError("Harness", error.to_string()),
         };
-        match (ending == original, status::known_difference(suite.target, &file.name, variant)) {
+        match (ending == original, status::known_difference(&file.name, rewrite)) {
             (true, None) | (false, Some(_)) => {}
             (true, Some(_)) => {
                 return TestResult::GenericError(
-                    variant.name(),
+                    rewrite.name(),
                     "ends as the original does, so it's no longer a known difference".to_owned(),
                 );
             }
-            (false, None) => return TestResult::GenericError(variant.name(), describe(&ending)),
+            (false, None) => return TestResult::GenericError(rewrite.name(), describe(&ending)),
         }
     }
     TestResult::Passed
@@ -91,12 +90,6 @@ fn run_in_child(root: &Path, file: &SuiteFile, program: &[u8]) -> io::Result<End
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // The reference interpreter reads its search paths from these.
-    for (key, _value) in env::vars_os() {
-        if key.to_string_lossy().starts_with("LUA_") {
-            command.env_remove(key);
-        }
-    }
     let mut child = command.spawn()?;
     let ended = child
         .stdin

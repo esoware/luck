@@ -2,83 +2,59 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: invalid string escape `\q`
- --> Lua51:1:12
-1 | local x = "\q"
-  |            ^^
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
-
-warning: invalid string escape `\z`
- --> Lua51:1:12
-1 | local x = "\z"
-  |            ^^
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
-
-warning: invalid string escape `\u`
- --> Lua51:1:12
-1 | local x = "\u{1F600}"
-  |            ^^
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
-
-warning: invalid string escape `\x`
- --> Lua51:1:12
-1 | local x = "\x41"
-  |            ^^
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
-
-warning: invalid string escape `\q`
- --> Lua51:2:12
-1 | -- "\q
-2 | local x = "\q" --[[ '\q ]] local y = '\w' -- \e
-  |            ^^
-3 |
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
-
-warning: invalid string escape `\w`
- --> Lua51:2:39
-1 | -- "\q
-2 | local x = "\q" --[[ '\q ]] local y = '\w' -- \e
-  |                                       ^^
-3 |
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
-
-warning: invalid string escape `\q`
- --> Luau:1:12
+ --> Standalone:1:12
 1 | local x = "\q"
   |            ^^
 help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
 
 warning: invalid string escape `\q`
- --> Luau:1:13
+ --> Standalone:2:12
+1 | -- "\q
+2 | local x = "\q" --[[ '\q ]] local y = '\w' -- \e
+  |            ^^
+3 |
+help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
+
+warning: invalid string escape `\w`
+ --> Standalone:2:39
+1 | -- "\q
+2 | local x = "\q" --[[ '\q ]] local y = '\w' -- \e
+  |                                       ^^
+3 |
+help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
+
+warning: invalid string escape `\q`
+ --> Standalone:1:13
 1 | local x = `a\q{1}b\w`
   |             ^^
 help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
 
 warning: invalid string escape `\w`
- --> Luau:1:19
+ --> Standalone:1:19
 1 | local x = `a\q{1}b\w`
   |                   ^^
 help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
 
 warning: invalid string escape `\q`
- --> Luau:1:13
+ --> Standalone:1:13
 1 | local x = `a\qb\{c}\w`
   |             ^^
 help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
 
 warning: invalid string escape `\w`
- --> Luau:1:20
+ --> Standalone:1:20
 1 | local x = `a\qb\{c}\w`
   |                    ^^
 help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
 
 warning: invalid string escape `\q`
- --> Lua51:1:8
+ --> Standalone:1:8
 1 | print "\q"
   |        ^^
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
+help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`
 
 warning: invalid string escape `\é`
- --> Lua51:1:12
+ --> Standalone:1:12
 1 | local x = "\é"
   |            ^^
-help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd`
+help: valid escapes: `\a` `\b` `\f` `\n` `\r` `\t` `\v` `\\` `\"` `\'` `\ddd` `\xXX` `\z` `\u{XXX}`

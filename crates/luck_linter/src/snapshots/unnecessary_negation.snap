@@ -2,99 +2,99 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a == b)
   |           ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = a ~= b
 
 warning: negated comparison, consider `a == b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a ~= b)
   |           ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = a == b
 
 warning: negated comparison, consider `a >= b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a < b)
   |           ^^^^^^^^^^^
 
 warning: negated comparison, consider `a < b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a >= b)
   |           ^^^^^^^^^^^^
 
 warning: negated comparison, consider `x.y == f(1)`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (x.y ~= f(1))
   |           ^^^^^^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = x.y == f(1)
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:12
+ --> Standalone:1:12
 1 | local r = (not (a == b))
   |            ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = (a ~= b)
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:16
+ --> Standalone:1:16
 1 | local r = not (not (a == b))
   |                ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = not (a ~= b)
 
 warning: negated comparison, consider `a ~= (b == c)`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a == (b == c))
   |           ^^^^^^^^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = a ~= (b == c)
 
 warning: negated comparison, consider `(a == b) ~= c`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not ((a == b) == c)
   |           ^^^^^^^^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = (a == b) ~= c
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:17
+ --> Standalone:1:17
 1 | local r = x and not (a == b)
   |                 ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = x and a ~= b
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a == b) == c
   |           ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = (a ~= b) == c
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:16
+ --> Standalone:1:16
 1 | local r = c == not (a == b)
   |                ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = c == (a ~= b)
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:16
+ --> Standalone:1:16
 1 | local r = x .. not (a == b)
   |                ^^^^^^^^^^^^
 fix: invert the comparison operator
   | local r = x .. (a ~= b)
 
 warning: negated comparison, consider `a ~= b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (a --[[why]] == b)
   |           ^^^^^^^^^^^^^^^^^^^^^^
 
 warning: negated comparison, consider `f(--[[why]] a) ~= b`
- --> Lua54:1:11
+ --> Standalone:1:11
 1 | local r = not (f(--[[why]] a) == b)
   |           ^^^^^^^^^^^^^^^^^^^^^^^^^
 fix: invert the comparison operator

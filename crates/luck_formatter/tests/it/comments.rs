@@ -2,24 +2,21 @@ use std::fmt::Write as _;
 use std::ops::Range;
 
 use luck_formatter::{CollapseSimpleStatement, FormatOptions, LineEndings};
-use luck_token::LuaVersion;
 
 use crate::common::{assert_format, assert_format_range, assert_format_with};
 
-/// A Latin-1 source, which Lua reads as bytes, keeps every byte of its
+/// A Latin-1 source, which Luau reads as bytes, keeps every byte of its
 /// comments and strings.
 #[test]
 fn comments_and_strings_that_are_not_utf8_keep_their_bytes() {
     let source = b"--[[ caf\xE9\r\n\xE8 ]]\nlocal s = { 'na\xEFve', \"\xFF\" } -- d\xE9j\xE0\n";
     let expected = b"--[[ caf\xE9\n\xE8 ]]\nlocal s = { \"na\xEFve\", \"\xFF\" } -- d\xE9j\xE0\n";
-    for version in [LuaVersion::Lua51, LuaVersion::Lua54] {
-        assert_format_with(source, expected, version, &FormatOptions::default());
-    }
+    assert_format_with(source, expected, &FormatOptions::default());
 }
 
 /// Each source, its layout at width 1, and the one widths 60, 80, and 120
 /// share.
-const INTERIOR_COMMENT_CASES: [(&str, &str, &str); 24] = [
+const INTERIOR_COMMENT_CASES: [(&str, &str, &str); 22] = [
     (
         "if (first --[[ condition ]] and second) then run() end",
         "\
@@ -278,42 +275,6 @@ local z = 3
     ),
     (
         "\
--- comment
-;(function()
-\tBoo = 42
-end)()",
-        "\
--- comment
-(function()
-\tBoo = 42
-end)()
-",
-        "\
--- comment
-(function()
-\tBoo = 42
-end)()
-",
-    ),
-    (
-        "\
--- on the separator
-;
--- leading
-local y = 2",
-        "\
--- on the separator
--- leading
-local y = 2
-",
-        "\
--- on the separator
--- leading
-local y = 2
-",
-    ),
-    (
-        "\
 if first --[[ header ]] then
 -- luck: format off
 local  y  =  { --[[inner]] 2 }
@@ -480,7 +441,7 @@ fn every_comment_formats_where_it_was_written() {
     for (source, narrowest, wider) in INTERIOR_COMMENT_CASES {
         for (line_width, expected) in [(1, narrowest), (60, wider), (80, wider), (120, wider)] {
             let options = FormatOptions { line_width, ..FormatOptions::default() };
-            assert_format_with(source, expected, LuaVersion::Lua54, &options);
+            assert_format_with(source, expected, &options);
         }
     }
 }
@@ -498,24 +459,6 @@ local y = 2
 ",
     );
     assert_format("return 1; -- keep me\n", "return 1 -- keep me\n");
-}
-
-#[test]
-fn comment_on_a_dropped_semicolon_stays_before_the_stmt() {
-    assert_format(
-        "\
--- comment
-;(function()
-\tBoo = 42
-end)()
-",
-        "\
--- comment
-(function()
-\tBoo = 42
-end)()
-",
-    );
 }
 
 #[test]
@@ -691,7 +634,7 @@ local t = --[[ why ]] {
 ",
     );
     // Before call arguments it goes inside the parentheses, since a line
-    // break before a `(` would start a new statement in Lua 5.1 and Luau.
+    // break before a call's `(` doesn't parse.
     assert_format(
         "\
 render --[[ why ]] (a, -- x
@@ -712,7 +655,6 @@ f(
 ]] \"s\"
 )
 ",
-        LuaVersion::Lua51,
         &FormatOptions::default(),
     );
     assert_format("local function f -- why\n() end\n", "local function f(\n\t-- why\n) end\n");
@@ -840,7 +782,6 @@ local n = size(
 \t+ size(u)
 \t+ size(v)
 ",
-        LuaVersion::Lua54,
         &FormatOptions { line_width: 30, ..FormatOptions::default() },
     );
 }
@@ -895,12 +836,7 @@ function f(
 #[test]
 fn a_comment_leading_an_alternation_goes_after_the_line_break_it_opens_with() {
     let options = FormatOptions::default();
-    assert_format_with(
-        "type T = --[[c]] A | B\n",
-        "type T = --[[c]] A | B\n",
-        LuaVersion::Luau,
-        &options,
-    );
+    assert_format_with("type T = --[[c]] A | B\n", "type T = --[[c]] A | B\n", &options);
     assert_format_with(
         "type T = -- c\nA | B\n",
         "\
@@ -909,14 +845,12 @@ type T =
 \t| A
 \t| B
 ",
-        LuaVersion::Luau,
         &options,
     );
     // An instantiation's comments go inside its doubled brackets.
     assert_format_with(
         "local x = convert --[[a]] < --[[b]] < integer > --[[e]] > (current)\n",
         "local x = convert --[[a]]<<--[[b]] integer --[[e]]>>(current)\n",
-        LuaVersion::Luau,
         &options,
     );
 }
@@ -997,24 +931,6 @@ end
 }
 
 #[test]
-fn a_comment_after_a_separator_stays_above_the_next_stmts_own_comment() {
-    // Both lead `local y`, in the order they were written.
-    assert_format(
-        "\
--- on the separator
-;
--- leading
-local y = 2
-",
-        "\
--- on the separator
--- leading
-local y = 2
-",
-    );
-}
-
-#[test]
 fn leading_comment() {
     assert_format(
         "\
@@ -1031,24 +947,6 @@ local x = 1
 #[test]
 fn trailing_comment() {
     assert_format("local x = 1 -- comment\n", "local x = 1 -- comment\n");
-}
-
-#[test]
-fn comment_after_only_empty_stmts() {
-    // A block holding only dropped `;` statements has nothing to print, so
-    // the comment flush must not open a line before it.
-    assert_format(";-- a\n", "-- a\n");
-    assert_format(
-        "\
-;
--- a
--- b
-",
-        "\
--- a
--- b
-",
-    );
 }
 
 #[test]
@@ -1230,7 +1128,6 @@ fn windows_line_endings() {
     assert_format_with(
         "if x then\ny=1\nend\n",
         "if x then\r\n\ty = 1\r\nend\r\n",
-        LuaVersion::Lua54,
         &windows_options(),
     );
 }
@@ -1266,7 +1163,6 @@ local t = {
 \t6, 7, 8,
 }
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -1329,7 +1225,7 @@ fn windows_line_endings_add_one_cr_to_verbatim_text_across_passes() {
         ),
     ];
     for (input, expected) in cases {
-        assert_format_with(input, expected, LuaVersion::Lua54, &windows_options());
+        assert_format_with(input, expected, &windows_options());
     }
 }
 
@@ -1338,39 +1234,44 @@ fn windows_line_endings_keep_crlf_input_as_one_line_ending() {
     assert_format_with(
         "local s = [[\r\nbody\r\n]]\r\n--[[\r\nblock\r\n]]\r\n",
         "local s = [[\r\nbody\r\n]]\r\n--[[\r\nblock\r\n]]\r\n",
-        LuaVersion::Lua54,
         &windows_options(),
     );
 }
 
 #[test]
 fn windows_line_endings_keep_other_verbatim_line_breaks() {
-    // Each of these is already a line break in a long string, so adding a CR
-    // would change the value.
+    // The printer adds a CR only to an LF without one before it, so each of
+    // these keeps its bytes.
     let options = windows_options();
-    for line_break in ["\n\r", "\r\r\n", "\r"] {
+    for line_break in ["\r\r\n", "\r"] {
         let source = format!("local s = [[a{line_break}b]]\n");
         let expected = format!("local s = [[a{line_break}b]]\r\n");
-        assert_format_with(&source, &expected, LuaVersion::Lua54, &options);
+        assert_format_with(&source, &expected, &options);
     }
 }
 
 #[test]
-fn windows_line_endings_keep_an_lf_that_verbatim_text_follows_with_a_cr() {
-    // Luau reads no line break in a CR, so the region starts with one, and
-    // the line break before it is half of an LFCR.
+fn windows_line_endings_add_a_cr_to_an_lf_before_a_cr() {
+    // A long string reads a CRLF as one LF and keeps a lone CR, so its value
+    // stays the same.
+    assert_format_with("local s = [[a\n\rb]]\n", "local s = [[a\r\n\rb]]\r\n", &windows_options());
+}
+
+#[test]
+fn windows_line_endings_make_the_lf_before_a_verbatim_cr_crlf() {
+    // A CR breaks no line, so the region starts with one, after the line
+    // break the printer writes.
     assert_format_with(
         "-- luck: format off\n\rlocal x=1\n-- luck: format on\nlocal y=2\n",
-        "-- luck: format off\n\rlocal x=1\r\n-- luck: format on\r\nlocal y = 2\r\n",
-        LuaVersion::Luau,
+        "-- luck: format off\r\n\rlocal x=1\r\n-- luck: format on\r\nlocal y = 2\r\n",
         &windows_options(),
     );
 }
 
 #[test]
-fn a_format_off_after_a_lone_cr_trails_the_statement_before_it_in_luau() {
-    // Luau reads a lone CR as a space, so the region starts on the next line,
-    // as it does after a trailing directive.
+fn a_format_off_after_a_lone_cr_trails_the_statement_before_it() {
+    // A lone CR is a space, so the region starts on the next line, as it does
+    // after a trailing directive.
     let expected = "\
 local x = 1 -- luck: format off
 local   y   =   2
@@ -1386,7 +1287,7 @@ local   y   =   2
 local   z   =   3
 "
         );
-        assert_format_with(&input, expected, LuaVersion::Luau, &FormatOptions::default());
+        assert_format_with(&input, expected, &FormatOptions::default());
     }
 }
 
@@ -1408,7 +1309,6 @@ if a then
 \tend)
 end
 ",
-        LuaVersion::Lua54,
         &conditional_collapse_options(),
     );
     assert_format(
@@ -1516,7 +1416,7 @@ end
 ",
         ),
     ] {
-        assert_format_with(input, expected, LuaVersion::Lua54, &options);
+        assert_format_with(input, expected, &options);
     }
 }
 
@@ -1557,7 +1457,7 @@ if a then i = 7 end
 ",
         ),
     ] {
-        assert_format_with(input, expected, LuaVersion::Lua54, &options);
+        assert_format_with(input, expected, &options);
     }
 }
 
@@ -1845,7 +1745,6 @@ if a then
 \t)
 end
 ",
-        LuaVersion::Lua54,
         &conditional_collapse_options(),
     );
 }
@@ -1865,7 +1764,6 @@ if a then
 \tend
 end
 ",
-        LuaVersion::Lua54,
         &conditional_collapse_options(),
     );
 }
@@ -1880,7 +1778,6 @@ if condition_name then
 \tcall_function_name()
 end
 ",
-        LuaVersion::Lua54,
         &options,
     );
 }
@@ -1995,4 +1892,46 @@ fn a_long_table_closing_on_a_comment_formats_without_rescanning_its_fields() {
     }
     expected.push_str("\t-- c\n}\n");
     assert_format(&format!("local t = {{{}\n-- c\n}}\n", fields.join(", ")), &expected);
+}
+
+#[test]
+fn a_comment_after_a_line_comment_a_lone_cr_ends_starts_its_own_line() {
+    // A line comment ends at a lone CR, which breaks no line.
+    assert_format(
+        "x = 1 -- a\r-- b\r",
+        "\
+x = 1 -- a
+-- b
+",
+    );
+    assert_format(
+        "f(a, -- x\r--[[y]] b)\n",
+        "\
+f(
+\ta, -- x
+\t--[[y]] b
+)
+",
+    );
+}
+
+#[test]
+fn lone_crs_ending_a_line_go_as_spaces_do() {
+    // A lone CR is a space, so only the last before an LF is half of a CRLF.
+    assert_format(
+        "x = -- c\r\r\n1\n",
+        "\
+x =
+\t-- c
+\t1
+",
+    );
+    assert_format(
+        "--[[a\r\r\nb]]\nlocal x\n",
+        "\
+--[[a
+b]]
+local x
+",
+    );
 }

@@ -15,7 +15,7 @@ pub(crate) struct GithubReporter;
 impl Reporter for GithubReporter {
     fn render(&self, file: SourceFile<'_>, diags: &[Diagnostic], output: &mut Vec<u8>) {
         let text = file.text.unwrap_or_default();
-        let lines = LineIndex::new(text, file.version);
+        let lines = LineIndex::new(text);
         // The runner resolves a relative path from the workspace root, not
         // the working directory, and makes an absolute one relative to the
         // workspace.
@@ -70,7 +70,7 @@ mod tests {
     use std::env;
 
     use luck_diagnostics::Severity;
-    use luck_token::{LuaVersion, Span};
+    use luck_token::Span;
 
     use super::*;
 
@@ -91,11 +91,7 @@ print(a)";
         .with_label(Span::new(6, 7), "a label")
         .with_help("prefix with `_` to suppress this warning");
         let mut output = Vec::new();
-        let source = SourceFile {
-            label: r"src\a.lua",
-            text: Some(text.as_bytes()),
-            version: LuaVersion::Lua54,
-        };
+        let source = SourceFile { label: r"src\a.lua", text: Some(text.as_bytes()) };
         GithubReporter.render(source, &[diag], &mut output);
         let lines = String::from_utf8(output).expect("annotations are UTF-8");
         let (file, rest) = lines

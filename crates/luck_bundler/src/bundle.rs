@@ -10,8 +10,8 @@ use crate::tree_emitter;
 
 #[derive(Debug)]
 pub struct Bundle {
-    /// Parses for the target, so every luck tool can read it back. Bytes,
-    /// as the modules' sources are, which it copies as written.
+    /// Parses as Luau, so every luck tool can read it back. Bytes, as the
+    /// modules' sources are, which it copies as written.
     pub output: Vec<u8>,
     /// By module, in discovery order.
     pub warnings: Vec<FileDiagnostics>,
@@ -22,7 +22,7 @@ pub struct Bundle {
 
 #[derive(Debug)]
 pub struct MinifiedBundle {
-    /// Opens with the entry's shebang and its Luau hot comments.
+    /// Opens with the entry's shebang and its hot comments.
     pub output: Vec<u8>,
     /// By module, in discovery order.
     pub warnings: Vec<FileDiagnostics>,
@@ -47,7 +47,7 @@ pub fn bundle(
     options: &BundleOptions<'_>,
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
     let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
-    let (output, line_map) = text_emitter::emit(arenas.get(), &mut graph, options.version)?;
+    let (output, line_map) = text_emitter::emit(arenas.get(), &mut graph)?;
     Ok(Bundle {
         output,
         warnings: graph.warnings,
@@ -72,7 +72,7 @@ pub fn bundle_minified(
 ) -> Result<MinifiedBundle, Vec<FileDiagnostics>> {
     let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
     let allocator = arenas.get();
-    let (mut chunk, header) = tree_emitter::emit(allocator, &mut graph, options.version)?;
+    let (mut chunk, header) = tree_emitter::emit(allocator, &mut graph)?;
     let output = luck_minifier::minify_chunk(allocator, &mut chunk, transforms, header)
         .expect("a bundle nests within the cap");
     Ok(MinifiedBundle {

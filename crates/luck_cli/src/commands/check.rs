@@ -66,21 +66,20 @@ impl CheckArgs {
 fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     let file_path = file.path.as_path();
     let label = file_path.to_string_lossy();
-    let version = file.project.target_for(Some(file_path)).version();
     let source = match FileSystemOs.read(file_path) {
         Ok(bytes) => bytes,
         Err(error) => {
             let mut rendered = Vec::new();
-            let source_file = SourceFile { label: &label, text: None, version };
+            let source_file = SourceFile { label: &label, text: None };
             DefaultReporter.render(source_file, &[Diagnostic::e010(&label, &error)], &mut rendered);
             return Some(rendered);
         }
     };
 
-    let result = luck_parser::parse(allocator, &source, version);
+    let result = luck_parser::parse(allocator, &source);
     let errors = if result.errors.is_empty() {
-        // The compile-time errors real Lua reports beyond the grammar, such as
-        // const writes and unresolved gotos.
+        // The compile-time errors Luau reports beyond the grammar, such as an
+        // assignment to a `const`.
         SemanticBuilder::new()
             .with_counts(result.counts)
             .with_check(true)
@@ -94,7 +93,7 @@ fn check_file(allocator: &Allocator, file: &ProjectFile) -> Option<Vec<u8>> {
     }
 
     let mut rendered = Vec::new();
-    let source_file = SourceFile { label: &label, text: Some(&source), version };
+    let source_file = SourceFile { label: &label, text: Some(&source) };
     DefaultReporter.render(source_file, &errors, &mut rendered);
     Some(rendered)
 }

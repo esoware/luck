@@ -4,20 +4,19 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
-    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody,
-    FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam, GenericFor,
-    GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, GlobalDeclaration, GlobalFunction,
-    GlobalStar, GotoStatement, IfExpression, IfStatement, IntegerLiteral, InterpolatedSegment,
-    InterpolatedString, IntersectionType, LabelStatement, LocalAssignment, LocalFunction,
-    MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, StringLiteral,
-    SuffixedExpression, TableConstructor, TableType, TypeArgs, TypeCast, TypeDeclaration, TypePack,
-    TypeofType, UnaryOp, UnionType, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef,
+    FunctionName, FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
+    GenericTypeParam, GetSpan, IfExpression, IfStatement, IntegerLiteral, InterpolatedSegment,
+    InterpolatedString, IntersectionType, LocalAssignment, LocalFunction, LocalName, MethodCall,
+    Name, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
+    ParenthesizedType, RepeatLoop, ReturnStatement, StringLiteral, SuffixedExpression,
+    TableConstructor, TableType, TypeArgs, TypeCast, TypeDeclaration, TypePack, TypeofType,
+    UnaryOp, UnionType, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// The largest discriminant of an [`AstType`].
-pub const AST_TYPE_MAX: u8 = 60;
+pub const AST_TYPE_MAX: u8 = 54;
 
 /// Which kind of node an [`AstKind`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,17 +57,11 @@ pub enum AstType {
     FunctionName,
     FunctionDecl,
     LocalFunction,
-    Attribute,
-    AttributedName,
+    LocalName,
     LocalAssignment,
-    GotoStatement,
-    LabelStatement,
     ReturnStatement,
     CompoundAssignment,
     TypeDeclaration,
-    GlobalDeclaration,
-    GlobalFunction,
-    GlobalStar,
     NamedType,
     TypeArgs,
     TypeofType,
@@ -125,17 +118,11 @@ pub enum AstKind<'ast> {
     FunctionName(&'ast FunctionName<'ast>),
     FunctionDecl(&'ast FunctionDecl<'ast>),
     LocalFunction(&'ast LocalFunction<'ast>),
-    Attribute(&'ast Attribute<'ast>),
-    AttributedName(&'ast AttributedName<'ast>),
+    LocalName(&'ast LocalName<'ast>),
     LocalAssignment(&'ast LocalAssignment<'ast>),
-    GotoStatement(&'ast GotoStatement<'ast>),
-    LabelStatement(&'ast LabelStatement<'ast>),
     ReturnStatement(&'ast ReturnStatement<'ast>),
     CompoundAssignment(&'ast CompoundAssignment<'ast>),
     TypeDeclaration(&'ast TypeDeclaration<'ast>),
-    GlobalDeclaration(&'ast GlobalDeclaration<'ast>),
-    GlobalFunction(&'ast GlobalFunction<'ast>),
-    GlobalStar(&'ast GlobalStar<'ast>),
     NamedType(&'ast NamedType<'ast>),
     TypeArgs(&'ast TypeArgs<'ast>),
     TypeofType(&'ast TypeofType<'ast>),
@@ -192,17 +179,11 @@ impl<'ast> AstKind<'ast> {
             Self::FunctionName(_) => AstType::FunctionName,
             Self::FunctionDecl(_) => AstType::FunctionDecl,
             Self::LocalFunction(_) => AstType::LocalFunction,
-            Self::Attribute(_) => AstType::Attribute,
-            Self::AttributedName(_) => AstType::AttributedName,
+            Self::LocalName(_) => AstType::LocalName,
             Self::LocalAssignment(_) => AstType::LocalAssignment,
-            Self::GotoStatement(_) => AstType::GotoStatement,
-            Self::LabelStatement(_) => AstType::LabelStatement,
             Self::ReturnStatement(_) => AstType::ReturnStatement,
             Self::CompoundAssignment(_) => AstType::CompoundAssignment,
             Self::TypeDeclaration(_) => AstType::TypeDeclaration,
-            Self::GlobalDeclaration(_) => AstType::GlobalDeclaration,
-            Self::GlobalFunction(_) => AstType::GlobalFunction,
-            Self::GlobalStar(_) => AstType::GlobalStar,
             Self::NamedType(_) => AstType::NamedType,
             Self::TypeArgs(_) => AstType::TypeArgs,
             Self::TypeofType(_) => AstType::TypeofType,
@@ -421,13 +402,8 @@ impl<'ast> AstKind<'ast> {
     }
 
     #[inline]
-    pub const fn as_attribute(self) -> Option<&'ast Attribute<'ast>> {
-        if let Self::Attribute(attribute) = self { Some(attribute) } else { None }
-    }
-
-    #[inline]
-    pub const fn as_attributed_name(self) -> Option<&'ast AttributedName<'ast>> {
-        if let Self::AttributedName(attributed_name) = self { Some(attributed_name) } else { None }
+    pub const fn as_local_name(self) -> Option<&'ast LocalName<'ast>> {
+        if let Self::LocalName(local_name) = self { Some(local_name) } else { None }
     }
 
     #[inline]
@@ -437,16 +413,6 @@ impl<'ast> AstKind<'ast> {
         } else {
             None
         }
-    }
-
-    #[inline]
-    pub const fn as_goto_stmt(self) -> Option<&'ast GotoStatement<'ast>> {
-        if let Self::GotoStatement(goto_stmt) = self { Some(goto_stmt) } else { None }
-    }
-
-    #[inline]
-    pub const fn as_label_stmt(self) -> Option<&'ast LabelStatement<'ast>> {
-        if let Self::LabelStatement(label_stmt) = self { Some(label_stmt) } else { None }
     }
 
     #[inline]
@@ -470,25 +436,6 @@ impl<'ast> AstKind<'ast> {
         } else {
             None
         }
-    }
-
-    #[inline]
-    pub const fn as_global_declaration(self) -> Option<&'ast GlobalDeclaration<'ast>> {
-        if let Self::GlobalDeclaration(global_declaration) = self {
-            Some(global_declaration)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub const fn as_global_function(self) -> Option<&'ast GlobalFunction<'ast>> {
-        if let Self::GlobalFunction(global_function) = self { Some(global_function) } else { None }
-    }
-
-    #[inline]
-    pub const fn as_global_star(self) -> Option<&'ast GlobalStar<'ast>> {
-        if let Self::GlobalStar(global_star) = self { Some(global_star) } else { None }
     }
 
     #[inline]
@@ -629,17 +576,11 @@ impl GetSpan for AstKind<'_> {
             Self::FunctionName(function_name) => function_name.span(),
             Self::FunctionDecl(function_decl) => function_decl.span(),
             Self::LocalFunction(local_function) => local_function.span(),
-            Self::Attribute(attribute) => attribute.span(),
-            Self::AttributedName(attributed_name) => attributed_name.span(),
+            Self::LocalName(local_name) => local_name.span(),
             Self::LocalAssignment(local_assignment) => local_assignment.span(),
-            Self::GotoStatement(goto_stmt) => goto_stmt.span(),
-            Self::LabelStatement(label_stmt) => label_stmt.span(),
             Self::ReturnStatement(return_stmt) => return_stmt.span(),
             Self::CompoundAssignment(compound_assignment) => compound_assignment.span(),
             Self::TypeDeclaration(type_declaration) => type_declaration.span(),
-            Self::GlobalDeclaration(global_declaration) => global_declaration.span(),
-            Self::GlobalFunction(global_function) => global_function.span(),
-            Self::GlobalStar(global_star) => global_star.span(),
             Self::NamedType(named_type) => named_type.span(),
             Self::TypeArgs(type_args) => type_args.span(),
             Self::TypeofType(typeof_type) => typeof_type.span(),

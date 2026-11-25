@@ -48,31 +48,20 @@ impl Rule for UnusedArgument {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("local function f(...args) return args end", LuaTarget::Lua55),
-        ("local function f(_x) end", LuaTarget::Lua54),
-        ("local function f(x) return x end", LuaTarget::Lua54),
-    ];
+    const PASS: &[&str] = &["local function f(_x) end", "local function f(x) return x end"];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        // Lua 5.5 named vararg binds like a parameter.
-        ("local function f(...args) end", LuaTarget::Lua55),
-        ("local function f(x) end", LuaTarget::Lua54),
+    const FAIL: &[&str] = &[
+        "local function f(x) end",
         // Only `x` is flagged. `self` is the implicit method receiver.
-        (
-            "\
+        "\
 local obj = {}
 function obj:method(x) end",
-            LuaTarget::Lua54,
-        ),
-        ("local function f(a, b, c) return a + c end", LuaTarget::Lua54),
+        "local function f(a, b, c) return a + c end",
         // The rename shouldn't make `return _a` read the second parameter.
-        ("local function f(_a, a) return _a end", LuaTarget::Lua54),
+        "local function f(_a, a) return _a end",
     ];
 
     #[test]

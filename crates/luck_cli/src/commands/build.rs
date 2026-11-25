@@ -10,7 +10,7 @@ use luck_bundler::{bundle, bundle_minified};
 use luck_config::{BuildConfig, Project, check_output_paths, find_config};
 use luck_diagnostics::FileDiagnostics;
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-use luck_token::{LuaVersion, chunk_start, has_shebang};
+use luck_token::has_shebang;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
@@ -213,10 +213,9 @@ impl BuildArgs {
         let start = Instant::now();
         // The arenas outlive each build, so a rebuild reuses their memory.
         arenas.reset();
-        let version = config.target.version();
-        let options = project.bundle_options(version);
+        let options = project.bundle_options();
         let bundle_failure = |errors: Vec<FileDiagnostics>| {
-            print_files(&errors, version);
+            print_files(&errors);
             let source_files =
                 errors.into_iter().map(|file| file.path).chain([config.entry.clone()]).collect();
             BuildFailure::Failed { source_files }
@@ -233,19 +232,19 @@ impl BuildArgs {
                 .map_err(bundle_failure)?;
             check_output(&minified.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_files(&minified.warnings, version);
+                print_files(&minified.warnings);
             }
             (minified.output, minified.source_files, Some(minified.source_byte_count))
         } else {
             let result = bundle(arenas, &config.entry, &options).map_err(bundle_failure)?;
             check_output(&result.source_files)?;
             if verbosity != Verbosity::Quiet {
-                print_files(&result.warnings, version);
+                print_files(&result.warnings);
             }
             (result.output, result.source_files, None)
         };
 
-        let output = with_preamble(config, bundled, version);
+        let output = with_preamble(config, bundled);
 
         if self.dry_run {
             eprintln!("[dry-run] Would write: {}", config.output.display());
@@ -282,13 +281,13 @@ fn watched_directories(files: &[PathBuf]) -> Vec<PathBuf> {
     directories
 }
 
-/// `output` with `config`'s preamble on top, after the BOM and shebang line a
-/// loader only skips at the very start of a chunk.
-fn with_preamble(config: &BuildConfig, output: Vec<u8>, version: LuaVersion) -> Vec<u8> {
+/// `output` with `config`'s preamble on top, after the shebang line a loader
+/// only skips at the very start of a chunk.
+fn with_preamble(config: &BuildConfig, output: Vec<u8>) -> Vec<u8> {
     let mut lines = Vec::new();
 
     if let Some(text) = &config.preamble {
-        // A short comment ends at a CR as well as at an LF, on every target.
+        // A short comment ends at a CR as well as at an LF.
         for line in text.lines().flat_map(|line| line.split('\r')) {
             lines.push(format!("-- {line}"));
         }
@@ -307,14 +306,13 @@ fn with_preamble(config: &BuildConfig, output: Vec<u8>, version: LuaVersion) -> 
     }
     let preamble = lines.join("\n");
 
-    let (bom, chunk) = output.split_at(chunk_start(&output, version));
-    if !has_shebang(chunk, version) {
-        return [bom, preamble.as_bytes(), b"\n", chunk].concat();
+    if !has_shebang(&output) {
+        return [preamble.as_bytes(), b"\n", output.as_slice()].concat();
     }
-    let shebang_length = chunk.iter().position(|&b| b == b'\n').unwrap_or(chunk.len());
-    let (shebang, from_line_break) = chunk.split_at(shebang_length);
+    let shebang_length = output.iter().position(|&b| b == b'\n').unwrap_or(output.len());
+    let (shebang, from_line_break) = output.split_at(shebang_length);
     let body = from_line_break.get(1..).unwrap_or_default();
-    [bom, shebang, b"\n", preamble.as_bytes(), b"\n", body].concat()
+    [shebang, b"\n", preamble.as_bytes(), b"\n", body].concat()
 }
 
 /// Blocks until a relevant file changes, then drains what's queued behind it.
@@ -388,7 +386,6 @@ fn relative_display(path: &Path) -> Cow<'_, str> {
 fn print_build_header(config: &BuildConfig) {
     let version = env!("CARGO_PKG_VERSION");
     eprintln!("\x1b[1;36mluck\x1b[0m \x1b[2mv{version}\x1b[0m\n");
-    eprintln!("  \x1b[2mTarget:\x1b[0m  {}", config.target);
     eprintln!("  \x1b[2mEntry:\x1b[0m   {}", relative_display(&config.entry));
     if config.minify {
         eprintln!("  \x1b[2mMinify:\x1b[0m  \x1b[32menabled\x1b[0m");
@@ -477,7 +474,7 @@ mod tests {
     fn a_save_during_a_rebuild_starts_another() {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = directory.path();
-        fs::write(project.join("main.lua"), "return require('small')\n").expect("write main.lua");
+        fs::write(project.join("main.lua"), "return require('./small')\n").expect("write main.lua");
         fs::write(project.join("small.lua"), "return 'v1'\n").expect("write small.lua");
         let config = project.join("luck.json");
         fs::write(&config, r#"{"entry":"main.lua","output":"out.lua"}"#).expect("write luck.json");
@@ -501,7 +498,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let project = directory.path();
         fs::write(project.join("a.lua"), "return 1\n").expect("write a.lua");
-        fs::write(project.join("b.lua"), "return require('dist.a')\n").expect("write b.lua");
+        fs::write(project.join("b.lua"), "return require('./dist/a')\n").expect("write b.lua");
         let config = project.join("luck.json");
         let entries = r#"{"entries":[
             {"entry":"a.lua","output":"dist/a.lua"},

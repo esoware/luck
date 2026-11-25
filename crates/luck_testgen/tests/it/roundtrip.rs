@@ -3,36 +3,30 @@ use luck_formatter::{Comments, FormatOptions, format, format_chunk};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_testgen::{generate_full_grammar, generate_runtime_safe, tree_shape};
-use luck_token::LuaVersion;
 
 const SEED_COUNT: u64 = 60;
 const STATEMENT_BUDGET: usize = 25;
 
 struct Program {
     source: String,
-    version: LuaVersion,
-    /// The program's profile, seed, and version, for failure messages.
+    /// The program's profile and seed, for failure messages.
     label: String,
 }
 
-/// The full-grammar profile reaches constructs (goto, types, varargs,
+/// The full-grammar profile reaches constructs (types, varargs,
 /// interpolation) the runtime-safe profile can't emit.
 fn programs() -> impl Iterator<Item = Program> {
-    LuaVersion::ALL.into_iter().flat_map(|version| {
-        (0..SEED_COUNT).flat_map(move |seed| {
-            [
-                Program {
-                    source: generate_runtime_safe(seed, version, STATEMENT_BUDGET),
-                    version,
-                    label: format!("runtime seed {seed} {version:?}"),
-                },
-                Program {
-                    source: generate_full_grammar(seed, version, STATEMENT_BUDGET),
-                    version,
-                    label: format!("full seed {seed} {version:?}"),
-                },
-            ]
-        })
+    (0..SEED_COUNT).flat_map(|seed| {
+        [
+            Program {
+                source: generate_runtime_safe(seed, STATEMENT_BUDGET),
+                label: format!("runtime seed {seed}"),
+            },
+            Program {
+                source: generate_full_grammar(seed, STATEMENT_BUDGET),
+                label: format!("full seed {seed}"),
+            },
+        ]
     })
 }
 
@@ -42,7 +36,7 @@ fn parse_cleanly<'ast>(
     stage: &str,
     output: &'ast [u8],
 ) -> ParseResult<'ast> {
-    let parsed = luck_parser::parse(allocator, output, program.version);
+    let parsed = luck_parser::parse(allocator, output);
     assert!(
         parsed.errors.is_empty(),
         "{}: {stage} output failed to parse.\ninput:\n{}\noutput:\n{}\nerrors: {:?}",
@@ -77,9 +71,9 @@ fn format_reparses_and_is_idempotent() {
     let mut allocator = Allocator::new();
     for program in programs() {
         allocator.reset();
-        let Program { source, version, label } = &program;
+        let Program { source, label } = &program;
         let original = parse_cleanly(&allocator, &program, "generator", source.as_bytes());
-        let first = format(&allocator, source.as_bytes(), *version, &options);
+        let first = format(&allocator, source.as_bytes(), &options);
         assert!(
             first.errors.is_empty(),
             "{label}: format errored:\n{source}\nerrors: {:?}",
@@ -87,7 +81,7 @@ fn format_reparses_and_is_idempotent() {
         );
         let formatted = parse_cleanly(&allocator, &program, "format", &first.output);
         assert_same_tree(&program, "format", &original, &formatted);
-        let second = format(&allocator, &first.output, *version, &options);
+        let second = format(&allocator, &first.output, &options);
         assert_eq!(
             first.output, second.output,
             "{label}: format not idempotent.\ninput:\n{source}"
@@ -96,20 +90,20 @@ fn format_reparses_and_is_idempotent() {
 }
 
 /// The AST-in path: the parsed program, fed back as a bare AST with no
-/// source or comments, must still print valid Lua that formats as itself.
+/// source or comments, must still print valid Luau that formats as itself.
 #[test]
 fn format_chunk_without_source_reparses_and_formats_as_itself() {
     let options = FormatOptions::default();
     let mut allocator = Allocator::new();
     for program in programs() {
         allocator.reset();
-        let Program { source, version, label } = &program;
+        let Program { source, label } = &program;
         let original = parse_cleanly(&allocator, &program, "generator", source.as_bytes());
         let via_ast = format_chunk(&allocator, &original.chunk, Comments::none(), &options)
             .expect("a parsed tree nests within the cap");
         let reprinted = parse_cleanly(&allocator, &program, "format_chunk", &via_ast);
         assert_same_tree(&program, "format_chunk", &original, &reprinted);
-        let reformatted = format(&allocator, &via_ast, *version, &options);
+        let reformatted = format(&allocator, &via_ast, &options);
         assert_eq!(
             via_ast, reformatted.output,
             "{label}: format changed format_chunk's output.\ninput:\n{source}"
@@ -125,11 +119,11 @@ fn formatting_minified_output_reparses_and_is_idempotent() {
     let mut allocator = Allocator::new();
     for program in programs() {
         allocator.reset();
-        let Program { source, version, label } = &program;
-        let minified = luck_minifier::minify(&allocator, source.as_bytes(), *version, &config)
+        let Program { source, label } = &program;
+        let minified = luck_minifier::minify(&allocator, source.as_bytes(), &config)
             .unwrap_or_else(|errors| panic!("{label}: minify errored: {errors:?}\n{source}"));
         let minified_parse = parse_cleanly(&allocator, &program, "minify", &minified);
-        let first = format(&allocator, &minified, *version, &options);
+        let first = format(&allocator, &minified, &options);
         let minified_text = String::from_utf8_lossy(&minified);
         assert!(
             first.errors.is_empty(),
@@ -138,7 +132,7 @@ fn formatting_minified_output_reparses_and_is_idempotent() {
         );
         let formatted = parse_cleanly(&allocator, &program, "format of minify", &first.output);
         assert_same_tree(&program, "format of minify", &minified_parse, &formatted);
-        let second = format(&allocator, &first.output, *version, &options);
+        let second = format(&allocator, &first.output, &options);
         assert_eq!(
             first.output, second.output,
             "{label}: format not idempotent on minified output.\nminified:\n{minified_text}"

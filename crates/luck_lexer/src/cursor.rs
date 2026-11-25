@@ -5,7 +5,7 @@
 
 use std::slice;
 
-use luck_token::{LuaVersion, Span, strip_line_break};
+use luck_token::{Span, strip_line_break};
 
 use crate::search::{name_length, short_string_length};
 
@@ -167,10 +167,10 @@ impl<'source> Cursor<'source> {
 
     /// Whether only spaces and tabs stand between the cursor and a line break
     /// or EOF.
-    pub(crate) fn is_at_line_end(&self, version: LuaVersion) -> bool {
+    pub(crate) fn is_at_line_end(&self) -> bool {
         let rest = self.rest();
         let blank_length = rest.iter().take_while(|b| matches!(b, b' ' | b'\t')).count();
         let after_blanks = &rest[blank_length..];
-        after_blanks.is_empty() || strip_line_break(after_blanks, version).is_some()
+        after_blanks.is_empty() || strip_line_break(after_blanks).is_some()
     }
 }

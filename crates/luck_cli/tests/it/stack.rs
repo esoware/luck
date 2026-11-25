@@ -7,7 +7,7 @@ use luck_ast::MAX_NESTING_DEPTH;
 use luck_testgen::sources_at_the_nesting_cap;
 use tempfile::TempDir;
 
-use crate::common::{luck_in, run, stderr_text, stdout_text, write_file};
+use crate::common::{luck_in, run, stderr_text, write_file};
 
 /// 0 when the command found nothing, 1 when it found problems, and anything
 /// else, such as a stack overflow's exit code, a failure.
@@ -19,11 +19,10 @@ fn assert_ran(output: &Assert) {
 #[test]
 fn every_command_gets_through_input_nested_to_the_cap() {
     let directory = TempDir::new().expect("directory");
-    write_file(directory.path(), "luck.json", r#"{"lua": "lua54", "luau": "luau"}"#);
+    write_file(directory.path(), "luck.json", "{}");
     let mut files = Vec::new();
-    for (i, (version, source)) in sources_at_the_nesting_cap().into_iter().enumerate() {
-        let extension = if version.is_luau() { "luau" } else { "lua" };
-        let name = format!("src/deep{i}.{extension}");
+    for (i, source) in sources_at_the_nesting_cap().into_iter().enumerate() {
+        let name = format!("src/deep{i}.luau");
         write_file(directory.path(), &name, &source);
         files.push(name);
     }
@@ -124,9 +123,6 @@ fn fmt_survives_long_runs() {
 /// One sibling list of each kind. A list is one level of nesting however long
 /// it is, and 20,000 `elseif`s overflowed `minify`'s stack when it recursed
 /// per clause.
-///
-/// A function holds at most 200 locals, so the one with 20,000 parameters is
-/// in `params.lua`, apart from the valid lists in `main.lua`.
 fn long_lists_project() -> TempDir {
     const ITEMS: usize = 20_000;
     let numbered = |template: &str| -> String {
@@ -147,12 +143,7 @@ local t = {{{}}}
         numbered("\nelseif a == # then a()"),
         "\nelseif false then a()".repeat(ITEMS),
         numbered("k# = a, "),
-        numbered(
-            "\
-goto l#
-::l#::
-"
-        ),
+        numbered("a(#)\n"),
     );
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.lua", &source);
@@ -171,6 +162,7 @@ fn every_command_survives_long_lists() {
         &["minify", "main.lua", "-o", "minified.lua"],
         &["bundle", "main.lua", "-o", "bundle.lua"],
         &["fmt", "main.lua"],
+        &["lint", "params.lua"],
         &["minify", "params.lua", "-o", "minified_params.lua"],
         &["fmt", "params.lua"],
     ] {
@@ -183,21 +175,13 @@ fn every_command_survives_long_lists() {
             stderr_text(&output)
         );
     }
-    let output = run(directory.path(), &["lint", "params.lua"]);
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_text(&output));
-    let report = format!("{}{}", stdout_text(&output), stderr_text(&output));
-    assert!(
-        report.contains("too many local variables (limit is 200) in function")
-            && report.contains("1 error(s), 0 warning(s)"),
-        "the compiler's limit is the one problem:\n{report}"
-    );
 }
 
 /// A project whose `deep.lua` holds `1` inside `tables` table constructors.
 /// Its own block is a level, and its wrapper in a bundle adds two more.
 fn deep_module_project(tables: usize) -> TempDir {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "main.lua", "return require(\"deep\")\n");
+    write_file(directory.path(), "main.lua", "return require(\"./deep\")\n");
     let deep = format!("return {}1{}\n", "{".repeat(tables), "}".repeat(tables));
     write_file(directory.path(), "deep.lua", &deep);
     directory

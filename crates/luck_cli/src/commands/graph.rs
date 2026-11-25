@@ -5,7 +5,6 @@ use clap::{Args, ValueEnum};
 use luck_allocator::ThreadAllocators;
 use luck_bundler::{DependencyGraph, DynamicRequire, ModuleId};
 use luck_resolver::to_slash_lossy;
-use luck_token::LuaTarget;
 use serde_json::{Map, Value, json};
 
 use crate::exit::{Exit, fail_with_diags};
@@ -24,17 +23,9 @@ pub(crate) struct GraphArgs {
     /// Entry file.
     entry: String,
 
-    /// Lua target [default: from the entry's extension and luck.json].
-    #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<LuaTarget>,
-
     /// Project config [default: discovered from entry directory].
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
-
-    /// Search path template (repeatable) [default: luck.json's `search_paths`].
-    #[arg(short = 's', long = "search-path", value_name = "PATTERN")]
-    search_paths: Vec<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = GraphFormat::Json)]
@@ -49,16 +40,14 @@ impl GraphArgs {
     pub(crate) fn run(self, verbosity: Verbosity) -> Result<(), Exit> {
         let entry_path = existing_file(&self.entry)?;
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
-        let target = self.target.unwrap_or_else(|| project.target_for(Some(entry_path)));
-        let version = target.version();
-        let options = bundle_options(&project, version, &self.search_paths, self.dynamic_require);
+        let options = bundle_options(&project, self.dynamic_require);
 
         let arenas = ThreadAllocators::new();
         let dependency_graph = DependencyGraph::build(&arenas, entry_path, &options)
-            .map_err(|errors| fail_with_diags(&errors, version))?;
+            .map_err(|errors| fail_with_diags(&errors))?;
 
         if verbosity != Verbosity::Quiet {
-            print_files(&dependency_graph.warnings, version);
+            print_files(&dependency_graph.warnings);
         }
 
         match self.format {
@@ -116,22 +105,19 @@ fn print_graph_dot(dependency_graph: &DependencyGraph<'_>) {
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
-    use luck_token::LuaTarget;
 
     use super::{GraphArgs, GraphFormat};
     use crate::cli::Cli;
     use crate::commands::Command;
 
     #[test]
-    fn graph_accepts_target_and_format() {
-        let cli =
-            Cli::try_parse_from(["luck", "graph", "src/main.lua", "-t", "54", "--format", "dot"])
-                .expect("graph parses");
-        let Command::Graph(GraphArgs { entry, target, format, .. }) = cli.command else {
+    fn graph_accepts_an_entry_and_a_format() {
+        let cli = Cli::try_parse_from(["luck", "graph", "src/main.luau", "--format", "dot"])
+            .expect("graph parses");
+        let Command::Graph(GraphArgs { entry, format, .. }) = cli.command else {
             panic!("expected Command::Graph");
         };
-        assert_eq!(entry, "src/main.lua");
-        assert_eq!(target, Some(LuaTarget::Lua54));
+        assert_eq!(entry, "src/main.luau");
         assert!(matches!(format, GraphFormat::Dot));
     }
 }

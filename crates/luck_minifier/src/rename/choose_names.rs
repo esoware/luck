@@ -200,7 +200,7 @@ impl Renamer<'_> {
     /// candidate it can wear.
     ///
     /// `oxc_mangler` then hands each length's names out again in slot order,
-    /// after Closure Compiler's `RenameVars`, which compresses worse on Lua.
+    /// after Closure Compiler's `RenameVars`, which compresses worse on Luau.
     fn name_slots(&self, choice: &mut Choice, slot_count: usize, pool: &mut CandidatePool<'_, '_>) {
         let Self { renamed: bindings, scopes, .. } = self;
         let starts = &mut choice.declared_starts;
@@ -312,12 +312,10 @@ impl Picker {
 mod tests {
     use std::fmt::Write as _;
 
-    use luck_token::LuaVersion;
-
     use crate::fixtures::{RENAMING, minify_with};
 
     fn apply(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &RENAMING)
+        minify_with(source, &RENAMING)
     }
 
     #[test]

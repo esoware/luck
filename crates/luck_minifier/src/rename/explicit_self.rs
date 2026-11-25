@@ -22,13 +22,11 @@ pub(super) fn take_receiver<'ast>(
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaVersion;
-
     use crate::fixtures::{RENAMING, minify_with};
 
     /// Rewrites, then renames, so an explicit `self` shows up renamed.
     fn rewrite_and_rename(source: &str) -> String {
-        minify_with(source, LuaVersion::Lua54, &RENAMING)
+        minify_with(source, &RENAMING)
     }
 
     #[test]
@@ -73,17 +71,16 @@ return t
 ",
         );
         assert_eq!(result, "local e={}function e:method(e)return e end return e");
-        let luau = minify_with(
+        let typed = minify_with(
             "\
 function t:method(x)
   local y: typeof(self) = x
   return y
 end
 ",
-            LuaVersion::Luau,
             &RENAMING,
         );
-        assert_eq!(luau, "function t:method(e)local t:typeof(self)=e return t end");
+        assert_eq!(typed, "function t:method(e)local t:typeof(self)=e return t end");
     }
 
     #[test]

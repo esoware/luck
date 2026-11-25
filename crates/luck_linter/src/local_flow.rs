@@ -131,7 +131,7 @@ fn is_uninitialized(symbol: &Symbol, host: &ContextHost<'_>) -> bool {
 }
 
 /// Whether more `local` names are active at once somewhere in the function
-/// than any Lua compiles.
+/// than Luau compiles.
 ///
 /// Each local's walk covers the nodes where it's active, so under the limit
 /// the walks cost at most that many visits a node.

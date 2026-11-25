@@ -1,65 +1,12 @@
 use std::fmt::Write as _;
 
-use luck_token::LuaVersion;
-
-/// What decides the code a bundle opens with, apart from its prefix.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct LoaderShape {
-    pub version: LuaVersion,
-    /// True only for a 5.1 bundle with a function that has no upvalue left
-    /// for a local loader.
-    ///
-    /// A global read costs none, but two bundles in one Lua state then
-    /// overwrite each other's loader.
-    pub is_loader_global: bool,
-    /// Only Lua targets record dynamic callees, so only a Lua loader gets the
-    /// entry point they're retargeted at.
-    pub has_dynamic_entry: bool,
-    pub has_export_runtime: bool,
-}
-
-/// Writes the loader a bundle opens with, then the entry point and the
-/// runtime its modules call for.
-pub(crate) fn write_prelude(prefix: &str, shape: LoaderShape, output: &mut String) {
-    write_loader(prefix, shape.version, shape.is_loader_global, output);
-    if shape.has_dynamic_entry {
-        write_dynamic_entry(prefix, shape.is_loader_global, output);
-    }
-    if shape.has_export_runtime {
+/// Writes the loader a bundle opens with, then the runtime its value-export
+/// modules call for when `has_export_runtime`.
+pub(crate) fn write_prelude(prefix: &str, has_export_runtime: bool, output: &mut String) {
+    write_loader(prefix, output);
+    if has_export_runtime {
         write_export_runtime(prefix, output);
     }
-}
-
-fn write_loader(prefix: &str, version: LuaVersion, is_loader_global: bool, output: &mut String) {
-    if version.is_luau() {
-        write_luau_loader(prefix, output);
-        return;
-    }
-
-    // The cache is package.loaded itself when it exists, and package.preload
-    // wins over bundled files, matching real require's state and searcher
-    // order. The require's truthiness check reloads a module that returned
-    // false, as every PUC version does.
-    let _ = write!(
-        output,
-        "local {prefix}modules={{}}\n\
-         local {prefix}loaded=type(package)==\"table\" and type(package.loaded)==\"table\" and package.loaded or {{}}\n\
-         local {prefix}preload=type(package)==\"table\" and type(package.preload)==\"table\" and package.preload or {{}}\n"
-    );
-    if version.has_require_filepath_arg() {
-        output.extend(["local ", prefix, "paths={}\n"]);
-    }
-    write_lua_require(prefix, version, is_loader_global, output);
-}
-
-/// What a loader function's declaration opens and closes with.
-///
-/// A global one is declared in a function the bundle calls at once. A
-/// function body is never the top level where the minifier's
-/// `rename_globals` finds the globals a file defines, so the loader keeps its
-/// prefixed name, which no host global shares.
-const fn entry_point(is_loader_global: bool) -> (&'static str, &'static str) {
-    if is_loader_global { (";(function()function", " end)()") } else { ("local function", "") }
 }
 
 /// The cache holds only a non-nil result, so a raising or nil-returning
@@ -67,7 +14,7 @@ const fn entry_point(is_loader_global: bool) -> (&'static str, &'static str) {
 ///
 /// Chunks receive no arguments and must return exactly one value
 /// (`Require/src/RequireImpl.cpp`, `CLI/src/ReplRequirer.cpp`).
-fn write_luau_loader(prefix: &str, output: &mut String) {
+fn write_loader(prefix: &str, output: &mut String) {
     let _ = write!(
         output,
         "local {prefix}modules={{}}\n\
@@ -88,8 +35,8 @@ fn write_luau_loader(prefix: &str, output: &mut String) {
     );
 }
 
-/// The runtime behind Luau value-export modules, which a bundle needs only
-/// when one of its modules exports a value.
+/// The runtime behind value-export modules, which a bundle needs only when
+/// one of its modules exports a value.
 ///
 /// `{prefix}exporting` hands a cyclic requirer a placeholder whose field
 /// accesses error until the module finishes, then fills and freezes it
@@ -112,111 +59,5 @@ fn write_export_runtime(prefix: &str, output: &mut String) {
          return {prefix}freeze(placeholder)\n\
          end\n\
          end\n"
-    );
-}
-
-fn write_lua_require(
-    prefix: &str,
-    version: LuaVersion,
-    is_loader_global: bool,
-    output: &mut String,
-) {
-    if !version.has_require_error_retry() {
-        // 5.1: a sentinel marks in-progress loads, and hitting it (a cycle, or
-        // a module whose load previously raised) reproduces 5.1's "loop or
-        // previous error" failure. It's a function because `module()` adopts
-        // a table it finds in `package.loaded`.
-        let (opening, closing) = entry_point(is_loader_global);
-        let _ = write!(
-            output,
-            "local {prefix}loading=function()end\n\
-             {opening} {prefix}require(name)\n\
-             local value={prefix}loaded[name]\n\
-             if value then\n\
-             if value=={prefix}loading then error(\"loop or previous error loading module '\"..name..\"'\",2)end\n\
-             return value\n\
-             end\n\
-             local loader={prefix}preload[name] or {prefix}modules[name]\n\
-             {prefix}loaded[name]={prefix}loading\n\
-             value=loader(name)\n\
-             if value~=nil then {prefix}loaded[name]=value end\n\
-             value={prefix}loaded[name]\n\
-             if value=={prefix}loading then\n\
-             value=true\n\
-             {prefix}loaded[name]=value\n\
-             end\n\
-             return value\n\
-             end{closing}\n"
-        );
-        return;
-    }
-    if !version.has_require_loaderdata() {
-        // 5.2/5.3 have no sentinel. As in real 5.2+, a load-time cycle
-        // recurses until the stack overflows, and a load that raises
-        // leaves the cache unset so a later require retries.
-        let _ = write!(
-            output,
-            "local function {prefix}require(name)\n\
-             local value={prefix}loaded[name]\n\
-             if value then return value end\n\
-             local preloader={prefix}preload[name]\n\
-             if preloader then\n\
-             value=preloader(name,nil)\n\
-             else\n\
-             value={prefix}modules[name](name,{prefix}paths[name])\n\
-             end\n\
-             if value~=nil then {prefix}loaded[name]=value end\n\
-             value={prefix}loaded[name]\n\
-             if value==nil then\n\
-             value=true\n\
-             {prefix}loaded[name]=value\n\
-             end\n\
-             return value\n\
-             end\n"
-        );
-        return;
-    }
-    // 5.4/5.5 also return the loader data as a second result, on first
-    // load only.
-    let _ = write!(
-        output,
-        "local function {prefix}require(name)\n\
-         local value={prefix}loaded[name]\n\
-         if value then return value end\n\
-         local loaderdata\n\
-         local loader={prefix}preload[name]\n\
-         if loader then\n\
-         loaderdata=\":preload:\"\n\
-         else\n\
-         loader={prefix}modules[name]\n\
-         loaderdata={prefix}paths[name]\n\
-         end\n\
-         value=loader(name,loaderdata)\n\
-         if value~=nil then {prefix}loaded[name]=value end\n\
-         value={prefix}loaded[name]\n\
-         if value==nil then\n\
-         value=true\n\
-         {prefix}loaded[name]=value\n\
-         end\n\
-         return value,loaderdata\n\
-         end\n"
-    );
-}
-
-/// The Lua loader's entry point for retargeted `require(expr)` calls. It
-/// serves a runtime-computed name from the bundle when it's bundled or
-/// preloaded, since the Lua cache is keyed by module name.
-///
-/// Anything else goes to the host's own `require`, looked up at call time so
-/// one the host installs later still counts.
-fn write_dynamic_entry(prefix: &str, is_loader_global: bool, output: &mut String) {
-    let (opening, closing) = entry_point(is_loader_global);
-    let _ = write!(
-        output,
-        "{opening} {prefix}dynamic(name)\n\
-         if {prefix}modules[name]~=nil or {prefix}preload[name]~=nil then return {prefix}require(name)end\n\
-         if type(require)==\"function\" then return require(name)end\n\
-         error(\"luck bundle: dynamic require of '\"..tostring(name)..\"' is not in the bundle and this runtime has no require\",2)\n\
-         end{closing}\n"
     );
 }

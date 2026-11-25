@@ -5,9 +5,9 @@
 mod common;
 
 mod correctness;
-mod dialects;
 mod generated;
 mod output;
 mod passes;
 mod renaming;
 mod stack;
+mod syntax;

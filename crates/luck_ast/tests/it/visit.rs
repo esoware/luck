@@ -191,16 +191,17 @@ impl<'ast> Visit<'ast> for NameTexts<'ast> {
 
 #[test]
 fn reaches_every_name_in_source_order() {
-    // local x <const> = t.a:m(y); goto done; ::done::
+    // local x = t.a:m(y); done(...)
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let call =
         synth.method_call(synth.field(synth.name_expr("t"), "a"), "m", [synth.name_expr("y")]);
-    let local = synth.local_full([synth.attributed_name("x", None, Some("const"))], [call]);
-    let block = synth.block([local, synth.goto_("done"), synth.label("done")]);
+    let local = synth.local_full([synth.local_name("x", None)], [call]);
+    let done = synth.call_stmt(synth.call(synth.name_expr("done"), [synth.vararg()]));
+    let block = synth.block([local, done]);
     let mut names = NameTexts::default();
     names.visit_block(&block);
-    assert_eq!(names.0, ["x", "const", "t", "a", "m", "y", "done", "done"]);
+    assert_eq!(names.0, ["x", "t", "a", "m", "y", "done"]);
 }
 
 #[test]
@@ -209,7 +210,7 @@ fn reaches_the_names_in_types() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let ty = synth.ty_optional(synth.ty_generic("Map", [synth.ty_named("K"), synth.ty_named("V")]));
-    let local = synth.local_full([synth.attributed_name("v", Some(ty), None)], [synth.nil()]);
+    let local = synth.local_full([synth.local_name("v", Some(ty))], [synth.nil()]);
     let mut names = NameTexts::default();
     let block = synth.block([local]);
     names.visit_block(&block);

@@ -160,7 +160,6 @@ impl<'ast> Formatter<'ast> {
                 Expression::BinaryOp(binary_op) => {
                     (&binary_op.first, current_slot.operand(binary_op, 0))
                 }
-                // Luau
                 Expression::TypeCast(cast) => (&cast.expr, Slot::CAST_OPERAND),
                 Expression::Nil(_)
                 | Expression::False(_)
@@ -196,7 +195,6 @@ impl<'ast> Formatter<'ast> {
             Expression::True(_) => self.token("true"),
             Expression::VarArg(_) => self.token("..."),
             Expression::Number(literal) => self.write_number(literal),
-            // Luau
             Expression::Integer(literal) => self.write_integer(literal),
             Expression::StringLiteral(literal) => self.write_string(literal),
             Expression::Name(name) => self.ascii(name.text.as_bytes()),
@@ -219,11 +217,8 @@ impl<'ast> Formatter<'ast> {
                     unsorted.write_function_definition(function_def);
                 });
             }
-            // Luau
             Expression::IfExpression(if_expr) => self.write_if_expr(if_expr),
-            // Luau
             Expression::InterpolatedString(interpolated) => self.write_interpolated(interpolated),
-            // Luau
             Expression::TypeCast(cast) => {
                 self.write_expr_in(&cast.expr, Slot::CAST_OPERAND);
                 self.space();
@@ -237,24 +232,17 @@ impl<'ast> Formatter<'ast> {
     }
 
     /// The numeral as written, or for one built in code, the shortest that
-    /// spells its value, with a zero on the bare side of a point, normalized
-    /// either way.
+    /// spells its value, normalized either way.
     fn write_number(&mut self, literal: &NumberLiteral<'ast>) {
         let text = if let Some(raw) = literal.raw {
             raw.as_bytes()
         } else {
-            let spelling = spell_number(literal.value, self.version());
-            let (buffer, allocator) = self.scratch();
-            buffer.extend_from_slice(spelling.as_str().as_bytes());
-            if buffer.ends_with(b".") {
-                buffer.push(b'0');
-            }
-            &*allocator.alloc_slice_copy(buffer)
+            &*self.allocator().alloc_slice_copy(spell_number(literal.value).as_str().as_bytes())
         };
         self.write_numeral(text);
     }
 
-    /// Luau: an integer, as [`Self::write_number`] writes a number.
+    /// An integer, as [`Self::write_number`] writes a number.
     fn write_integer(&mut self, literal: &IntegerLiteral<'ast>) {
         let text = if let Some(raw) = literal.raw {
             raw.as_bytes()
@@ -299,8 +287,8 @@ impl<'ast> Formatter<'ast> {
         allocator.alloc_slice_copy(buffer)
     }
 
-    /// Luau: a piece of an interpolated string, as written or escaped from
-    /// its value.
+    /// A piece of an interpolated string, as written or escaped from its
+    /// value.
     fn write_interpolated_text(&mut self, text: &StringLiteral<'ast>) {
         let spelling = if let Some(raw) = text.raw {
             raw.as_bytes()
@@ -317,7 +305,7 @@ impl<'ast> Formatter<'ast> {
     /// A function expression. Only one a statement assigns, which prints
     /// this directly, keeps the require sorting of the block around it.
     pub(crate) fn write_function_definition(&mut self, function_def: &FunctionDef<'ast>) {
-        // Luau attributes stay on the same line as `function` here.
+        // Attributes stay on the same line as `function` here.
         for attribute in &function_def.attributes {
             self.write_function_attribute(attribute);
             self.space();
@@ -419,8 +407,8 @@ impl<'ast> Formatter<'ast> {
             Suffix::MethodCall(call) => {
                 self.token(":");
                 self.name(call.name);
-                // Luau rejects a method call whose `(` is on a later line
-                // than its name. The tree keeps no span for the outer `>`.
+                // A method call whose `(` is on a later line than its name
+                // doesn't parse. The tree keeps no span for the outer `>`.
                 if let Some(type_args) = &call.type_args {
                     let closer =
                         self.comments().closer_offset(type_args.span.end, TokenKind::Greater);
@@ -428,7 +416,6 @@ impl<'ast> Formatter<'ast> {
                 }
                 self.write_function_args(&call.args);
             }
-            // Luau
             Suffix::TypeInstantiation { span, type_args } => {
                 self.write_type_args(("<<", ">>"), type_args, span.end);
             }
@@ -479,7 +466,7 @@ impl<'ast> Formatter<'ast> {
                     && !self.is_wrapped(operand, operand_slot))
                     || self.comments().has_comment_before(self.extent(operand).start)
             }
-            UnOp::Len | UnOp::BitNot => false,
+            UnOp::Len => false,
         };
         if is_spaced {
             self.space();
@@ -487,7 +474,7 @@ impl<'ast> Formatter<'ast> {
         self.write_expr_in(operand, operand_slot);
     }
 
-    /// Luau: one group, so a long if-expression starts an indented line at
+    /// One group, so a long if-expression starts an indented line at
     /// each `then`, `elseif`, and `else`, above which goes a comment ending
     /// its line before the expression after it.
     fn write_if_expr(&mut self, if_expr: &IfExpression<'ast>) {
@@ -521,9 +508,10 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    /// Luau. Luau rejects `{{`, so an expression starting with `{` gets a
-    /// space after the opening brace, and one before the closing brace to
-    /// match. A hole's `}` comes right before the piece after it.
+    /// `{{` is an error in an interpolated string, so an expression starting
+    /// with `{` gets a space after the opening brace, and one before the
+    /// closing brace to match. A hole's `}` comes right before the piece
+    /// after it.
     fn write_interpolated(&mut self, interpolated: &InterpolatedString<'ast>) {
         self.token("`");
         let closers = interpolated

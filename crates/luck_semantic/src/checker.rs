@@ -1,6 +1,6 @@
-//! The compile-time errors Lua and Luau report beyond the grammar, each an
-//! E008, which [`SemanticBuilder::with_check`](crate::SemanticBuilder::with_check)
-//! finds in the walk that resolves the names they're about.
+//! The errors Luau reports beyond the grammar, each an E008, which
+//! [`SemanticBuilder::with_check`](crate::SemanticBuilder::with_check) finds
+//! in the walk that resolves the names they're about.
 
 use luck_diagnostics::Diagnostic;
 use luck_token::Span;
@@ -9,20 +9,14 @@ pub(crate) fn assignment_to_read_only(span: Span, name: &str) -> Diagnostic {
     Diagnostic::e008(span, format!("attempt to assign to const variable `{name}`"))
 }
 
-/// Lua 5.5: a free name while a `global` declaration is in scope and no
-/// `global *` is.
-pub(crate) fn undeclared_global(span: Span, name: &str) -> Diagnostic {
-    Diagnostic::e008(span, format!("variable `{name}` not declared"))
-}
-
-/// Luau: a type function runs in the type checker, where the chunk's locals
-/// don't exist.
+/// A type function runs in the type checker, where the chunk's locals don't
+/// exist.
 pub(crate) fn type_function_outer_local(span: Span, name: &str) -> Diagnostic {
     Diagnostic::e008(span, format!("type function cannot reference outer local `{name}`"))
 }
 
-/// Luau: `continue` skips to the `until` condition, past the locals declared
-/// after it.
+/// `continue` skips to the `until` condition, past the locals declared after
+/// it.
 pub(crate) fn until_reads_skipped_local(condition: Span, name: &str) -> Diagnostic {
     Diagnostic::e008(
         condition,
@@ -30,43 +24,4 @@ pub(crate) fn until_reads_skipped_local(condition: Span, name: &str) -> Diagnost
             "local `{name}` used in the `until` condition is declared after a `continue` statement"
         ),
     )
-}
-
-/// The function's header, `None` for the chunk, which Lua calls the main
-/// function.
-fn in_function(diagnostic: Diagnostic, header: Option<Span>) -> Diagnostic {
-    match header {
-        Some(span) => diagnostic.with_label(span, "in this function"),
-        None => diagnostic,
-    }
-}
-
-/// The declaration that takes a function past `limit` active locals, as
-/// `lparser.c` counts them.
-pub(crate) fn too_many_locals(span: Span, limit: usize, function: Option<Span>) -> Diagnostic {
-    let place = if function.is_some() { "function" } else { "main function" };
-    let error =
-        Diagnostic::e008(span, format!("too many local variables (limit is {limit}) in {place}"));
-    in_function(error, function)
-}
-
-/// The use that takes a function past `limit` upvalues, which may be one in
-/// a function nested inside it, since each function between a variable and
-/// its use captures it.
-pub(crate) fn too_many_upvalues(span: Span, limit: usize, function: Option<Span>) -> Diagnostic {
-    let error = Diagnostic::e008(span, format!("too many upvalues (limit is {limit}) in function"));
-    in_function(error, function)
-}
-
-pub(crate) fn duplicate_label(span: Span, name: &str, first: Span) -> Diagnostic {
-    Diagnostic::e008(span, format!("label `{name}` already defined"))
-        .with_label(first, "first defined here")
-}
-
-pub(crate) fn goto_into_local_scope(span: Span, name: &str) -> Diagnostic {
-    Diagnostic::e008(span, format!("`goto {name}` jumps into the scope of a local"))
-}
-
-pub(crate) fn unresolved_goto(span: Span, name: &str) -> Diagnostic {
-    Diagnostic::e008(span, format!("no visible label `{name}` for `goto`"))
 }

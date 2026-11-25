@@ -25,14 +25,14 @@ fn is_block_arg(arg: &Expression<'_>) -> bool {
 
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_function_body(&mut self, body: &FunctionBody<'ast>) {
-        // Luau: `<T, U...>` generic list before the parameter parens.
+        // `<T, U...>` generic list before the parameter parens.
         if let Some(generics) = &body.generics {
             self.write_generic_type_list(generics);
         }
 
         self.write_param_list(body);
 
-        // Luau: `: T` return annotation after `)`.
+        // `: T` return annotation after `)`.
         if let Some(return_type) = &body.return_type {
             self.token(":");
             self.space();
@@ -87,7 +87,7 @@ impl<'ast> Formatter<'ast> {
                     f.write_parameter(param);
                 }
                 // The vararg comes last. Unlike a table, a broken parameter
-                // list gets no trailing comma, since no dialect allows one.
+                // list gets no trailing comma, since the grammar allows none.
                 if let Some(vararg) = &body.vararg {
                     if !body.params.is_empty() {
                         f.token(",");
@@ -107,7 +107,7 @@ impl<'ast> Formatter<'ast> {
             || param.span(),
             |f| {
                 f.name(param.name);
-                // Luau: `: T` annotation.
+                // `: T` annotation.
                 if let Some(type_annotation) = &param.type_annotation {
                     f.token(":");
                     f.space();
@@ -122,11 +122,7 @@ impl<'ast> Formatter<'ast> {
             || vararg.span,
             |f| {
                 f.token("...");
-                // Lua 5.5: `...name`.
-                if let Some(name) = &vararg.name {
-                    f.name(*name);
-                }
-                // Luau: `: T` annotation (may be a pack, e.g. `...number`).
+                // `: T` annotation (may be a pack, e.g. `...number`).
                 if let Some(type_annotation) = &vararg.type_annotation {
                     f.token(":");
                     f.space();
@@ -270,7 +266,7 @@ impl<'ast> Formatter<'ast> {
         }
     }
 
-    /// No dialect allows a comma after the last argument, so the list never
+    /// The grammar allows no comma after the last argument, so the list never
     /// gets a trailing comma and `magic_trailing_comma` only affects tables
     /// inside it.
     ///

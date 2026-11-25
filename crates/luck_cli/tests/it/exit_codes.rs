@@ -130,50 +130,50 @@ fn invalid_config_unknown_key_exits_usage() {
 /// an error would deadlock on the stdio locks the main thread holds there.
 ///
 /// The timeout turns that hang into a failure.
-fn write_bad_dialect_project(directory: &Path) {
-    write_file(directory, "luck.json", "{ \"lua\": \"lua99\" }\n");
+fn write_bad_variant_project(directory: &Path) {
+    write_file(directory, "luck.json", "{ \"variant\": \"bogus\" }\n");
     for name in ["a.lua", "b.lua", "c.lua", "d.lua"] {
         write_file(directory, name, "return 1\n");
     }
 }
 
 #[test]
-fn fmt_bad_dialect_with_multiple_files_exits_usage() {
+fn fmt_bad_variant_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_bad_dialect_project(directory.path());
+    write_bad_variant_project(directory.path());
 
     luck_in(directory.path())
         .args(["fmt", "--check"])
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unknown variant `lua99`"));
+        .stderr(predicate::str::contains("unknown variant `bogus`"));
 }
 
 #[test]
-fn lint_bad_dialect_with_multiple_files_exits_usage() {
+fn lint_bad_variant_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_bad_dialect_project(directory.path());
+    write_bad_variant_project(directory.path());
 
     luck_in(directory.path())
         .arg("lint")
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unknown variant `lua99`"));
+        .stderr(predicate::str::contains("unknown variant `bogus`"));
 }
 
 #[test]
-fn check_bad_dialect_with_multiple_files_exits_usage() {
+fn check_bad_variant_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_bad_dialect_project(directory.path());
+    write_bad_variant_project(directory.path());
 
     luck_in(directory.path())
         .arg("check")
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unknown variant `lua99`"));
+        .stderr(predicate::str::contains("unknown variant `bogus`"));
 }
 
 /// An empty `entries` list is a config error, not a panic or a silent exit 0.
@@ -229,23 +229,6 @@ fn minify_missing_input_exits_usage() {
 }
 
 #[test]
-fn bad_target_flag_is_reported_before_the_config() {
-    let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
-    write_file(directory.path(), "main.lua", "return 1\n");
-
-    for command in ["bundle", "minify", "graph"] {
-        luck_in(directory.path())
-            .args([command, "main.lua", "-t", "lua99"])
-            .assert()
-            .code(2)
-            .stderr(predicate::str::contains("invalid value 'lua99' for '--target <TARGET>'"))
-            .stderr(predicate::str::contains("invalid target `lua99`"))
-            .stderr(predicate::str::contains("not_a_real_key").not());
-    }
-}
-
-#[test]
 fn bad_dynamic_require_flag_is_reported_before_the_config() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "luck.json", "{ \"not_a_real_key\": true }\n");
@@ -263,8 +246,9 @@ fn bad_dynamic_require_flag_is_reported_before_the_config() {
     }
 }
 
-/// A `require(expr)` warns and emits a bundle that resolves the call at runtime,
-/// and only fails when the project (or the flag) asks for strictness.
+/// A `require(expr)` warns and stays in the bundle as written, to run at
+/// runtime, and only fails when the project (or the flag) asks for
+/// strictness.
 #[test]
 fn bundle_with_dynamic_require_succeeds_and_warns() {
     let directory = TempDir::new().unwrap();
@@ -273,8 +257,8 @@ fn bundle_with_dynamic_require_succeeds_and_warns() {
         directory.path(),
         "main.lua",
         "\
-local helper = require(\"helper\")
-local name = \"helper\"
+local helper = require(\"./helper\")
+local name = \"./helper\"
 return helper.value + require(name).value
 ",
     );
@@ -285,7 +269,7 @@ return helper.value + require(name).value
         .code(0)
         .stderr(predicate::str::contains("W007"));
     let bundle = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(bundle.contains("__luck_dynamic("), "{bundle}");
+    assert!(bundle.contains("require(name)"), "{bundle}");
 }
 
 #[test]
@@ -296,8 +280,8 @@ fn bundle_with_dynamic_require_fails_in_error_mode() {
         directory.path(),
         "main.lua",
         "\
-local helper = require(\"helper\")
-local name = \"helper\"
+local helper = require(\"./helper\")
+local name = \"./helper\"
 return helper.value + require(name).value
 ",
     );
@@ -329,7 +313,7 @@ fn bundle_of_a_bare_entry_name_emits_no_absolute_paths() {
         directory.path(),
         "main.lua",
         "\
-local helper = require(\"helper\")
+local helper = require(\"./helper\")
 return helper.value
 ",
     );
@@ -343,5 +327,5 @@ return helper.value
         !bundle.contains(&native_root) && !bundle.contains(&slash_root),
         "absolute path leaked into the bundle:\n{bundle}"
     );
-    assert!(bundle.contains("-- module \"helper\": helper.lua"), "{bundle}");
+    assert!(bundle.contains("-- module #1: helper.lua"), "{bundle}");
 }

@@ -103,8 +103,7 @@ async function createConfig(): Promise<void> {
 		void vscode.window.showWarningMessage("Luck: luck.json already exists.");
 	} else {
 		const skeleton = {
-			lua: "lua54",
-			luau: "luau",
+			variant: "standalone",
 			lint: {
 				extra_globals: [],
 			},
@@ -124,7 +123,7 @@ async function viewSyntaxTree(client: LuckClient): Promise<void> {
 	const { languageClient } = client;
 	const editor = vscode.window.activeTextEditor;
 	if (!languageClient || !editor) {
-		void vscode.window.showWarningMessage("Luck: open a Lua file first.");
+		void vscode.window.showWarningMessage("Luck: open a Luau file first.");
 		return;
 	}
 	try {

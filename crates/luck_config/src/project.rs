@@ -10,7 +10,7 @@ use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs};
 use luck_stdlib::Stdlib;
-use luck_token::{LuaTarget, LuaVersion};
+use luck_token::Variant;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -27,10 +27,8 @@ use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
 pub struct Project {
     root: PathBuf,
     files: Vec<PathBuf>,
-    /// The `lua` key's dialect's library, with the `std` definitions over it.
-    lua: Stdlib,
-    /// The `luau` key's dialect's library, with the `std` definitions over it.
-    luau: Stdlib,
+    /// The variant's library, with the `std` definitions over it.
+    stdlib: Stdlib,
     filter: ProjectFilter,
     format: FormatConfig,
     overrides: Vec<Override>,
@@ -40,7 +38,6 @@ pub struct Project {
     /// The linter of each set of overrides with `lint` settings, by their
     /// indices, compiled for the first file they all match.
     layered_linters: Mutex<FxHashMap<Vec<usize>, Arc<Linter>>>,
-    search_paths: Vec<String>,
     dynamic_require: DynamicRequire,
     transforms: TransformConfig,
     build: BuildKeys,
@@ -67,8 +64,7 @@ impl Project {
         let Loaded { config, mut files } = load::load(config_path)?;
         let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
         let LuckConfig {
-            lua,
-            luau,
+            variant,
             std,
             root: _,
             extends: _,
@@ -80,7 +76,6 @@ impl Project {
             entries,
             minify,
             dynamic_require,
-            search_paths,
             transforms,
             profiles,
             preamble,
@@ -114,33 +109,22 @@ impl Project {
             .iter()
             .map(|std_path| read_std_definition(std_path))
             .collect::<Result<Vec<_>, _>>()?;
-        let layered = |target: LuaTarget| {
-            std_paths.iter().zip(&definitions).try_fold(
-                Stdlib::new(target),
-                |stdlib, (std_path, definition)| {
-                    stdlib.layer(definition).map_err(|diag| in_file(std_path, diag))
-                },
-            )
-        };
-        let targets = (lua.unwrap_or(LuaTarget::Lua54), luau.unwrap_or(LuaTarget::Luau));
-        let stdlibs = if targets.0 == targets.1 {
-            let shared = layered(targets.0)?;
-            (shared.clone(), shared)
-        } else {
-            (layered(targets.0)?, layered(targets.1)?)
-        };
+        let stdlib = std_paths.iter().zip(&definitions).try_fold(
+            Stdlib::new(variant.unwrap_or_default()),
+            |stdlib, (std_path, definition)| {
+                stdlib.layer(definition).map_err(|diag| in_file(std_path, diag))
+            },
+        )?;
         files.extend(std_paths);
         Ok(Self {
             root,
             files,
-            lua: stdlibs.0,
-            luau: stdlibs.1,
+            stdlib,
             filter,
             format: format.unwrap_or_default(),
             overrides: compiled_overrides,
             linter: Arc::new(Linter::new(lint.unwrap_or_default())),
             layered_linters: Mutex::default(),
-            search_paths: search_paths.unwrap_or_default(),
             dynamic_require: dynamic_require.unwrap_or_default(),
             transforms: transforms.unwrap_or_default(),
             build: BuildKeys {
@@ -163,14 +147,12 @@ impl Project {
         Self {
             root,
             files: Vec::new(),
-            lua: Stdlib::new(LuaTarget::Lua54),
-            luau: Stdlib::new(LuaTarget::Luau),
+            stdlib: Stdlib::new(Variant::default()),
             filter,
             format: FormatConfig::default(),
             overrides: Vec::new(),
             linter: Arc::new(Linter::new(LintConfig::default())),
             layered_linters: Mutex::default(),
-            search_paths: Vec::new(),
             dynamic_require: DynamicRequire::default(),
             transforms: TransformConfig::default(),
             build: BuildKeys::default(),
@@ -193,21 +175,15 @@ impl Project {
         &self.filter
     }
 
-    /// The dialect of the file at `path`: the `luau` key's for a `.luau`
-    /// file, and the `lua` key's for any other file or a document with no
-    /// path.
-    pub fn target_for(&self, path: Option<&Path>) -> LuaTarget {
-        self.stdlib_for(path).target()
+    /// Where every file of the project runs, which its `variant` key names.
+    pub fn variant(&self) -> Variant {
+        self.stdlib.variant()
     }
 
-    /// The standard library of the file at `path`: its dialect's, with the
-    /// `std` definitions layered over it.
-    pub fn stdlib_for(&self, path: Option<&Path>) -> &Stdlib {
-        if path.and_then(Path::extension).is_some_and(|extension| extension == "luau") {
-            &self.luau
-        } else {
-            &self.lua
-        }
+    /// The variant's standard library, with the `std` definitions layered
+    /// over it.
+    pub const fn stdlib(&self) -> &Stdlib {
+        &self.stdlib
     }
 
     /// The linter of the `lint` section with the overrides `path` matches
@@ -262,22 +238,13 @@ impl Project {
         self.layered_linters.get_mut().clear();
     }
 
-    pub fn search_paths(&self) -> &[String] {
-        &self.search_paths
-    }
-
     pub const fn transforms(&self) -> TransformConfig {
         self.transforms
     }
 
-    /// How a bundle for `version` resolves and reads its modules.
-    pub fn bundle_options(&self, version: LuaVersion) -> BundleOptions<'_> {
-        BundleOptions {
-            version,
-            search_paths: &self.search_paths,
-            project_root: &self.root,
-            dynamic_require: self.dynamic_require,
-        }
+    /// How a bundle resolves and reads its modules.
+    pub fn bundle_options(&self) -> BundleOptions<'_> {
+        BundleOptions { project_root: &self.root, dynamic_require: self.dynamic_require }
     }
 
     /// The bundles `luck build` writes under `profile`.

@@ -1,16 +1,12 @@
 use luck_token::{
-    EscapeError, Escaped, LuaVersion, StringKind, StringValue, decode_interpolated_text,
-    decode_string, read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
+    EscapeError, Escaped, StringKind, StringValue, decode_interpolated_text, decode_string,
+    read_escape, spell_string, spell_string_shorter_than, write_interpolated_text,
     write_long_string,
 };
 
 fn decode(raw: &str) -> Vec<u8> {
-    decode_in(raw, LuaVersion::Lua54)
-}
-
-fn decode_in(raw: &str, version: LuaVersion) -> Vec<u8> {
     let mut output = Vec::new();
-    match decode_string(raw.as_bytes(), true, version, &mut output) {
+    match decode_string(raw.as_bytes(), true, &mut output) {
         StringValue::Verbatim(bytes) => bytes.to_vec(),
         StringValue::Decoded => output,
     }
@@ -28,8 +24,8 @@ fn written(bytes: &[u8]) -> String {
     output
 }
 
-fn escape_error(escape: &str, version: LuaVersion) -> (usize, Option<EscapeError>) {
-    let (length, meaning) = read_escape(escape.as_bytes(), StringKind::Quoted, version);
+fn escape_error(escape: &str) -> (usize, Option<EscapeError>) {
+    let (length, meaning) = read_escape(escape.as_bytes(), StringKind::Quoted);
     (length, meaning.err())
 }
 
@@ -44,17 +40,17 @@ fn a_body_with_nothing_to_rewrite_is_its_own_value() {
         b"[[\xFF]]",
         b"[[]]",
         b"\"\"",
+        b"[[a\rb]]",
+        b"[[\r\nab]]",
     ] {
-        for version in LuaVersion::ALL {
-            let mut output = Vec::new();
-            let value = decode_string(raw, true, version, &mut output);
-            assert!(matches!(value, StringValue::Verbatim(_)), "{raw:?} {version:?}");
-            assert!(output.is_empty(), "{raw:?} {version:?}");
-        }
+        let mut output = Vec::new();
+        let value = decode_string(raw, true, &mut output);
+        assert!(matches!(value, StringValue::Verbatim(_)), "{raw:?}");
+        assert!(output.is_empty(), "{raw:?}");
     }
     for raw in [&br#""a\n""#[..], b"[[a\r\nb]]", b"[[\r\na\r\n]]"] {
         let mut output = Vec::new();
-        assert_eq!(decode_string(raw, true, LuaVersion::Lua54, &mut output), StringValue::Decoded);
+        assert_eq!(decode_string(raw, true, &mut output), StringValue::Decoded);
     }
 }
 
@@ -69,69 +65,56 @@ fn decodes_every_kind_of_escape() {
         ("\"a\\z   \n   b\"", b"ab"),
         ("\"a\\\nb\"", b"a\nb"),
         ("\"a\\\r\nb\"", b"a\nb"),
-        ("\"a\\\n\rb\"", b"a\nb"),
+        ("\"a\\\rb\"", b"a\nb"),
+        ("\"a\\\n\rb\"", b"a\n\rb"),
     ] {
         assert_eq!(decode(raw), expected, "{raw}");
     }
 }
 
 #[test]
-fn writes_unicode_escapes_in_lua_s_longer_utf8_forms() {
-    for version in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Luau] {
-        assert_eq!(decode_in(r#""\u{D800}""#, version), [0xED, 0xA0, 0x80], "{version:?}");
-    }
-    assert_eq!(decode(r#""\u{110000}""#), [0xF4, 0x90, 0x80, 0x80]);
-    assert_eq!(decode(r#""\u{200000}""#), [0xF8, 0x88, 0x80, 0x80, 0x80]);
-    assert_eq!(decode(r#""\u{7FFFFFFF}""#), [0xFD, 0xBF, 0xBF, 0xBF, 0xBF, 0xBF]);
+fn writes_unicode_escapes_as_utf8_a_surrogate_included() {
+    assert_eq!(decode(r#""\u{D800}""#), [0xED, 0xA0, 0x80]);
+    assert_eq!(decode(r#""\u{7FF}\u{800}""#), [0xDF, 0xBF, 0xE0, 0xA0, 0x80]);
+    assert_eq!(decode(r#""\u{10FFFF}""#), [0xF4, 0x8F, 0xBF, 0xBF]);
+    assert_eq!(decode(r#""\u{0000000000000041}""#), b"A");
 }
 
 #[test]
-fn lua51_and_luau_read_an_undefined_escape_as_the_character() {
-    let lua51 = LuaVersion::Lua51;
-    assert_eq!(decode_in(r#""\m""#, lua51), b"m");
-    assert_eq!(decode_in(r#""\x41""#, lua51), b"x41");
-    assert_eq!(decode_in(r#""a\z  b""#, lua51), b"az  b");
-    assert_eq!(decode_in(r#""\u{48}""#, lua51), b"u{48}");
-    assert_eq!(decode_in(r#""\65""#, lua51), b"A");
-    assert_eq!(decode_in(r#""\q\{""#, LuaVersion::Luau), b"q{");
-    let (_, lenient) = read_escape(b"q", StringKind::Quoted, lua51);
+fn an_undefined_escape_reads_as_the_character() {
+    assert_eq!(decode(r#""\m""#), b"m");
+    assert_eq!(decode(r#""\q\{""#), b"q{");
+    let (_, lenient) = read_escape(b"q", StringKind::Quoted);
     assert!(lenient.is_ok_and(Escaped::is_lenient));
-    let (_, defined) = read_escape(b"n", StringKind::Quoted, lua51);
+    let (_, defined) = read_escape(b"n", StringKind::Quoted);
     assert!(defined.is_ok_and(|escaped| !escaped.is_lenient()));
 }
 
 #[test]
 fn an_interpolated_string_also_escapes_its_delimiters() {
     let mut output = Vec::new();
-    let value = decode_interpolated_text(br"a\{b\}c\`d\q", true, LuaVersion::Luau, &mut output);
+    let value = decode_interpolated_text(br"a\{b\}c\`d\q", true, &mut output);
     assert_eq!(value, StringValue::Decoded);
     assert_eq!(output, b"a{b}c`dq");
-    let (_, brace) = read_escape(b"{", StringKind::Interpolated, LuaVersion::Luau);
+    let (_, brace) = read_escape(b"{", StringKind::Interpolated);
     assert!(brace.is_ok_and(|escaped| !escaped.is_lenient()));
 }
 
 #[test]
 fn reports_each_malformed_escape_and_how_far_it_reached() {
-    let lua54 = LuaVersion::Lua54;
-    assert_eq!(escape_error("256", lua54), (3, Some(EscapeError::DecimalTooLarge(256))));
-    assert_eq!(escape_error("x4g", lua54), (2, Some(EscapeError::HexDigits(1))));
-    assert_eq!(escape_error("xg", lua54), (1, Some(EscapeError::HexDigits(0))));
-    assert_eq!(escape_error("u41", lua54), (1, Some(EscapeError::UnicodeBrace)));
-    assert_eq!(escape_error("u{}", lua54), (2, Some(EscapeError::UnicodeDigits)));
-    assert_eq!(escape_error("u{80000000}", lua54), (10, Some(EscapeError::UnicodeTooLarge)));
-    assert_eq!(escape_error("u{41", lua54), (4, Some(EscapeError::UnicodeUnclosed)));
-    assert_eq!(escape_error("q", lua54), (1, Some(EscapeError::Undefined)));
-    assert_eq!(
-        escape_error("u{110000}", LuaVersion::Lua53),
-        (8, Some(EscapeError::UnicodeTooLarge))
-    );
-    let seventeen_digits = "u{00000000000000041}";
-    assert_eq!(
-        escape_error(seventeen_digits, LuaVersion::Luau).1,
-        Some(EscapeError::UnicodeTooLarge)
-    );
-    assert_eq!(escape_error(seventeen_digits, lua54), (20, None));
-    assert_eq!(escape_error("u{48}", LuaVersion::Lua52), (1, Some(EscapeError::Undefined)));
+    assert_eq!(escape_error("256"), (3, Some(EscapeError::DecimalTooLarge(256))));
+    assert_eq!(escape_error("x4g"), (2, Some(EscapeError::HexDigits(1))));
+    assert_eq!(escape_error("xg"), (1, Some(EscapeError::HexDigits(0))));
+    assert_eq!(escape_error("u41"), (1, Some(EscapeError::UnicodeBrace)));
+    assert_eq!(escape_error("u{}"), (2, Some(EscapeError::UnicodeDigits)));
+    assert_eq!(escape_error("u{110000}"), (8, Some(EscapeError::UnicodeTooLarge)));
+    assert_eq!(escape_error("u{80000000}"), (10, Some(EscapeError::UnicodeTooLarge)));
+    assert_eq!(escape_error("u{41"), (4, Some(EscapeError::UnicodeUnclosed)));
+    assert_eq!(escape_error("u{00000000000000041}"), (19, Some(EscapeError::UnicodeTooLarge)));
+    assert_eq!(escape_error("q"), (1, None));
+    let (length, meaning) = read_escape(b"", StringKind::Quoted);
+    assert_eq!(length, 0);
+    assert!(meaning.is_ok_and(|escaped| escaped.as_bytes().is_empty()));
 }
 
 #[test]
@@ -150,30 +133,23 @@ fn a_literal_cut_off_before_its_closer_holds_what_it_reached() {
 }
 
 #[test]
-fn long_brackets_turn_every_line_break_into_a_newline() {
+fn long_brackets_turn_every_crlf_into_a_newline_and_keep_a_lone_cr() {
     assert_eq!(decode("[[hello]]"), b"hello");
     assert_eq!(decode("[==[x]==]"), b"x");
     assert_eq!(decode("[[a\\nb]]"), b"a\\nb");
     for (raw, expected) in [
-        ("[[a\rb]]", &b"a\nb"[..]),
-        ("[[a\r\nb]]", b"a\nb"),
-        ("[[a\n\rb]]", b"a\nb"),
+        ("[[a\r\nb]]", &b"a\nb"[..]),
+        ("[[a\rb]]", b"a\rb"),
+        ("[[a\n\rb]]", b"a\n\rb"),
+        ("[[a\r\r\nb\r\n]]", b"a\r\nb\n"),
         ("[[\r\nhi]]", b"hi"),
-        ("[[\n\rhi]]", b"hi"),
-        ("[[\rhi]]", b"hi"),
+        ("[[\nhi]]", b"hi"),
+        ("[[\rhi]]", b"\rhi"),
+        ("[[\n\rhi]]", b"\rhi"),
         ("[[\r\n\r\nhi]]", b"\nhi"),
     ] {
         assert_eq!(decode(raw), expected, "{raw:?}");
     }
-}
-
-#[test]
-fn luau_long_brackets_keep_a_lone_cr() {
-    let luau = LuaVersion::Luau;
-    assert_eq!(decode_in("[[a\rb]]", luau), b"a\rb");
-    assert_eq!(decode_in("[[a\r\nb]]", luau), b"a\nb");
-    assert_eq!(decode_in("[[a\n\rb]]", luau), b"a\n\rb");
-    assert_eq!(decode_in("[[\rhi]]", luau), b"\rhi");
 }
 
 #[test]
@@ -244,9 +220,7 @@ fn every_written_string_reads_back_as_itself() {
     );
     for bytes in cases {
         let text = written(&bytes);
-        for version in LuaVersion::ALL {
-            assert_eq!(decode_in(&text, version), bytes, "{text:?} {version:?}");
-        }
+        assert_eq!(decode(&text), bytes, "{text:?}");
         assert_eq!(written(&decode(&text)), text);
     }
 }
@@ -262,14 +236,13 @@ fn long_strings_take_the_lowest_level_no_closer_in_the_text_takes() {
         ("x]", "[=[x]]=]"),
         ("=]", "[=[=]]=]"),
         ("[[ ]=]", "[==[[[ ]=]]==]"),
+        ("[[x", "[[[[x]]"),
         ("\nline", "[[\n\nline]]"),
     ] {
         let mut output = Vec::new();
         assert!(write_long_string(text, &mut output), "{text:?}");
         assert_eq!(output, expected.as_bytes(), "{text:?}");
-        for version in LuaVersion::ALL {
-            assert_eq!(decode_in(expected, version), text.as_bytes(), "{expected:?} {version:?}");
-        }
+        assert_eq!(decode(expected), text.as_bytes(), "{expected:?}");
     }
     let mut output = Vec::new();
     assert!(!write_long_string("a\r\nb", &mut output));
@@ -298,7 +271,7 @@ fn interpolated_text_escapes_what_its_lexer_reads() {
     write_interpolated_text(b"a{b}`c\\d\"e\n\xFF\x017", &mut output);
     assert_eq!(output, br#"a\{b}\`c\\d"e\n\255\0017"#);
     let mut decoded = Vec::new();
-    let value = decode_interpolated_text(&output, true, LuaVersion::Luau, &mut decoded);
+    let value = decode_interpolated_text(&output, true, &mut decoded);
     assert_eq!(value, StringValue::Decoded);
     assert_eq!(decoded, b"a{b}`c\\d\"e\n\xFF\x017");
 }

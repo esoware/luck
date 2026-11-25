@@ -20,8 +20,8 @@ impl<'ast> Parser<'ast> {
         }
         self.open(Closer::BlockEnd);
 
-        // Luau puts the generic list before the parens: `function f<T>(x: T)`.
-        let generics = (self.is_at(TokenKind::Less) && self.version.has_type_syntax()).then(|| {
+        // The generic list goes before the parens: `function f<T>(x: T)`.
+        let generics = self.is_at(TokenKind::Less).then(|| {
             let generics = self.parse_generic_type_list(GenericsOwner::Function);
             self.alloc(generics)
         });
@@ -33,12 +33,10 @@ impl<'ast> Parser<'ast> {
         let (params, vararg) = self.parse_params();
         self.expect_closer(TokenKind::RightParen, Closer::Paren, open);
 
-        // Luau: optional return type annotation after `)`.
-        let return_type =
-            (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
-                let ty = self.parse_return_type();
-                self.alloc(ty)
-            });
+        let return_type = self.eat(TokenKind::Colon).then(|| {
+            let ty = self.parse_return_type();
+            self.alloc(ty)
+        });
 
         // A loop around the function doesn't make `break` or `continue` valid
         // inside it, and `...` needs this function's own vararg parameter.
@@ -86,35 +84,21 @@ impl<'ast> Parser<'ast> {
     }
 
     /// Finish a function parameter or a for-loop variable whose `name` was
-    /// just consumed, taking a Luau `: T` annotation if one follows.
+    /// just consumed, taking a `: T` annotation if one follows.
     pub(super) fn parse_parameter(&mut self, name: Name<'ast>) -> Parameter<'ast> {
         self.counts.declarations += 1;
         Parameter::new(name, self.try_parse_type_annotation())
     }
 
-    /// Parse `... [name] [: type]`; `...` must be the current token.
+    /// Parse `... [: type]`, where the type may be a pack (`...: T...`);
+    /// `...` must be the current token.
     fn parse_vararg_param(&mut self) -> Box<'ast, VarArgParam<'ast>> {
         let dots = self.advance();
-        // Lua 5.1: a vararg function binds its extra arguments' table to `arg`.
-        if self.version.has_implicit_vararg_table() {
-            self.counts.declarations += 1;
-        }
-        // Lua 5.5: named varargs `...name`.
-        let name = (self.version.has_named_varargs() && self.is_at_name()).then(|| {
-            self.counts.declarations += 1;
-            self.advance_name()
+        let type_annotation = self.eat(TokenKind::Colon).then(|| {
+            let ty = self.parse_vararg_type();
+            self.alloc(ty)
         });
-        // Luau: vararg type annotation `...: type` or `...: T...`.
-        let type_annotation =
-            (self.version.has_type_syntax() && self.eat(TokenKind::Colon)).then(|| {
-                let ty = self.parse_vararg_type();
-                self.alloc(ty)
-            });
-        let end_span = type_annotation
-            .as_deref()
-            .map(Type::span)
-            .or_else(|| name.map(|vararg_name| vararg_name.span))
-            .unwrap_or(dots);
-        VarArgParam::boxed(dots.merge(end_span), name, type_annotation, self.allocator)
+        let end_span = type_annotation.as_deref().map_or(dots, Type::span);
+        VarArgParam::boxed(dots.merge(end_span), type_annotation, self.allocator)
     }
 }

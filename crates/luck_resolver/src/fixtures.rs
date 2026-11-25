@@ -21,7 +21,7 @@ pub(crate) fn write_files(root: &Path, files: &[(&str, &str)]) {
     }
 }
 
-pub(crate) fn luau_project() -> TempDir {
+pub(crate) fn sample_project() -> TempDir {
     project_with(&[
         ("src/main.luau", "-- entry"),
         ("src/utils.luau", "return {}"),

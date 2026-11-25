@@ -1,19 +1,19 @@
 use luck_ast::{Call, Chunk, SuffixedExpression, TreeCounts};
 use luck_diagnostics::Diagnostic;
 use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder, SymbolId};
-use luck_token::{LuaTarget, LuaVersion};
+use luck_token::Variant;
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
 
-/// A chunk's [`Semantic`], read against the stdlib of one target.
+/// A chunk's [`Semantic`], read against the stdlib of one variant.
 #[derive(Debug)]
 pub struct SemanticAnalysis<'ast> {
     semantic: Semantic<'ast>,
     stdlib: &'ast StdlibLibrary<'ast>,
     /// Each symbol's shape, by symbol index: a never-reassigned local
     /// initialized from a value of known shape, such as
-    /// `local f = io.open(...)`.
+    /// `local s = string.rep(...)`.
     symbol_shapes: Vec<Option<&'ast str>>,
     /// Each name's standing as a global the host defines, by name index.
     host_globals: Vec<HostGlobal>,
@@ -25,19 +25,18 @@ struct HostGlobal {
     is_extra: bool,
 }
 
-/// `chunk`'s semantic, read against `stdlib`, a library of the dialect
-/// `chunk` was parsed as, and beside it the checker's errors.
+/// `chunk`'s semantic, read against `stdlib`, and beside it the checker's
+/// errors.
 ///
 /// The semantic holds every part: the checker's errors, the node table,
 /// which the shapes read, and the `require` sites. Its tables are sized from
-/// `counts`, the parse's or the default. For Luau, it's the same whether or
-/// not the target is Roblox, which only adds the Roblox runtime's stdlib.
+/// `counts`, the parse's or the default. It's the same whether or not the
+/// variant is Roblox, which only adds the Roblox runtime's stdlib.
 pub fn analyze<'ast>(
     chunk: &'ast Chunk<'ast>,
     counts: TreeCounts,
     stdlib: &'ast StdlibLibrary<'ast>,
 ) -> (SemanticAnalysis<'ast>, Vec<Diagnostic>) {
-    debug_assert_eq!(chunk.version, stdlib.target.version(), "the target is the chunk's dialect");
     let built = SemanticBuilder::new()
         .with_counts(counts)
         .with_check(true)
@@ -70,12 +69,8 @@ impl<'ast> SemanticAnalysis<'ast> {
         self.stdlib
     }
 
-    pub const fn target(&self) -> LuaTarget {
-        self.stdlib.target
-    }
-
-    pub const fn version(&self) -> LuaVersion {
-        self.stdlib.target.version()
+    pub const fn variant(&self) -> Variant {
+        self.stdlib.variant
     }
 
     /// Marks `names` as globals the host defines beyond the stdlib, such as
@@ -93,8 +88,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     /// Whether `name` is recognized as a global: a stdlib entry for this
-    /// target, an extra global, or a name a `global` statement in this
-    /// chunk declares.
+    /// variant or an extra global.
     pub fn is_known_global(&self, name: &str) -> bool {
         match self.scoping().name_id(name) {
             Some(id) => self.is_known_global_name(id),
@@ -105,19 +99,12 @@ impl<'ast> SemanticAnalysis<'ast> {
     /// [`Self::is_known_global`] for one of the chunk's names.
     pub fn is_known_global_name(&self, name: NameId) -> bool {
         let global = self.host_globals[name.index()];
-        global.is_stdlib || global.is_extra || self.scoping().is_declared_global(name)
+        global.is_stdlib || global.is_extra
     }
 
     /// Whether [`Self::add_extra_globals`] marked `name`.
     pub fn is_extra_global(&self, name: NameId) -> bool {
         self.host_globals[name.index()].is_extra
-    }
-
-    /// Whether a global's name is defined where `reference` uses it: known
-    /// to [`Self::is_known_global`], or covered by a Lua 5.5 `global`
-    /// statement in scope there, `global *` included.
-    pub fn is_defined_global(&self, reference: &Reference) -> bool {
-        reference.is_declared_global || self.is_known_global_name(reference.name)
     }
 
     /// Whether the stdlib marks the global `name` read-only, so code
@@ -127,7 +114,7 @@ impl<'ast> SemanticAnalysis<'ast> {
     }
 
     /// `symbol`'s shape: a never-reassigned local initialized from a value
-    /// of known shape, such as `local f = io.open(...)`.
+    /// of known shape, such as `local s = string.rep(...)`.
     pub fn symbol_shape(&self, symbol: SymbolId) -> Option<&'ast str> {
         self.symbol_shapes[symbol.index()]
     }
@@ -158,10 +145,10 @@ impl<'ast> SemanticAnalysis<'ast> {
     /// The entry `segments` names, where `root` is the reference their first
     /// makes.
     ///
-    /// With `local f = io.open(...)`, `["f", "read"]` resolves through the
-    /// `file` shape. A root that reaches the host's global is a plain library
-    /// lookup. Any other root resolves to nothing unless it's a local of
-    /// known shape, which keeps shadowed names out of hover and semantic
+    /// With `local s = string.rep(...)`, `["s", "upper"]` resolves through
+    /// the `string` shape. A root that reaches the host's global is a plain
+    /// library lookup. Any other root resolves to nothing unless it's a local
+    /// of known shape, which keeps shadowed names out of hover and semantic
     /// tokens.
     pub fn resolve_stdlib_path(
         &self,

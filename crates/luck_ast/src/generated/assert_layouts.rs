@@ -4,21 +4,20 @@
 use luck_allocator::{List, ThinBytes, ThinStr};
 
 use crate::{
-    Assignment, Attribute, AttributedName, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment,
-    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
-    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
-    GlobalDeclaration, GlobalFunction, GlobalStar, GotoStatement, IfExpression, IfStatement,
-    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LabelStatement,
-    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name,
-    NameIndex, NamedType, NumberLiteral, NumericFor, OptionalType, Parameter,
-    ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement, Statement,
-    StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type, TypeArgs,
-    TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypeFieldAccess, TypePack,
-    TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
+    Assignment, BinaryLink, BinaryOp, Block, Chunk, CompoundAssignment, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
+    IntegerLiteral, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, LocalName, MethodCall, Name, NameIndex,
+    NamedType, NumberLiteral, NumericFor, OptionalType, Parameter, ParenthesizedExpression,
+    ParenthesizedType, RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix,
+    SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration,
+    TypeDeclarationValue, TypeField, TypeFieldAccess, TypePack, TypeofType, UnaryOp, UnionType,
+    Var, VarArgParam, VariadicType, WhileLoop,
 };
 
-const LAYOUTS: [(&str, usize, usize); 82] = [
+const LAYOUTS: [(&str, usize, usize); 75] = [
     ("Expression", size_of::<Expression<'_>>(), align_of::<Expression<'_>>()),
     ("Var", size_of::<Var<'_>>(), align_of::<Var<'_>>()),
     (
@@ -77,12 +76,9 @@ const LAYOUTS: [(&str, usize, usize); 82] = [
     ("FunctionDecl", size_of::<FunctionDecl<'_>>(), align_of::<FunctionDecl<'_>>()),
     ("LocalFunction", size_of::<LocalFunction<'_>>(), align_of::<LocalFunction<'_>>()),
     ("LocalFunctionKind", size_of::<LocalFunctionKind>(), align_of::<LocalFunctionKind>()),
-    ("Attribute", size_of::<Attribute<'_>>(), align_of::<Attribute<'_>>()),
-    ("AttributedName", size_of::<AttributedName<'_>>(), align_of::<AttributedName<'_>>()),
+    ("LocalName", size_of::<LocalName<'_>>(), align_of::<LocalName<'_>>()),
     ("LocalAssignment", size_of::<LocalAssignment<'_>>(), align_of::<LocalAssignment<'_>>()),
     ("LocalAssignmentKind", size_of::<LocalAssignmentKind>(), align_of::<LocalAssignmentKind>()),
-    ("GotoStatement", size_of::<GotoStatement<'_>>(), align_of::<GotoStatement<'_>>()),
-    ("LabelStatement", size_of::<LabelStatement<'_>>(), align_of::<LabelStatement<'_>>()),
     ("ReturnStatement", size_of::<ReturnStatement<'_>>(), align_of::<ReturnStatement<'_>>()),
     (
         "CompoundAssignment",
@@ -95,9 +91,6 @@ const LAYOUTS: [(&str, usize, usize); 82] = [
         size_of::<TypeDeclarationValue<'_>>(),
         align_of::<TypeDeclarationValue<'_>>(),
     ),
-    ("GlobalDeclaration", size_of::<GlobalDeclaration<'_>>(), align_of::<GlobalDeclaration<'_>>()),
-    ("GlobalFunction", size_of::<GlobalFunction<'_>>(), align_of::<GlobalFunction<'_>>()),
-    ("GlobalStar", size_of::<GlobalStar<'_>>(), align_of::<GlobalStar<'_>>()),
     ("Type", size_of::<Type<'_>>(), align_of::<Type<'_>>()),
     ("NamedType", size_of::<NamedType<'_>>(), align_of::<NamedType<'_>>()),
     ("TypeArgs", size_of::<TypeArgs<'_>>(), align_of::<TypeArgs<'_>>()),
@@ -116,7 +109,6 @@ const LAYOUTS: [(&str, usize, usize); 82] = [
     ("GenericPackType", size_of::<GenericPackType<'_>>(), align_of::<GenericPackType<'_>>()),
     ("GenericTypeList", size_of::<GenericTypeList<'_>>(), align_of::<GenericTypeList<'_>>()),
     ("GenericTypeParam", size_of::<GenericTypeParam<'_>>(), align_of::<GenericTypeParam<'_>>()),
-    ("Option<Name>", size_of::<Option<Name<'_>>>(), align_of::<Option<Name<'_>>>()),
     (
         "Option<List<Expression>>",
         size_of::<Option<List<'_, Expression<'_>>>>(),
@@ -130,7 +122,7 @@ const LAYOUTS: [(&str, usize, usize); 82] = [
         size_of::<Option<Expression<'_>>>(),
         align_of::<Option<Expression<'_>>>(),
     ),
-    ("Option<Attribute>", size_of::<Option<Attribute<'_>>>(), align_of::<Option<Attribute<'_>>>()),
+    ("Option<Name>", size_of::<Option<Name<'_>>>(), align_of::<Option<Name<'_>>>()),
     ("Option<TypeArgs>", size_of::<Option<TypeArgs<'_>>>(), align_of::<Option<TypeArgs<'_>>>()),
     (
         "Option<TypeFieldAccess>",

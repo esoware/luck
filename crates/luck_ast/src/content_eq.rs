@@ -1,5 +1,5 @@
 use luck_allocator::{Box, List, ThinBytes, ThinStr};
-use luck_token::{BinOp, CompoundOp, LuaNumber, LuaVersion, UnOp};
+use luck_token::{BinOp, CompoundOp, UnOp};
 
 use crate::one_or_more::OneOrMore;
 
@@ -39,19 +39,14 @@ macro_rules! content_eq_is_eq {
     };
 }
 
-content_eq_is_eq!(
-    str,
-    ThinStr<'_>,
-    ThinBytes<'_>,
-    LuaNumber,
-    i64,
-    bool,
-    u32,
-    BinOp,
-    UnOp,
-    CompoundOp,
-    LuaVersion,
-);
+content_eq_is_eq!(str, ThinStr<'_>, ThinBytes<'_>, i64, bool, u32, BinOp, UnOp, CompoundOp);
+
+/// The same double bit for bit, as two literals of it are.
+impl ContentEq for f64 {
+    fn content_eq(&self, other: &Self) -> bool {
+        self.to_bits() == other.to_bits()
+    }
+}
 
 impl<T> ContentEq for Option<T>
 where

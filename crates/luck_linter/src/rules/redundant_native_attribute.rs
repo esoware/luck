@@ -106,99 +106,61 @@ fn has_native_directive(host: &ContextHost<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use luck_token::LuaTarget;
-
     use crate::fixtures::Tester;
     use crate::rules::RuleId;
 
-    const PASS: &[(&str, LuaTarget)] = &[
-        ("@native function f() end", LuaTarget::Luau),
-        (
-            "\
+    const PASS: &[&str] = &[
+        "@native function f() end",
+        "\
 local _x = 1
 --!native
 @native function f() end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native
 @checked function f() end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native
 local _x = 1",
-            LuaTarget::Lua54,
-        ),
         // The compiler ignores `--!native on`.
-        (
-            "\
+        "\
 --!native on
 @native function f() end",
-            LuaTarget::Luau,
-        ),
     ];
 
-    const FAIL: &[(&str, LuaTarget)] = &[
-        (
-            "\
+    const FAIL: &[&str] = &[
+        "\
 --!native
 @native function f() end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native
 @native
 local function f() end
 f()",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native
 do
 @native function f() end
 end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native
 @native
 local function a() end
 local f = @native function() end",
-            LuaTarget::Luau,
-        ),
         // The fix should remove the whole attribute.
-        (
-            "\
+        "\
 --!native
 @[native] function f() end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native
 @[native, deprecated] function f() end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native 
 @native function f() end",
-            LuaTarget::Luau,
-        ),
-        (
-            "\
+        "\
 --!native\r
 @native\r
 local function f() end\r
 f()",
-            LuaTarget::Luau,
-        ),
     ];
 
     #[test]

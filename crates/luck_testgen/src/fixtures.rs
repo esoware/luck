@@ -2,18 +2,12 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use luck_token::LuaVersion;
-
-/// A Lua source in the shared fixture tree.
+/// A source in the shared fixture tree.
 #[derive(Debug)]
-pub struct LuaFixture {
+pub struct LuauFixture {
     pub path: PathBuf,
     /// The path under the tree's root, which names the fixture.
     pub relative_path: PathBuf,
-    /// The dialect the path names: `.luau` files and the `luau/` tree are
-    /// Luau, `lua51/` to `lua55/` name their version, and everything else,
-    /// `idiomatic/` included, is 5.4.
-    pub version: LuaVersion,
     /// Under an `errors/` directory, so the fixture holds a mistake and may
     /// not parse.
     pub is_error: bool,
@@ -24,7 +18,7 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
 }
 
-/// Every file in the shared fixture tree, in path order, whether it holds Lua
+/// Every file in the shared fixture tree, in path order, whether it holds Luau
 /// or not.
 ///
 /// # Panics
@@ -54,7 +48,7 @@ pub fn fixture_files() -> Vec<PathBuf> {
 /// # Panics
 ///
 /// Panics as [`fixture_files`] does, or when a file isn't readable as UTF-8.
-pub fn lua_fixtures() -> Vec<LuaFixture> {
+pub fn luau_fixtures() -> Vec<LuauFixture> {
     let root = root();
     fixture_files()
         .into_iter()
@@ -65,27 +59,7 @@ pub fn lua_fixtures() -> Vec<LuaFixture> {
             let source = fs::read_to_string(&path).expect("a fixture is readable");
             let is_error =
                 relative_path.components().any(|component| component.as_os_str() == "errors");
-            LuaFixture {
-                version: version_named_by(&relative_path),
-                is_error,
-                path,
-                relative_path,
-                source,
-            }
+            LuauFixture { path, relative_path, is_error, source }
         })
         .collect()
-}
-
-fn version_named_by(relative_path: &Path) -> LuaVersion {
-    if relative_path.extension() == Some(OsStr::new("luau")) {
-        return LuaVersion::Luau;
-    }
-    match relative_path.iter().next().and_then(OsStr::to_str) {
-        Some("luau") => LuaVersion::Luau,
-        Some("lua51") => LuaVersion::Lua51,
-        Some("lua52") => LuaVersion::Lua52,
-        Some("lua53") => LuaVersion::Lua53,
-        Some("lua55") => LuaVersion::Lua55,
-        _ => LuaVersion::Lua54,
-    }
 }

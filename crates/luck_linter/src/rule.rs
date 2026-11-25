@@ -77,7 +77,7 @@ pub(crate) trait Rule: RuleMeta + Default {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::new();
 
     /// Whether the rule can report anything in this file, as a Roblox rule
-    /// can't in a file of any other target.
+    /// can't outside Roblox.
     fn should_run(&self, _host: &ContextHost<'_>) -> bool {
         true
     }

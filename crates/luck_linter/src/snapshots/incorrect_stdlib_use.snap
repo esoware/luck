@@ -2,46 +2,46 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 error: `table.insert` requires at least 2 argument(s), got 0
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | table.insert()
   | ^^^^^^^^^^^^^^
 
 error: `type` accepts at most 1 argument(s), got 3
- --> Lua54:1:1
+ --> Standalone:1:1
 1 | type(1, 2, 3)
   | ^^^^^^^^^^^^^
 
-error: `collectgarbage` argument 1 must be one of `collect`, `count`, `isrunning`, `restart`, `setpause`, `setstepmul`, `step`, `stop`, ... (10 allowed values), got `frob`
- --> Lua54:1:16
+error: `collectgarbage` argument 1 must be one of `collect`, `count`, got `frob`
+ --> Standalone:1:16
 1 | collectgarbage('frob')
   |                ^^^^^^
 
-error: `collectgarbage` argument 1 must be one of `collect`, `count`, `isrunning`, `restart`, `setpause`, `setstepmul`, `step`, `stop`, ... (10 allowed values), got `frob`
- --> Lua54:1:15
+error: `collectgarbage` argument 1 must be one of `collect`, `count`, got `frob`
+ --> Standalone:1:15
 1 | collectgarbage'frob'
   |               ^^^^^^
+
+error: `string:rep` requires at least 1 argument(s), got 0
+ --> Standalone:1:11
+1 | local s = ('x'):rep()
+  |           ^^^^^^^^^^^
 
 error: no overload of `CFrame.new` accepts 5 argument(s)
  --> Roblox:1:11
 1 | local c = CFrame.new(1, 2, 3, 4, 5)
   |           ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: `f:setvbuf` requires at least 1 argument(s), got 0
- --> Lua54:2:1
-1 | local f = io.open('x')
-2 | f:setvbuf()
-  | ^^^^^^^^^^^
+error: `child:FindFirstChild` requires at least 1 argument(s), got 0
+ --> Roblox:2:20
+1 | local child = script:FindFirstChild('x')
+2 | local grandchild = child:FindFirstChild()
+  |                    ^^^^^^^^^^^^^^^^^^^^^^
 
-error: `f:seek` argument 1 must be one of `set`, `cur`, `end`, got `nope`
- --> Lua54:2:8
-1 | local f = io.open('x')
-2 | f:seek('nope')
-  |        ^^^^^^
-
-error: `string:rep` requires at least 1 argument(s), got 0
- --> Lua54:1:11
-1 | local s = ('x'):rep()
-  |           ^^^^^^^^^^^
+error: `child:IsA` argument 1 must be one of `Accessory`, `AccessoryDescription`, `AccountService`, `Accoutrement`, `AchievementService`, `ActivityHistoryEventService`, `Actor`, `AdGui`, ... (891 allowed values), got `Partz`
+ --> Roblox:2:27
+1 | local child = script:WaitForChild('x')
+2 | local is_part = child:IsA('Partz')
+  |                           ^^^^^^^
 
 error: `game:GetService` argument 1 must be one of `AccountService`, `AchievementService`, `ActivityHistoryEventService`, `AdService`, `AnalyticsService`, `AnimationClipProvider`, `AnimationFromVideoCreatorService`, `AnimationFromVideoCreatorStudioService`, ... (314 allowed values), got `Playerz`
  --> Roblox:1:17

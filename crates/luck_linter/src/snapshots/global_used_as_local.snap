@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: global `counter` is only used inside one function
- --> Lua54:2:5
+ --> Standalone:2:5
 1 | local function f()
 2 |     counter = 0
   |     ^^^^^^^
@@ -10,7 +10,7 @@ warning: global `counter` is only used inside one function
 help: declare it `local` inside that function
 
 warning: global `cache` is only used inside one function
- --> Lua54:2:5
+ --> Standalone:2:5
 1 | local function f()
 2 |     cache = {}
   |     ^^^^^

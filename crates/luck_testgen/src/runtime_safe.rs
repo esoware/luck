@@ -1,11 +1,9 @@
-use luck_token::LuaVersion;
-
 use crate::rng::Rng;
 
 const MAX_STMT_DEPTH: usize = 4;
 
-/// Module-scope locals to stop at. PUC-Rio Lua rejects a function with more
-/// than 200 active locals, and the blocks nested below module scope add
+/// Module-scope locals to stop at. Luau's compiler rejects a function with
+/// more than 200 active locals, and the blocks nested below module scope add
 /// their own on top.
 const MAX_MODULE_LOCALS: usize = 150;
 
@@ -27,15 +25,14 @@ enum ValueKind {
 struct Binding {
     name: String,
     kind: ValueKind,
-    /// A loop's counter or control variable, which a generated assignment
-    /// must leave alone so the loop stays bounded and, on 5.5, compiles.
+    /// A loop's counter, which a generated assignment must leave alone so
+    /// the loop stays bounded.
     is_read_only: bool,
 }
 
 #[derive(Debug)]
 struct RuntimeGenerator {
     rng: Rng,
-    version: LuaVersion,
     output: String,
     scopes: Vec<Vec<Binding>>,
     next_id: usize,
@@ -43,10 +40,9 @@ struct RuntimeGenerator {
 }
 
 impl RuntimeGenerator {
-    fn new(seed: u64, version: LuaVersion) -> Self {
+    fn new(seed: u64) -> Self {
         Self {
             rng: Rng::new(seed),
-            version,
             output: String::new(),
             scopes: vec![Vec::new()],
             next_id: 0,
@@ -171,7 +167,7 @@ impl RuntimeGenerator {
                 let denominator = self.rng.one_through(9);
                 format!("({lhs} / {denominator})")
             }
-            3 if self.version.has_floor_div() => {
+            3 => {
                 let lhs = self.number_expr(inner_depth);
                 let denominator = self.rng.one_through(9);
                 format!("({lhs} // {denominator})")
@@ -296,7 +292,7 @@ impl RuntimeGenerator {
     fn assignment(&mut self) {
         if let Some(name) = self.assignable_name(ValueKind::Number) {
             let value = self.number_expr(2);
-            if self.version.has_compound_assignment() && self.rng.chance(30) {
+            if self.rng.chance(30) {
                 self.line(&format!("{name} += {value}"));
             } else {
                 self.line(&format!("{name} = {value}"));
@@ -353,19 +349,11 @@ impl RuntimeGenerator {
     }
 
     fn numeric_for(&mut self) {
-        // 5.5 control variables are read-only: keep the name globally
-        // unique (a bare-stem shadow would make later writes resolve to
-        // the loop var) and never offer it as an assignment target.
-        let is_read_only = self.version.has_const_for_variables();
-        let loop_variable = if is_read_only { self.numbered_stem().1 } else { self.fresh_name() };
+        let loop_variable = self.fresh_name();
         let stop = self.rng.one_through(4);
         self.line(&format!("for {loop_variable} = 1, {stop} do"));
         self.block(|generator| {
-            if is_read_only {
-                generator.declare_read_only(loop_variable, ValueKind::Number);
-            } else {
-                generator.declare(loop_variable, ValueKind::Number);
-            }
+            generator.declare(loop_variable, ValueKind::Number);
             generator.small_body();
         });
         self.line("end");
@@ -428,16 +416,16 @@ impl RuntimeGenerator {
     }
 }
 
-/// A program in `version` that runs without error, with `statement_budget`
-/// random statements at module scope.
+/// A program that runs without error, with `statement_budget` random
+/// statements at module scope.
 ///
 /// The same arguments always give the same program. Every variable is set
 /// before it's read, arithmetic takes only numbers, every loop is bounded,
 /// and nothing calls a library function whose result varies, such as the
 /// order of `pairs`, the time, or the collector. It prints what it computes,
 /// so a program and what a stage made of it can be compared by their output.
-pub fn generate_runtime_safe(seed: u64, version: LuaVersion, statement_budget: usize) -> String {
-    RuntimeGenerator::new(seed, version).program(statement_budget)
+pub fn generate_runtime_safe(seed: u64, statement_budget: usize) -> String {
+    RuntimeGenerator::new(seed).program(statement_budget)
 }
 
 #[cfg(test)]
@@ -446,15 +434,15 @@ mod tests {
 
     #[test]
     fn same_seed_generates_the_same_program() {
-        let first = generate_runtime_safe(42, LuaVersion::Lua54, 30);
-        let second = generate_runtime_safe(42, LuaVersion::Lua54, 30);
+        let first = generate_runtime_safe(42, 30);
+        let second = generate_runtime_safe(42, 30);
         assert_eq!(first, second);
     }
 
     #[test]
     fn different_seeds_generate_different_programs() {
-        let first = generate_runtime_safe(1, LuaVersion::Lua54, 30);
-        let second = generate_runtime_safe(2, LuaVersion::Lua54, 30);
+        let first = generate_runtime_safe(1, 30);
+        let second = generate_runtime_safe(2, 30);
         assert_ne!(first, second);
     }
 }

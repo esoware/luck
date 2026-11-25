@@ -1,6 +1,6 @@
 use luck_diagnostics::Tag;
 use luck_token::{
-    LintExtent, LintVerb, LuaVersion, Span, index_to_offset, is_lua_whitespace, strip_line_break,
+    LintExtent, LintVerb, Span, index_to_offset, is_luau_whitespace, strip_line_break,
 };
 
 use crate::context::ContextHost;
@@ -113,7 +113,7 @@ fn removal(context: &ContextHost<'_>, removed: &[usize]) -> Vec<TextEdit> {
         let (taken, rest) = remaining.split_at(count);
         remaining = rest;
         edits.push(if taken.len() == directive.entries.len() {
-            comment_removal(context.source, directive.span, context.semantic.version())
+            comment_removal(context.source, directive.span)
         } else {
             list_without(context.source, directives, directive, taken)
         });
@@ -143,33 +143,32 @@ fn list_without(
 /// It takes the comment's whole line when nothing else is on it, the blanks
 /// before it when it ends a line of code, and else the blanks after it,
 /// leaving a space between code on both sides.
-fn comment_removal(source: &[u8], span: Span, version: LuaVersion) -> TextEdit {
+fn comment_removal(source: &[u8], span: Span) -> TextEdit {
     let (start, end) = (span.start as usize, span.end as usize);
     let before = &source[..start];
     let after = &source[end..];
-    let is_line_break = |b: u8| b == b'\n' || (b == b'\r' && version.has_lfcr_line_break());
-    let line_before_length = before.iter().rev().take_while(|&&b| !is_line_break(b)).count();
-    let line_after_length = after.iter().take_while(|&&b| !is_line_break(b)).count();
+    let line_before_length = before.iter().rev().take_while(|&&b| b != b'\n').count();
+    let line_after_length = after.iter().take_while(|&&b| b != b'\n').count();
     let line_before = &before[start - line_before_length..];
     let line_after = &after[..line_after_length];
-    let has_code_before = !line_before.iter().all(|&b| is_lua_whitespace(b));
-    let has_code_after = !line_after.iter().all(|&b| is_lua_whitespace(b));
+    let has_code_before = !line_before.iter().all(|&b| is_luau_whitespace(b));
+    let has_code_after = !line_after.iter().all(|&b| is_luau_whitespace(b));
     let (removed_start, removed_end, replacement) = match (has_code_before, has_code_after) {
         (false, false) => {
             let rest = &after[line_after_length..];
-            let line_break_length = strip_line_break(rest, version)
-                .map_or(0, |after_break| rest.len() - after_break.len());
+            let line_break_length =
+                strip_line_break(rest).map_or(0, |after_break| rest.len() - after_break.len());
             let line_end = end + line_after_length + line_break_length;
             (start - line_before_length, line_end, &b""[..])
         }
         (true, false) => {
             let blanks_before =
-                line_before.iter().rev().take_while(|&&b| is_lua_whitespace(b)).count();
+                line_before.iter().rev().take_while(|&&b| is_luau_whitespace(b)).count();
             (start - blanks_before, end, &b""[..])
         }
         (_, true) => {
-            let blanks_after = after.iter().take_while(|&&b| is_lua_whitespace(b)).count();
-            let is_touching = line_before.last().is_some_and(|&b| !is_lua_whitespace(b));
+            let blanks_after = after.iter().take_while(|&&b| is_luau_whitespace(b)).count();
+            let is_touching = line_before.last().is_some_and(|&b| !is_luau_whitespace(b));
             (start, end + blanks_after, if is_touching { &b" "[..] } else { b"" })
         }
     };

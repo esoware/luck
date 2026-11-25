@@ -240,7 +240,7 @@ fn parse_errors_surface_without_config() {
 fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join("luck.json");
-    fs::write(&config_path, "{\n  \"lua\": \"lua99\"\n}\n").expect("write luck.json");
+    fs::write(&config_path, "{\n  \"variant\": \"bogus\"\n}\n").expect("write luck.json");
     let path = directory.path().join("main.lua");
     fs::write(&path, "local unused = 1\n").expect("write main.lua");
     let uri = Uri::from_file_path(&path).expect("file path URI");
@@ -252,10 +252,10 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let config_diags = client.diagnostics(&config_uri, None);
     let [diag] = config_diags.as_slice() else { panic!("one config error: {config_diags:?}") };
     assert_eq!(diag.code, Some(NumberOrString::String("E014".to_owned())));
-    assert!(diag.message.contains("unknown variant `lua99`"), "{}", diag.message);
-    assert_eq!(diag.range, Range::new(Position::new(1, 9), Position::new(1, 16)));
+    assert!(diag.message.contains("unknown variant `bogus`"), "{}", diag.message);
+    assert_eq!(diag.range, Range::new(Position::new(1, 13), Position::new(1, 20)));
     let errors = client.shown(MessageType::ERROR);
-    assert!(errors.iter().any(|text| text.contains("lua99")), "{errors:?}");
+    assert!(errors.iter().any(|text| text.contains("bogus")), "{errors:?}");
     assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "the defaults lint the file");
 
     fs::write(&config_path, "{}").expect("fix luck.json");
@@ -263,15 +263,22 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     assert!(client.diagnostics(&config_uri, None).is_empty(), "the fix clears the error");
 }
 
-/// A symlink reads by its own name, as `luck lint` reads the path it's
-/// given, and not by its target's.
+/// A symlink reads under the project of its own directory, as `luck lint`
+/// reads the path it's given, and not under its target's.
 #[test]
-fn a_symlink_takes_the_dialect_of_its_own_name() {
+fn a_symlink_takes_the_project_of_its_own_directory() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
-    let text = "local x: number = 1\n";
-    let target = directory.path().join("b.luau");
-    fs::write(&target, text).expect("write b.luau");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+    fs::write(
+        elsewhere.join("luck.json"),
+        r#"{ "lint": { "rules": { "unused_variable": "off" } } }"#,
+    )
+    .expect("write elsewhere/luck.json");
+    let text = "local unused = 1\n";
+    let target = elsewhere.join("b.lua");
+    fs::write(&target, text).expect("write b.lua");
     let link = directory.path().join("a.lua");
     // Windows lets only an administrator or developer mode make one.
     if symlink_file(&target, &link).is_err() {
@@ -283,7 +290,11 @@ fn a_symlink_takes_the_dialect_of_its_own_name() {
     client.open(&uri, text);
     let diags = client.diagnostics(&uri, Some(1));
     let codes: Vec<_> = diags.iter().filter_map(|diag| diag.code.as_ref()).collect();
-    assert_eq!(codes, [&NumberOrString::String("E008".to_owned())], "read as Lua: {diags:?}");
+    assert_eq!(
+        codes,
+        [&NumberOrString::String("unused_variable".to_owned())],
+        "linted under the link's project: {diags:?}"
+    );
 }
 
 #[test]
@@ -693,23 +704,22 @@ fn semantic_tokens_count_the_session_s_units() {
 #[test]
 fn document_link_resolves_require_path() {
     let directory = tempfile::tempdir().expect("tempdir");
-    // Pin the project root here. Discovery walks up past the temp directory,
-    // so without a config of its own this would resolve `?.lua` against
-    // whatever `luck.json` happens to sit above the machine's temp root.
+    // Pins the project, so no `luck.json` above the temp root can pick its
+    // settings.
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     // A neighboring module the `require` should resolve to.
     fs::write(directory.path().join("foo.lua"), "return {}\n").expect("write foo.lua");
     let main_path = directory.path().join("main.lua");
-    fs::write(&main_path, "local foo = require(\"foo\")\n").expect("write main.lua");
+    fs::write(&main_path, "local foo = require(\"./foo\")\n").expect("write main.lua");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
     let mut client = Client::start();
-    client.open(&uri, "local foo = require(\"foo\")\n");
+    client.open(&uri, "local foo = require(\"./foo\")\n");
     let links = document_links(&mut client, &uri);
     assert_eq!(links.len(), 1, "exactly one require link expected");
     assert_eq!(
         links[0].tooltip.as_deref(),
-        Some("foo"),
+        Some("./foo"),
         "link tooltip should carry the module name"
     );
     let target = links[0].target.as_ref().expect("link should have a target");
@@ -727,7 +737,7 @@ fn a_module_created_on_disk_links_once_the_watcher_reports_it() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     let main_path = directory.path().join("main.lua");
-    let text = "local late = require(\"late\")\n";
+    let text = "local late = require(\"./late\")\n";
     fs::write(&main_path, text).expect("write main.lua");
     let uri = Uri::from_file_path(&main_path).expect("file path URI");
 
@@ -768,11 +778,10 @@ fn a_luaurc_change_reaches_the_project_s_resolver() {
 }
 
 #[test]
-fn document_link_resolves_luau_relative_import() {
-    // Luau relative imports go through the shared resolver, so `./sibling`
-    // survives instead of being mangled by a dots-to-slashes rewrite.
+fn document_link_resolves_a_relative_require() {
     let directory = tempfile::tempdir().expect("tempdir");
-    // Pins the dialect, so no `luck.json` above the temp root can pick it.
+    // Pins the project, so no `luck.json` above the temp root can pick its
+    // settings.
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     fs::write(directory.path().join("sibling.luau"), "return {}\n").expect("write sibling.luau");
     let main_path = directory.path().join("main.luau");
@@ -793,10 +802,11 @@ fn document_link_resolves_luau_relative_import() {
 }
 
 #[test]
-fn document_link_resolves_luau_alias_import() {
-    // `@alias` imports resolve through the `.luaurc` alias table.
+fn document_link_resolves_an_alias_require() {
+    // `@alias` requires resolve through the `.luaurc` alias table.
     let directory = tempfile::tempdir().expect("tempdir");
-    // Pins the dialect, so no `luck.json` above the temp root can pick it.
+    // Pins the project, so no `luck.json` above the temp root can pick its
+    // settings.
     fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
     let shared = directory.path().join("shared");
     fs::create_dir_all(&shared).expect("mkdir shared");
@@ -843,7 +853,7 @@ fn code_action_offers_lint_fix() {
     )
     .expect("write luck.json");
     let file_path = directory.path().join("nilinit.lua");
-    fs::write(&file_path, "local x = nil\n").expect("write lua file");
+    fs::write(&file_path, "local x = nil\n").expect("write luau file");
     let uri = Uri::from_file_path(&file_path).expect("file path URI");
 
     let mut client = Client::start();

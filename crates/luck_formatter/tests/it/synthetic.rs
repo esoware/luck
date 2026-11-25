@@ -9,12 +9,11 @@ use luck_formatter::{
     CollapseSimpleStatement, Comments, FormatOptions, SyntheticComment, format_chunk,
 };
 use luck_testgen::with_the_smallest_stack;
-use luck_token::{BinOp, CommentPosition, LuaVersion, StringValue, TokenKind, UnOp, decode_string};
+use luck_token::{BinOp, CommentPosition, StringValue, TokenKind, UnOp, decode_string};
 
 use crate::common::{Fixture, assert_format_with};
 
-/// The output also has to format as itself and re-parse clean in the
-/// chunk's version.
+/// The output also has to format as itself and re-parse clean.
 fn assert_format_chunk_with(
     fixture: &Fixture,
     chunk: &Chunk<'_>,
@@ -25,11 +24,11 @@ fn assert_format_chunk_with(
     let output = format_chunk(fixture.allocator(), chunk, comments, options)
         .expect("the block nests within the cap");
     assert_eq!(output, expected.as_bytes(), "format mismatch");
-    assert_format_with(expected, expected, chunk.version, options);
+    assert_format_with(expected, expected, options);
 }
 
-fn assert_format_block(fixture: &Fixture, block: Block<'_>, version: LuaVersion, expected: &str) {
-    let chunk = Chunk::new(version, block);
+fn assert_format_block(fixture: &Fixture, block: Block<'_>, expected: &str) {
+    let chunk = Chunk::new(block);
     let options = FormatOptions::default();
     assert_format_chunk_with(fixture, &chunk, Comments::none(), &options, expected);
 }
@@ -60,24 +59,21 @@ fn long_string_delimiters_and_bytes_roundtrip() {
         cases.push((content, expected));
     }
     for (content, expected) in cases {
-        for version in LuaVersion::ALL {
-            let block = synth.block([synth.return_([synth.long_string(&content)])]);
-            assert_format_block(&fixture, block, version, &expected);
-            let parse =
-                luck_parser::parse_with_tokens(fixture.allocator(), expected.as_bytes(), version);
-            let literal = parse
-                .tokens
-                .iter()
-                .find(|token| token.kind == TokenKind::StringLiteral)
-                .expect("string literal")
-                .text(expected.as_bytes());
-            let mut decoded = Vec::new();
-            let value = match decode_string(literal, true, version, &mut decoded) {
-                StringValue::Verbatim(bytes) => bytes.to_vec(),
-                StringValue::Decoded => decoded,
-            };
-            assert_eq!(value, content.as_bytes(), "{version:?}: {expected}");
-        }
+        let block = synth.block([synth.return_([synth.long_string(&content)])]);
+        assert_format_block(&fixture, block, &expected);
+        let parse = luck_parser::parse_with_tokens(fixture.allocator(), expected.as_bytes());
+        let literal = parse
+            .tokens
+            .iter()
+            .find(|token| token.kind == TokenKind::StringLiteral)
+            .expect("string literal")
+            .text(expected.as_bytes());
+        let mut decoded = Vec::new();
+        let value = match decode_string(literal, true, &mut decoded) {
+            StringValue::Verbatim(bytes) => bytes.to_vec(),
+            StringValue::Decoded => decoded,
+        };
+        assert_eq!(value, content.as_bytes(), "{expected}");
     }
 }
 
@@ -277,7 +273,7 @@ fn composite_types_preserve_grouping() {
         ];
         for (ty, (narrowest, wider)) in types.into_iter().zip(layouts) {
             let block = synth.block([synth.type_declaration(false, "Result", None, ty)]);
-            let chunk = Chunk::new(LuaVersion::Luau, block);
+            let chunk = Chunk::new(block);
             for (line_width, expected) in [(1, narrowest), (60, wider), (80, wider), (120, wider)] {
                 let options = FormatOptions { line_width, ..FormatOptions::default() };
                 assert_format_chunk_with(&fixture, &chunk, Comments::none(), &options, expected);
@@ -286,7 +282,7 @@ fn composite_types_preserve_grouping() {
     }
     let optional_function = synth.ty_optional(synth.ty_function([], synth.ty_named("A")));
     let block = synth.block([synth.type_declaration(false, "Callback", None, optional_function)]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "type Callback = (() -> A)?\n");
+    assert_format_block(&fixture, block, "type Callback = (() -> A)?\n");
 }
 
 #[test]
@@ -294,10 +290,9 @@ fn typed_local_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let optional = synth.ty_optional(synth.ty_named("number"));
-    let stmt =
-        synth.local_full([synth.attributed_name("value", Some(optional), None)], [synth.nil()]);
+    let stmt = synth.local_full([synth.local_name("value", Some(optional))], [synth.nil()]);
     let block = synth.block([stmt]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "local value: number? = nil\n");
+    assert_format_block(&fixture, block, "local value: number? = nil\n");
 }
 
 #[test]
@@ -316,7 +311,6 @@ fn typed_function_roundtrips() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 local identity = function(n: number): number
 \treturn n
@@ -359,7 +353,6 @@ fn mixed_stmts_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 local data = { 1, name = 2, [\"k\"] = true }
 for key, value in pairs(data) do
@@ -406,7 +399,6 @@ fn precedence_parens_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "return (a + b) * c, a - (b - c), (-a) ^ b, (a .. b) .. c\n",
     );
 }
@@ -425,7 +417,6 @@ fn if_expr_operand_roundtrips() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "return a or if c then 1 else 2, (if c then 1 else 2) or a\n",
     );
 }
@@ -438,7 +429,7 @@ fn prefix_wrapping_roundtrips() {
     let string_method = synth.method_call(synth.string("s"), "rep", [synth.number_i64(2)]);
     let table_field = synth.field(synth.table([]), "field");
     let block = synth.block([synth.return_([string_method, table_field])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "return (\"s\"):rep(2), ({}).field\n");
+    assert_format_block(&fixture, block, "return (\"s\"):rep(2), ({}).field\n");
 }
 
 #[test]
@@ -449,12 +440,7 @@ fn field_or_index_roundtrips() {
     let bad = synth.field_or_index(synth.name_expr("t"), "not ok");
     let keyword = synth.field_or_index(synth.name_expr("t"), "end");
     let block = synth.block([synth.return_([good, bad, keyword])]);
-    assert_format_block(
-        &fixture,
-        block,
-        LuaVersion::Luau,
-        "return t.ok, t[\"not ok\"], t[\"end\"]\n",
-    );
+    assert_format_block(&fixture, block, "return t.ok, t[\"not ok\"], t[\"end\"]\n");
 }
 
 #[test]
@@ -463,7 +449,7 @@ fn string_bytes_roundtrips() {
     let synth = fixture.synth();
     let bytes = synth.string_bytes(&[0xff, 0x00, b'a', b'1']);
     let block = synth.block([synth.local(&["blob"], [bytes])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "local blob = \"\\255\\0a1\"\n");
+    assert_format_block(&fixture, block, "local blob = \"\\255\\0a1\"\n");
 }
 
 #[test]
@@ -479,7 +465,6 @@ line ]] two",
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 local doc = [=[line one
 line ]] two]=]
@@ -503,8 +488,7 @@ fn numeric_specials_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Lua54,
-        "return { 3.0, -2.5, 1e999, 0.0 / 0.0, -42, 0x8000000000000000 }
+        "return { 3, -2.5, 1e999, 0 / 0, -42, -9223372036854776e3 }
 ",
     );
 }
@@ -520,7 +504,6 @@ fn call_sugar_roundtrips() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 require(\"module\")
 configure({ debug = true })
@@ -529,41 +512,7 @@ configure({ debug = true })
 }
 
 #[test]
-fn attributed_local_roundtrips_in_lua54() {
-    let fixture = Fixture::default();
-    let synth = fixture.synth();
-    let stmt = synth
-        .local_full([synth.attributed_name("frozen", None, Some("const"))], [synth.number_i64(1)]);
-    let block = synth.block([stmt]);
-    assert_format_block(&fixture, block, LuaVersion::Lua54, "local frozen <const> = 1\n");
-}
-
-#[test]
-fn globals_roundtrip_in_lua55() {
-    let fixture = Fixture::default();
-    let synth = fixture.synth();
-    let global_declaration =
-        synth.global_declaration([synth.attributed_name("shared", None, None)], []);
-    let global_function =
-        synth.global_function("main", FunctionSignature::default(), synth.block([]));
-    let global_star = synth.global_star(None);
-    let block = synth.block([global_declaration, global_function, global_star]);
-    assert_format_block(
-        &fixture,
-        block,
-        LuaVersion::Lua55,
-        "\
-global shared
-
-global function main() end
-
-global *
-",
-    );
-}
-
-#[test]
-fn mid_block_break_roundtrips_in_lua54() {
+fn mid_block_break_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let conditional_break =
@@ -574,7 +523,6 @@ fn mid_block_break_roundtrips_in_lua54() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Lua54,
         "\
 while true do
 \tif done then
@@ -587,23 +535,7 @@ end
 }
 
 #[test]
-fn goto_roundtrips_in_lua54() {
-    let fixture = Fixture::default();
-    let synth = fixture.synth();
-    let block = synth.block([synth.goto_("done"), synth.label("done")]);
-    assert_format_block(
-        &fixture,
-        block,
-        LuaVersion::Lua54,
-        "\
-goto done
-::done::
-",
-    );
-}
-
-#[test]
-fn luau_type_forms_roundtrip() {
+fn type_forms_roundtrip() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
 
@@ -653,7 +585,6 @@ fn luau_type_forms_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 export type Handler<T...> = <U>(name: string, T...) -> (U, boolean)
 
@@ -680,7 +611,6 @@ fn function_attributes_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 @native
 local function hot() end
@@ -704,7 +634,6 @@ fn attribute_args_roundtrip() {
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 @[deprecated({ use = \"y\" })]
 local function old() end
@@ -721,7 +650,7 @@ fn cast_before_comparison_roundtrips() {
     let cast = synth.type_cast(synth.name_expr("value"), synth.ty_named("number"));
     let compared = synth.binary_op(cast, BinOp::Lt, synth.name_expr("limit"));
     let block = synth.block([synth.return_([compared])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "return (value :: number) < limit\n");
+    assert_format_block(&fixture, block, "return (value :: number) < limit\n");
 }
 
 #[test]
@@ -731,27 +660,20 @@ fn chained_cast_roundtrips() {
     let inner = synth.type_cast(synth.name_expr("x"), synth.ty_named("any"));
     let outer = synth.type_cast(inner, synth.ty_named("number"));
     let block = synth.block([synth.local(&["narrowed"], [outer])]);
-    assert_format_block(
-        &fixture,
-        block,
-        LuaVersion::Luau,
-        "local narrowed = (x :: any) :: number\n",
-    );
+    assert_format_block(&fixture, block, "local narrowed = (x :: any) :: number\n");
 }
 
 #[test]
 fn const_declarations_roundtrip() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
-    let const_local =
-        synth.const_local([synth.attributed_name("frozen", None, None)], [synth.number_i64(1)]);
+    let const_local = synth.const_local([synth.local_name("frozen", None)], [synth.number_i64(1)]);
     let const_function =
         synth.const_function("pinned", [], FunctionSignature::default(), synth.block([]));
     let block = synth.block([const_local, const_function]);
     assert_format_block(
         &fixture,
         block,
-        LuaVersion::Luau,
         "\
 const frozen = 1
 
@@ -771,12 +693,7 @@ fn interpolated_parts_roundtrip() {
     ]);
     let plain = synth.interpolated_string([InterpolatedStringPart::Text("no exprs")]);
     let block = synth.block([synth.local(&["s", "t"], [greeting, plain])]);
-    assert_format_block(
-        &fixture,
-        block,
-        LuaVersion::Luau,
-        "local s, t = `hi {name}!`, `no exprs`\n",
-    );
+    assert_format_block(&fixture, block, "local s, t = `hi {name}!`, `no exprs`\n");
 }
 
 #[test]
@@ -784,24 +701,18 @@ fn exponent_number_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let block = synth.block([synth.local(&["huge"], [synth.number_f64(1e300)])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "local huge = 1e300\n");
+    assert_format_block(&fixture, block, "local huge = 1e300\n");
 }
 
 #[test]
-fn luau_pinned_numbers_roundtrip() {
-    // Luau has no float subtype to preserve, so integral values print as
-    // plain digits, or an exponent where that's shorter, and `i64::MIN` as a
-    // negated float.
+fn integral_numbers_roundtrip() {
+    // An integral value prints as plain digits, or an exponent where that's
+    // shorter, and `i64::MIN` as a negated float.
     let fixture = Fixture::default();
-    let synth = fixture.synth().with_version(LuaVersion::Luau);
+    let synth = fixture.synth();
     let values = [synth.number_f64(100.0), synth.number_f64(1.5), synth.number_i64(i64::MIN)];
     let block = synth.block([synth.return_([synth.array(values)])]);
-    assert_format_block(
-        &fixture,
-        block,
-        LuaVersion::Luau,
-        "return { 100, 1.5, -9223372036854776e3 }\n",
-    );
+    assert_format_block(&fixture, block, "return { 100, 1.5, -9223372036854776e3 }\n");
 }
 
 #[test]
@@ -810,7 +721,7 @@ fn single_value_truncation_roundtrips() {
     let synth = fixture.synth();
     let truncated = synth.single_value(synth.call(synth.name_expr("f"), []));
     let block = synth.block([synth.return_([truncated])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "return (f())\n");
+    assert_format_block(&fixture, block, "return (f())\n");
 }
 
 #[test]
@@ -819,18 +730,18 @@ fn long_string_carriage_return_roundtrips() {
     let synth = fixture.synth();
     let text = synth.long_string("a\r\nb");
     let block = synth.block([synth.local(&["doc"], [text])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "local doc = \"a\\r\\nb\"\n");
+    assert_format_block(&fixture, block, "local doc = \"a\\r\\nb\"\n");
 }
 
 #[test]
-fn version_pinned_keyword_field_roundtrips() {
+fn a_field_named_goto_roundtrips() {
     let fixture = Fixture::default();
-    let synth = fixture.synth().with_version(LuaVersion::Luau);
-    // `goto` is a plain identifier in Luau, so the dot form is used and
-    // must survive a Luau re-parse.
+    let synth = fixture.synth();
+    // `goto` is a plain identifier, so the dot form is used and must survive
+    // a re-parse.
     let access = synth.field_or_index(synth.name_expr("t"), "goto");
     let block = synth.block([synth.return_([access])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "return t.goto\n");
+    assert_format_block(&fixture, block, "return t.goto\n");
 }
 
 #[test]
@@ -861,7 +772,7 @@ fn synthetic_comments_placed_around_stmt() {
     let block = synth.block([stmt]);
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(LuaVersion::Luau, block),
+        &Chunk::new(block),
         Comments::synthetic([leading, trailing]),
         &FormatOptions::default(),
         "\
@@ -881,7 +792,7 @@ fn dangling_comment_prints_inside_empty_function() {
     let block = synth.block([stmt]);
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(LuaVersion::Luau, block),
+        &Chunk::new(block),
         Comments::synthetic([dangling]),
         &FormatOptions::default(),
         "\
@@ -899,7 +810,7 @@ fn requested_blank_lines_separate_stmts() {
     let first = synth.local(&["a"], [synth.number_i64(1)]);
     let second = synth.local(&["b"], [synth.number_i64(2)]);
     let blank_anchor = second.span().start;
-    let chunk = Chunk::new(LuaVersion::Luau, synth.block([first, second]));
+    let chunk = Chunk::new(synth.block([first, second]));
     let options = FormatOptions::default();
 
     assert_format_chunk_with(
@@ -938,7 +849,7 @@ fn sort_requires_orders_a_tree_built_in_code() {
     let options = FormatOptions { sort_requires: true, ..FormatOptions::default() };
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(LuaVersion::Lua54, block),
+        &Chunk::new(block),
         Comments::synthetic([trailing]),
         &options,
         "\
@@ -953,7 +864,7 @@ fn empty_block_formats_to_parseable_output() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let block = synth.block([]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "\n");
+    assert_format_block(&fixture, block, "\n");
 }
 
 #[test]
@@ -961,7 +872,7 @@ fn last_stmt_only_roundtrips() {
     let fixture = Fixture::default();
     let synth = fixture.synth();
     let block = synth.block([synth.return_([synth.number_i64(42)])]);
-    assert_format_block(&fixture, block, LuaVersion::Luau, "return 42\n");
+    assert_format_block(&fixture, block, "return 42\n");
 }
 
 #[test]
@@ -979,7 +890,7 @@ fn synthetic_comment_on_a_collapsible_body_keeps_it_expanded() {
     };
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(LuaVersion::Luau, block),
+        &Chunk::new(block),
         Comments::synthetic([trailing]),
         &options,
         "\
@@ -1004,7 +915,7 @@ y = 2",
     let block = synth.block([stmt]);
     assert_format_chunk_with(
         &fixture,
-        &Chunk::new(LuaVersion::Lua54, block),
+        &Chunk::new(block),
         Comments::synthetic([comment]),
         &FormatOptions::default(),
         "\
@@ -1032,7 +943,7 @@ fn a_tree_at_the_nesting_cap_formats_and_reparses() {
         let block = nested_negations(fixture.synth(), wraps);
         assert_eq!(block_nesting_depth(&block), MAX_NESTING_DEPTH, "the tree sits at the cap");
         let expected = format!("return {}x\n", "not ".repeat(wraps));
-        assert_format_block(&fixture, block, LuaVersion::Lua54, &expected);
+        assert_format_block(&fixture, block, &expected);
     });
 }
 
@@ -1040,8 +951,7 @@ fn a_tree_at_the_nesting_cap_formats_and_reparses() {
 fn a_tree_past_the_nesting_cap_is_an_error_instead_of_output_that_cannot_reparse() {
     with_the_smallest_stack(|| {
         let fixture = Fixture::default();
-        let chunk =
-            Chunk::new(LuaVersion::Lua54, nested_negations(fixture.synth(), MAX_NESTING_DEPTH));
+        let chunk = Chunk::new(nested_negations(fixture.synth(), MAX_NESTING_DEPTH));
         let error =
             format_chunk(fixture.allocator(), &chunk, Comments::none(), &FormatOptions::default())
                 .expect_err("the tree nests one level too deep");
@@ -1057,7 +967,7 @@ fn a_tree_far_past_the_nesting_cap_is_refused_without_walking_down_it() {
     for _ in 0..200_000 {
         nested = synth.unary_op(UnOp::Not, nested);
     }
-    let chunk = Chunk::new(LuaVersion::Lua54, synth.block([synth.return_([nested])]));
+    let chunk = Chunk::new(synth.block([synth.return_([nested])]));
     assert_eq!(block_nesting_depth(&chunk.block), MAX_NESTING_DEPTH + 1, "measuring stops there");
     let options = FormatOptions::default();
     assert!(format_chunk(fixture.allocator(), &chunk, Comments::none(), &options).is_err());
@@ -1087,5 +997,5 @@ return x
         "\t\t+ 1\n".repeat(links - 1),
         "\t\t:next()\n".repeat(calls)
     );
-    assert_format_block(&fixture, block, LuaVersion::Lua54, &expected);
+    assert_format_block(&fixture, block, &expected);
 }
