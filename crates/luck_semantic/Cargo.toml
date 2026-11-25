@@ -19,8 +19,7 @@ luck_ast         = { workspace = true }
 luck_diagnostics = { workspace = true }
 luck_token       = { workspace = true }
 
-hashbrown  = { workspace = true }
-rustc-hash = { workspace = true }
+hashbrown = { workspace = true }
 
 [dev-dependencies]
 luck_allocator = { workspace = true }

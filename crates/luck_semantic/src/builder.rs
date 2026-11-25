@@ -18,6 +18,7 @@ use crate::node::AstNodes;
 use crate::require_site::{require_call, require_sites};
 use crate::scoping::{
     NameRole, Reference, ReferenceKind, Scope, ScopeKind, Scoping, Symbol, SymbolKind,
+    distinct_names_estimate,
 };
 use crate::semantic::Semantic;
 
@@ -111,7 +112,6 @@ impl SemanticBuilder {
     ) -> SemanticBuilderReturn<'ast> {
         let counts = self.counts;
         let names = counts.names as usize;
-        let distinct_names = counts.declarations as usize + counts.name_uses as usize;
         let module = ScopeId::from_index(0);
         let mut builder = Builder {
             is_checking: self.is_checking,
@@ -122,7 +122,7 @@ impl SemanticBuilder {
             next_node: NodeId::from_index(0),
             require_calls: self.is_finding_requires.then(Vec::new),
             errors: Vec::new(),
-            bindings: Vec::with_capacity(distinct_names),
+            bindings: Vec::with_capacity(distinct_names_estimate(counts)),
             current_scope: module,
             current_function: module,
             outer_scopes: Vec::new(),
@@ -194,9 +194,9 @@ struct Builder<'ast> {
     /// Each [`require_call`], with the reference its prefix makes.
     require_calls: Option<Vec<(Call<'ast>, ReferenceId)>>,
     errors: Vec<Diagnostic>,
-    /// Each name's innermost live local, by name, `None` for a free name.
-    /// Resolving a name is one hash of it, and leaving a scope hashes
-    /// nothing.
+    /// Each name's innermost live local, by name, `None` for a free name,
+    /// as far as the last name a declaration binds. Resolving a name is one
+    /// hash of it, and leaving a scope hashes nothing.
     bindings: Vec<Option<SymbolId>>,
     // The scope stack is never empty, so its top lives here and reading it
     // doesn't branch.
@@ -204,7 +204,7 @@ struct Builder<'ast> {
     current_function: ScopeId,
     outer_scopes: Vec<OuterScope>,
     /// Undo log: the binding each declaration since the outermost open
-    /// scope's entry replaced.
+    /// scope's entry replaced, but for the chunk's scope, which never closes.
     shadowed: Vec<(NameId, Option<SymbolId>)>,
     /// The open loops, of every function, and where the current function's
     /// start.
@@ -225,9 +225,8 @@ struct Builder<'ast> {
     /// innermost statement's last.
     scratch_nodes: Vec<NodeId>,
     /// The node of each name an assignment writes once its values are read,
-    /// and its slot among the references by position, innermost
-    /// assignment's last.
-    deferred_writes: Vec<(NodeId, usize)>,
+    /// innermost assignment's last.
+    deferred_writes: Vec<NodeId>,
 }
 
 impl<'ast> Builder<'ast> {
@@ -313,14 +312,6 @@ impl<'ast> Builder<'ast> {
         self.scratch_nodes.truncate(first);
     }
 
-    fn intern(&mut self, text: &str) -> NameId {
-        let id = self.scoping.intern(text);
-        if self.bindings.len() <= id.index() {
-            self.bindings.push(None);
-        }
-        id
-    }
-
     fn push_scope(&mut self, kind: ScopeKind, node: NodeId) {
         let id = self.scoping.next_scope_id();
         let function = if kind == ScopeKind::Function { id } else { self.current_function };
@@ -351,12 +342,18 @@ impl<'ast> Builder<'ast> {
         kind: SymbolKind,
         declaration: NodeId,
     ) -> SymbolId {
-        let name = self.intern(text);
+        let name = self.scoping.intern(text);
+        if self.bindings.len() <= name.index() {
+            self.bindings.resize(name.index() + 1, None);
+        }
         let shadows = self.bindings[name.index()];
         let id =
             self.scoping.add_symbol(name, self.current_scope, kind, declaration, span, shadows);
         self.bindings[name.index()] = Some(id);
-        self.shadowed.push((name, shadows));
+        // The chunk's scope never closes, so its bindings need no undoing.
+        if !self.outer_scopes.is_empty() {
+            self.shadowed.push((name, shadows));
+        }
         id
     }
 
@@ -371,27 +368,26 @@ impl<'ast> Builder<'ast> {
             return None;
         }
         let id = self.declare(name.text.as_str(), name.span, kind, declaration);
-        self.scoping.set_role(name.index, NameRole::Symbol(id));
+        self.scoping.set_role(name.index, NameRole::symbol(id));
         Some(self.scoping.symbol_mut(id))
     }
 
     /// Records a use of `name`, whose node is `node`, resolved against the
-    /// live declarations, in `position` among the references by position when
-    /// it reserved one there. A use from a nested function also marks the
-    /// symbol it reads as an upvalue, and a write marks it modified.
+    /// live declarations. A use from a nested function also marks the symbol
+    /// it reads as an upvalue, and a write marks it modified.
     fn reference(
         &mut self,
         name: &Name<'_>,
         kind: ReferenceKind,
         node: NodeId,
-        position: Option<usize>,
     ) -> Option<ReferenceId> {
         let text = name.text.as_str();
         if text.is_empty() {
             return None;
         }
-        let name_id = self.intern(text);
-        let resolved = self.bindings[name_id.index()];
+        let name_id = self.scoping.intern(text);
+        let resolved = self.bindings.get(name_id.index()).copied().flatten();
+        let mut is_recursive = false;
         if let Some(symbol_id) = resolved {
             if self.is_checking {
                 self.check_reference(name, kind, symbol_id);
@@ -402,6 +398,9 @@ impl<'ast> Builder<'ast> {
             // an enclosing function's.
             symbol.is_upvalue |= self.type_depth == 0 && symbol.scope < self.current_function;
             symbol.is_modified |= kind.is_write();
+            // Only a `local function`'s own name has a body the walk can be in.
+            is_recursive = symbol.kind == SymbolKind::FunctionName
+                && self.local_functions.contains(&symbol_id);
         } else if self.type_function_scope.is_some()
             && (text == "types" || self.type_names.contains(&text))
         {
@@ -419,10 +418,10 @@ impl<'ast> Builder<'ast> {
             resolved,
             kind,
             is_in_type: self.type_depth > 0,
-            is_recursive: resolved.is_some_and(|symbol| self.local_functions.contains(&symbol)),
+            is_recursive,
         };
-        let id = self.scoping.add_reference(reference, position);
-        self.scoping.set_role(name.index, NameRole::Reference(id));
+        let id = self.scoping.add_reference(reference);
+        self.scoping.set_role(name.index, NameRole::reference(id));
         Some(id)
     }
 
@@ -433,7 +432,7 @@ impl<'ast> Builder<'ast> {
         kind: ReferenceKind,
     ) -> Option<ReferenceId> {
         let node = self.enter(AstKind::Name(name));
-        let reference = self.reference(name, kind, node, None);
+        let reference = self.reference(name, kind, node);
         self.leave();
         reference
     }
@@ -674,8 +673,7 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             match target {
                 Var::Name(name) => {
                     let node = self.name_node(name);
-                    let position = self.scoping.reserve_position();
-                    self.deferred_writes.push((node, position));
+                    self.deferred_writes.push(node);
                 }
                 Var::Suffixed(chain) => self.visit_suffixed_expr(chain),
             }
@@ -688,8 +686,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
             Var::Suffixed(_) => None,
         });
         for (i, name) in names.enumerate() {
-            let (node, position) = self.deferred_writes[first_target + i];
-            self.reference(name, ReferenceKind::Write, node, Some(position));
+            let node = self.deferred_writes[first_target + i];
+            self.reference(name, ReferenceKind::Write, node);
         }
         self.deferred_writes.truncate(first_target);
         self.leave();
@@ -700,9 +698,8 @@ impl<'ast> Visit<'ast> for Builder<'ast> {
         match &compound_assignment.var {
             Var::Name(name) => {
                 let node = self.name_node(name);
-                let position = self.scoping.reserve_position();
                 self.visit_expr(&compound_assignment.expr);
-                self.reference(name, ReferenceKind::ReadWrite, node, Some(position));
+                self.reference(name, ReferenceKind::ReadWrite, node);
             }
             Var::Suffixed(chain) => {
                 self.visit_suffixed_expr(chain);

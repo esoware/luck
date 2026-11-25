@@ -21,3 +21,4 @@ luck_token = { workspace = true }
 [dev-dependencies]
 luck_allocator = { workspace = true }
 luck_parser    = { workspace = true }
+luck_testgen   = { workspace = true }
