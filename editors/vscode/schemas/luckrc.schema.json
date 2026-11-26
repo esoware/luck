@@ -144,6 +144,17 @@
         "null"
       ]
     },
+    "security": {
+      "description": "The security level a Roblox project's files run at (default `None`),\nwhich decides the part of Roblox's API `luck check` gives them:\n`\"None\"` for a `Script` or `LocalScript`, `\"LocalUserSecurity\"`,\n`\"PluginSecurity\"` for a plugin or Studio's command bar, or\n`\"RobloxScriptSecurity\"` for a `CoreScript`. Only a `\"roblox\"` project\ntakes it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SecurityLevel"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "std": {
       "description": "Std definition files, relative to this file's directory, that layer a\nhost's globals, fields, and functions over the variant's standard\nlibrary, in order. Each is TOML in the format of luck's own\n`stdlib_data`, which\n<https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>\ndescribes.",
       "type": [
@@ -962,6 +973,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "SecurityLevel": {
+      "description": "The security level Roblox runs a script at.",
+      "type": "string",
+      "enum": [
+        "None",
+        "LocalUserSecurity",
+        "PluginSecurity",
+        "RobloxScriptSecurity"
+      ]
     },
     "SpaceAfterFunction": {
       "description": "Where a space goes before the `(` of a function definition or call.",

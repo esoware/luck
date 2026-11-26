@@ -83,9 +83,9 @@ schema:
 stdlib:
   cargo test -p luck_stdlib regenerate_stdlib_catalog -- --ignored
 
-# Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump, then the stdlib catalog
+# Regenerate roblox_api.toml, roblox_enums.toml, and roblox.luau from the live Roblox API dump and Creator Documentation, then the stdlib catalog
 roblox-api:
-  cargo test -p luck_stdlib regenerate_roblox_api -- --ignored
+  cargo test -p luck_stdlib regenerate_roblox -- --ignored
   just stdlib
 
 # Regenerate the committed minsize.snap after the minifier or the benchmark files change

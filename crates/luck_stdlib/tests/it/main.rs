@@ -8,6 +8,7 @@ mod analysis;
 mod drift;
 mod replace_template;
 mod roblox_api;
+mod roblox_definitions;
 mod stdlib_catalog;
 mod stdlib_definition;
 mod variant;

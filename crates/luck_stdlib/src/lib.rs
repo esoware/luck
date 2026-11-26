@@ -14,6 +14,10 @@
 //! name is a stdlib or configured global and resolve calls to stdlib
 //! entries, whichever library it is.
 //!
+//! [`definitions_for`] gives the Luau definitions a type checker loads over
+//! Luau's built-in ones for a variant: Roblox's API, as a script at a
+//! [`SecurityLevel`] reaches it, derived from one committed definition file.
+//!
 //! # Usage
 //!
 //! ```
@@ -47,9 +51,11 @@
 //! ```
 
 mod analysis;
+mod definitions;
 mod layering;
 mod replace_template;
 mod resolve;
+mod security_level;
 mod stdlib;
 mod stdlib_catalog;
 mod stdlib_definition;
@@ -58,8 +64,10 @@ mod stdlib_model;
 mod variant;
 
 pub use analysis::{SemanticAnalysis, analyze};
+pub use definitions::definitions_for;
 pub use replace_template::expand_replace_template;
 pub use resolve::{ChainCallees, ResolvedCallee};
+pub use security_level::SecurityLevel;
 pub use stdlib::Stdlib;
 pub use stdlib_catalog::library_for;
 pub use stdlib_definition::StdlibDefinition;

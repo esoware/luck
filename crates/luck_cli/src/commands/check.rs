@@ -9,14 +9,14 @@ use luck_allocator::Allocator;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
 use luck_semantic::SemanticBuilder;
-use luck_stdlib::Variant;
+use luck_stdlib::{SecurityLevel, Variant, definitions_for};
 use luck_token::{LineIndex, Span, index_to_offset, offset_to_index};
 use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host};
 use rustc_hash::FxHashMap;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{ProjectFile, current_directory, project_files};
-use crate::reporter::{DefaultReporter, Reporter as _, SourceFile, print_files};
+use crate::reporter::{DefaultReporter, Reporter as _, SourceFile, print_document, print_files};
 use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
@@ -83,41 +83,61 @@ struct TypeErrors<'files> {
     luaurcs: Vec<FileDiagnostics>,
 }
 
-/// What Luau's type checker finds in the `files` a standalone project
-/// governs, from checking them together on `threads` threads. Roblox files
-/// aren't checked until there are definitions of Roblox's API.
+/// What Luau's type checker finds in `files`, from checking together, on
+/// `threads` threads, the files of the projects with one variant and
+/// security level, which need one set of definitions.
 fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErrors<'_>, Exit> {
-    let host = FileHost::new()?;
-    let modules: Vec<(&Path, String)> = files
-        .iter()
-        .filter(|file| file.project.variant() == Variant::Standalone)
-        .filter_map(|file| {
-            let canonical = FileSystemOs.canonicalize(&file.path).ok()?;
-            Some((file.path.as_path(), host.module_name(&canonical)))
-        })
-        .collect();
-    if modules.is_empty() {
-        return Ok(TypeErrors { by_path: FxHashMap::default(), luaurcs: Vec::new() });
+    let mut groups: Vec<((Variant, SecurityLevel), Vec<&ProjectFile>)> = Vec::new();
+    for file in files {
+        let settings = (file.project.variant(), file.project.security());
+        match groups.iter_mut().find(|(group_settings, _)| *group_settings == settings) {
+            Some((_, group)) => group.push(file),
+            None => groups.push((settings, vec![file])),
+        }
     }
 
-    let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
-    let mut checker = Checker::new(host);
-    let diags = match checker.check(&names, threads, &CancellationToken::new()) {
-        Ok(diags) => diags,
-        Err(CheckError::Internal { module, diag }) => {
-            let path = checker.host_mut().path(&module);
-            return Err(fail_with_diags(&[FileDiagnostics { path, diags: vec![diag] }]));
+    let mut type_errors = TypeErrors { by_path: FxHashMap::default(), luaurcs: Vec::new() };
+    for ((variant, security), group) in groups {
+        let host = FileHost::new()?;
+        let modules: Vec<(&Path, String)> = group
+            .into_iter()
+            .filter_map(|file| {
+                let canonical = FileSystemOs.canonicalize(&file.path).ok()?;
+                Some((file.path.as_path(), host.module_name(&canonical)))
+            })
+            .collect();
+        let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
+        let mut checker = Checker::new(host);
+        if let Some(definitions) = definitions_for(variant, security)
+            && let Err(diags) = checker.load_definitions("@roblox", &definitions)
+        {
+            print_document("@roblox", definitions.as_bytes(), &diags);
+            return Err(Exit::Failure);
         }
-        // Nothing cancels the token.
-        Err(CheckError::Cancelled) => Vec::new(),
-    };
-    let by_path = modules
-        .into_iter()
-        .zip(diags)
-        .filter(|(_, diags)| !diags.is_empty())
-        .map(|((path, _), diags)| (path, diags))
-        .collect();
-    Ok(TypeErrors { by_path, luaurcs: mem::take(checker.host_mut().luaurc_errors.get_mut()) })
+        let diags = match checker.check(&names, threads, &CancellationToken::new()) {
+            Ok(diags) => diags,
+            Err(CheckError::Internal { module, diag }) => {
+                let path = checker.host_mut().path(&module);
+                return Err(fail_with_diags(&[FileDiagnostics { path, diags: vec![diag] }]));
+            }
+            // Nothing cancels the token.
+            Err(CheckError::Cancelled) => Vec::new(),
+        };
+        type_errors.by_path.extend(
+            modules
+                .into_iter()
+                .zip(diags)
+                .filter(|(_, diags)| !diags.is_empty())
+                .map(|((path, _), diags)| (path, diags)),
+        );
+        // A `.luaurc` above files of two groups is read once for each.
+        for luaurc in mem::take(checker.host_mut().luaurc_errors.get_mut()) {
+            if !type_errors.luaurcs.iter().any(|known| known.path == luaurc.path) {
+                type_errors.luaurcs.push(luaurc);
+            }
+        }
+    }
+    Ok(type_errors)
 }
 
 /// The file system as Luau's type checker reads it, with `require` resolved as

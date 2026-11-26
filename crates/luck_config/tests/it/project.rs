@@ -10,7 +10,7 @@ use luck_config::{Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_stdlib::Variant;
+use luck_stdlib::{SecurityLevel, Variant};
 
 use crate::common::{load_error, loaded, project_with};
 
@@ -48,6 +48,48 @@ fn rejects_a_variant_on_its_value() {
         "{diag:?}"
     );
     assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""bogus""#[..]));
+}
+
+#[test]
+fn the_security_key_picks_the_level_of_a_roblox_projects_files() {
+    let (_plugin_directory, plugin) =
+        loaded(&[("luck.json", r#"{ "variant": "roblox", "security": "PluginSecurity" }"#)]);
+    assert_eq!(plugin.security(), SecurityLevel::PluginSecurity);
+
+    let (_script_directory, script) = loaded(&[("luck.json", r#"{ "variant": "roblox" }"#)]);
+    assert_eq!(script.security(), SecurityLevel::None);
+}
+
+#[test]
+fn rejects_security_on_a_standalone_project() {
+    for text in [
+        r#"{ "security": "None" }"#,
+        r#"{ "variant": "standalone", "security": "PluginSecurity" }"#,
+    ] {
+        let directory = project_with(&[("luck.json", text)]);
+        let (_, diag) = load_error(&directory.path().join("luck.json"));
+        assert_eq!(diag.code, "E014");
+        assert!(
+            diag.message.contains("`security` applies only to a Roblox project"),
+            "{text}: {diag:?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_a_security_level_no_script_runs_at_on_its_value() {
+    let text = r#"{ "variant": "roblox", "security": "RobloxSecurity" }"#;
+    let directory = project_with(&[("luck.json", text)]);
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
+    assert_eq!(diag.code, "E014");
+    assert!(
+        diag.message.contains(
+            "unknown variant `RobloxSecurity`, expected one of `None`, `LocalUserSecurity`, \
+             `PluginSecurity`, `RobloxScriptSecurity`"
+        ),
+        "{diag:?}"
+    );
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""RobloxSecurity""#[..]));
 }
 
 #[test]

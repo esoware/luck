@@ -1179,16 +1179,20 @@ version = "0.6.0"
 name = "luck_stdlib"
 version = "0.6.0"
 dependencies = [
+ "flate2",
  "luck_allocator",
  "luck_ast",
  "luck_diagnostics",
  "luck_parser",
  "luck_semantic",
  "luck_token",
+ "luck_type_checker",
+ "saphyr",
  "schemars",
  "self_cell",
  "serde",
  "serde_json",
+ "tar",
  "toml",
  "ureq",
 ]

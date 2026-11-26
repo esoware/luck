@@ -103,12 +103,47 @@ fn check_reports_a_syntax_error_once() {
 }
 
 #[test]
-fn check_type_checks_no_roblox_file_yet() {
+fn check_types_a_roblox_project_with_robloxs_api() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "luck.json", r#"{ "variant": "roblox" }"#);
-    write_file(directory.path(), "main.luau", MISMATCH);
+    let main = "\
+--!strict
+local camera: Camera = workspace.CurrentCamera
+local name: number = camera.Name
+return name
+";
+    write_file(directory.path(), "main.luau", main);
 
     let output = run(directory.path(), &["check", "main.luau"]);
 
-    assert_eq!(output.status.code(), Some(0), "{}", stderr_text(&output));
+    let stderr = stderr_text(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
+    assert!(stderr.contains("Expected this to be 'number', but got 'string'"), "{stderr}");
+    assert!(stderr.contains("main.luau:3:22"), "{stderr}");
+}
+
+/// `GetDebugId` needs `PluginSecurity`, so a script at `None` can't reach it.
+#[test]
+fn check_gives_a_roblox_project_the_api_of_its_security_level() {
+    const DEBUG_ID: &str = "--!strict\nreturn game:GetDebugId()\n";
+    let script = TempDir::new().unwrap();
+    write_file(script.path(), "luck.json", r#"{ "variant": "roblox" }"#);
+    write_file(script.path(), "main.luau", DEBUG_ID);
+    let plugin = TempDir::new().unwrap();
+    write_file(
+        plugin.path(),
+        "luck.json",
+        r#"{ "variant": "roblox", "security": "PluginSecurity" }"#,
+    );
+    write_file(plugin.path(), "main.luau", DEBUG_ID);
+
+    let at_none = run(script.path(), &["check", "main.luau"]);
+    let at_plugin = run(plugin.path(), &["check", "main.luau"]);
+
+    let stderr = stderr_text(&at_none);
+    assert_eq!(at_none.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("[E015]"), "{stderr}");
+    assert!(stderr.contains("Key 'GetDebugId' not found in external type 'DataModel'"), "{stderr}");
+    assert_eq!(at_plugin.status.code(), Some(0), "{}", stderr_text(&at_plugin));
 }

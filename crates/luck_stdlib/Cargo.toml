@@ -36,8 +36,13 @@ serde     = { workspace = true }
 toml      = { workspace = true }
 
 [dev-dependencies]
-luck_parser = { workspace = true }
+luck_parser       = { workspace = true }
+luck_type_checker = { workspace = true }
 
-# Only the ignored regenerate_roblox_api test uses these, to fetch and parse the live Roblox API dump.
+# Only the ignored regenerate tests use these, to fetch and read the live Roblox API dump and Creator
+# Documentation.
+flate2     = { workspace = true }
+saphyr     = { workspace = true }
 serde_json = { workspace = true }
+tar        = { workspace = true }
 ureq       = { workspace = true }

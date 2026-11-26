@@ -8,7 +8,7 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
-use luck_stdlib::{Stdlib, Variant};
+use luck_stdlib::{SecurityLevel, Stdlib, Variant};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -27,6 +27,7 @@ pub struct Project {
     files: Vec<PathBuf>,
     /// The variant's library, with the `std` definitions over it.
     stdlib: Stdlib,
+    security: SecurityLevel,
     filter: ProjectFilter,
     format: FormatConfig,
     overrides: Vec<Override>,
@@ -63,6 +64,7 @@ impl Project {
         let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
         let LuckConfig {
             variant,
+            security,
             std,
             root: _,
             extends: _,
@@ -84,6 +86,13 @@ impl Project {
         } = config;
         if entry.is_some() && entries.is_some() {
             return Err(invalid("`entry` and `entries` can't both be set, so keep one"));
+        }
+        let variant = variant.unwrap_or_default();
+        if security.is_some() && !variant.is_roblox() {
+            return Err(invalid(
+                "`security` applies only to a Roblox project, so set `variant` to `roblox` or \
+                 remove `security`",
+            ));
         }
         let root = config_directory(config_path);
         let filter =
@@ -108,7 +117,7 @@ impl Project {
             .map(|std_path| read_std_definition(std_path))
             .collect::<Result<Vec<_>, _>>()?;
         let stdlib = std_paths.iter().zip(&definitions).try_fold(
-            Stdlib::new(variant.unwrap_or_default()),
+            Stdlib::new(variant),
             |stdlib, (std_path, definition)| {
                 stdlib.layer(definition).map_err(|diag| in_file(std_path, diag))
             },
@@ -118,6 +127,7 @@ impl Project {
             root,
             files,
             stdlib,
+            security: security.unwrap_or_default(),
             filter,
             format: format.unwrap_or_default(),
             overrides: compiled_overrides,
@@ -146,6 +156,7 @@ impl Project {
             root,
             files: Vec::new(),
             stdlib: Stdlib::new(Variant::default()),
+            security: SecurityLevel::default(),
             filter,
             format: FormatConfig::default(),
             overrides: Vec::new(),
@@ -176,6 +187,12 @@ impl Project {
     /// Where every file of the project runs, which its `variant` key names.
     pub fn variant(&self) -> Variant {
         self.stdlib.variant()
+    }
+
+    /// The security level a Roblox project's files run at, which its
+    /// `security` key names, and `None` for any other project.
+    pub const fn security(&self) -> SecurityLevel {
+        self.security
     }
 
     /// The variant's standard library, with the `std` definitions layered

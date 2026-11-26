@@ -8,7 +8,7 @@ use luck_bundler::DynamicRequire;
 use luck_formatter::FormatConfig;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use luck_stdlib::Variant;
+use luck_stdlib::{SecurityLevel, Variant};
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 
@@ -64,6 +64,13 @@ pub(crate) struct LuckConfig {
     /// `"standalone"` for standalone Luau, or `"roblox"` for Roblox, whose globals,
     /// services, and enums join Luau's standard library.
     pub variant: Option<Variant>,
+    /// The security level a Roblox project's files run at (default `None`),
+    /// which decides the part of Roblox's API `luck check` gives them:
+    /// `"None"` for a `Script` or `LocalScript`, `"LocalUserSecurity"`,
+    /// `"PluginSecurity"` for a plugin or Studio's command bar, or
+    /// `"RobloxScriptSecurity"` for a `CoreScript`. Only a `"roblox"` project
+    /// takes it.
+    pub security: Option<SecurityLevel>,
     /// Std definition files, relative to this file's directory, that layer a
     /// host's globals, fields, and functions over the variant's standard
     /// library, in order. Each is TOML in the format of luck's own
@@ -127,6 +134,7 @@ impl LuckConfig {
     pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
             variant: self.variant.or(base.variant),
+            security: self.security.or(base.security),
             std: merge_with(self.std, base.std, layer),
             root: self.root.or(base.root),
             extends: None,

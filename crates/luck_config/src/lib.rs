@@ -6,9 +6,9 @@
 //! the build's entries and module resolution.
 //!
 //! Everything is checked at load: the JSON5 syntax, every key, the variant,
-//! the globs, the lint rule names and options, the build keys that can't go
-//! together, and the std definitions `std` names, which layer over the
-//! variant's library. A problem comes back as one E014 [`Diagnostic`] placed
+//! the globs, the lint rule names and options, the keys that can't go
+//! together, such as `security` on a project that isn't Roblox's, and the std
+//! definitions `std` names, which layer over the variant's library. A problem comes back as one E014 [`Diagnostic`] placed
 //! where it is, in the [`FileDiagnostics`] of the file at fault.
 //!
 //! Each tool derives the `luck.json` shape of its own option types behind its
