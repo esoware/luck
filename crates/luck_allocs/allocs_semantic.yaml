@@ -30,3 +30,14 @@ infinite_yield.luau:
   arena allocs: 0
   arena reallocs: 0
   arena size: 3457864 # 3.46 MB
+
+stress.luau:
+  file size: 314606 # 314.61 kB
+  sys allocs: 20
+  sys reallocs: 18
+  sys deallocs: 20
+  sys alloc bytes: 4812395 # 4.81 MB
+  sys peak growth: 4812395 # 4.81 MB
+  arena allocs: 0
+  arena reallocs: 0
+  arena size: 3125728 # 3.13 MB
