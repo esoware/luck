@@ -1,26 +1,16 @@
 # luck_formatter
 
-The Prettier-style formatter for Luau.
+A Prettier-style formatter for Luau that fits code to a line width and handles the full type syntax.
 
 ## Overview
 
-The formatter writes the tree into one flat stream of layout elements in the caller's arena. The elements are text, line breaks, indents, and groups, and each text borrows from the tree, the source, or the arena. A printer walks the stream once, taking it as it's written at the line breaks between statements, since no layout decision looks past a forced line break, so the stream holds about a statement at a time. A group prints on one line if it fits the line width, along with whatever follows it on that line, and breaks if it doesn't. As a group closes, it records bounds on how wide it prints flat, which settle most of those measurements without a walk over its elements.
+`format(format(x)) == format(x)`, and the output always parses. Tests check both.
 
-For a parse, the formatter takes comments from the parse's comment list and places each at the nearest node boundary: before the node it leads, after the node it trails on its line, or before a container's closer, as `oxc_formatter` does. It never lexes the source again: the parse's tokens say where every token the tree keeps no span for sits, such as a closer or a `,` a comment trails, so it reads the source only for line breaks and indentation, and for the text it copies. A comment that ends its line in the source ends it in the output. It keeps blank lines between statements, and copies `-- luck: format off` to `-- luck: format on` regions and statements after `-- luck: ignore` as written. A tree built in code takes its comments from `SyntheticComment`s instead. The output parses, and formatting it again changes nothing.
+Comments stay with the nearest node, and blank lines between statements are kept. Code between `-- luck: format off` and `-- luck: format on` is left alone, and `-- luck: ignore` skips the next statement.
 
-It writes the parentheses precedence needs. Of those in the source, it keeps the ones the tree keeps, any a comment sits in, and any around an operator expression, which group it for a reader, and drops the rest, which the parse records beside the tree. Around a whole condition, it keeps only those a comment sits in.
-
-## Features
-
-- `FormatOptions` sets the line width, indent style and width, quote style, hex digit case, call parentheses, collapsing of simple `if` statements, line endings, blank lines at the edges of blocks, opt-in `require` sorting, a space after function names, and the magic trailing comma.
-- `FormatConfig` is `luck.json`'s `format` section, with each option unset unless it's set, so `merge_onto` layers it over another, as over `.editorconfig`, and `FormatOptions::from` fills in the defaults.
-- The `serde` feature derives `Deserialize` for `FormatConfig` and the option enums, the shape `luck.json` gives them, and `schemars` derives `JsonSchema` too.
+`format_range` formats a selection. `format_chunk` formats a tree with no source, such as one built with `luck_ast::Synth`.
 
 ## Usage
-
-- `format(allocator, source, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors. The source and the output are bytes, as Luau reads them, so a comment or a string that isn't UTF-8 keeps its bytes, and the output is UTF-8 whenever the source is.
-- `format_parsed` formats a parse the caller holds, made with `luck_parser::parse_with_tokens`, which keeps the tokens the formatter reads, or with `luck_parser::parse_definitions_with_tokens` for a definition file, and `format_range` formats only the statements a byte range overlaps and copies the rest.
-- `format_chunk(allocator, &chunk, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic`, which places each `SyntheticComment` at the statement or block it's anchored to, or `Comments::none`, and spells each literal that has no spelling from its value. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
 
 ```rust
 use luck_allocator::Allocator;
@@ -31,3 +21,20 @@ let result = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::de
 assert!(result.errors.is_empty());
 assert_eq!(result.output, b"local x = 1\n");
 ```
+
+## API
+
+- `format` parses and formats a source.
+- `format_parsed` formats a parse you already have, from `luck_parser::parse_with_tokens`.
+- `format_range` formats the statements a byte range overlaps, and copies the rest unchanged.
+- `format_chunk` formats a tree, with its comments passed as `Comments`.
+- `FormatResult` holds the output and the parse errors.
+- `Comments` and `SyntheticComment` attach comments to a tree built in code.
+- `FormatOptions` holds every option, with defaults filled in.
+- `FormatConfig` is the `format` section of `luck.json`, where each option is optional.
+- `IndentStyle`, `QuoteStyle`, `HexCase`, `CallParentheses`, `CollapseSimpleStatement`, `LineEndings`, `BlockNewlineGaps`, and `SpaceAfterFunction` are option values.
+
+## Cargo features
+
+- `serde` derives `Deserialize` for `FormatConfig` and the option enums, in the shape `luck.json` uses.
+- `schemars` derives `JsonSchema` too, and enables `serde`.

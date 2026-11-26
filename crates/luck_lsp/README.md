@@ -1,52 +1,31 @@
 # luck_lsp
 
-The language server for Luau, which `luck lsp` serves and the VS Code extension starts, and which an editor with nothing on disk, such as Monaco in a browser, can hand its config and files.
+A Luau language server, built on luck's linter and formatter and Luau's own type checker.
 
 ## Overview
 
-One main loop takes the client's messages in order and touches no tree, as rust-analyzer's does. It applies each notification as it arrives and hands every request to a pool of its own workers, with the version of each document it reads as it stood then. A request waits in a queue ahead of the diagnostics, and both ahead of reading the workspace, so checking every open document doesn't keep a hover waiting, and indexing keeps neither waiting.
+It runs as `luck lsp` and speaks the Language Server Protocol over stdio, or TCP for debugging. Hover, completion, and signature help come from Luau's types, including docs from definition files.
 
-Each version of an open document keeps its text in an `Arc<str>`, and the first job that needs it parses and analyzes it in an arena of its own, held with its parse and analysis through `self_cell`, with no `unsafe`. A job that needs the same version meanwhile waits for that one parse. Lints are built once per version too, and publishing, code actions, and fix-all share them. An edit or a close stops the lint of the version it replaces between rules, the main loop drops any answer or diagnostics that went stale, and a request the client cancels before it starts never runs. Once nothing holds a replaced version, its arena empties into a spare slot the next version parses into, and a close frees it.
+It also supports:
 
-Types come from Luau's own checker, `luck_type_checker`, one for each security level and list of definitions the session's projects load, as `luck check` keeps one for each, which keeps every module it checked with its types. Each open, edit, or close of a document, and each change the file watcher reports, or the client pushes, to a module, a `.luaurc` or `.config.luau`, or the settings, starts a generation, in which one job checks every open document through its project's checker and publishes each one's lints with its type errors, E015s in Luau's own words, and Luau's syntax errors only where luck's parser reported none, since a change to one module can change the types of every module that requires it. A check reads a module from its open document if it has one, as it stood when the job was spawned, and from its files otherwise, lending Luau a document's or a pushed file's text, which only Luau copies, with each `require` resolved as `luck build` resolves it, and checks a module again only once its text, or a module it requires, changed. A checker sits behind a lock, which a hover, completion, signature help, or go to definition holds while it brings the checker to the open documents as they stood when the request came, checks what's left, and reads the types. The next generation cancels every check of the last through its `CancellationToken`, so no job brings a checker back to older text, and the main loop drops the diagnostics of a generation that ended.
+- lint and type error diagnostics, plus requires that don't resolve
+- formatting, including ranges
+- go-to-definition, references, rename, and document and workspace symbols, including module members across files
+- go-to-definition into Luau's and Roblox's definition files, shown as `luck:` documents
+- code actions for fixes, `source.fixAll.luck`, and disabling a rule
+- semantic tokens, highlights, folding ranges, selection ranges, and document links
+- UTF-8, UTF-16, and UTF-32 positions
 
-Hover, completion, and signature help show the comment directly above the declaration a definition file has of what they name, found by the documentation symbol Luau gives it, as `@roblox/globaltype/Part.Anchored`, or where Analysis records it, and go to definition goes to that declaration. Luau's definitions, `luck_stdlib`'s `luau.d.luau`, and Roblox's API at each security level are no file in the workspace, so the server serves them under its own `luck:` scheme, as `luck:/luau.d.luau` and `luck:/roblox/PluginSecurity.d.luau`, through LSP 3.18's `workspace/textDocumentContent`, which its capabilities register for the scheme.
+Custom methods are `luck/syntaxTree`, `luck/fixAllWorkspace`, and the notification `luck/didChangeFiles`. If the client passes a config in `initializationOptions`, the server reads only the files the client sends it.
 
-Every other provider reads the document's analysis. A request at a position finds the innermost node there in `luck_semantic`'s node table, with one binary search, and walks up through its parents, and a name finds the local it declares or refers to by its symbol and reference, so shadowed names never mix. Links come from the analysis's `require` sites, the ones a build resolves.
+## Architecture
 
-The workspace is the client's folders, and its files are the ones `luck lint` would take there. Each file has a record of what the other files see of it, modeled on oxc's `ModuleRecord`: the modules it requires, and each place it names a member of a module's table, a field of the local it returns, a key of the table it returns, an exported local, or a field of a required module, read through the call or a local the call initializes. An open document's record comes from its analysis. Every other file is parsed from its files once, in an arena from a pool, into a record that outlives the arena, as idle workers walk the folders ahead of the first request that needs them, and again once the file watcher says it changed. Go to definition, references, and rename of a member read every record, each resolving its requires through its own project's resolver, and stop between files once the client cancels them. A rename refuses a member of a module outside the workspace, whose readers the server can't know.
+A main loop reads messages in order and never touches a syntax tree. Requests run on a worker pool.
 
-A document's settings come from the `luck_config::Project` of the nearest `luck.json`, or of the config the client gave, so the editor runs the rules `luck lint` runs, against Luau's standard library with what the project's `definitions` loads over it, each as the type checker loads it, which highlighting reads too, and from `.editorconfig`. A worker finds them the first time a document is analyzed, since that reads the files. The server caches each project, and its checker, until a file it read, a definition file among them, or a `.editorconfig`, changes. A checker loads a definition file its project lists from the file's open document while it has one, and since Luau can't unload a definition, an open, edit, or close of that document loads a new checker for the project, and layers the same texts over Luau's library for its documents' analysis, on the job of the generation it starts, which stops between definition files once the next generation starts, while every request reads the old checker and library until the new ones are ready, and that job analyzes each document again against the new library before it publishes it. Every other project's checker stays. A `luck.json` that doesn't load is shown as an error and published as a diagnostic on the file at fault, and its documents use the defaults until it's fixed. A definition file luck's parser or Luau can't load never takes its project down: the project loads without it, Luau's errors in it are published on it, and once its text loads, from its open document, a push, or the disk, its declarations arrive as any edit's do. Each project keeps one resolver, and each checker one, which a `.luaurc` or `.config.luau` edited, or a module created or deleted, clears, since a require that didn't resolve may now.
+Each document version is parsed once, in its own arena, and an edit cancels linting of the old version. Idle workers index the rest of the workspace in the background.
 
-Every source comes through a `luck_resolver::FileSystem`: the disk, or once the client gives a config, the files the client holds, its open documents and the files it pushes, so the server reads no disk at all, and opening a file the client never pushed creates it, as pushing it would, and closing it deletes it. The resolver, the project, `.luaurc` and `.config.luau`, `.editorconfig`, definition files, and the workspace read through it. A client's file goes by a path made of its URI, `/scheme/authority/path`, as `inmemory://model/1` is `/inmemory/model/1`, whatever the scheme, `file:` included, so requires, globs, and Luau's checker treat it as a file on disk, and every path the server hands back goes by the URI the file came with. A client's config is that config's project for every document, with the same keys as a `luck.json` and the same validation, its paths relative to the first workspace folder, or to `/`, the root of every client path, when there's none. It can't `extends`, since no file holds it. One that doesn't load is shown as an error, and its documents use the defaults until the client sends another. A client's files with no workspace folder all are its workspace.
+## API
 
-A file whose name ends in `.d.luau` is a definition file, which the server parses with `luck_parser::parse_definitions` for everything it does with it, so `declare` is never an error there, and which is no code, so no lint rule runs on it, and no module, so it's never checked as one, and a `require` of it is an E004. What Luau finds wrong in a definition file the project loads is published on that file, open or not, and cleared once it loads, and shown unless the file is open, since each edit loads it again, and a project's `.config.luau` files are run by Luau's own Config library, through `luck_type_checker`, each stopped once it has run for a second, or, read for a module's config in a check, once the next generation cancels the check. A checker runs each once, keeping the config each directory gives the modules in it, as `luau-analyze` does, until the file watcher reports, or the client pushes, a change to a `.luaurc` or `.config.luau`.
-
-Positions count UTF-8 bytes when the client offers them, since a column then costs nothing, or else UTF-32 characters or UTF-16 units, in the order the client prefers.
-
-## Features
-
-- Lint diagnostics on open and change, from `luck_linter`, each with its labels as related locations, its help and note after its message, a link to its rule, and the `Unnecessary` or `Deprecated` tag where it has one.
-- The E004, E007, and W004 that `luck build` reports for a `require` that doesn't resolve, at its string.
-- Type errors from Luau's own checker, with the definitions the project loads, for every open document.
-- Formatting and range formatting, from `luck_formatter`.
-- Hover with the type at the cursor as Luau prints it, completion from Luau's own autocomplete with each entry's type and deprecation, and signature help from the callee's type with the active parameter, each with the documentation a definition file has of what it names.
-- Go to definition of a local, a `require`'s module, and a global, type, or member a definition file declares, references, rename, document and workspace symbols, semantic tokens, document highlights, folding ranges, selection ranges, and document links.
-- Go to definition, references, and rename of a module's members across the workspace.
-- Luau's and Roblox's definition files, as `luck:` documents through `workspace/textDocumentContent`.
-- Code actions: each diagnostic's fix or suggestion, `source.fixAll.luck`, which applies the fixes and leaves the suggestions, and comments that disable a rule.
-- Custom requests: `luck/syntaxTree` and `luck/fixAllWorkspace`, and the custom notification `luck/didChangeFiles`.
-- A config the client gives as its `initializationOptions`, and replaces with `workspace/didChangeConfiguration`, and a client's own files, with nothing on disk.
-
-## Usage
-
-- `serve_stdio(threads)` serves over stdin and stdout, `serve_socket(port, threads)` over TCP, for debugging, and `serve(connection, threads)` over any `lsp_server::Connection`, such as the in-memory pair the tests drive it through, each running its jobs on `threads` workers, which `luck lsp` takes from `--threads`.
-- Each returns an error when the session doesn't end as LSP says it should, such as with `exit` before `shutdown`, which the CLI turns into exit code 1.
-
-An editor with nothing on disk hands the server everything:
-
-- Its config, as `initializationOptions` in `initialize`: the keys of a `luck.json` but `extends`, as JSON, such as `{ "definitions": ["@roblox", "app.d.luau"], "security": "RobloxScriptSecurity" }`, with its paths relative to its first workspace folder, such as `inmemory://model/`. A client that gives one has the server read nothing but what it holds, and registers no file watcher. `workspace/didChangeConfiguration` replaces the config with its `settings`.
-- Its documents, opened as any client opens them, under any URI, such as Monaco's `inmemory://model/1`.
-- Every other file a document requires, or the config names, such as a definition file, a `.luaurc` or `.config.luau`, or an `.editorconfig`, with the `luck/didChangeFiles` notification, whose params are `{ "changes": [{ "uri": "inmemory://model/app.d.luau", "text": "declare function alert(message: string): ()" }] }`, a change with no `text` deleting its file and clearing any problems published on it. A pushed file is what the disk holds, and an open document of it what an editor's buffer holds over it.
-
-The server runs every job on the workers it starts, each with `luck_ast::MIN_STACK_BYTES` of stack, and each type check on as many threads more, which the check joins before it returns.
+- `serve_stdio` serves over stdio, as `luck lsp` does.
+- `serve_socket` serves over TCP, for debugging.
+- `serve` serves over any `lsp_server` connection.

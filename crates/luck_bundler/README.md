@@ -1,28 +1,18 @@
 # luck_bundler
 
-Bundles a multi-file Luau project into one self-contained file.
+Bundles a multi-file Luau project into a single file that runs without any loader or runtime library.
 
 ## Overview
 
-Discovery starts at the entry file. The bundler reads each module as bytes, as Luau does, parses it, and reads everything else it needs off one `luck_semantic` pass, which finds its `require` calls, so only a call that reaches the global `require`, by its name or as `_G.require`, counts. It resolves each require string with `luck_resolver`. Each module is a task on rayon's pool, which reads it into the arena its thread gets from the caller's `ThreadAllocators` and resolves its requires. The calling thread alone keeps the graph, and starts a task for each new module a finished one reaches, as `oxc_linter`'s service does. It numbers the modules in require order in a `DependencyGraph`, so the result is the same however many threads read them, and reports a cycle as a warning.
+Starting from an entry file, it follows every `require` and resolves it with `luck_resolver`. Each module runs on its first `require` and its result is cached, as Luau's `require` does.
 
-The bundle opens with a small loader, and each module registers as a function that runs on its first `require`. The loader works like Luau's own `require`: it caches a module by file, and the module must return exactly one value. Every name the bundler generates shares a prefix no module's source contains, and every path in the output is relative to the project root.
+Modules are parsed in parallel on rayon's pool. `bundle_minified` minifies each module's tree directly instead of reparsing the bundle. Paths in the output are relative to the project root.
 
-`bundle` splices the loader into each module's text, which it copies byte for byte, so a line in the bundle maps back to a line of its module. `bundle_minified` instead builds the bundle as one tree from the modules' own parses and minifies it with `luck_minifier`, so no text is parsed twice.
-
-## Features
-
-- `DynamicRequire` decides what a `require` whose argument isn't a string literal does: fail the bundle (E002), stay for the runtime with a warning (W007), which is the default, or stay silently.
-- The `serde` feature derives `Deserialize` for `DynamicRequire`, the shape `luck.json` gives it, and `schemars` derives `JsonSchema` too.
+A `require` whose argument isn't a string can't be resolved at build time. `DynamicRequire` decides whether that's an error, a warning, or allowed.
 
 ## Usage
 
-- `bundle(&arenas, entry, &options)` returns a `Bundle`: the output, the warnings, the bundled files, and the line map. The result borrows no arena, so `arenas.reset()` can empty them right after.
-- `bundle_minified(&arenas, entry, &options, &transforms)` returns a `MinifiedBundle`.
-- `BundleOptions` holds the project root, the `DynamicRequire` mode, and the `luck_resolver::LuauConfigAliases` that reads each `.config.luau`, without which none loads, which the `luck` CLI gives as Luau's own.
-- `DependencyGraph::build` builds the graph alone.
-
-Modules are parsed and analyzed on rayon's threads, so give that pool `luck_ast::MIN_STACK_BYTES` of stack. Called from a thread of the pool, the bundler runs queued modules on it while it waits, so a pool of one thread does all the work on the caller's.
+The bundler parses modules on rayon's pool, so give its threads `luck_ast::MIN_STACK_BYTES` of stack.
 
 ```rust,no_run
 use std::path::Path;
@@ -41,3 +31,19 @@ let arenas = ThreadAllocators::new();
 let bundle = luck_bundler::bundle(&arenas, Path::new("main.luau"), &options).unwrap();
 assert!(!bundle.output.is_empty());
 ```
+
+## API
+
+- `bundle` bundles every module an entry file reaches.
+- `bundle_minified` does the same and minifies it with a `TransformConfig`.
+- `Bundle` and `MinifiedBundle` hold the output, the warnings, and the list of bundled files.
+- `BundleOptions` holds the project root, the `DynamicRequire` setting, and the `.config.luau` reader.
+- `DynamicRequire` is `Error`, `Warn`, or `Allow`.
+- `DependencyGraph` holds every module, the entry, and a topological order. `build` makes one.
+- `ModuleInfo`, `ModuleId`, and `Dependency` describe a module and what it requires.
+- `LineMapEntry` maps a range of bundle lines back to its module.
+
+## Cargo features
+
+- `serde` derives `Deserialize` for `DynamicRequire`, in the shape `luck.json` uses.
+- `schemars` derives `JsonSchema` too, and enables `serde`.

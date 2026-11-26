@@ -1,14 +1,18 @@
 # luck_simd
 
-CPU feature sets, and the SIMD vectors that work with them, for luck's lexer. It began as a port of `oxc_simd`, whose notice is in `LICENSE`.
+Safe SIMD vectors for AVX2 and Neon, gated on CPU feature detection.
+
+## Overview
+
+Having a value of a feature set type, such as `Avx2`, proves the CPU supports it. Vector methods take one, so they're safe to call.
+
+`DynCpu::detect` checks for AVX2 at runtime on `x86_64`. Neon is always present on aarch64.
+
+Put AVX2 code inside `Avx2::run` so each vector method compiles to one instruction. The code assumes little-endian byte order.
+
+Based on `oxc_simd`.
 
 ## Usage
-
-- `Avx2`, `Neon`, and `Generic`: a feature set each. Holding one proves the CPU has it, because only `DynCpu::detect` makes one, and a feature set a platform can't have is an uninhabited type there, so the code that handles it compiles away.
-- `DynCpu`: the best feature set this CPU has, checked at runtime on x86_64 and known at compile time everywhere else. `DynCpu::available` lists each one the CPU has, so a test can run its code under every one.
-- `Vec256` and `Vec128`: 32 bytes in an AVX2 register and 16 in a Neon one. Each holds its feature set, so its methods are safe to call.
-
-An AVX2 intrinsic compiles to its one instruction only inside a function that enables AVX2, so AVX2 code runs in a closure passed to `Avx2::run`. Neon is part of every aarch64 target, so its code needs no such step.
 
 ```rust
 use luck_simd::{DynCpu, Vec256};
@@ -22,3 +26,10 @@ let count = match DynCpu::detect() {
 };
 assert_eq!(count, 32);
 ```
+
+## API
+
+- `DynCpu` is whichever feature set this CPU has.
+- `Avx2`, `Neon`, and `Generic` are the feature sets.
+- `Vec256` is 32 bytes in an AVX2 register.
+- `Vec128` is 16 bytes in a Neon register.

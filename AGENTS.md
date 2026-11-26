@@ -95,6 +95,7 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
 - Types that two crates share when neither depends on the other live in `luck_token`, diagnostics in `luck_diagnostics`, and data structures that know nothing of Luau in `luck_data_structures`.
 - Every crate in the workspace and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it.
+- Do not add any extra content to the existing per-crate README.md files, only substitute or remove information that becomes outdated.
 
 ### Types and errors
 
@@ -118,6 +119,3 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - A fix test applies the edit and asserts that the result reparses.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
 - Test source or output that spans lines, or reads better across lines, is a multi-line string literal, never one with `\n` escapes. Text that reads fine on one line stays on one line.
-## Extension
-
-- Split a file only once it passes about 700 lines, and only into parts that make sense on their own.

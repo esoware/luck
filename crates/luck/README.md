@@ -1,51 +1,69 @@
-# luck_lua
+# luck
 
-The whole luck toolchain behind one dependency, for a build tool or editor that would rather not track each `luck_*` crate. The package is `luck_lua` and the library is `luck`, so code imports `luck::`.
+The full luck toolchain in one crate: a parser, formatter, linter, minifier, bundler, and type checker for Luau.
 
-## Features
+## Overview
 
-The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::diagnostics`. Every other stage is behind a feature of its name, and none is on by default.
+It re-exports every luck crate as a module, except the language server and the CLI. The package is published as `luck_lua`, but you import it as `luck`.
 
-| Feature | Adds |
-| --- | --- |
-| `codegen` | `luck::codegen`, the compact printer |
-| `minifier` | `luck::minifier` |
-| `formatter` | `luck::formatter` |
-| `semantic` | `luck::semantic`, scoping, compile-time checks, the node table, and `require` sites, in one pass |
-| `stdlib` | `luck::stdlib`, the standard library from Luau definition files, Luau's with Roblox's API or a host's definitions over it, and what a chunk reaches in it, and `semantic` |
-| `linter` | `luck::linter`, and `stdlib` |
-| `type_checker` | `luck::type_checker`, Luau's own type checker, built from Luau's C++, which can't share a binary with another build of Luau, such as `mlua`'s |
-| `resolver` | `luck::resolver`, module resolution and source reading |
-| `bundler` | `luck::bundler`, and `resolver` and `minifier` |
-| `config` | `luck::config`, `luck.json` and `.editorconfig` loading, and the stages it configures |
-| `full` | All of them |
-
-The language server is not part of it. `luck::VERSION` is the toolchain's version.
+The parser and what it needs are always included. Everything else is behind a feature.
 
 ## Usage
 
-A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the source it was parsed from, so both outlive it. Every stage that builds nodes takes the arena first. `reset` frees everything in it at once and keeps the memory, so one arena serves file after file, and threads each take an arena from an `AllocatorPool`. The bundler reads modules on rayon's pool, each into the arena its thread gets from a `ThreadAllocators`.
-
-```rust
-use luck::allocator::Allocator;
-
-let mut allocator = Allocator::new();
-for source in [&b"local x = 1"[..], b"return x"] {
-    let parsed = luck::parser::parse(&allocator, source);
-    assert!(parsed.errors.is_empty());
-    // The parse borrows the arena, so it goes first.
-    drop(parsed);
-    allocator.reset();
-}
+```sh
+cargo add luck_lua --features formatter,minifier
 ```
-
-With the `formatter` feature:
 
 ```rust
 use luck::allocator::Allocator;
 use luck::formatter::FormatOptions;
+use luck::minifier::TransformConfig;
 
 let allocator = Allocator::new();
 let formatted = luck::formatter::format(&allocator, b"local x=1", &FormatOptions::default());
 assert_eq!(formatted.output, b"local x = 1\n");
+
+let minified = luck::minifier::minify(&allocator, b"return 1 + 2", &TransformConfig::default());
+assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 ```
+
+## Modules
+
+| Module | Crate | Feature |
+| --- | --- | --- |
+| `allocator` | `luck_allocator` | always |
+| `token` | `luck_token` | always |
+| `lexer` | `luck_lexer` | always |
+| `ast` | `luck_ast` | always |
+| `parser` | `luck_parser` | always |
+| `diagnostics` | `luck_diagnostics` | always |
+| `codegen` | `luck_codegen` | `codegen` |
+| `resolver` | `luck_resolver` | `resolver` |
+| `bundler` | `luck_bundler` | `bundler` |
+| `minifier` | `luck_minifier` | `minifier` |
+| `formatter` | `luck_formatter` | `formatter` |
+| `semantic` | `luck_semantic` | `semantic` |
+| `stdlib` | `luck_stdlib` | `stdlib` |
+| `linter` | `luck_linter` | `linter` |
+| `type_checker` | `luck_type_checker` | `type_checker` |
+| `config` | `luck_config` | `config` |
+
+`VERSION` is the toolchain version.
+
+## Arenas
+
+Every tree lives in an `allocator::Allocator` that you own. Call `reset` to free everything in it and reuse the memory for the next file. For threads, take arenas from an `AllocatorPool`.
+
+## Cargo features
+
+- `full` enables everything below.
+- `codegen` adds the compact printer.
+- `resolver` adds module resolution.
+- `bundler` adds bundling, and enables `resolver` and `minifier`.
+- `minifier` adds the minifier.
+- `formatter` adds the formatter.
+- `semantic` adds scope and symbol analysis.
+- `stdlib` adds the standard library definitions, and enables `semantic`.
+- `linter` adds the linter, and enables `stdlib`.
+- `type_checker` adds Luau's type checker. Building it needs clang.
+- `config` adds `luck.json` loading, and enables `bundler`, `minifier`, `formatter`, and `linter`.

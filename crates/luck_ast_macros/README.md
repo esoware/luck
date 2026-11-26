@@ -1,18 +1,11 @@
 # luck_ast_macros
 
-`#[derive(Ast)]`, which marks a type as part of `luck_ast`'s syntax tree and generates nothing. `luck_ast_tools` reads the marked types and writes the tree's support code from them, and the derive lets the types carry the tool's attributes:
+The `#[derive(Ast)]` marker that `luck_ast`'s node types use for code generation.
 
-- `#[visit(level)]` on a type makes its walk one level of nesting, and on a field makes visiting that field one.
-- `#[visit(no_kind)]` on a struct makes it no node of its own, with no `AstKind`, for a struct that spans exactly what it holds.
-- `#[content_eq(skip)]` on a field leaves it out of `ContentEq`, for a field that records only how the source was written.
+The derive itself generates nothing. It marks a type for `luck_ast_tools` and lets it carry these attributes:
 
-```rust,ignore
-#[derive(Debug, PartialEq, Eq, Ast)]
-#[visit(level)]
-pub struct TableConstructor<'ast> {
-    pub span: Span,
-    pub fields: List<'ast, Field<'ast>>,
-    #[content_eq(skip)]
-    pub has_trailing_separator: bool,
-}
-```
+- `#[visit(level)]` counts walking into this type or field as one level of nesting.
+- `#[visit(no_kind)]` means this struct isn't a node of its own and has no `AstKind`.
+- `#[content_eq(skip)]` leaves this field out of `ContentEq`.
+
+Ported from `oxc_ast_macros`.

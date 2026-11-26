@@ -1,44 +1,59 @@
 # luck_ast
 
-The syntax tree of Luau, and what walks, measures, and builds it.
+The Luau syntax tree every luck tool works on, with visitors and a builder for making trees in code.
 
 ## Overview
 
-- A tree lives in a `luck_allocator` arena. Every node is in an arena `Box` or `List`, none needs dropping, and the tree is freed with its arena at once. A tree is `Send` and `Sync`.
-- A tree's root is the `Block` of its chunk, a list of `Statement`s. A `return`, a `break`, and a `continue` are statements like any other, and `Statement::has_to_end_block` picks them out as the ones the grammar takes only at the end of a block. A `;` is no node. Every value is an `Expression`, and a type annotation is a `Type`, a tree of its own rather than text.
-- A definition file's `declare` statements are `Statement`s too, a `DeclaredGlobal`, a `DeclaredFunction`, or a `DeclaredExternType`, whose methods are `DeclaredFunction`s and whose other members are the `TypeField`s a table type holds. Only `luck_parser`'s definition parse builds them, and the attributes a `FunctionType` holds in a declared type.
-- A `Name` holds its text, and a literal, a `NumberLiteral` or `StringLiteral`, its value, which the parser decodes once, beside its spelling as written, which a built literal leaves out. A string's value is bytes, and a number's the `f64` it reads as. A parsed leaf borrows from the source and a built one lives in the arena, so a printer never needs the source. A `Name` also holds a `NameIndex`, which the parser numbers, each name its own, and by which `luck_semantic` finds what the name declares or refers to.
-- A run of suffixes (`a.b[c]:d()`) is one `SuffixedExpression`, and a run of binary operators at one precedence (`a + b - c`) one `BinaryOp`, so a run nests one level however long it is. A `BinaryLink` pairs an operator with the operand after it, and spans exactly that operand, so it's no node of its own: every operand of a run is the run's child.
-- The tree keeps a `ParenthesizedExpression` only where the parentheses change what they hold: a call or `...` they truncate to one value. A printer asks `Expression::needs_parens` whether an expression needs a pair in the `Slot` it writes it in, as `oxc_codegen` derives them, and writes a run held in a run at its own level in parentheses. One that has already matched the expression's kind asks the slot instead, with `Slot::wraps_atom`, `wraps_run`, `wraps_unary`, `wraps_if`, or `wraps_cast`, which a constant slot such as `Slot::FREE` folds away.
-- A part most nodes of a kind lack, an `if`'s `else` or a type annotation, is boxed, so a node without one doesn't hold its space.
-- Comments aren't in the tree. The lexer keeps them in a list of their own.
-- Every type in the tree derives `luck_ast_macros::Ast`, and `luck_ast_tools` writes `src/generated/` from those types. Run `just ast` after changing one.
+A tree's root is a `Block`, which is a list of `Statement`s. Values are `Expression`s and type annotations are `Type`s.
+
+Trees live in a `luck_allocator` arena and are freed along with it. Names and literals carry their own text, so printing a tree never needs the source. `Synth` builds trees in code.
+
+A chain like `a.b[c]:d()` is one `SuffixedExpression`, and `a + b - c` is one `BinaryOp`, so long chains stay one level deep.
+
+The tree keeps only the parentheses that change meaning. `Expression::needs_parens` tells a printer where the rest go.
+
+`Visit` reads a tree and `VisitMut` edits it in place. `ContentEq` compares two trees, ignoring spans.
+
+`luck_ast_tools` generates both visitors, `AstKind`, `GetSpan`, `ContentEq`, and the node constructors.
+
+## Stack depth
+
+Every walk recurses once per level of nesting. `luck_parser` never returns a tree deeper than `MAX_NESTING_DEPTH`, and walking one that deep takes `MIN_STACK_BYTES` of stack. Run luck on threads that have at least that.
+
+A tree from `Synth` has no depth limit. Check it with `block_nesting_depth` before walking it.
 
 ## Usage
 
-- `Visit` walks a tree and `VisitMut` rewrites one in place. Each has a `visit_*` hook for every type, which defaults to the `walk_*` method that visits what the node holds in source order. Override the hooks you need and call `self.walk_*` from them to keep recursing. `enter_node` and `leave_node` see every node, as an `AstKind` in `Visit` and an `AstType` in `VisitMut`.
-- `GetSpan` gives every node's span, and `ContentEq` compares two trees with their spans and spellings left out, so `a==1` and `a == 1` hold the same tree, as `"a"` and `'a'` do.
-- Every node type has a `new` constructor, a `boxed` one when a field holds it in a `Box`, and an enum a `new_*` one for each variant that holds a struct, as `Expression::new_binary_op`. They check nothing.
-- `Synth` builds nodes without source on top of those, for a tool that emits a tree. It checks names, builds literals from values, which the printers spell, joins runs and chains, and puts a statement that has to end its block but doesn't in a `do ... end` of its own, so the printed tree reads back as the same tree. `SpanCounter` gives its nodes distinct spans, which a `luck_formatter::SyntheticComment` anchors a comment to.
-- `MAX_NESTING_DEPTH` is the deepest tree `luck_parser` builds, and `MIN_STACK_BYTES` the stack a thread needs to run any luck stage on a tree that deep, since every traversal recurses once per level. `block_nesting_depth` and `expr_nesting_depth` measure a tree built some other way, safely at any depth.
-- `TreeCounts` counts what a parsed tree holds, and `luck_semantic` sizes its tables from it.
-
 ```rust
 use luck_allocator::Allocator;
-use luck_ast::{SuffixedExpression, Visit};
+use luck_ast::{Name, Visit};
 
-struct CallCounter(usize);
+struct Names<'ast>(Vec<&'ast str>);
 
-impl<'ast> Visit<'ast> for CallCounter {
-    fn visit_suffixed_expr(&mut self, suffixed_expr: &'ast SuffixedExpression<'ast>) {
-        self.0 += suffixed_expr.calls().count();
-        self.walk_suffixed_expr(suffixed_expr);
+impl<'ast> Visit<'ast> for Names<'ast> {
+    fn visit_name(&mut self, name: &'ast Name<'ast>) {
+        self.0.push(name.text.as_str());
     }
 }
 
 let allocator = Allocator::new();
-let parsed = luck_parser::parse(&allocator, b"f(g(1))");
-let mut counter = CallCounter(0);
-counter.visit_block(&parsed.chunk);
-assert_eq!(counter.0, 2);
+let parsed = luck_parser::parse(&allocator, b"local total = count + 1");
+let mut names = Names(Vec::new());
+names.visit_block(&parsed.chunk);
+assert_eq!(names.0, ["total", "count"]);
 ```
+
+## API
+
+- Roots: `Block`, `Statement`, `Expression`, `Type`
+- Statements: `LocalAssignment`, `Assignment`, `CompoundAssignment`, `IfStatement`, `WhileLoop`, `RepeatLoop`, `NumericFor`, `GenericFor`, `DoBlock`, `FunctionDecl`, `LocalFunction`, `ReturnStatement`, `TypeDeclaration`, and their parts
+- Expressions: `BinaryOp`, `UnaryOp`, `SuffixedExpression`, `FunctionDef`, `TableConstructor`, `IfExpression`, `InterpolatedString`, `TypeCast`, `ParenthesizedExpression`, and their parts
+- Types: `NamedType`, `FunctionType`, `TableType`, `UnionType`, `IntersectionType`, `OptionalType`, `TypeofType`, `TypePack`, and their parts
+- Leaves: `Name`, `NameIndex`, `NumberLiteral`, `StringLiteral`
+- Definition files: `DeclaredGlobal`, `DeclaredFunction`, `DeclaredExternType`, `ExternTypeMember`
+- Traversal: `Visit`, `VisitMut`, `AstKind`, `AstType`, `AST_TYPE_MAX`
+- Queries: `GetSpan`, `ContentEq`, `Slot`, `Call`, `ChainHead`, `DottedPath`, `TreeCounts`
+- Building: `Synth`, `SpanCounter`, `FieldSpec`, `TypeFieldSpec`, `FunctionSignature`, `InterpolatedStringPart`
+- Depth: `MAX_NESTING_DEPTH`, `MIN_STACK_BYTES`, `block_nesting_depth`, `expr_nesting_depth`, `type_nesting_depth`, `spans_past_nesting_cap`
+- Identifiers: `is_valid_identifier`, `sanitize_identifier`
+- Containers: `OneOrMore`
