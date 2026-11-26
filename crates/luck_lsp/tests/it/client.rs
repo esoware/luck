@@ -3,12 +3,12 @@
 
 use std::str::FromStr as _;
 
-use ls_types::notification::DidChangeConfiguration;
+use ls_types::notification::{DidChangeConfiguration, DidCloseTextDocument};
 use ls_types::request::{Formatting, GotoDefinition, HoverRequest, Rename};
 use ls_types::{
-    Diagnostic, DidChangeConfigurationParams, DocumentFormattingParams, FormattingOptions,
-    GotoDefinitionParams, GotoDefinitionResponse, HoverContents, HoverParams, Location,
-    MessageType, NumberOrString, PartialResultParams, Position, Range, RenameParams, Uri,
+    Diagnostic, DidChangeConfigurationParams, DidCloseTextDocumentParams, DocumentFormattingParams,
+    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, HoverContents, HoverParams,
+    Location, MessageType, NumberOrString, PartialResultParams, Position, Range, RenameParams, Uri,
     WorkDoneProgressParams,
 };
 use serde_json::{Value, json};
@@ -303,6 +303,81 @@ fn a_config_luau_that_never_returns_is_stopped() {
 
     assert_eq!(codes(&diags), ["E004"], "{diags:?}");
     assert!(diags[0].message.contains(".config.luau`, which doesn't load"), "{diags:?}");
+}
+
+#[test]
+fn a_pushed_config_luau_s_change_reaches_the_checks() {
+    let client = Client::start_given(json!({}), &folder());
+    let config = uri(".config.luau");
+    client.push(&[(&config, Some("return { luau = { languagemode = \"nocheck\" } }"))]);
+    let main = uri("1");
+    client.open(
+        &main,
+        "\
+local count: number = \"one\"
+return count
+",
+    );
+    let mut client = client;
+    let diags = client.diagnostics(&main, Some(1));
+    assert!(!codes(&diags).contains(&"E015"), "nothing is checked: {diags:?}");
+
+    client.push(&[(&config, Some("return { luau = { languagemode = \"strict\" } }"))]);
+
+    loop {
+        let published = client.next_published(&main);
+        if codes(&published.diagnostics).contains(&"E015") {
+            break;
+        }
+    }
+}
+
+/// Each change to the open definition file reloads what the checker
+/// declares, and closing it goes back to the file pushed under it.
+#[test]
+fn an_open_definition_file_s_changes_reach_the_checks() {
+    fn wait_for(client: &mut Client, uri: &Uri, message: &str) {
+        loop {
+            let published = client.next_published(uri);
+            if published.diagnostics.iter().any(|diag| diag.message == message) {
+                return;
+            }
+        }
+    }
+
+    let client = Client::start_given(json!({ "definitions": ["app.d.luau"] }), &folder());
+    let definitions = uri("app.d.luau");
+    client.push(&[(&definitions, Some(DEFINITIONS))]);
+    let main = uri("1");
+    client.open(
+        &main,
+        "\
+--!strict
+alert(\"hi\", \"eight\")
+",
+    );
+    let mut client = client;
+    wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
+
+    client.open(&definitions, "declare function alert(message: string, seconds: Missing): ()\n");
+    let rejected = client.diagnostics(&definitions, Some(1));
+    assert_eq!(codes(&rejected), ["E015"], "{rejected:?}");
+    assert_eq!(rejected[0].message, "Unknown type 'Missing'");
+    wait_for(&mut client, &main, "Unknown global 'alert'; consider assigning to it first");
+
+    client.replace_all(
+        &definitions,
+        2,
+        "declare function alert(message: string, seconds: boolean): ()\n",
+    );
+    assert_eq!(client.diagnostics(&definitions, Some(2)), []);
+    wait_for(&mut client, &main, "Expected this to be 'boolean', but got 'string'");
+
+    client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+        text_document: document(&definitions),
+    });
+    assert_eq!(client.next_published(&definitions).diagnostics, []);
+    wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
 }
 
 #[test]

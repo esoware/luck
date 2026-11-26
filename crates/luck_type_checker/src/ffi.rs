@@ -214,6 +214,9 @@ unsafe extern "C" {
         errors: LuckErrors,
     );
     fn luck_luau_config_aliases(source: LuckStr, errors: LuckErrors, aliases: LuckAliases);
+    fn luck_config_save(config: NonNull<CxxConfig>) -> NonNull<CxxConfig>;
+    fn luck_config_set(config: NonNull<CxxConfig>, saved: NonNull<CxxConfig>);
+    fn luck_config_free(config: NonNull<CxxConfig>);
     fn luck_checker_new(host: LuckHost) -> NonNull<CxxChecker>;
     fn luck_checker_free(checker: NonNull<CxxChecker>);
     fn luck_checker_load_definitions(
@@ -543,6 +546,46 @@ impl Config<'_> {
             );
         }
         errors.pop().map_or(Ok(()), |error| Err(error.message))
+    }
+
+    /// A copy of what's set, which [`Self::set`] sets on another module, so
+    /// a host that keeps the config of each directory, as `luau-analyze`
+    /// does, runs a `.config.luau` once for every module below it, or `None`
+    /// once the check that asked for the config is cancelled, which may have
+    /// stopped a `.config.luau` short.
+    pub fn saved(&self) -> Option<SavedConfig> {
+        // SAFETY: the token is the one the frontend passed with the config,
+        // for the call `self` is borrowed in.
+        if unsafe { luck_cancellation_is_cancelled(self.cancellation) } {
+            return None;
+        }
+        // SAFETY: the config is the one the frontend asked the host for, for
+        // that call, and the copy is the `SavedConfig`'s to free.
+        Some(SavedConfig { raw: unsafe { luck_config_save(self.raw) } })
+    }
+
+    /// Sets what `saved` holds in place of what's set.
+    pub fn set(&mut self, saved: &SavedConfig) {
+        // SAFETY: as for `apply_luaurc`, and `saved` outlives the call, which
+        // copies it.
+        unsafe { luck_config_set(self.raw, saved.raw) };
+    }
+}
+
+/// A copy of a [`Config`], which a host keeps to set on other modules.
+#[derive(Debug)]
+pub struct SavedConfig {
+    raw: NonNull<CxxConfig>,
+}
+
+// SAFETY: it points at a Luau `Config` of its own, which keeps nothing tied
+// to the thread that made it.
+unsafe impl Send for SavedConfig {}
+
+impl Drop for SavedConfig {
+    fn drop(&mut self) {
+        // SAFETY: the copy is freed once, here.
+        unsafe { luck_config_free(self.raw) };
     }
 }
 

@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::io::Write as _;
-use std::mem;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +13,7 @@ use luck_semantic::SemanticBuilder;
 use luck_stdlib::{SecurityLevel, roblox_definitions};
 use luck_token::{LineIndex, Span, index_to_offset, offset_to_index};
 use luck_type_checker::{
-    CancellationToken, CheckError, Checker, Config, Host, luau_config_aliases,
+    CancellationToken, CheckError, Checker, Config, Host, SavedConfig, luau_config_aliases,
 };
 use rustc_hash::FxHashMap;
 
@@ -105,9 +104,9 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
         }
     }
 
-    let mut type_errors = TypeErrors { by_path: FxHashMap::default(), configs: Vec::new() };
+    let host = FileHost::new()?;
+    let mut by_path = FxHashMap::default();
     for ((security, definitions), group) in groups {
-        let host = FileHost::new()?;
         let names_and_texts: Vec<(String, Cow<'_, str>)> = definitions
             .iter()
             .map(|source| match source {
@@ -126,7 +125,7 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
             })
             .collect();
         let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
-        let mut checker = Checker::new(host);
+        let mut checker = Checker::new(&host);
         for (name, text) in &names_and_texts {
             if let Err(diags) = checker.load_definitions(name, text) {
                 print_document(name, text.as_bytes(), &diags);
@@ -145,44 +144,37 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
         let diags = match checker.check(&names, threads, &CancellationToken::new()) {
             Ok(diags) => diags,
             Err(CheckError::Internal { module, diag }) => {
-                let path = checker.host_mut().path(&module);
+                let path = host.path(&module);
                 return Err(fail_with_diags(&[FileDiagnostics { path, diags: vec![diag] }]));
             }
             // Nothing cancels the token.
             Err(CheckError::Cancelled) => Vec::new(),
         };
-        type_errors.by_path.extend(
+        by_path.extend(
             modules
                 .into_iter()
                 .zip(diags)
                 .filter(|(_, diags)| !diags.is_empty())
                 .map(|((path, _), diags)| (path, diags)),
         );
-        // A config above files of two groups is read once for each.
-        for config in mem::take(checker.host_mut().config_errors.get_mut()) {
-            if !type_errors.configs.iter().any(|known| known.path == config.path) {
-                type_errors.configs.push(config);
-            }
-        }
     }
-    Ok(type_errors)
+    Ok(TypeErrors { by_path, configs: host.config_errors.into_inner() })
 }
 
 /// The file system as Luau's type checker reads it, with `require` resolved as
 /// `luck build` resolves it, and each module named by its canonical path,
-/// relative to the working directory when it's under it.
+/// relative to the working directory when it's under it. Every group's
+/// checker reads through one, so a run reads each config once.
 struct FileHost {
     working_directory: PathBuf,
     resolver: Resolver,
-    configs: RefCell<FxHashMap<PathBuf, DirectoryConfigs>>,
-    /// The E014 of each config Luau couldn't read, from the first time it
-    /// read it.
+    /// The config each directory gives the modules in it, from its `.luaurc`
+    /// or `.config.luau` and the ones above it, read the first time a module
+    /// below it asks, as `luau-analyze` keeps them.
+    configs: RefCell<FxHashMap<PathBuf, SavedConfig>>,
+    /// The E014 of each config Luau couldn't read.
     config_errors: RefCell<Vec<FileDiagnostics>>,
 }
-
-/// A directory's `.luaurc` and `.config.luau`, where it has them, as read the
-/// first time a module below it asked.
-type DirectoryConfigs = (Option<String>, Option<String>);
 
 impl FileHost {
     fn new() -> Result<Self, Exit> {
@@ -207,7 +199,7 @@ impl FileHost {
     }
 }
 
-impl Host for FileHost {
+impl Host for &FileHost {
     fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
         FileSystemOs.read(&self.path(module)).ok().map(Cow::Owned)
     }
@@ -223,27 +215,27 @@ impl Host for FileHost {
         let path = self.path(module);
         let directories: Vec<&Path> = path.ancestors().skip(1).collect();
         let mut configs = self.configs.borrow_mut();
-        for &directory in directories.iter().rev() {
-            let mut is_first_read = false;
-            let (luaurc, luau_config) =
-                &*configs.entry(directory.to_path_buf()).or_insert_with(|| {
-                    is_first_read = true;
-                    let read = |name: &str| {
-                        String::from_utf8(FileSystemOs.read(&directory.join(name)).ok()?).ok()
-                    };
-                    (read(".luaurc"), read(".config.luau"))
-                });
-            let (name, text, applied) = match (luaurc, luau_config) {
-                (Some(text), Some(_)) => {
-                    (".luaurc", text, Err("Both .luaurc and .config.luau files exist".to_owned()))
+        let cached = directories.iter().position(|directory| configs.contains_key(*directory));
+        if let Some(index) = cached {
+            config.set(&configs[directories[index]]);
+        }
+        for &directory in directories[..cached.unwrap_or(directories.len())].iter().rev() {
+            let read =
+                |name: &str| String::from_utf8(FileSystemOs.read(&directory.join(name)).ok()?).ok();
+            let (luaurc, luau_config) = (read(".luaurc"), read(".config.luau"));
+            let applied = match (&luaurc, &luau_config) {
+                (Some(text), Some(_)) => Some((
+                    ".luaurc",
+                    text,
+                    Err("Both .luaurc and .config.luau files exist".to_owned()),
+                )),
+                (Some(text), None) => Some((".luaurc", text, config.apply_luaurc(text))),
+                (None, Some(source)) => {
+                    Some((".config.luau", source, config.apply_luau_config(source)))
                 }
-                (Some(text), None) => (".luaurc", text, config.apply_luaurc(text)),
-                (None, Some(source)) => (".config.luau", source, config.apply_luau_config(source)),
-                (None, None) => continue,
+                (None, None) => None,
             };
-            if let Err(error) = applied
-                && is_first_read
-            {
+            if let Some((name, text, Err(error))) = applied {
                 let config_path = directory.join(name);
                 let relative = config_path.strip_prefix(&self.working_directory);
                 let diag = Diagnostic::e014(config_error_span(&error, text), &error);
@@ -251,6 +243,9 @@ impl Host for FileHost {
                     path: relative.map_or_else(|_| config_path.clone(), Path::to_path_buf),
                     diags: vec![diag],
                 });
+            }
+            if let Some(saved) = config.saved() {
+                configs.insert(directory.to_path_buf(), saved);
             }
         }
     }

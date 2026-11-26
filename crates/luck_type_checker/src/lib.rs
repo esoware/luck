@@ -9,11 +9,12 @@
 //! `require` string names, and the `.luaurc` and `.config.luau` files that
 //! make up a module's config, which Luau's own Config library reads, running
 //! a `.config.luau` in its sandbox for at most a second, as
-//! [`luau_config_aliases`] does for a caller that wants only its aliases. So
-//! it works with nothing on disk. It starts with Luau's built-in definitions,
-//! which [`builtin_definitions`] gives as text, loads more from text with
-//! [`Checker::load_definitions`], types what a definition file can't when
-//! asked, with [`Checker::return_named_type`] and
+//! [`luau_config_aliases`] does for a caller that wants only its aliases, and
+//! which a host can keep for a directory, with [`Config::saved`], and set on
+//! every module there. So it works with nothing on disk. It starts with
+//! Luau's built-in definitions, which [`builtin_definitions`] gives as text,
+//! loads more from text with [`Checker::load_definitions`], types what a
+//! definition file can't when asked, with [`Checker::return_named_type`] and
 //! [`Checker::bind_type_namespace`], and keeps each module it checks until
 //! [`Checker::invalidate`] marks it changed. [`Checker::check`] checks many
 //! modules on worker threads it starts and joins, through Analysis's own
@@ -60,4 +61,4 @@ mod ffi;
 pub use checker::{
     CheckError, Checker, Completion, CompletionKind, Declaration, Description, Host, Signature,
 };
-pub use ffi::{CancellationToken, Config, builtin_definitions, luau_config_aliases};
+pub use ffi::{CancellationToken, Config, SavedConfig, builtin_definitions, luau_config_aliases};

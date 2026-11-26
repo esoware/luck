@@ -2,7 +2,7 @@ use std::num::NonZero;
 
 use luck_type_checker::{CancellationToken, CheckError, luau_config_aliases};
 
-use crate::common::checker;
+use crate::common::{check, checker};
 
 #[test]
 fn a_config_luau_s_aliases_come_back_by_lowercased_name() {
@@ -66,10 +66,41 @@ fn a_config_luau_stops_once_the_check_that_runs_it_is_cancelled() {
     let cancelled = checker.check(&["main"], NonZero::<usize>::MIN, &cancellation);
 
     assert_eq!(cancelled, Err(CheckError::Cancelled));
-    let errors = checker.host_mut().config_errors.get_mut();
+    let host = checker.host_mut();
+    let errors = host.config_errors.get_mut();
     assert!(!errors.is_empty(), "the config ran");
     assert!(
         errors.iter().all(|error| error == "config:1: Analysis has been cancelled by user"),
         "{errors:?}"
+    );
+    assert!(host.saved.get_mut().is_none(), "a config stopped short isn't kept");
+}
+
+#[test]
+fn a_saved_config_sets_a_config_luau_s_mode_on_every_module() {
+    let mismatch = "\
+local count: number = \"one\"
+return count
+";
+    let mut checker = checker(&[("first", mismatch), ("second", mismatch), ("third", mismatch)]);
+    checker.host_mut().config_luau =
+        Some("return { luau = { languagemode = \"strict\" } }\n".to_owned());
+
+    let diags = check(&mut checker, &["first", "second", "third"]).unwrap();
+
+    assert!(diags.iter().all(|module| module.len() == 1), "each is strict: {diags:?}");
+}
+
+#[test]
+fn a_saved_config_runs_a_config_luau_once_for_every_module() {
+    let mut checker =
+        checker(&[("first", "return 1\n"), ("second", "return 2\n"), ("third", "return 3\n")]);
+    checker.host_mut().config_luau = Some("while true do end\n".to_owned());
+
+    check(&mut checker, &["first", "second", "third"]).unwrap();
+
+    assert_eq!(
+        *checker.host_mut().config_errors.get_mut(),
+        ["config:1: Typeinfer failed to complete in allotted time"]
     );
 }

@@ -464,6 +464,18 @@ void luck_luau_config_aliases(LuckStr source, LuckErrors errors, LuckAliases ali
     }
 }
 
+Luau::Config* luck_config_save(const Luau::Config* config) noexcept {
+    return new Luau::Config(*config);
+}
+
+void luck_config_set(Luau::Config* config, const Luau::Config* saved) noexcept {
+    *config = *saved;
+}
+
+void luck_config_free(Luau::Config* config) noexcept {
+    delete config;
+}
+
 Checker* luck_checker_new(LuckHost host) noexcept {
     set_flags();
     return new Checker(host);
@@ -736,7 +748,7 @@ void luck_cancellation_cancel(const CancellationToken* token) noexcept {
 }
 
 bool luck_cancellation_is_cancelled(const CancellationToken* token) noexcept {
-    return (*token)->requested();
+    return *token && (*token)->requested();
 }
 
 void luck_cancellation_free(CancellationToken* token) noexcept {

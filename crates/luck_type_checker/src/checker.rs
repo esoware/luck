@@ -32,7 +32,8 @@ pub trait Host {
     fn resolve(&self, requirer: &str, path: &str) -> Option<String>;
 
     /// Applies the `.luaurc` and `.config.luau` files that govern `module` to
-    /// `config`, outermost first.
+    /// `config`, outermost first, or sets what [`Config::saved`] kept of
+    /// them. Analysis asks for each module's config twice a check.
     fn config(&self, module: &str, config: &mut Config<'_>);
 }
 

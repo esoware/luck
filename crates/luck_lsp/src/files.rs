@@ -127,6 +127,13 @@ impl ClientFiles {
         self.files.read().keys().cloned().collect()
     }
 
+    /// What the client last pushed of each file, by its path.
+    pub(crate) fn pushed(&self) -> BTreeMap<PathBuf, Arc<str>> {
+        let files = self.files.read();
+        let pushed = files.iter().filter_map(|(path, file)| Some((path, file.pushed.as_ref()?)));
+        pushed.map(|(path, text)| (path.clone(), Arc::clone(text))).collect()
+    }
+
     /// Whether a file lies under `path`, which is then a directory.
     fn has_below(&self, path: &Path) -> bool {
         let files = self.files.read();

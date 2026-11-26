@@ -14,12 +14,17 @@
 //! cancels once the next change starts a new one. So a job never brings a
 //! checker back to older text, and a check of text that changed since stops.
 //!
-//! A definition file is no module, so it's never checked as one. What Luau
-//! finds wrong with it as it loads it is published on it, open or not.
+//! A definition file is no module, so it's never checked as one. A checker
+//! loads each one its project lists as its open document holds it, if it has
+//! one, and Luau can't unload a definition, so once that text changes, the
+//! generation's job loads a new checker in place of the old one, which every
+//! other job reads until the new one is ready, and stops between definition
+//! files once the next generation starts. What Luau finds wrong with a
+//! definition file as it loads it is published on it, open or not.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
-use std::iter;
+use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeMap;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,7 +38,7 @@ use luck_resolver::{FileSystem as _, ResolverGeneric, to_slash_lossy};
 use luck_stdlib::{SecurityLevel, luau_definitions, roblox_definitions};
 use luck_type_checker::{
     CancellationToken, CheckError, Checker, Completion, Config, Declaration, Description, Host,
-    luau_config_aliases,
+    SavedConfig, luau_config_aliases,
 };
 use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -115,19 +120,30 @@ impl TypeChecks {
 pub(crate) struct TypeCheck {
     security: SecurityLevel,
     definitions: Vec<DefinitionSource>,
-    /// Luau's own definitions, then the project's, in the order it loads
-    /// them.
-    packages: Vec<Package>,
     files: Files,
     /// The settings' generation the project came from, which a problem of
     /// its definitions is published under.
     generation: u64,
-    /// Loaded the first time a job needs it, since that takes a while.
-    checker: Mutex<Option<Checker<ModuleHost>>>,
+    /// The checker every job reads, loaded the first time a job needs one,
+    /// since that takes a while.
+    loaded: Mutex<Option<Loaded>>,
+    /// Held while a job loads a checker in place of the one in `loaded`, so
+    /// only one job loads it.
+    loading: Mutex<()>,
     /// What changed in the files since the last check.
     changed: Mutex<Changed>,
-    /// What Luau found wrong with each definition file it couldn't load.
+    /// What Luau found wrong with each definition file the checker in
+    /// `loaded` couldn't load.
     rejected: Mutex<Vec<(PathBuf, Vec<Diagnostic>)>>,
+}
+
+/// A checker and the definitions it loaded.
+#[derive(Debug)]
+struct Loaded {
+    checker: Checker<ModuleHost>,
+    /// Luau's own definitions, then the project's, in the order it loaded
+    /// them, each open one as its document held it.
+    packages: Vec<Package>,
 }
 
 #[derive(Debug, Default)]
@@ -146,61 +162,105 @@ impl TypeCheck {
         files: Files,
         generation: u64,
     ) -> Self {
-        let luau =
-            Package::new("@luau".to_owned(), Some(luau_uri()), Cow::Borrowed(luau_definitions()));
-        let packages = iter::once(luau)
-            .chain(definitions.iter().map(|source| match source {
-                DefinitionSource::Roblox => Package::new(
-                    "@roblox".to_owned(),
-                    Some(roblox_uri(security)),
-                    roblox_definitions(security),
-                ),
-                DefinitionSource::File { path, text } => {
-                    Package::new(module_name(path), files.uri(path), Cow::Owned(text.clone()))
-                }
-            }))
-            .collect();
         Self {
             security,
             definitions,
-            packages,
             files,
             generation,
-            checker: Mutex::default(),
+            loaded: Mutex::default(),
+            loading: Mutex::default(),
             changed: Mutex::default(),
             rejected: Mutex::default(),
         }
     }
 
-    /// A checker with the project's definitions loaded, which shows why one
-    /// doesn't load and publishes it on the file.
-    fn load(&self, session: &Session) -> Checker<ModuleHost> {
+    fn is_loaded(&self) -> bool {
+        self.loaded.lock().is_some()
+    }
+
+    /// Loads a checker with the project's definitions, each open one as
+    /// `open` holds it, in place of the one loaded, which every other job
+    /// reads meanwhile, unless that one loaded the same, or returns `None`
+    /// once `cancellation` is cancelled. It publishes on each definition file
+    /// why it doesn't load, and shows it, or clears that once it loads.
+    fn reload(
+        &self,
+        session: &Session,
+        open: &OpenModules,
+        cancellation: &CancellationToken,
+    ) -> Option<()> {
+        let _loading = self.loading.lock();
+        let is_current = self.loaded.lock().as_ref().is_some_and(|loaded| {
+            loaded.packages[1..].iter().zip(&self.definitions).all(|(package, source)| match source
+            {
+                DefinitionSource::Roblox => true,
+                DefinitionSource::File { path, text } => {
+                    package.text() == definition_text(open, path, text)
+                }
+            })
+        });
+        if is_current {
+            return Some(());
+        }
+        if cancellation.is_cancelled() {
+            return None;
+        }
         let mut checker = Checker::new(ModuleHost::new(self.files.clone()));
         checker.retain_type_graphs();
-        for (package, source) in self.packages[1..].iter().zip(&self.definitions) {
-            let Err(diags) = checker.load_definitions(package.name(), package.text()) else {
-                continue;
-            };
-            let problems: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-            let message = format!(
-                "luck: Luau can't load the definition file `{}`, so its declarations are left out: {}",
-                package.name(),
-                problems.join("; ")
-            );
-            let shown = ShowMessageParams { typ: MessageType::ERROR, message };
-            let mut notifications = vec![Notification::new(ShowMessage::METHOD.to_owned(), shown)];
-            if let DefinitionSource::File { path, text } = source {
-                if let Some(uri) = package.uri() {
-                    let diagnostics =
-                        diagnostics::config_to_lsp(uri, &diags, text, session.encoding());
-                    let published =
-                        PublishDiagnosticsParams { uri: uri.clone(), diagnostics, version: None };
-                    notifications
-                        .push(Notification::new(PublishDiagnostics::METHOD.to_owned(), published));
-                }
-                self.rejected.lock().push((path.clone(), diags));
+        let luau =
+            Package::new("@luau".to_owned(), Some(luau_uri()), Cow::Borrowed(luau_definitions()));
+        let mut packages = vec![luau];
+        let mut rejected = Vec::new();
+        let mut notifications = Vec::new();
+        for source in &self.definitions {
+            if cancellation.is_cancelled() {
+                return None;
             }
-            session.send(Task::ConfigError { generation: self.generation, notifications });
+            let package = match source {
+                DefinitionSource::Roblox => Package::new(
+                    "@roblox".to_owned(),
+                    Some(roblox_uri(self.security)),
+                    roblox_definitions(self.security),
+                ),
+                DefinitionSource::File { path, text } => Package::new(
+                    module_name(path),
+                    self.files.uri(path),
+                    Cow::Owned(definition_text(open, path, text).to_owned()),
+                ),
+            };
+            if let Err(diags) = checker.load_definitions(package.name(), package.text()) {
+                // An open definition file loads again with each edit, so its
+                // problems show only on it, not in a message for each edit.
+                if !open.contains_key(package.name()) {
+                    let problems: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
+                    let message = format!(
+                        "luck: Luau can't load the definition file `{}`, so its declarations are left out: {}",
+                        package.name(),
+                        problems.join("; ")
+                    );
+                    let shown = ShowMessageParams { typ: MessageType::ERROR, message };
+                    notifications.push(Notification::new(ShowMessage::METHOD.to_owned(), shown));
+                }
+                if let DefinitionSource::File { path, .. } = source {
+                    if let Some(uri) = package.uri() {
+                        let diagnostics = diagnostics::config_to_lsp(
+                            uri,
+                            &diags,
+                            package.text(),
+                            session.encoding(),
+                        );
+                        let published = PublishDiagnosticsParams {
+                            uri: uri.clone(),
+                            diagnostics,
+                            version: None,
+                        };
+                        let method = PublishDiagnostics::METHOD.to_owned();
+                        notifications.push(Notification::new(method, published));
+                    }
+                    rejected.push((path.clone(), diags));
+                }
+            }
+            packages.push(package);
         }
         if self.definitions.contains(&DefinitionSource::Roblox) {
             // What Roblox Studio types past its definitions: the class a
@@ -211,7 +271,29 @@ impl TypeCheck {
             checker.return_named_type("ServiceProvider", "FindService");
             checker.bind_type_namespace("Enum", "EnumItem");
         }
-        checker
+        {
+            let mut loaded = self.loaded.lock();
+            if cancellation.is_cancelled() {
+                return None;
+            }
+            *loaded = Some(Loaded { checker, packages });
+        }
+        let loads_now: Vec<PathBuf> = {
+            let mut kept = self.rejected.lock();
+            let was_rejected = mem::replace(&mut *kept, rejected);
+            let paths = was_rejected.into_iter().map(|(path, _)| path);
+            paths
+                .filter(|path| kept.iter().all(|(rejected_path, _)| rejected_path != path))
+                .collect()
+        };
+        for uri in loads_now.iter().filter_map(|path| self.files.uri(path)) {
+            let cleared = PublishDiagnosticsParams { uri, diagnostics: Vec::new(), version: None };
+            notifications.push(Notification::new(PublishDiagnostics::METHOD.to_owned(), cleared));
+        }
+        if !notifications.is_empty() {
+            session.send(Task::ConfigError { generation: self.generation, notifications });
+        }
+        Some(())
     }
 
     /// What Luau found wrong with the definition file at `path` as it loaded
@@ -222,30 +304,30 @@ impl TypeCheck {
         found.map(|(_, diags)| diags.clone()).unwrap_or_default()
     }
 
-    /// What `read` gives once `modules` are checked as `open` holds the open
-    /// documents, with each one's diagnostics, or `None` once `cancellation`
-    /// is cancelled.
+    /// What `read` gives once the checker loaded checks `modules` as `open`
+    /// holds the open documents, with each one's diagnostics, or `None` once
+    /// `cancellation` is cancelled, or while no checker is loaded.
     fn with_checked<R>(
         &self,
         session: &Session,
         open: OpenModules,
         modules: &[String],
         cancellation: &CancellationToken,
-        read: impl FnOnce(&mut Checker<ModuleHost>, Vec<Vec<Diagnostic>>) -> R,
+        read: impl FnOnce(&mut Loaded, Vec<Vec<Diagnostic>>) -> R,
     ) -> Option<R> {
-        let mut guard = self.checker.lock();
+        let mut guard = self.loaded.lock();
         if cancellation.is_cancelled() {
             return None;
         }
-        let checker = guard.get_or_insert_with(|| self.load(session));
+        let loaded = guard.as_mut()?;
         let changed = mem::take(&mut *self.changed.lock());
         let changed_modules: FxHashSet<String> = changed
             .modules
             .iter()
             .map(|path| module_name(&self.files.canonicalize_existing(path)))
             .collect();
-        sync(checker, open, &changed_modules, changed.is_everything);
-        let diags = match checker.check(modules, session.threads(), cancellation) {
+        sync(&mut loaded.checker, open, &changed_modules, changed.is_everything);
+        let diags = match loaded.checker.check(modules, session.threads(), cancellation) {
             Ok(diags) => diags,
             Err(CheckError::Cancelled) => return None,
             Err(CheckError::Internal { module, diag }) => modules
@@ -253,8 +335,15 @@ impl TypeCheck {
                 .map(|name| if *name == module { vec![diag.clone()] } else { Vec::new() })
                 .collect(),
         };
-        Some(read(checker, diags))
+        Some(read(loaded, diags))
     }
+}
+
+/// The text of the definition file at `path`, which its project read as
+/// `text`, as a checker loads it: its open document's, where `open` holds
+/// one.
+fn definition_text<'text>(open: &'text OpenModules, path: &Path, text: &'text str) -> &'text str {
+    open.get(&module_name(path)).map_or(text, |open_text| open_text)
 }
 
 /// What a request reads of the types of the module it's about.
@@ -292,6 +381,9 @@ impl Types<'_> {
 /// document at `uri` that a job reads, once Luau has checked it with the
 /// other open documents as `open` holds them, or `None` once `cancellation`
 /// is cancelled. A definition file, which is no module, has no types to read.
+///
+/// It reads the checker loaded, whatever definitions it loaded, and loads
+/// one only when none is, so a request never waits for a new one.
 pub(crate) fn with_types<R>(
     session: &Session,
     uri: &Uri,
@@ -308,10 +400,17 @@ pub(crate) fn with_types<R>(
     open.insert(module.clone(), Arc::clone(document.shared_text()));
     let check =
         session.type_checks().of(settings.project.project(), session.settings().generation());
+    if !check.is_loaded() {
+        check.reload(session, &open, cancellation)?;
+    }
     let modules = [module];
-    check.with_checked(session, open, &modules, cancellation, |checker, _| {
-        let (packages, encoding) = (&check.packages, session.encoding());
-        read(&mut Types { checker, packages, module: &modules[0], encoding })
+    check.with_checked(session, open, &modules, cancellation, |loaded, _| {
+        read(&mut Types {
+            checker: &mut loaded.checker,
+            packages: &loaded.packages,
+            module: &modules[0],
+            encoding: session.encoding(),
+        })
     })
 }
 
@@ -319,6 +418,9 @@ pub(crate) fn with_types<R>(
 /// in order, once Luau has checked them together, or `None` once
 /// `cancellation` is cancelled. A document the project leaves out has none,
 /// and a definition file has what Luau found wrong with it as it loaded it.
+///
+/// A checker that loaded a definition file with other text than the open
+/// documents now give it loads afresh first.
 pub(crate) fn type_errors(
     session: &Session,
     documents: &[(Uri, Arc<Document>)],
@@ -347,6 +449,7 @@ pub(crate) fn type_errors(
     }
     let mut errors = vec![Vec::new(); documents.len()];
     for CheckGroup { check, modules, definitions } in groups {
+        check.reload(session, &open, cancellation)?;
         let (indices, names): (Vec<usize>, Vec<String>) = modules.into_iter().unzip();
         let checked =
             check.with_checked(session, open.clone(), &names, cancellation, |_, diags| diags)?;
@@ -400,6 +503,7 @@ fn sync(
     is_everything: bool,
 ) {
     let host = checker.host_mut();
+    host.pushed = OnceCell::new();
     if is_everything {
         host.resolver.clear_cache();
         host.configs.get_mut().clear();
@@ -430,16 +534,19 @@ fn sync(
 struct ModuleHost {
     files: Files,
     open: OpenModules,
+    /// What the client pushed of each file, taken the first time a check
+    /// reads a module no open document holds, which the check lends Luau as
+    /// it does a document's text.
+    pushed: OnceCell<BTreeMap<PathBuf, Arc<str>>>,
     /// The text each module was last read with: an open document's, or
     /// `None` for the file's.
     read: RefCell<FxHashMap<String, Option<Arc<str>>>>,
     resolver: ResolverGeneric<Files>,
-    configs: RefCell<FxHashMap<PathBuf, DirectoryConfigs>>,
+    /// The config each directory gives the modules in it, from its `.luaurc`
+    /// or `.config.luau` and the ones above it, read the first time a module
+    /// below it asks, as `luau-analyze` keeps them.
+    configs: RefCell<FxHashMap<PathBuf, SavedConfig>>,
 }
-
-/// A directory's `.luaurc` and `.config.luau`, where it has them, as read the
-/// first time a module below it asked.
-type DirectoryConfigs = (Option<String>, Option<String>);
 
 impl ModuleHost {
     fn new(files: Files) -> Self {
@@ -448,6 +555,7 @@ impl ModuleHost {
                 .with_luau_config(luau_config_aliases),
             files,
             open: OpenModules::default(),
+            pushed: OnceCell::new(),
             read: RefCell::default(),
             configs: RefCell::default(),
         }
@@ -460,9 +568,14 @@ impl Host for ModuleHost {
             self.read.borrow_mut().insert(module.to_owned(), Some(Arc::clone(text)));
             return Some(Cow::Borrowed(text.as_bytes()));
         }
-        let source = self.files.read(Path::new(module)).ok()?;
+        let path = Path::new(module);
+        let pushed = self.files.client().map(|client| self.pushed.get_or_init(|| client.pushed()));
+        let source = match pushed.and_then(|pushed| pushed.get(path)) {
+            Some(text) => Cow::Borrowed(text.as_bytes()),
+            None => Cow::Owned(self.files.read(path).ok()?),
+        };
         self.read.borrow_mut().insert(module.to_owned(), None);
-        Some(Cow::Owned(source))
+        Some(source)
     }
 
     fn resolve(&self, requirer: &str, path: &str) -> Option<String> {
@@ -483,26 +596,81 @@ impl Host for ModuleHost {
         }
         let directories: Vec<&Path> = path.ancestors().skip(1).collect();
         let mut configs = self.configs.borrow_mut();
-        for &directory in directories.iter().rev() {
-            let found = configs.entry(directory.to_path_buf()).or_insert_with(|| {
-                let read = |name: &str| {
-                    String::from_utf8(self.files.read(&directory.join(name)).ok()?).ok()
-                };
-                (read(".luaurc"), read(".config.luau"))
-            });
-            let _ = match found {
-                (Some(text), None) => config.apply_luaurc(text),
-                (None, Some(source)) => config.apply_luau_config(source),
+        let cached = directories.iter().position(|directory| configs.contains_key(*directory));
+        if let Some(index) = cached {
+            config.set(&configs[directories[index]]);
+        }
+        for &directory in directories[..cached.unwrap_or(directories.len())].iter().rev() {
+            let read =
+                |name: &str| String::from_utf8(self.files.read(&directory.join(name)).ok()?).ok();
+            let _ = match (read(".luaurc"), read(".config.luau")) {
+                (Some(text), None) => config.apply_luaurc(&text),
+                (None, Some(source)) => config.apply_luau_config(&source),
                 (Some(_), Some(_)) | (None, None) => Ok(()),
             };
+            let Some(saved) = config.saved() else {
+                return;
+            };
+            configs.insert(directory.to_path_buf(), saved);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+    use std::str::FromStr as _;
+    use std::time::{Duration, Instant};
+
+    use luck_resolver::lexically_normalized;
+
     use super::*;
+    use crate::files::ClientFiles;
     use crate::fixtures::{document, session, uri};
+
+    #[test]
+    fn a_config_luau_runs_once_for_every_module_below_it_until_the_files_change() {
+        let client = Arc::new(ClientFiles::default());
+        let push = |name: &str, text: &str| {
+            let path = lexically_normalized(Path::new(&format!("/inmemory/model/{name}")));
+            let uri = Uri::from_str(&format!("inmemory://model/{name}")).expect("a valid URI");
+            client.push(&path, uri, Some(Arc::from(text)));
+            module_name(&path)
+        };
+        let slow_nocheck = "\
+local started = os.clock()
+while os.clock() - started < 0.5 do end
+return { luau = { languagemode = \"nocheck\" } }
+";
+        push(".config.luau", slow_nocheck);
+        let mismatch = "\
+local count: number = \"one\"
+return count
+";
+        let modules =
+            [push("a.luau", mismatch), push("src/b.luau", mismatch), push("src/c.luau", mismatch)];
+        let mut checker = Checker::new(ModuleHost::new(Files::Client(Arc::clone(&client))));
+        let (threads, cancellation) = (NonZero::<usize>::MIN, CancellationToken::new());
+
+        let started = Instant::now();
+        let first = checker.check(&modules, threads, &cancellation).expect("nothing cancels it");
+        for module in &modules {
+            checker.invalidate(module);
+        }
+        let second = checker.check(&modules, threads, &cancellation).expect("nothing cancels it");
+        let elapsed = started.elapsed();
+
+        // Analysis asks for each module's config twice a check, so running
+        // the config each time would take half a second twelve times.
+        assert!(elapsed < Duration::from_secs(2), "it took {elapsed:?}");
+        assert!(first.iter().chain(&second).all(Vec::is_empty), "{first:?} {second:?}");
+
+        push(".config.luau", "return { luau = { languagemode = \"strict\" } }\n");
+        sync(&mut checker, OpenModules::default(), &FxHashSet::default(), true);
+        let strict = checker.check(&modules, threads, &cancellation).expect("nothing cancels it");
+
+        assert!(strict.iter().all(|diags| diags.len() == 1), "{strict:?}");
+    }
 
     #[test]
     fn a_check_a_change_cancelled_reads_nothing() {

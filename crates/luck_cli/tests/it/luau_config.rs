@@ -2,6 +2,7 @@
 //! Config library runs, read wherever a `.luaurc` is.
 
 use std::fs;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -95,6 +96,27 @@ fn a_config_luau_that_errors_is_reported_in_luau_s_words() {
     let build_stderr = stderr_text(&built);
     assert_eq!(built.status.code(), Some(1), "{build_stderr}");
     assert!(build_stderr.contains(".config.luau`, which doesn't load"), "{build_stderr}");
+}
+
+#[test]
+fn a_config_luau_runs_once_for_every_module_below_it() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "luck.json", "{}");
+    write_file(directory.path(), ".config.luau", "while true do end\n");
+    for name in ["a.luau", "b.luau", "src/c.luau", "src/d.luau"] {
+        write_file(directory.path(), name, "return 1\n");
+    }
+
+    let started = Instant::now();
+    let checked = run(directory.path(), &["check"]);
+    let elapsed = started.elapsed();
+
+    let stderr = stderr_text(&checked);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("[E014]").count(), 1, "{stderr}");
+    // Each run takes a second, and Analysis asks for each module's config
+    // twice.
+    assert!(elapsed < Duration::from_secs(4), "it took {elapsed:?}");
 }
 
 #[test]

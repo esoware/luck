@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::num::NonZero;
 
 use luck_diagnostics::Diagnostic;
-use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host};
+use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host, SavedConfig};
 use rustc_hash::FxHashMap;
 
 /// Modules held in memory by name, where `require("./name")` names the module
@@ -15,6 +15,9 @@ pub(crate) struct MemoryHost {
     pub(crate) config_luau: Option<String>,
     /// What Luau said each time it couldn't read the config.
     pub(crate) config_errors: RefCell<Vec<String>>,
+    /// The config once read, which every module after takes, as a host keeps
+    /// a directory's.
+    pub(crate) saved: RefCell<Option<SavedConfig>>,
 }
 
 impl Host for MemoryHost {
@@ -28,6 +31,10 @@ impl Host for MemoryHost {
     }
 
     fn config(&self, _: &str, config: &mut Config<'_>) {
+        if let Some(saved) = &*self.saved.borrow() {
+            config.set(saved);
+            return;
+        }
         let applied = match (&self.luaurc, &self.config_luau) {
             (Some(luaurc), _) => config.apply_luaurc(luaurc),
             (None, Some(source)) => config.apply_luau_config(source),
@@ -36,6 +43,7 @@ impl Host for MemoryHost {
         if let Err(error) = applied {
             self.config_errors.borrow_mut().push(error);
         }
+        *self.saved.borrow_mut() = config.saved();
     }
 }
 
