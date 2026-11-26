@@ -25,6 +25,24 @@ fn a_file_not_yet_on_disk_matches_relative_to_the_root() {
     );
 }
 
+/// An editor's model is Luau because the editor opened it as Luau, so only
+/// an `include` it doesn't match leaves it out.
+#[test]
+fn a_document_with_no_luau_name_is_included_unless_a_glob_leaves_it_out() {
+    let (directory, project) = loaded(&[("luck.json", r#"{ "exclude": ["gen/**"] }"#)]);
+    let model = directory.path().join("model/1");
+    assert!(project.filter().includes_document(&model));
+    assert!(!project.filter().is_included(&model), "a walk takes `.luau` and `.lua` files");
+    assert!(!project.filter().includes_document(&directory.path().join("gen/1")));
+}
+
+#[test]
+fn a_document_an_include_does_not_match_is_left_out() {
+    let (directory, project) = loaded(&[("luck.json", r#"{ "include": ["src/**"] }"#)]);
+    assert!(!project.filter().includes_document(&directory.path().join("model/1")));
+    assert!(project.filter().includes_document(&directory.path().join("src/1")));
+}
+
 #[test]
 fn a_bad_glob_is_an_error_on_the_glob() {
     let text = r#"{ "exclude": ["gen/**", "src/{a,b"] }"#;

@@ -18,7 +18,8 @@
 //!   workspace folders, and definition into the definition files, Luau's
 //!   and Roblox's as `luck:` documents, served through
 //!   `workspace/textDocumentContent`
-//! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
+//! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`, and the
+//!   custom notification `luck/didChangeFiles`
 //! - positions in UTF-8, UTF-16, or UTF-32, whichever `positionEncoding`
 //!   settles
 //!
@@ -44,10 +45,16 @@
 //! analysis's `require` sites and its project's resolver, and where it names
 //! a member of a module's table, the one it returns or one it requires. An
 //! open document's record comes from its analysis, and every other file's
-//! is read from disk once, as idle workers walk the folders ahead of the
+//! is read from its files once, as idle workers walk the folders ahead of the
 //! first request that needs them, until the file watcher says it changed. A
 //! cross-file request reads every record, between which it stops once the
 //! client cancels it.
+//!
+//! Every source comes through a file system, the disk, or once the client
+//! gives a config as its `initializationOptions`, the files the client holds,
+//! its open documents and the ones it pushes with `luck/didChangeFiles`, by
+//! paths made of their URIs. A `.d.luau` file is a definition file, which
+//! parses as one and is never checked as a module.
 //!
 //! [`serve_stdio`] serves over stdio, as `luck lsp` does, [`serve_socket`]
 //! over TCP for debugging, and [`serve`] over any `lsp_server` connection.
@@ -61,6 +68,7 @@ mod analyzed;
 mod capabilities;
 mod definitions;
 mod document;
+mod files;
 #[cfg(test)]
 mod fixtures;
 mod line_index;

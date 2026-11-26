@@ -1,5 +1,5 @@
 //! The ignored `regenerate_roblox_definitions` test, which writes
-//! `roblox.luau` from the live API dump, `LuauTypes.d.luau`, and Roblox's
+//! `roblox.d.luau` from the live API dump, `LuauTypes.d.luau`, and Roblox's
 //! Creator Documentation, and offline checks of the committed file at each
 //! security level.
 
@@ -67,7 +67,7 @@ const KEYWORDS: [&str; 21] = [
 ];
 
 fn generated_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib_data/roblox.luau")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib_data/roblox.d.luau")
 }
 
 fn fetch(url: &str) -> Vec<u8> {
@@ -700,7 +700,7 @@ fn missing_from_luau(candidates: &[String]) -> BTreeSet<String> {
 }
 
 #[test]
-#[ignore = "rewrites roblox.luau from the live API dump, LuauTypes.d.luau, and Creator Documentation; run with --ignored"]
+#[ignore = "rewrites roblox.d.luau from the live API dump, LuauTypes.d.luau, and Creator Documentation; run with --ignored"]
 fn regenerate_roblox_definitions() {
     let dump: Value = serde_json::from_slice(&fetch(DUMP_URL)).expect("the API dump is JSON");
     let full_dump: Value =
@@ -1030,7 +1030,7 @@ fn regenerate_roblox_definitions() {
     }
 
     let trimmed = out.trim_end().to_owned() + "\n";
-    fs::write(generated_path(), trimmed).expect("write roblox.luau");
+    fs::write(generated_path(), trimmed).expect("write roblox.d.luau");
 }
 
 /// Each security level's definitions, which every test below reads.

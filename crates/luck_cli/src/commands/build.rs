@@ -15,7 +15,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
-use crate::project::{current_directory, load_project};
+use crate::project::{bundle_options, current_directory, load_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -87,7 +87,7 @@ impl BuildArgs {
     fn config_path(&self) -> Result<PathBuf, Exit> {
         match &self.config {
             Some(path) => Ok(path.clone()),
-            None => find_config(&current_directory()?).ok_or_else(|| {
+            None => find_config(&FileSystemOs, &current_directory()?).ok_or_else(|| {
                 usage_error(
                     "no `luck.json` found, so run from a project directory or use `--config`",
                 )
@@ -174,7 +174,7 @@ impl BuildArgs {
         let Ok(config_path) = self.config_path() else {
             return Ok(WatchedFiles::default());
         };
-        let project = match Project::load(&config_path) {
+        let project = match Project::load(&config_path, FileSystemOs) {
             Ok(project) => project,
             Err(error) => {
                 config_error(&error);
@@ -213,7 +213,7 @@ impl BuildArgs {
         let start = Instant::now();
         // The arenas outlive each build, so a rebuild reuses their memory.
         arenas.reset();
-        let options = project.bundle_options();
+        let options = bundle_options(project, None);
         let bundle_failure = |errors: Vec<FileDiagnostics>| {
             print_files(&errors);
             let source_files =

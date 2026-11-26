@@ -92,11 +92,11 @@ ast:
 schema:
   cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
-# Regenerate luck_stdlib's luau.luau from Luau's built-in definitions and its live library reference, after `just luau`
+# Regenerate luck_stdlib's luau.d.luau from Luau's built-in definitions and its live library reference, after `just luau`
 stdlib:
   cargo test -p luck_stdlib regenerate_luau_definitions -- --ignored
 
-# Regenerate luck_stdlib's roblox.luau from the live Roblox API dump, LuauTypes.d.luau, and Creator Documentation
+# Regenerate luck_stdlib's roblox.d.luau from the live Roblox API dump, LuauTypes.d.luau, and Creator Documentation
 roblox-api:
   cargo test -p luck_stdlib regenerate_roblox_definitions -- --ignored
 

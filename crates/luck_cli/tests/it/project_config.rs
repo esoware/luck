@@ -205,8 +205,9 @@ fn a_config_error_names_the_place_in_the_file() {
         .stderr(predicate::str::contains("luck.json:2:24"));
 }
 
-/// The definition file sits among the sources, but it's no source of the
-/// project, so `lint` doesn't read its `declare` statements as code.
+/// The definition file sits among the sources, and `lint` reads it as the
+/// definition file its name makes it, so its `declare` statements are no
+/// syntax error.
 #[test]
 fn lint_reads_the_definition_files_a_config_names() {
     let project = TempDir::new().expect("project");

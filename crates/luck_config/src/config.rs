@@ -62,10 +62,11 @@ pub(crate) struct OverrideConfig {
 pub(crate) struct LuckConfig {
     /// The definitions every `.luau` and `.lua` file runs with over Luau's
     /// standard library, in order: `"@roblox"` for Roblox's API, at the
-    /// `security` level, and any other entry a Luau definition file,
-    /// relative to this file's directory, whose `declare` statements say what
-    /// a host gives a script, as they do for Luau's type checker. A name a
-    /// later one declares replaces the one before it.
+    /// `security` level, and any other entry a Luau definition file, whose
+    /// name ends in `.d.luau`, relative to this file's directory, whose
+    /// `declare` statements say what a host gives a script, as they do for
+    /// Luau's type checker. A name a later one declares replaces the one
+    /// before it.
     #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
     pub definitions: Option<Vec<DefinitionsEntry>>,
     /// The security level the files of a project that loads `"@roblox"` run

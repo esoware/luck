@@ -53,8 +53,8 @@ pub fn source_fixtures() -> Vec<SourceFixture> {
     luau_fixtures().into_iter().filter(|fixture| !is_definition_file(fixture)).collect()
 }
 
-/// Every `.luau` file under the shared fixture tree's `definitions/`, in path
-/// order, each a definition file, which parses only as one.
+/// Every `.d.luau` file in the shared fixture tree, in path order, each a
+/// definition file, which parses only as one.
 ///
 /// # Panics
 ///
@@ -64,7 +64,7 @@ pub fn definition_fixtures() -> Vec<SourceFixture> {
 }
 
 fn is_definition_file(fixture: &SourceFixture) -> bool {
-    fixture.relative_path.starts_with("definitions")
+    fixture.path.as_os_str().as_encoded_bytes().ends_with(b".d.luau")
 }
 
 fn luau_fixtures() -> Vec<SourceFixture> {

@@ -159,8 +159,11 @@
 //! use luck::allocator::ThreadAllocators;
 //! use luck::bundler::{BundleOptions, DynamicRequire};
 //!
-//! let options =
-//!     BundleOptions { project_root: Path::new("src"), dynamic_require: DynamicRequire::default() };
+//! let options = BundleOptions {
+//!     project_root: Path::new("src"),
+//!     dynamic_require: DynamicRequire::default(),
+//!     luau_config: None,
+//! };
 //! let arenas = ThreadAllocators::new();
 //! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.luau"), &options).unwrap();
 //! std::io::Write::write_all(&mut std::io::stdout(), &bundle.output).unwrap();

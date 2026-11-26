@@ -1,21 +1,27 @@
-//! Discovery walks up from the document's directory.
+//! Discovery walks up from the document's directory, or once the client
+//! gives a config, every document takes the project of that config.
 //!
 //! Results, misses and configs that don't load included, stay cached until a
-//! watched config file changes. A lookup reads the disk, so only workers make
-//! one.
+//! config file changes, or the client gives another config. A lookup reads
+//! the files, so only workers make one.
 
 use std::ffi::OsString;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use luck_config::{CONFIG_FILE_NAME, EDITORCONFIG_FILE_NAME, Editorconfigs, Project, find_config};
-use luck_diagnostics::FileDiagnostics;
+use ls_types::Uri;
+use luck_config::{
+    CONFIG_FILE_NAME, ConfigError, EDITORCONFIG_FILE_NAME, Editorconfigs, Project, find_config,
+};
 use luck_formatter::FormatOptions;
 use luck_linter::Linter;
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolver};
+use luck_resolver::{FileSystem as _, ResolverGeneric, is_definition_file};
+use luck_type_checker::luau_config_aliases;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::files::Files;
 
 /// What a document's path and the project around it fix, which every
 /// version of the document shares until the settings change.
@@ -32,6 +38,9 @@ pub(crate) struct DocumentSettings {
     /// Whether the project's `include` and `exclude` take the document in.
     /// One they leave out gets no diagnostics and no fixes.
     pub is_included: bool,
+    /// Whether it's a definition file, by its name, which parses as one and
+    /// is no module.
+    pub is_definitions: bool,
 }
 
 /// A project, and the resolver its files' requires go through, so each
@@ -39,34 +48,53 @@ pub(crate) struct DocumentSettings {
 #[derive(Debug)]
 pub(crate) struct LoadedProject {
     project: Project,
-    resolver: Resolver,
+    files: Files,
+    resolver: ResolverGeneric<Files>,
 }
 
 impl LoadedProject {
-    pub(crate) fn new(project: Project) -> Self {
-        Self { project, resolver: Resolver::new() }
+    pub(crate) fn new(project: Project, files: Files) -> Self {
+        let resolver = ResolverGeneric::new_with_file_system(files.clone())
+            .with_luau_config(luau_config_aliases);
+        Self { project, files, resolver }
     }
 
     pub(crate) const fn project(&self) -> &Project {
         &self.project
     }
 
-    pub(crate) const fn resolver(&self) -> &Resolver {
+    pub(crate) const fn resolver(&self) -> &ResolverGeneric<Files> {
         &self.resolver
+    }
+
+    /// The URI of the file at `path`, as the project's files name it.
+    pub(crate) fn uri(&self, path: &Path) -> Option<Uri> {
+        self.files.uri(path)
     }
 }
 
-/// A `luck.json` that doesn't load, which the first document under it
-/// reports.
+/// A config that doesn't load, which the first document under it reports.
 #[derive(Debug)]
-pub(crate) struct ConfigError {
-    pub file: FileDiagnostics,
+pub(crate) struct LoadError {
+    pub error: ConfigError,
     /// The cache's [`SettingsCache::generation`] when the lookup read it.
     pub generation: u64,
 }
 
-#[derive(Debug, Default)]
+/// The config a client gives, which every document's project comes from in
+/// place of a `luck.json`.
+#[derive(Debug)]
+pub(crate) struct GivenConfig {
+    /// The directory its paths and globs are relative to.
+    pub root: PathBuf,
+    /// As JSON, which the client replaces with each change it sends.
+    pub text: RwLock<String>,
+}
+
+#[derive(Debug)]
 pub(crate) struct SettingsCache {
+    files: Files,
+    given: Option<GivenConfig>,
     /// One lock for all of them, so a reader never sees a directory without
     /// its project.
     lookups: RwLock<Lookups>,
@@ -79,7 +107,8 @@ struct Lookups {
     generation: u64,
     /// Shared by every document without a file path.
     untitled: Option<Arc<LoadedProject>>,
-    /// By the directory a document is in.
+    /// By the directory a document is in. A client's config gives every
+    /// document the project the untitled ones get.
     by_directory: FxHashMap<PathBuf, Arc<LoadedProject>>,
     /// By the path of their `luck.json`, so documents in several of a
     /// project's directories share it.
@@ -111,8 +140,8 @@ impl Lookups {
         directory: Option<&Path>,
         config_path: Option<PathBuf>,
         project: Arc<LoadedProject>,
-        error: Option<FileDiagnostics>,
-    ) -> (Arc<LoadedProject>, Option<FileDiagnostics>) {
+        error: Option<ConfigError>,
+    ) -> (Arc<LoadedProject>, Option<ConfigError>) {
         let found_meanwhile = match &config_path {
             Some(config) => self.by_config.get(config),
             None => self.cached(directory),
@@ -123,7 +152,7 @@ impl Lookups {
         }
         let names = project.project().files().iter().filter_map(|file| file.file_name());
         self.config_names.extend(names.map(OsString::from));
-        if let Some(broken) = &error {
+        if let Some(ConfigError::File(broken)) = &error {
             self.config_names.extend(broken.path.file_name().map(OsString::from));
             self.broken.push(broken.path.clone());
         }
@@ -147,6 +176,25 @@ impl Lookups {
 }
 
 impl SettingsCache {
+    /// Reads every project through `files`, and gives every document the
+    /// project of `given`, when the client gives a config.
+    pub(crate) fn new(files: Files, given: Option<GivenConfig>) -> Self {
+        Self { files, given, lookups: RwLock::default() }
+    }
+
+    /// Whether the client gave a config.
+    pub(crate) const fn is_given(&self) -> bool {
+        self.given.is_some()
+    }
+
+    /// Makes `text`, which the client sent, the config it gave, which the
+    /// next lookup after a [`clear`](Self::clear) loads.
+    pub(crate) fn set_given(&self, text: String) {
+        if let Some(given) = &self.given {
+            *given.text.write() = text;
+        }
+    }
+
     /// The settings of the document at `file`, a path
     /// [`located_path`](luck_config::located_path) gives, or of an untitled
     /// document, under `project`, the one [`Self::project_for`] gives it.
@@ -159,9 +207,10 @@ impl SettingsCache {
         let loaded = project.project();
         let linter = loaded.linter_for(file);
         let format = loaded.format_options(file, Some(&editorconfigs));
-        let is_included = file.is_none_or(|located| loaded.filter().includes_located(located));
-        let path = file.map(|located| FileSystemOs.canonicalize_existing(located));
-        DocumentSettings { path, project, linter, format, is_included }
+        let is_included = file.is_none_or(|located| loaded.filter().includes_document(located));
+        let is_definitions = file.is_some_and(is_definition_file);
+        let path = file.map(|located| self.files.canonicalize_existing(located));
+        DocumentSettings { path, project, linter, format, is_included, is_definitions }
     }
 
     /// The project of the nearest `luck.json` above the file at
@@ -169,7 +218,9 @@ impl SettingsCache {
     /// config has one spelling, or the defaults rooted at its directory when
     /// there's none, and why that `luck.json` doesn't load, if this is the
     /// first lookup to find it. A `luck.json` that doesn't load gives the
-    /// defaults rooted at its directory.
+    /// defaults rooted at its directory. With a config the client gave, it's
+    /// that config's project for every document, or the defaults rooted where
+    /// it is.
     ///
     /// `spelled` is the document's path as the client spells it. A load error
     /// names its file under the same directories, since a client knows a file
@@ -178,8 +229,8 @@ impl SettingsCache {
         &self,
         document_path: Option<&Path>,
         spelled: Option<&Path>,
-    ) -> (Arc<LoadedProject>, Option<ConfigError>) {
-        let directory = document_path.and_then(Path::parent);
+    ) -> (Arc<LoadedProject>, Option<LoadError>) {
+        let directory = document_path.filter(|_| self.given.is_none()).and_then(Path::parent);
         let generation = {
             let lookups = self.lookups.read();
             if let Some(project) = lookups.cached(directory) {
@@ -187,36 +238,61 @@ impl SettingsCache {
             }
             lookups.generation
         };
+        let files = &self.files;
+        let loaded = |project| Arc::new(LoadedProject::new(project, files.clone()));
+        let defaults = |root| loaded(Project::defaults(root, files.clone()));
+        if let Some(given) = &self.given {
+            let text = given.text.read().clone();
+            let (project, error) =
+                match Project::from_config(&text, given.root.clone(), files.clone()) {
+                    Ok(project) => (loaded(project), None),
+                    Err(error) => (defaults(given.root.clone()), Some(error)),
+                };
+            return self.keep(generation, None, None, project, error);
+        }
         // Discovery stats every directory up to the root, loading reads every
         // file in the `extends` chain, and the defaults' filter canonicalizes
         // their root.
-        let config_path = directory.and_then(find_config);
+        let config_path = directory.and_then(|start| find_config(files, start));
         let shared = config_path
             .as_ref()
             .and_then(|config| self.lookups.read().by_config.get(config).cloned());
         let (project, error) = match (shared, &config_path) {
             (Some(project), _) => (project, None),
-            (None, Some(config)) => match Project::load(config) {
-                Ok(loaded) => (Arc::new(LoadedProject::new(loaded)), None),
+            (None, Some(config)) => match Project::load(config, files.clone()) {
+                Ok(project) => (loaded(project), None),
                 Err(mut problem) => {
                     if let Some(document) = spelled {
-                        problem.path = spelled_beside(&problem.path, document);
+                        problem.path = spelled_beside(files, &problem.path, document);
                     }
                     let root = config.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-                    (Arc::new(LoadedProject::new(Project::defaults(root))), Some(problem))
+                    (defaults(root), Some(ConfigError::File(problem)))
                 }
             },
             (None, None) => {
                 let root = directory.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-                (Arc::new(LoadedProject::new(Project::defaults(root))), None)
+                (defaults(root), None)
             }
         };
+        self.keep(generation, directory, config_path, project, error)
+    }
+
+    /// Keeps `project`, which a lookup in `generation` found, unless the cache
+    /// was cleared since.
+    fn keep(
+        &self,
+        generation: u64,
+        directory: Option<&Path>,
+        config_path: Option<PathBuf>,
+        project: Arc<LoadedProject>,
+        error: Option<ConfigError>,
+    ) -> (Arc<LoadedProject>, Option<LoadError>) {
         let mut lookups = self.lookups.write();
         if lookups.generation != generation {
             return (project, None);
         }
         let (kept, reported) = lookups.keep(directory, config_path, project, error);
-        (kept, reported.map(|file| ConfigError { file, generation }))
+        (kept, reported.map(|problem| LoadError { error: problem, generation }))
     }
 
     /// Bumped by each [`clear`](Self::clear).
@@ -225,13 +301,15 @@ impl SettingsCache {
     }
 
     /// Whether a change to the file at `path` can change a document's
-    /// settings.
+    /// settings. With a config the client gave, any definition file can,
+    /// since the config may name one the client hasn't pushed yet.
     pub(crate) fn is_settings_file(&self, path: &Path) -> bool {
         let Some(name) = path.file_name() else {
             return false;
         };
         let lookups = self.lookups.read();
-        name == CONFIG_FILE_NAME
+        (self.given.is_some() && is_definition_file(path))
+            || name == CONFIG_FILE_NAME
             || name == EDITORCONFIG_FILE_NAME
             || lookups.config_names.contains(name)
             || (!lookups.broken.is_empty()
@@ -259,17 +337,18 @@ impl SettingsCache {
     }
 }
 
-/// `path`, a canonical path, as the client spells the files near `document`.
+/// `path`, a canonical path in `files`, as the client spells the files near
+/// `document`.
 ///
 /// That's under the deepest directory above `document` whose canonical path
 /// holds it, so a client that reached `document` through a symlink or a
 /// short name knows the file, or `path` itself when none holds it.
-fn spelled_beside(path: &Path, document: &Path) -> PathBuf {
+fn spelled_beside(files: &Files, path: &Path, document: &Path) -> PathBuf {
     document
         .ancestors()
         .skip(1)
         .find_map(|directory| {
-            let inside = path.strip_prefix(FileSystemOs.canonicalize_existing(directory)).ok()?;
+            let inside = path.strip_prefix(files.canonicalize_existing(directory)).ok()?;
             Some(directory.join(inside))
         })
         .unwrap_or_else(|| path.to_path_buf())
@@ -280,17 +359,19 @@ mod tests {
     use std::fs;
     use std::ptr;
 
+    use luck_resolver::FileSystemOs;
+
     use super::*;
 
     #[test]
     fn a_document_with_no_config_takes_the_defaults_rooted_at_its_directory() {
         let directory = tempfile::tempdir().expect("tempdir");
         let file = directory.path().join("foo.luau");
-        let cache = SettingsCache::default();
+        let cache = SettingsCache::new(Files::Disk, None);
         let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
         assert!(!project.project().stdlib().library().has_roblox);
-        if find_config(directory.path()).is_none() {
+        if find_config(&FileSystemOs, directory.path()).is_none() {
             assert_eq!(project.project().root(), directory.path());
         }
         let (untitled, _) = cache.project_for(None, None);
@@ -306,7 +387,7 @@ mod tests {
         fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
         let first = directory.path().join("first.luau");
         let nested = directory.path().join("sub/nested.luau");
-        let cache = SettingsCache::default();
+        let cache = SettingsCache::new(Files::Disk, None);
 
         let (project, _) = cache.project_for(Some(&first), None);
         assert!(project.project().stdlib().library().has_roblox);
@@ -328,11 +409,12 @@ mod tests {
         fs::write(directory.path().join("luck.json"), r#"{ "definitions": ["@bogus"] }"#)
             .expect("write luck.json");
         let file = directory.path().join("a.luau");
-        let cache = SettingsCache::default();
+        let cache = SettingsCache::new(Files::Disk, None);
 
         let (project, first_error) = cache.project_for(Some(&file), None);
         let error = first_error.expect("the error comes with the first lookup");
-        assert_eq!(error.file.diags[0].code, "E014");
+        let ConfigError::File(problem) = &error.error else { panic!("{error:?}") };
+        assert_eq!(problem.diags[0].code, "E014");
         assert_eq!(error.generation, cache.generation());
         assert!(!project.project().stdlib().library().has_roblox);
         assert!(cache.project_for(Some(&file), None).1.is_none(), "reported once");
@@ -349,7 +431,7 @@ mod tests {
         fs::write(directory.path().join("shared.json"), "{}").expect("write shared.json");
         fs::write(directory.path().join("luck.json"), r#"{ "extends": ["shared.json"] }"#)
             .expect("write luck.json");
-        let cache = SettingsCache::default();
+        let cache = SettingsCache::new(Files::Disk, None);
         let sourcemap = directory.path().join("sourcemap.json");
         let shared = directory.path().join("shared.json");
         assert!(!cache.is_settings_file(&shared));
@@ -370,7 +452,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
         let main = directory.path().join("main.luau");
-        let cache = SettingsCache::default();
+        let cache = SettingsCache::new(Files::Disk, None);
         let (project, _) = cache.project_for(Some(&main), None);
         let resolver = project.resolver();
         assert!(ptr::eq(resolver, cache.project_for(Some(&main), None).0.resolver()));

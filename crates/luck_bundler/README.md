@@ -19,7 +19,7 @@ The bundle opens with a small loader, and each module registers as a function th
 
 - `bundle(&arenas, entry, &options)` returns a `Bundle`: the output, the warnings, the bundled files, and the line map. The result borrows no arena, so `arenas.reset()` can empty them right after.
 - `bundle_minified(&arenas, entry, &options, &transforms)` returns a `MinifiedBundle`.
-- `BundleOptions` holds the project root and the `DynamicRequire` mode.
+- `BundleOptions` holds the project root, the `DynamicRequire` mode, and the `luck_resolver::LuauConfigAliases` that reads each `.config.luau`, without which none loads, which the `luck` CLI gives as Luau's own.
 - `DependencyGraph::build` builds the graph alone.
 
 Modules are parsed and analyzed on rayon's threads, so give that pool `luck_ast::MIN_STACK_BYTES` of stack. Called from a thread of the pool, the bundler runs queued modules on it while it waits, so a pool of one thread does all the work on the caller's.
@@ -32,8 +32,11 @@ use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, DynamicRequire};
 
 rayon::ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global().unwrap();
-let options =
-    BundleOptions { project_root: Path::new("."), dynamic_require: DynamicRequire::default() };
+let options = BundleOptions {
+    project_root: Path::new("."),
+    dynamic_require: DynamicRequire::default(),
+    luau_config: None,
+};
 let arenas = ThreadAllocators::new();
 let bundle = luck_bundler::bundle(&arenas, Path::new("main.luau"), &options).unwrap();
 assert!(!bundle.output.is_empty());

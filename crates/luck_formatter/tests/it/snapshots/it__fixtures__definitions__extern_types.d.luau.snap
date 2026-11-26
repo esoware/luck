@@ -1,7 +1,7 @@
 ---
 source: crates/luck_formatter/tests/it/fixtures.rs
 expression: snapshot
-input_file: tests/fixtures/definitions/extern_types.luau
+input_file: tests/fixtures/definitions/extern_types.d.luau
 ---
 -- line_width = 1
 --[[

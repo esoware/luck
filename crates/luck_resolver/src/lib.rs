@@ -4,13 +4,16 @@
 //! require by string does.
 //!
 //! A relative require (`./module`, `../module`) resolves from the requiring
-//! file's directory, and an `@alias` prefix from the `.luaurc` files found up
-//! the directory tree.
+//! file's directory, and an `@alias` prefix from the `.luaurc` and
+//! `.config.luau` files found up the directory tree. A `.config.luau` is Luau
+//! code, which only Luau can run, so a resolver reads its aliases through
+//! the [`LuauConfigAliases`] its caller gives it.
 //!
 //! A [`ResolverGeneric`] reads through a [`FileSystem`], the OS's own in a
 //! [`Resolver`], so a caller can resolve against files only it holds. It
-//! caches the directory listings it reads, `.luaurc` aliases, and its file
-//! probes, which its threads share, until [`ResolverGeneric::clear_cache`]. A
+//! caches the directory listings it reads, the aliases of each config, and
+//! its file probes, which its threads share, until
+//! [`ResolverGeneric::clear_cache`]. A
 //! require that names no file, or more than one, gets a [`ResolveError`]
 //! saying why, which [`ResolveError::to_diagnostic`] turns into the
 //! diagnostic luck reports it with, and [`Resolution::to_diagnostic`] gives
@@ -47,5 +50,5 @@ mod shared_cache;
 
 pub use error::ResolveError;
 pub use file_system::{DirEntry, FileMetadata, FileSystem, FileSystemOs};
-pub use path::{lexically_normalized, to_slash_lossy};
-pub use resolver::{Resolution, Resolver, ResolverGeneric};
+pub use path::{is_definition_file, lexically_normalized, to_slash_lossy};
+pub use resolver::{LuauConfigAliases, Resolution, Resolver, ResolverGeneric};

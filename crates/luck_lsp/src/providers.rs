@@ -35,6 +35,7 @@ mod tests {
         WorkDoneProgressParams,
     };
     use luck_config::Project;
+    use luck_resolver::FileSystemOs;
     use luck_testgen::{
         broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_at_the_nesting_cap,
         sources_past_the_nesting_cap,
@@ -53,7 +54,7 @@ mod tests {
 
     fn serve_every_typed_request(source: &str) {
         let uri = uri();
-        let project = Project::defaults(PathBuf::from("."));
+        let project = Project::defaults(PathBuf::from("."), FileSystemOs);
         let document = document_at(source, project, Path::new("main.luau"));
         let session = session();
         let positions: Vec<_> = [0, source.len().div_ceil(2), source.len()]
@@ -75,7 +76,7 @@ mod tests {
 
     fn serve_every_request_but_types(source: &str) {
         let uri = uri();
-        let project = Project::defaults(PathBuf::from("."));
+        let project = Project::defaults(PathBuf::from("."), FileSystemOs);
         let document = document_at(source, project, Path::new("main.luau"));
         let session = session();
         let workspace = WorkspaceView::new(&session, &[], &|| false);

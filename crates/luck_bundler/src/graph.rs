@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
+use luck_resolver::{FileSystem as _, FileSystemOs, LuauConfigAliases, Resolver, to_slash_lossy};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
@@ -24,6 +24,10 @@ pub struct BundleOptions<'input> {
     /// relative to this.
     pub project_root: &'input Path,
     pub dynamic_require: DynamicRequire,
+    /// What reads the aliases of each `.config.luau`, Luau's own as
+    /// `luck_type_checker::luau_config_aliases` gives it, without which none
+    /// loads.
+    pub luau_config: Option<LuauConfigAliases>,
 }
 
 #[derive(Debug)]
@@ -59,7 +63,10 @@ impl<'ast> DependencyGraph<'ast> {
         // Emitted paths are made relative to this, so it must be canonical like
         // the modules' paths.
         let root = absolute_project_root(options.project_root);
-        let resolver = Resolver::new();
+        let resolver = match options.luau_config {
+            Some(luau_config) => Resolver::new().with_luau_config(luau_config),
+            None => Resolver::new(),
+        };
         let reader = Reader::new(options.dynamic_require, &root, &resolver);
         let entry =
             FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());

@@ -23,6 +23,7 @@ use ls_types::{
     WorkspaceFolder,
 };
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
+use serde_json::{Value, json};
 
 /// How long a test waits for any one message before it fails.
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -54,6 +55,19 @@ impl Client {
             name: "workspace".to_owned(),
         }];
         let params = InitializeParams {
+            workspace_folders: Some(workspace_folders),
+            ..InitializeParams::default()
+        };
+        Self::initialized(params).0
+    }
+
+    /// A server that reads nothing but what the client holds, under `config`,
+    /// with the workspace folder `folder`.
+    pub(crate) fn start_given(config: Value, folder: &Uri) -> Self {
+        let workspace_folders =
+            vec![WorkspaceFolder { uri: folder.clone(), name: "workspace".to_owned() }];
+        let params = InitializeParams {
+            initialization_options: Some(config),
             workspace_folders: Some(workspace_folders),
             ..InitializeParams::default()
         };
@@ -245,6 +259,16 @@ impl Client {
             text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version },
             content_changes,
         });
+    }
+
+    /// Pushes the client's files, each with its text, or with none to delete
+    /// it, through `luck/didChangeFiles`.
+    pub(crate) fn push(&self, files: &[(&Uri, Option<&str>)]) {
+        let changes: Vec<Value> =
+            files.iter().map(|(uri, text)| json!({ "uri": uri, "text": text })).collect();
+        let notification =
+            Notification::new("luck/didChangeFiles".to_owned(), json!({ "changes": changes }));
+        self.connection.sender.send(notification.into()).expect("the server reads");
     }
 
     /// What a client sends when the file at `path` changes on disk.

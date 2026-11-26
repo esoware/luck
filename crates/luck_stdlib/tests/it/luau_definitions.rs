@@ -1,4 +1,4 @@
-//! The ignored `regenerate_luau_definitions` test, which writes `luau.luau`
+//! The ignored `regenerate_luau_definitions` test, which writes `luau.d.luau`
 //! from Luau's built-in definitions and Luau's library reference, and offline
 //! checks of the committed file.
 
@@ -31,7 +31,7 @@ const HEADER: &str = "\
 ";
 
 fn generated_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib_data/luau.luau")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib_data/luau.d.luau")
 }
 
 /// A name the reference documents, as `string.byte`, with each signature its
@@ -323,7 +323,7 @@ fn generate(built_in: &str, reference: &str) -> String {
 }
 
 #[test]
-#[ignore = "rewrites luau.luau from Luau's built-in definitions and its live library reference; run with --ignored"]
+#[ignore = "rewrites luau.d.luau from Luau's built-in definitions and its live library reference; run with --ignored"]
 fn regenerate_luau_definitions() {
     let reference = ureq::get(REFERENCE_URL)
         .call()
@@ -332,11 +332,11 @@ fn regenerate_luau_definitions() {
         .read_to_string()
         .expect("read Luau's library reference");
     let text = generate(&builtin_definitions(), &reference.replace("\r\n", "\n"));
-    fs::write(generated_path(), text).expect("write luau.luau");
+    fs::write(generated_path(), text).expect("write luau.d.luau");
 }
 
 fn committed() -> String {
-    fs::read_to_string(generated_path()).expect("read luau.luau")
+    fs::read_to_string(generated_path()).expect("read luau.d.luau")
 }
 
 /// Its lines hold the built-in definitions' in order, once the deprecations
@@ -355,7 +355,7 @@ fn the_definitions_hold_luaus_built_in_ones() {
     for built_in in builtin_definitions().lines().filter(|line| !line.trim().is_empty()) {
         assert!(
             lines.any(|line| line == built_in),
-            "luau.luau lacks `{built_in}`; regenerate it with `just stdlib`"
+            "luau.d.luau lacks `{built_in}`; regenerate it with `just stdlib`"
         );
     }
 }

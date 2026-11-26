@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "definitions": {
-      "description": "The definitions every `.luau` and `.lua` file runs with over Luau's\nstandard library, in order: `\"@roblox\"` for Roblox's API, at the\n`security` level, and any other entry a Luau definition file,\nrelative to this file's directory, whose `declare` statements say what\na host gives a script, as they do for Luau's type checker. A name a\nlater one declares replaces the one before it.",
+      "description": "The definitions every `.luau` and `.lua` file runs with over Luau's\nstandard library, in order: `\"@roblox\"` for Roblox's API, at the\n`security` level, and any other entry a Luau definition file, whose\nname ends in `.d.luau`, relative to this file's directory, whose\n`declare` statements say what a host gives a script, as they do for\nLuau's type checker. A name a later one declares replaces the one\nbefore it.",
       "type": [
         "array",
         "null"

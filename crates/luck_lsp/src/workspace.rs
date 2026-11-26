@@ -2,7 +2,9 @@
 //!
 //! The workspace's files are the Luau files `luck lint` takes in the folders:
 //! each under the nearest `luck.json` above it, whose `include` and
-//! `exclude` decide, past what `.gitignore` and `.luckignore` hide.
+//! `exclude` decide, past what `.gitignore` and `.luckignore` hide. Once the
+//! client gives a config, they're the files it holds in the folders, which
+//! that config's `include` and `exclude` take.
 //!
 //! The first job that needs the files walks the folders, and the main loop
 //! starts a new walk once a file is created or deleted, the folders change,
@@ -20,20 +22,22 @@ use std::sync::OnceLock;
 
 use ls_types::{Position, Uri};
 use luck_config::{ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor, walk_source_files};
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_resolver::{FileSystem as _, FileSystemOs, is_definition_file};
 use luck_semantic::SemanticBuilder;
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analyzed::Arena;
 use crate::document::{Document, DocumentState};
+use crate::files::Files;
 use crate::line_index::LineIndex;
 use crate::module_record::{Member, ModuleRecord, Table};
 use crate::session::Session;
 use crate::settings::LoadedProject;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Workspace {
+    files_read: Files,
     walk: RwLock<Arc<Walk>>,
     /// By canonical path.
     files: RwLock<FxHashMap<PathBuf, Arc<DiskFile>>>,
@@ -66,6 +70,16 @@ struct FileRecord {
 }
 
 impl Workspace {
+    /// A workspace of no folders, whose files are read through `files`.
+    pub(crate) fn new(files: Files) -> Self {
+        Self {
+            files_read: files,
+            walk: RwLock::default(),
+            files: RwLock::default(),
+            changed: Mutex::default(),
+        }
+    }
+
     pub(crate) fn walk(&self) -> Arc<Walk> {
         Arc::clone(&self.walk.read())
     }
@@ -121,7 +135,7 @@ impl Workspace {
         if !changed.is_empty() {
             let mut files = self.files.write();
             for reported in mem::take(&mut *changed) {
-                files.remove(&FileSystemOs.canonicalize_existing(&reported));
+                files.remove(&self.files_read.canonicalize_existing(&reported));
             }
         }
     }
@@ -154,6 +168,14 @@ impl DiskFile {
 /// Every Luau file under `folders` that its project takes, canonical and
 /// sorted. A directory that can't be read is passed over.
 fn files_under(folders: &[PathBuf], session: &Session) -> Vec<PathBuf> {
+    if let Some(client) = session.files().client() {
+        let mut files = client.paths();
+        files.retain(|path| {
+            folders.iter().any(|folder| path.starts_with(folder))
+                && session.project_for(Some(path), None).project().filter().includes_located(path)
+        });
+        return files;
+    }
     let visitor = FolderVisitor {
         session,
         folders: folders
@@ -224,21 +246,26 @@ impl Deref for ProjectFilterOf {
     }
 }
 
-/// The file at `path`, parsed, or `None` when it can't be read or no URI
-/// names it. A file that isn't UTF-8 reads as an editor would show it.
+/// The file at `path`, parsed, as a definition file when its name says it's
+/// one, or `None` when it can't be read or no URI names it. A file that isn't
+/// UTF-8 reads as an editor would show it.
 fn read_record(session: &Session, path: &Path) -> Option<FileRecord> {
     let project = session.project_for(Some(path), None);
-    let bytes = FileSystemOs.read(path).ok()?;
+    let bytes = session.files().read(path).ok()?;
     let text = String::from_utf8_lossy(&bytes);
     let allocator = session.allocators().get();
-    let parsed = luck_parser::parse(&allocator, text.as_bytes());
+    let parsed = if is_definition_file(path) {
+        luck_parser::parse_definitions(&allocator, text.as_bytes())
+    } else {
+        luck_parser::parse(&allocator, text.as_bytes())
+    };
     let chunk = allocator.alloc(parsed.chunk);
     let semantic =
         SemanticBuilder::new().with_counts(parsed.counts).with_requires(true).build(chunk).semantic;
     let line_index = LineIndex::new(&text, session.encoding());
     let mut positions = line_index.positions(&text);
     let record = ModuleRecord::new(chunk, &semantic, |span| positions.range(span));
-    Some(FileRecord { uri: Uri::from_file_path(path)?, project, record })
+    Some(FileRecord { uri: session.files().uri(path)?, project, record })
 }
 
 /// A file's record, with what resolves its requires.
@@ -318,7 +345,7 @@ impl<'job> WorkspaceView<'job> {
     }
 
     /// The file at `path` analyzed as an open document would be, from the
-    /// open document there, or else from disk, or `None` when it can't be
+    /// open document there, or else from its file, or `None` when it can't be
     /// read.
     pub(crate) fn with_document<R>(
         &self,
@@ -328,7 +355,7 @@ impl<'job> WorkspaceView<'job> {
         if let Some((_, document)) = self.document_at(path) {
             return Some(read(document));
         }
-        let bytes = FileSystemOs.read(path).ok()?;
+        let bytes = self.session.files().read(path).ok()?;
         let text: Arc<str> = String::from_utf8_lossy(&bytes).into();
         let settings = self.session.document_settings(Some(path));
         let line_index = LineIndex::new(&text, self.session.encoding());

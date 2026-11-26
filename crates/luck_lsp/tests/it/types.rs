@@ -332,7 +332,7 @@ fn goto_definition_serves_luau_s_own_definitions_under_its_scheme() {
     client.open(&uri, "print(1)\n");
 
     let location = definition(&mut client, &uri, 0, 2);
-    assert_eq!(location.uri.as_str(), "luck:/luau.luau");
+    assert_eq!(location.uri.as_str(), "luck:/luau.d.luau");
     let served = client
         .request::<TextDocumentContent>(TextDocumentContentParams { uri: location.uri.clone() });
 

@@ -1,7 +1,7 @@
 ---
 source: crates/luck_formatter/tests/it/fixtures.rs
 expression: snapshot
-input_file: tests/fixtures/definitions/lenient_forms.luau
+input_file: tests/fixtures/definitions/lenient_forms.d.luau
 ---
 -- line_width = 1
 -- What Luau's parser reads in a definition file and then drops: the attributes

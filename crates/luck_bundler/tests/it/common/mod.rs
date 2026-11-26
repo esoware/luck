@@ -101,7 +101,11 @@ pub(crate) fn bundle_project(
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
     bundle_both(
         &directory.join(entry),
-        &BundleOptions { project_root: directory, dynamic_require: DynamicRequire::default() },
+        &BundleOptions {
+            project_root: directory,
+            dynamic_require: DynamicRequire::default(),
+            luau_config: None,
+        },
     )
 }
 

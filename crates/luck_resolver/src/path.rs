@@ -12,6 +12,12 @@ pub fn to_slash_lossy(path: &Path) -> Cow<'_, str> {
     lossy
 }
 
+/// Whether the file at `path` is a definition file, which declares what a
+/// host gives a script and is no module: one whose name ends in `.d.luau`.
+pub fn is_definition_file(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().ends_with(b".d.luau")
+}
+
 /// `path` with each `.` dropped and each `..` taking off the name before it,
 /// without reading the disk.
 pub fn lexically_normalized(path: &Path) -> PathBuf {

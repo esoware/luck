@@ -22,7 +22,7 @@ use crate::settings::DocumentSettings;
 
 /// An open document's path and the settings its versions share until the
 /// settings change, which a worker finds the first time one is analyzed,
-/// since that reads the disk.
+/// since that reads the files.
 #[derive(Debug)]
 struct LazySettings {
     /// As the client spells it, or `None` for a document with no file.
@@ -189,7 +189,8 @@ impl DocumentState {
         arena: Arena,
     ) -> Self {
         let stdlib = settings.project.project().stdlib().clone();
-        let analyzed = Analyzed::new(text, stdlib, &settings.linter, arena);
+        let analyzed =
+            Analyzed::new(text, settings.is_definitions, stdlib, &settings.linter, arena);
         Self {
             settings,
             line_index,
@@ -304,10 +305,16 @@ impl DocumentState {
 
     /// Lints with the linter that built the analysis, building every kind
     /// of fix, since a suggestion is still a quick fix, or `None` once
-    /// `is_cancelled` stops it. A document the project leaves out has none.
+    /// `is_cancelled` stops it. A document the project leaves out has none,
+    /// and a definition file, which is no code for a rule to read, its
+    /// syntax errors alone.
     pub(crate) fn lint(&self, is_cancelled: &dyn Fn() -> bool) -> Option<Vec<Message>> {
         if !self.settings.is_included {
             return Some(Vec::new());
+        }
+        if self.settings.is_definitions {
+            let errors = self.parse().errors.iter().cloned();
+            return Some(errors.map(|diagnostic| Message { diagnostic, fix: None }).collect());
         }
         self.settings.linter.run_analyzed(self.analysis(), FixKind::all(), None, is_cancelled)
     }

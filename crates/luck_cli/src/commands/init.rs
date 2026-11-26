@@ -68,6 +68,7 @@ fn init_config_content(has_roblox: bool) -> String {
 #[cfg(test)]
 mod tests {
     use luck_config::Project;
+    use luck_resolver::FileSystemOs;
 
     use super::*;
 
@@ -77,7 +78,8 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
         fs::write(&config_path, &content).expect("write luck.json");
-        let project = Project::load(&config_path).expect("generated luck.json should load");
+        let project =
+            Project::load(&config_path, FileSystemOs).expect("generated luck.json should load");
         (content, project)
     }
 

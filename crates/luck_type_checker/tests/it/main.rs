@@ -9,3 +9,4 @@ mod check;
 mod definitions;
 mod describe;
 mod invalidate;
+mod luau_config;

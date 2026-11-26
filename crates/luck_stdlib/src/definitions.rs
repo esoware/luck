@@ -4,7 +4,7 @@ use crate::SecurityLevel;
 
 /// Luau's standard library as a definition file, as `just stdlib` generates
 /// it.
-pub(crate) const LUAU: &str = include_str!("../stdlib_data/luau.luau");
+pub(crate) const LUAU: &str = include_str!("../stdlib_data/luau.d.luau");
 
 /// Luau's standard library as a definition file: Luau's built-in definitions,
 /// with a declaration for each function they leave to Luau's C++, and the
@@ -22,7 +22,7 @@ pub const fn luau_definitions() -> &'static str {
     clippy::large_include_file,
     reason = "Roblox's whole API is one definition file, which a checker loads whole"
 )]
-const ROBLOX: &str = include_str!("../stdlib_data/roblox.luau");
+const ROBLOX: &str = include_str!("../stdlib_data/roblox.d.luau");
 
 /// Roblox's API for a script at `security`, the definitions a project's
 /// `@roblox` loads over Luau's built-in ones, as Luau's `loadDefinitionFile`

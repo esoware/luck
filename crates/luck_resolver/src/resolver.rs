@@ -9,6 +9,7 @@ use crate::aliases::{AliasCache, AliasTarget};
 use crate::error::ResolveError;
 use crate::file_system::{FileSystem, FileSystemOs};
 use crate::fs_cache::FsCache;
+use crate::path::is_definition_file;
 use crate::shared_cache::{Generation, SharedCache};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,11 @@ impl Resolution {
 /// A [`ResolverGeneric`] on the OS's own file system.
 pub type Resolver = ResolverGeneric<FileSystemOs>;
 
+/// The aliases a `.config.luau`, given its source, declares, by lowercased
+/// name, or why it doesn't load, as Luau's own Config library says once it
+/// runs it in a sandbox. `luck_type_checker::luau_config_aliases` is Luau's.
+pub type LuauConfigAliases = fn(&str) -> Result<Vec<(String, String)>, String>;
+
 /// Resolves requires through `Fs`, one path component at a time, as Luau's
 /// navigator does, and keeps what it reads until [`Self::clear_cache`], so
 /// threads that share one read each thing once.
@@ -39,14 +45,15 @@ pub type Resolver = ResolverGeneric<FileSystemOs>;
 /// It lists each directory a require looks in once, and answers from that
 /// listing which files exist and their canonical paths. Many requires pass
 /// through the same directories and reach the same modules, so it also keeps
-/// the `.luaurc` alias tables it discovers and what each module path holds. A
-/// missing or malformed file is kept too.
+/// the alias tables of the `.luaurc` and `.config.luau` files it discovers
+/// and what each module path holds. A missing or malformed file is kept too.
 #[derive(Debug)]
 pub struct ResolverGeneric<Fs> {
     fs_cache: FsCache<Fs>,
     aliases: AliasCache,
     modules: SharedCache<OsString, ModuleFiles>,
     generation: Arc<Generation>,
+    luau_config: Option<LuauConfigAliases>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,7 +116,16 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
             aliases: AliasCache::new(&generation),
             modules: SharedCache::new(&generation),
             generation,
+            luau_config: None,
         }
+    }
+
+    /// This resolver, reading the aliases of each `.config.luau` with
+    /// `luau_config`, without which none loads.
+    #[must_use]
+    pub const fn with_luau_config(mut self, luau_config: LuauConfigAliases) -> Self {
+        self.luau_config = Some(luau_config);
+        self
     }
 
     /// Forgets everything read so far, so the next resolution sees the file
@@ -133,7 +149,8 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
     ///
     /// # Errors
     ///
-    /// Returns why `module` names no module, or more than one.
+    /// Returns why `module` names no module, or more than one, or a
+    /// definition file.
     pub fn resolve(&self, from_file: &Path, module: &str) -> Result<Resolution, ResolveError> {
         let require_path = module.replace('\\', "/");
         let alias_path = require_path.strip_prefix('@');
@@ -198,7 +215,8 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
                 followed.push(lowercase_name);
                 return Err(ResolveError::AliasCycle(followed));
             }
-            let aliases = self.aliases.in_effect(self.fs_cache.file_system(), &directory);
+            let aliases =
+                self.aliases.in_effect(self.fs_cache.file_system(), self.luau_config, &directory);
             match aliases.targets.get(&lowercase_name) {
                 Some(AliasTarget::Directory(target_directory)) => {
                     return Ok((target_directory.clone(), full_sub_path));
@@ -218,9 +236,9 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
                 }
                 None => {
                     return Err(aliases
-                        .malformed_luaurc
+                        .invalid_config
                         .clone()
-                        .map_or(ResolveError::UnknownAlias(name), ResolveError::MalformedLuaurc));
+                        .unwrap_or(ResolveError::UnknownAlias(name)));
                 }
             }
         }
@@ -238,7 +256,7 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
         let relative_path = sub_path.ok_or(ResolveError::BareSelfAlias)?;
         let is_self_alias_shadowed = self
             .aliases
-            .in_effect(self.fs_cache.file_system(), lookup_directory)
+            .in_effect(self.fs_cache.file_system(), self.luau_config, lookup_directory)
             .targets
             .contains_key("self");
         let path = self.navigate(requiring_module, relative_path)?;
@@ -286,6 +304,9 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
             None => self.probe(&position)?,
         };
         match probed {
+            Probed::Module(found) if is_definition_file(&found) => {
+                Err(ResolveError::DefinitionFile(found))
+            }
             Probed::Module(found) => Ok(self.fs_cache.canonical_file(&found)),
             Probed::Directory | Probed::Missing => Err(not_found(start, sub_path)),
         }

@@ -10,7 +10,7 @@ use luck_token::{LineIndex, Span, index_to_offset};
 use rustc_hash::FxHashMap;
 
 use crate::ffi::{
-    CancellationToken, Config, LuauDescription, LuauDocs, LuauEntry, LuauError, Outcome,
+    CancellationToken, Config, LuauDescription, LuauDocs, LuauEntry, LuauError, LuckLocation,
     RawChecker, Task,
 };
 
@@ -28,8 +28,8 @@ pub trait Host {
     /// names none.
     fn resolve(&self, requirer: &str, path: &str) -> Option<String>;
 
-    /// Applies the `.luaurc` files that govern `module` to `config`,
-    /// outermost first.
+    /// Applies the `.luaurc` and `.config.luau` files that govern `module` to
+    /// `config`, outermost first.
     fn config(&self, module: &str, config: &mut Config<'_>);
 }
 
@@ -134,7 +134,7 @@ impl<H: Host> Context<H> {
 
 impl<H> Context<H> {
     /// Where `location` is in the module or definitions named `name`.
-    fn span(&self, name: &str, location: [u32; 4]) -> Option<Span> {
+    fn span(&self, name: &str, location: LuckLocation) -> Option<Span> {
         let lines = self.lines.borrow();
         span(location, lines.get(name).or_else(|| self.definition_lines.get(name))?)
     }
@@ -195,17 +195,10 @@ impl<H: Host> Checker<H> {
     /// [`Self::retain_type_graphs`].
     pub fn describe(&mut self, module: &str, offset: u32) -> Option<Description> {
         let (line, column) = self.position(module, offset)?;
-        let described = self.raw.describe(module, line, column)?;
-        let LuauDescription { location, ty, docs, signatures } = described;
+        let LuauDescription { location, ty, docs, signatures } =
+            self.raw.describe(module, line, column)?;
         let context = self.raw.context();
         let span = context.span(module, location)?;
-        let signatures = signatures
-            .into_iter()
-            .map(|(label, params)| Signature {
-                label,
-                params: params.into_iter().map(|[start, end]| Span::new(start, end)).collect(),
-            })
-            .collect();
         Some(Description { span, ty, declaration: context.declaration(docs), signatures })
     }
 
@@ -221,22 +214,10 @@ impl<H: Host> Checker<H> {
         let context = self.raw.context();
         entries
             .into_iter()
-            .filter_map(|entry| {
+            .map(|entry| {
                 let LuauEntry { name, kind, ty, is_deprecated, insert_text, docs } = entry;
-                let kind = match kind {
-                    0 => CompletionKind::Property,
-                    1 => CompletionKind::Binding,
-                    2 => CompletionKind::Keyword,
-                    3 => CompletionKind::String,
-                    4 => CompletionKind::Type,
-                    5 => CompletionKind::Module,
-                    6 => CompletionKind::GeneratedFunction,
-                    7 => CompletionKind::RequirePath,
-                    8 => CompletionKind::HotComment,
-                    _ => return None,
-                };
                 let declaration = context.declaration(docs);
-                Some(Completion { name, kind, ty, is_deprecated, insert_text, declaration })
+                Completion { name, kind, ty, is_deprecated, insert_text, declaration }
             })
             .collect()
     }
@@ -300,7 +281,7 @@ impl<H: Host> Checker<H> {
     ) -> Result<Vec<Vec<Diagnostic>>, CheckError> {
         let names: Vec<&str> = modules.iter().map(AsRef::as_ref).collect();
         let (sender, receiver) = crossbeam_channel::unbounded::<Task>();
-        let outcome = thread::scope(|scope| {
+        let checked = thread::scope(|scope| {
             for _ in 0..threads.get() {
                 let tasks = receiver.clone();
                 // A worker that can't start leaves its tasks to the others, or
@@ -320,23 +301,25 @@ impl<H: Host> Checker<H> {
             checked
         });
 
+        if cancellation.is_cancelled() {
+            return Err(CheckError::Cancelled);
+        }
         let lines = self.raw.context().lines.borrow();
-        match outcome {
-            Outcome::Cancelled => Err(CheckError::Cancelled),
-            Outcome::InternalError(error) => {
-                let module = error.module_name.clone();
+        match checked {
+            Err(error) => {
+                let module = error.module.clone();
                 Err(CheckError::Internal { diag: diagnostic(error, lines.get(&module)), module })
             }
-            Outcome::Checked(errors) => {
-                let mut diags = vec![Vec::new(); names.len()];
-                for error in errors {
-                    let module_lines = names.get(error.module).and_then(|name| lines.get(*name));
-                    if let Some(module_diags) = diags.get_mut(error.module) {
-                        module_diags.push(diagnostic(error, module_lines));
-                    }
-                }
-                Ok(diags.into_iter().map(sorted).collect())
-            }
+            Ok(errors) => Ok(errors
+                .into_iter()
+                .zip(&names)
+                .map(|(errors, name)| {
+                    let module_lines = lines.get(*name);
+                    sorted(
+                        errors.into_iter().map(|error| diagnostic(error, module_lines)).collect(),
+                    )
+                })
+                .collect()),
         }
     }
 }
@@ -349,9 +332,9 @@ impl<H> fmt::Debug for Checker<H> {
 
 /// Where Luau's `location`, zero-based lines and byte columns, is in the
 /// source whose lines and length are `lines`.
-fn span(location: [u32; 4], lines: &(LineIndex, u32)) -> Option<Span> {
+fn span(location: LuckLocation, lines: &(LineIndex, u32)) -> Option<Span> {
     let (lines, source_len) = lines;
-    let [begin_line, begin_column, end_line, end_column] = location;
+    let LuckLocation { begin_line, begin_column, end_line, end_column } = location;
     let start = lines.offset(begin_line.checked_add(1)?, begin_column.saturating_add(1))?;
     let end = lines.offset(end_line.checked_add(1)?, end_column.saturating_add(1))?;
     let start = start.min(*source_len);

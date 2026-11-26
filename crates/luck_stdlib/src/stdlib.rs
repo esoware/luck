@@ -38,7 +38,7 @@ static LUAU_LIBRARY: OnceLock<Stdlib> = OnceLock::new();
 /// Roblox's API over Luau's library at each level of [`SecurityLevel::ALL`].
 static ROBLOX_LIBRARIES: [OnceLock<Stdlib>; 4] = [const { OnceLock::new() }; 4];
 
-/// Luau's own library, `luau.luau`'s, which every project's starts from,
+/// Luau's own library, `luau.d.luau`'s, which every project's starts from,
 /// built the first time a process asks for it.
 ///
 /// # Panics
@@ -62,7 +62,7 @@ pub fn roblox_library(security: SecurityLevel) -> &'static StdlibLibrary<'static
 }
 
 fn built_in_luau() -> &'static Stdlib {
-    LUAU_LIBRARY.get_or_init(|| Stdlib::layered(None, false, LUAU).expect("luau.luau parses"))
+    LUAU_LIBRARY.get_or_init(|| Stdlib::layered(None, false, LUAU).expect("luau.d.luau parses"))
 }
 
 fn built_in_roblox(security: SecurityLevel) -> &'static Stdlib {
@@ -97,7 +97,7 @@ impl Stdlib {
 
     fn roblox_over(&self, security: SecurityLevel) -> Self {
         Self::layered(Some(self.clone()), true, &roblox_definitions(security))
-            .expect("roblox.luau parses at every level")
+            .expect("roblox.d.luau parses at every level")
     }
 
     /// This library with the definition file `source` layered over it.

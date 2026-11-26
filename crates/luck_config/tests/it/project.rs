@@ -6,7 +6,7 @@ use std::os::windows::fs::symlink_file;
 use std::path::{Path, PathBuf};
 
 use luck_bundler::DynamicRequire;
-use luck_config::{DefinitionSource, Editorconfigs, Project};
+use luck_config::{ConfigError, DefinitionSource, Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
@@ -16,7 +16,7 @@ use crate::common::{load_error, loaded, project_with};
 
 #[test]
 fn defaults_take_every_lua_and_luau_file_as_luau() {
-    let project = Project::defaults(PathBuf::from("."));
+    let project = Project::defaults(PathBuf::from("."), FileSystemOs);
     assert!(!project.stdlib().library().has_roblox);
     assert_eq!(project.definitions(), []);
     assert!(project.filter().is_included(Path::new("src/a.lua")));
@@ -271,8 +271,7 @@ fn definitions_layer_in_order_over_luau_s_library() {
     let file =
         FileSystemOs.canonicalize(&directory.path().join("types/app.d.luau")).expect("exists");
     assert!(project.files().contains(&file), "{:?}", project.files());
-    assert!(!project.filter().is_included(&file), "a definition file is no source file");
-    assert!(project.filter().is_excluded(&file));
+    assert!(project.filter().is_included(&file), "a definition file is one of the project's");
     assert_eq!(
         project.definitions(),
         [DefinitionSource::Roblox, DefinitionSource::File { path: file, text: APP.to_owned() }]
@@ -330,6 +329,69 @@ fn a_definitions_file_that_does_not_parse_is_reported_in_it() {
     assert!(path.ends_with("app.d.luau"), "{path:?}");
     assert_eq!(diag.code, "E008");
     assert!(diag.span.is_some(), "{diag:?}");
+}
+
+#[test]
+fn a_definitions_file_whose_name_does_not_end_in_d_luau_is_reported_on_its_name() {
+    let text = r#"{ "definitions": ["app.luau"] }"#;
+    let directory = project_with(&[("app.luau", APP), ("luck.json", text)]);
+    let (path, diag) = load_error(&directory.path().join("luck.json"));
+    assert!(path.ends_with("luck.json"), "{path:?}");
+    assert_eq!(
+        diag.message,
+        "invalid config: `definitions` names `app.luau`, but a definition file's name ends in \
+         `.d.luau`"
+    );
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""app.luau""#[..]));
+}
+
+#[test]
+fn a_given_config_reads_its_definitions_from_its_root() {
+    let directory = project_with(&[("types/app.d.luau", APP)]);
+    let config = r#"{ "definitions": ["@roblox", "types/app.d.luau"], "lint": { "extra_globals": ["it"] } }"#;
+    let project = Project::from_config(config, directory.path().to_path_buf(), FileSystemOs)
+        .expect("the config loads");
+    let library = project.stdlib().library();
+    assert!(library.has_roblox);
+    assert!(library.lookup(["app", "onMessage"]).is_some());
+    assert_eq!(project.root(), directory.path());
+    assert_eq!(project.linter_for(None).config().extra_globals, ["it"]);
+}
+
+#[test]
+fn a_given_config_reports_what_a_luck_json_with_its_text_does() {
+    let text = r#"{ "definitions": ["@lune"] }"#;
+    let directory = project_with(&[("luck.json", text)]);
+    let (_, from_file) = load_error(&directory.path().join("luck.json"));
+    let given = Project::from_config(text, directory.path().to_path_buf(), FileSystemOs)
+        .expect_err("the config doesn't load");
+    assert_eq!(given, ConfigError::Given(from_file));
+}
+
+#[test]
+fn a_given_config_extends_nothing() {
+    let text = r#"{ "extends": ["base.json"] }"#;
+    let directory = project_with(&[("base.json", "{}")]);
+    let Err(ConfigError::Given(diag)) =
+        Project::from_config(text, directory.path().to_path_buf(), FileSystemOs)
+    else {
+        panic!("the config doesn't load");
+    };
+    assert!(diag.message.starts_with("invalid config: `extends` names `base.json`"), "{diag:?}");
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""base.json""#[..]));
+}
+
+#[test]
+fn a_given_config_s_definition_file_that_does_not_parse_is_reported_in_it() {
+    let directory = project_with(&[("app.d.luau", "declare function greet(name: string: string")]);
+    let text = r#"{ "definitions": ["app.d.luau"] }"#;
+    let Err(ConfigError::File(error)) =
+        Project::from_config(text, directory.path().to_path_buf(), FileSystemOs)
+    else {
+        panic!("the config doesn't load");
+    };
+    assert!(error.path.ends_with("app.d.luau"), "{error:?}");
+    assert_eq!(error.diags[0].code, "E008");
 }
 
 #[test]

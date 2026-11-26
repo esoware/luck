@@ -13,6 +13,9 @@
 //! they stand between two changes, takes its token, which the main loop
 //! cancels once the next change starts a new one. So a job never brings a
 //! checker back to older text, and a check of text that changed since stops.
+//!
+//! A definition file is no module, so it's never checked as one. What Luau
+//! finds wrong with it as it loads it is published on it, open or not.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -21,38 +24,48 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ls_types::notification::{Notification as _, ShowMessage};
-use ls_types::{Location, MessageType, ShowMessageParams, Uri};
+use ls_types::notification::{Notification as _, PublishDiagnostics, ShowMessage};
+use ls_types::{Location, MessageType, PublishDiagnosticsParams, ShowMessageParams, Uri};
 use lsp_server::Notification;
 use luck_config::{DefinitionSource, Project};
 use luck_diagnostics::Diagnostic;
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
+use luck_resolver::{FileSystem as _, ResolverGeneric, to_slash_lossy};
 use luck_stdlib::{SecurityLevel, luau_definitions, roblox_definitions};
 use luck_type_checker::{
     CancellationToken, CheckError, Checker, Completion, Config, Declaration, Description, Host,
+    luau_config_aliases,
 };
 use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::definitions::{Package, luau_uri, roblox_uri};
 use crate::document::{Document, DocumentState};
+use crate::files::Files;
 use crate::line_index::PositionEncoding;
+use crate::providers::diagnostics;
 use crate::server::Task;
 use crate::session::Session;
 
 /// The open documents' texts by module name, which a check reads in place of
-/// the disk.
+/// the files.
 pub(crate) type OpenModules = FxHashMap<String, Arc<str>>;
 
 /// The checkers of the session's projects.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct TypeChecks {
+    files: Files,
     checks: Mutex<Vec<Arc<TypeCheck>>>,
 }
 
 impl TypeChecks {
-    /// The checker of the files of `project`.
-    pub(crate) fn of(&self, project: &Project) -> Arc<TypeCheck> {
+    /// Checkers that read every module through `files`.
+    pub(crate) fn new(files: Files) -> Self {
+        Self { files, checks: Mutex::default() }
+    }
+
+    /// The checker of the files of `project`, which the settings of
+    /// `generation` gave.
+    pub(crate) fn of(&self, project: &Project, generation: u64) -> Arc<TypeCheck> {
         let (security, definitions) = (project.security(), project.definitions());
         let mut checks = self.checks.lock();
         let found = checks
@@ -61,7 +74,12 @@ impl TypeChecks {
         if let Some(check) = found {
             return Arc::clone(check);
         }
-        let check = Arc::new(TypeCheck::new(security, definitions.to_vec()));
+        let check = Arc::new(TypeCheck::new(
+            security,
+            definitions.to_vec(),
+            self.files.clone(),
+            generation,
+        ));
         checks.push(Arc::clone(&check));
         check
     }
@@ -80,9 +98,15 @@ impl TypeChecks {
     }
 
     /// Drops every checker, as new settings need, since they decide the
-    /// definitions each project loads.
-    pub(crate) fn clear(&self) {
-        self.checks.lock().clear();
+    /// definitions each project loads, and returns each definition file Luau
+    /// couldn't load, whose problems were published.
+    pub(crate) fn clear(&self) -> Vec<PathBuf> {
+        let checks = mem::take(&mut *self.checks.lock());
+        checks
+            .iter()
+            .flat_map(|check| mem::take(&mut *check.rejected.lock()))
+            .map(|(path, _)| path)
+            .collect()
     }
 }
 
@@ -94,23 +118,34 @@ pub(crate) struct TypeCheck {
     /// Luau's own definitions, then the project's, in the order it loads
     /// them.
     packages: Vec<Package>,
+    files: Files,
+    /// The settings' generation the project came from, which a problem of
+    /// its definitions is published under.
+    generation: u64,
     /// Loaded the first time a job needs it, since that takes a while.
     checker: Mutex<Option<Checker<ModuleHost>>>,
-    /// What changed on disk since the last check.
+    /// What changed in the files since the last check.
     changed: Mutex<Changed>,
+    /// What Luau found wrong with each definition file it couldn't load.
+    rejected: Mutex<Vec<(PathBuf, Vec<Diagnostic>)>>,
 }
 
 #[derive(Debug, Default)]
 struct Changed {
     /// As the client spells them.
     modules: Vec<PathBuf>,
-    /// A module was created or deleted, or a `.luaurc` changed, so any
-    /// module may resolve a require or take its mode differently.
+    /// A module was created or deleted, or a config changed, so any module
+    /// may resolve a require or take its mode differently.
     is_everything: bool,
 }
 
 impl TypeCheck {
-    fn new(security: SecurityLevel, definitions: Vec<DefinitionSource>) -> Self {
+    fn new(
+        security: SecurityLevel,
+        definitions: Vec<DefinitionSource>,
+        files: Files,
+        generation: u64,
+    ) -> Self {
         let luau =
             Package::new("@luau".to_owned(), Some(luau_uri()), Cow::Borrowed(luau_definitions()));
         let packages = iter::once(luau)
@@ -120,39 +155,52 @@ impl TypeCheck {
                     Some(roblox_uri(security)),
                     roblox_definitions(security),
                 ),
-                DefinitionSource::File { path, text } => Package::new(
-                    module_name(path),
-                    Uri::from_file_path(path),
-                    Cow::Owned(text.clone()),
-                ),
+                DefinitionSource::File { path, text } => {
+                    Package::new(module_name(path), files.uri(path), Cow::Owned(text.clone()))
+                }
             }))
             .collect();
         Self {
             security,
             definitions,
             packages,
+            files,
+            generation,
             checker: Mutex::default(),
             changed: Mutex::default(),
+            rejected: Mutex::default(),
         }
     }
 
     /// A checker with the project's definitions loaded, which shows why one
-    /// doesn't load.
+    /// doesn't load and publishes it on the file.
     fn load(&self, session: &Session) -> Checker<ModuleHost> {
-        let mut checker = Checker::new(ModuleHost::default());
+        let mut checker = Checker::new(ModuleHost::new(self.files.clone()));
         checker.retain_type_graphs();
-        for package in &self.packages[1..] {
-            if let Err(diags) = checker.load_definitions(package.name(), package.text()) {
-                let problems: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
-                let message = format!(
-                    "luck: Luau can't load the definition file `{}`, so its declarations are left out: {}",
-                    package.name(),
-                    problems.join("; ")
-                );
-                let shown = ShowMessageParams { typ: MessageType::ERROR, message };
-                session
-                    .send(Task::Notify(Notification::new(ShowMessage::METHOD.to_owned(), shown)));
+        for (package, source) in self.packages[1..].iter().zip(&self.definitions) {
+            let Err(diags) = checker.load_definitions(package.name(), package.text()) else {
+                continue;
+            };
+            let problems: Vec<&str> = diags.iter().map(|diag| &*diag.message).collect();
+            let message = format!(
+                "luck: Luau can't load the definition file `{}`, so its declarations are left out: {}",
+                package.name(),
+                problems.join("; ")
+            );
+            let shown = ShowMessageParams { typ: MessageType::ERROR, message };
+            let mut notifications = vec![Notification::new(ShowMessage::METHOD.to_owned(), shown)];
+            if let DefinitionSource::File { path, text } = source {
+                if let Some(uri) = package.uri() {
+                    let diagnostics =
+                        diagnostics::config_to_lsp(uri, &diags, text, session.encoding());
+                    let published =
+                        PublishDiagnosticsParams { uri: uri.clone(), diagnostics, version: None };
+                    notifications
+                        .push(Notification::new(PublishDiagnostics::METHOD.to_owned(), published));
+                }
+                self.rejected.lock().push((path.clone(), diags));
             }
+            session.send(Task::ConfigError { generation: self.generation, notifications });
         }
         if self.definitions.contains(&DefinitionSource::Roblox) {
             // What Roblox Studio types past its definitions: the class a
@@ -164,6 +212,14 @@ impl TypeCheck {
             checker.bind_type_namespace("Enum", "EnumItem");
         }
         checker
+    }
+
+    /// What Luau found wrong with the definition file at `path` as it loaded
+    /// it, once it has.
+    fn rejected(&self, path: &Path) -> Vec<Diagnostic> {
+        let rejected = self.rejected.lock();
+        let found = rejected.iter().find(|(rejected_path, _)| rejected_path == path);
+        found.map(|(_, diags)| diags.clone()).unwrap_or_default()
     }
 
     /// What `read` gives once `modules` are checked as `open` holds the open
@@ -186,7 +242,7 @@ impl TypeCheck {
         let changed_modules: FxHashSet<String> = changed
             .modules
             .iter()
-            .map(|path| module_name(&FileSystemOs.canonicalize_existing(path)))
+            .map(|path| module_name(&self.files.canonicalize_existing(path)))
             .collect();
         sync(checker, open, &changed_modules, changed.is_everything);
         let diags = match checker.check(modules, session.threads(), cancellation) {
@@ -235,7 +291,7 @@ impl Types<'_> {
 /// What `read` gives for the types of `document`, the version of the open
 /// document at `uri` that a job reads, once Luau has checked it with the
 /// other open documents as `open` holds them, or `None` once `cancellation`
-/// is cancelled.
+/// is cancelled. A definition file, which is no module, has no types to read.
 pub(crate) fn with_types<R>(
     session: &Session,
     uri: &Uri,
@@ -245,9 +301,13 @@ pub(crate) fn with_types<R>(
     read: impl FnOnce(&mut Types<'_>) -> R,
 ) -> Option<R> {
     let settings = document.settings();
+    if settings.is_definitions {
+        return None;
+    }
     let module = document_module(uri, settings.path.as_deref());
     open.insert(module.clone(), Arc::clone(document.shared_text()));
-    let check = session.type_checks().of(settings.project.project());
+    let check =
+        session.type_checks().of(settings.project.project(), session.settings().generation());
     let modules = [module];
     check.with_checked(session, open, &modules, cancellation, |checker, _| {
         let (packages, encoding) = (&check.packages, session.encoding());
@@ -257,38 +317,56 @@ pub(crate) fn with_types<R>(
 
 /// The type errors of each of `documents`, the open documents a job reads,
 /// in order, once Luau has checked them together, or `None` once
-/// `cancellation` is cancelled. A document the project leaves out has none.
+/// `cancellation` is cancelled. A document the project leaves out has none,
+/// and a definition file has what Luau found wrong with it as it loaded it.
 pub(crate) fn type_errors(
     session: &Session,
     documents: &[(Uri, Arc<Document>)],
     cancellation: &CancellationToken,
 ) -> Option<Vec<Vec<Diagnostic>>> {
     let open = open_modules(session, documents);
-    let mut groups: Vec<(Arc<TypeCheck>, Vec<usize>, Vec<String>)> = Vec::new();
+    let generation = session.settings().generation();
+    let mut groups: Vec<CheckGroup> = Vec::new();
     for (index, (uri, document)) in documents.iter().enumerate() {
         let settings = document.state(session).settings();
         if !settings.is_included {
             continue;
         }
-        let check = session.type_checks().of(settings.project.project());
-        let module = document_module(uri, settings.path.as_deref());
-        match groups.iter_mut().find(|(known, ..)| Arc::ptr_eq(known, &check)) {
-            Some((_, indices, modules)) => {
-                indices.push(index);
-                modules.push(module);
-            }
-            None => groups.push((check, vec![index], vec![module])),
+        let check = session.type_checks().of(settings.project.project(), generation);
+        let found = groups.iter().position(|group| Arc::ptr_eq(&group.check, &check));
+        let group = found.unwrap_or_else(|| {
+            groups.push(CheckGroup { check, modules: Vec::new(), definitions: Vec::new() });
+            groups.len() - 1
+        });
+        let group = &mut groups[group];
+        match (&settings.path, settings.is_definitions) {
+            (Some(path), true) => group.definitions.push((index, path.clone())),
+            (_, true) => {}
+            (path, false) => group.modules.push((index, document_module(uri, path.as_deref()))),
         }
     }
     let mut errors = vec![Vec::new(); documents.len()];
-    for (check, indices, modules) in groups {
+    for CheckGroup { check, modules, definitions } in groups {
+        let (indices, names): (Vec<usize>, Vec<String>) = modules.into_iter().unzip();
         let checked =
-            check.with_checked(session, open.clone(), &modules, cancellation, |_, diags| diags)?;
+            check.with_checked(session, open.clone(), &names, cancellation, |_, diags| diags)?;
         for (index, diags) in indices.into_iter().zip(checked) {
             errors[index] = diags;
         }
+        for (index, path) in definitions {
+            errors[index] = check.rejected(&path);
+        }
     }
     Some(errors)
+}
+
+/// The open documents one checker checks together.
+struct CheckGroup {
+    check: Arc<TypeCheck>,
+    /// Each module's document, by its index, and the module's name.
+    modules: Vec<(usize, String)>,
+    /// Each definition file's document, by its index, and its path.
+    definitions: Vec<(usize, PathBuf)>,
 }
 
 /// The text of each of `documents` by its module's name.
@@ -312,8 +390,8 @@ fn document_module(uri: &Uri, path: Option<&Path>) -> String {
     path.map_or_else(|| uri.as_str().to_owned(), module_name)
 }
 
-/// Brings `checker` to `open` and to the modules `changed` on disk, or to
-/// every file when `is_everything`, invalidating each module it last read
+/// Brings `checker` to `open` and to the modules `changed` in the files, or
+/// to every file when `is_everything`, invalidating each module it last read
 /// otherwise.
 fn sync(
     checker: &mut Checker<ModuleHost>,
@@ -324,7 +402,7 @@ fn sync(
     let host = checker.host_mut();
     if is_everything {
         host.resolver.clear_cache();
-        host.luaurcs.get_mut().clear();
+        host.configs.get_mut().clear();
     }
     let stale: Vec<String> = host
         .read
@@ -346,18 +424,34 @@ fn sync(
     }
 }
 
-/// The open documents and the files on disk, as a checker reads them, with
-/// `require` resolved as `luck build` resolves it.
-#[derive(Debug, Default)]
+/// The open documents and the files, as a checker reads them, with `require`
+/// resolved as `luck build` resolves it.
+#[derive(Debug)]
 struct ModuleHost {
+    files: Files,
     open: OpenModules,
     /// The text each module was last read with: an open document's, or
     /// `None` for the file's.
     read: RefCell<FxHashMap<String, Option<Arc<str>>>>,
-    resolver: Resolver,
-    /// Each directory's `.luaurc`, if it has one, as read the first time a
-    /// module below it asked.
-    luaurcs: RefCell<FxHashMap<PathBuf, Option<String>>>,
+    resolver: ResolverGeneric<Files>,
+    configs: RefCell<FxHashMap<PathBuf, DirectoryConfigs>>,
+}
+
+/// A directory's `.luaurc` and `.config.luau`, where it has them, as read the
+/// first time a module below it asked.
+type DirectoryConfigs = (Option<String>, Option<String>);
+
+impl ModuleHost {
+    fn new(files: Files) -> Self {
+        Self {
+            resolver: ResolverGeneric::new_with_file_system(files.clone())
+                .with_luau_config(luau_config_aliases),
+            files,
+            open: OpenModules::default(),
+            read: RefCell::default(),
+            configs: RefCell::default(),
+        }
+    }
 }
 
 impl Host for ModuleHost {
@@ -366,34 +460,41 @@ impl Host for ModuleHost {
             self.read.borrow_mut().insert(module.to_owned(), Some(Arc::clone(text)));
             return Some(text.as_bytes().to_vec());
         }
-        let source = FileSystemOs.read(Path::new(module)).ok()?;
+        let source = self.files.read(Path::new(module)).ok()?;
         self.read.borrow_mut().insert(module.to_owned(), None);
         Some(source)
     }
 
     fn resolve(&self, requirer: &str, path: &str) -> Option<String> {
         let requirer = Path::new(requirer);
-        if !requirer.is_absolute() {
+        if !requirer.has_root() {
             return None;
         }
         Some(module_name(&self.resolver.resolve(requirer, path).ok()?.path))
     }
 
+    /// As luau-analyze reads them: a directory with both a `.luaurc` and a
+    /// `.config.luau` applies neither, and Luau applies the keys of a config
+    /// before one it can't read.
     fn config(&self, module: &str, config: &mut Config<'_>) {
         let path = Path::new(module);
-        if !path.is_absolute() {
+        if !path.has_root() {
             return;
         }
         let directories: Vec<&Path> = path.ancestors().skip(1).collect();
-        let mut luaurcs = self.luaurcs.borrow_mut();
+        let mut configs = self.configs.borrow_mut();
         for &directory in directories.iter().rev() {
-            let luaurc = luaurcs.entry(directory.to_path_buf()).or_insert_with(|| {
-                String::from_utf8(FileSystemOs.read(&directory.join(".luaurc")).ok()?).ok()
+            let found = configs.entry(directory.to_path_buf()).or_insert_with(|| {
+                let read = |name: &str| {
+                    String::from_utf8(self.files.read(&directory.join(name)).ok()?).ok()
+                };
+                (read(".luaurc"), read(".config.luau"))
             });
-            // Luau applies the keys before one it can't read.
-            if let Some(text) = luaurc {
-                let _ = config.apply_luaurc(text);
-            }
+            let _ = match found {
+                (Some(text), None) => config.apply_luaurc(text),
+                (None, Some(source)) => config.apply_luau_config(source),
+                (Some(_), Some(_)) | (None, None) => Ok(()),
+            };
         }
     }
 }

@@ -13,10 +13,10 @@ Luau language support powered by the luck toolchain:
 - **JS/TS-style highlighting**: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough
 - **Document highlights**, folding ranges, selection ranges, document links
 - **Snippets** for common Luau patterns
-- **TextMate grammar** for Luau, in `.luau` and `.lua` files alike (type annotations, string interpolation, attributes, generics)
+- **TextMate grammar** for Luau (type annotations, string interpolation, attributes, generics, and definition files' `declare` statements)
 - Status bar item, dedicated output channels, restart-server command
 
-Supports Luau, standalone or with the Roblox API. Every `.luau` and `.lua` file is read as Luau.
+Supports Luau, standalone or with the Roblox API. Every `.luau` file is read as Luau, and so is every `.lua` file unless `luck.treatLuaFilesAsLuau` is off.
 
 ## Quick start
 
@@ -43,5 +43,6 @@ All commands are under the `Luck:` prefix in the command palette:
 ## Configuration highlights
 
 - Formatter style, lint rules, the definitions (such as `@roblox`), and globals are all read from `luck.json` / `.editorconfig` by the server. There are no editor settings for them.
+- `luck.treatLuaFilesAsLuau` (on by default) opens `.lua` files as Luau. Turn it off to leave them in VS Code's Lua mode, untouched by Luck.
 - `luck.server.path` is an explicit path to the `luck` binary, overriding the bundled one.
 - `luck.trace.server` traces LSP messages for debugging.

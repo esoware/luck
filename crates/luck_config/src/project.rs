@@ -1,6 +1,6 @@
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{fs, mem};
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
@@ -8,6 +8,7 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
+use luck_resolver::FileSystem;
 use luck_stdlib::{SecurityLevel, Stdlib};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -17,12 +18,14 @@ use crate::config::{DefinitionsEntry, Entries, LuckConfig, OverrideConfig};
 use crate::editorconfig::Editorconfigs;
 use crate::filter::{ProjectFilter, located_path};
 use crate::glob::compiled;
-use crate::load::{self, Loaded, config_directory, in_file, unreadable};
+use crate::load::{self, ConfigError, Loaded, config_directory, in_file, read_text};
 
-/// A `luck.json` loaded through its `extends` chain and validated, or the
-/// defaults where there's none, and the settings it gives each file.
+/// A `luck.json` loaded through its `extends` chain and validated, a config
+/// no file holds, or the defaults where there's none, and the settings it
+/// gives each file, all read through one [`FileSystem`].
 #[derive(Debug)]
 pub struct Project {
+    file_system: Arc<dyn FileSystem>,
     root: PathBuf,
     files: Vec<PathBuf>,
     /// Luau's library with what `definitions` loads layered over it.
@@ -62,8 +65,8 @@ struct Override {
 }
 
 impl Project {
-    /// The project of the `luck.json` at `config_path`, rooted at its
-    /// directory.
+    /// The project of the `luck.json` at `config_path` in `file_system`,
+    /// rooted at its directory.
     ///
     /// # Errors
     ///
@@ -71,9 +74,51 @@ impl Project {
     /// be read, E014 when it or a file it extends isn't valid, and E008 where
     /// a definition file doesn't parse, each in the file at fault and placed
     /// where the problem is.
-    pub fn load(config_path: &Path) -> Result<Self, FileDiagnostics> {
-        let Loaded { config, mut files } = load::load(config_path)?;
-        let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
+    pub fn load(
+        config_path: &Path,
+        file_system: impl FileSystem + 'static,
+    ) -> Result<Self, FileDiagnostics> {
+        let file_system: Arc<dyn FileSystem> = Arc::new(file_system);
+        let Loaded { config, files } = load::load(&*file_system, config_path)?;
+        let invalid =
+            |problem: &str| in_file(&*file_system, config_path, Diagnostic::e014(None, problem));
+        let root = config_directory(config_path);
+        Self::validated(config, files, root, Arc::clone(&file_system), invalid)
+    }
+
+    /// The project of `config`, the text of a config no file holds, such as
+    /// one an editor gives, with the keys of a `luck.json` but `extends`,
+    /// rooted at `root`, which its paths and globs are relative to, and
+    /// reading through `file_system`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Given`], the E014 a `luck.json` with the same
+    /// text would report, placed in `config`, or else the E010 or E008s of a
+    /// definition file it names, in that file.
+    pub fn from_config(
+        config: &str,
+        root: PathBuf,
+        file_system: impl FileSystem + 'static,
+    ) -> Result<Self, ConfigError> {
+        let file_system: Arc<dyn FileSystem> = Arc::new(file_system);
+        let given = load::given(&*file_system, config, &root).map_err(ConfigError::Given)?;
+        let invalid = |problem: &str| ConfigError::Given(Diagnostic::e014(None, problem));
+        Self::validated(given, Vec::new(), root, file_system, invalid)
+    }
+
+    /// The project of `config`, which read `files`, rooted at `root`, with
+    /// `invalid` placing a problem of the config as a whole.
+    fn validated<E>(
+        config: LuckConfig,
+        mut files: Vec<PathBuf>,
+        root: PathBuf,
+        file_system: Arc<dyn FileSystem>,
+        invalid: impl Fn(&str) -> E,
+    ) -> Result<Self, E>
+    where
+        E: From<FileDiagnostics>,
+    {
         let LuckConfig {
             security,
             definitions,
@@ -107,19 +152,11 @@ impl Project {
                  `definitions` or remove `security`",
             ));
         }
-        let root = config_directory(config_path);
-        let definition_files: Vec<PathBuf> = definitions
-            .iter()
-            .filter_map(|named| match named {
-                DefinitionsEntry::File(path) => Some(path.clone()),
-                DefinitionsEntry::BuiltIn(_) => None,
-            })
-            .collect();
         let filter = ProjectFilter::new(
             &root,
             include.as_deref(),
             exclude.as_deref().unwrap_or_default(),
-            &definition_files,
+            Arc::clone(&file_system),
         )
         .map_err(|message| invalid(&message))?;
         let compiled_overrides = overrides
@@ -146,7 +183,7 @@ impl Project {
                     DefinitionSource::Roblox
                 }
                 DefinitionsEntry::File(path) => {
-                    let text = fs::read_to_string(&path).map_err(|e| unreadable(&path, &e))?;
+                    let text = read_text(&*file_system, &path)?;
                     stdlib = stdlib
                         .layer(&text)
                         .map_err(|diags| FileDiagnostics { path: path.clone(), diags })?;
@@ -157,6 +194,7 @@ impl Project {
             sources.push(source);
         }
         Ok(Self {
+            file_system,
             root,
             files,
             stdlib,
@@ -183,10 +221,12 @@ impl Project {
     }
 
     /// The defaults, for files with no `luck.json` above them, rooted at
-    /// `root`.
-    pub fn defaults(root: PathBuf) -> Self {
-        let filter = ProjectFilter::everything(&root);
+    /// `root`, reading through `file_system`.
+    pub fn defaults(root: PathBuf, file_system: impl FileSystem + 'static) -> Self {
+        let file_system: Arc<dyn FileSystem> = Arc::new(file_system);
+        let filter = ProjectFilter::everything(&root, Arc::clone(&file_system));
         Self {
+            file_system,
             root,
             files: Vec::new(),
             stdlib: Stdlib::luau(),
@@ -203,8 +243,8 @@ impl Project {
         }
     }
 
-    /// The directory of the `luck.json`, which the project's relative paths
-    /// and globs start from.
+    /// The directory of the `luck.json`, or the root a config no file holds
+    /// was given, which the project's relative paths and globs start from.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -269,7 +309,7 @@ impl Project {
             .fold(self.format, |format, layer| layer.merge_onto(format));
         let editorconfig = path
             .zip(editorconfigs)
-            .map(|(file, reader)| reader.format_config_for(file))
+            .map(|(file, reader)| reader.format_config_for(&*self.file_system, file))
             .unwrap_or_default();
         FormatOptions::from(&format.merge_onto(editorconfig))
     }
@@ -292,9 +332,14 @@ impl Project {
         self.transforms
     }
 
-    /// How a bundle resolves and reads its modules.
+    /// How a bundle resolves and reads its modules, with no `.config.luau`
+    /// reader, which a caller that links Luau gives.
     pub fn bundle_options(&self) -> BundleOptions<'_> {
-        BundleOptions { project_root: &self.root, dynamic_require: self.dynamic_require }
+        BundleOptions {
+            project_root: &self.root,
+            dynamic_require: self.dynamic_require,
+            luau_config: None,
+        }
     }
 
     /// The bundles `luck build` writes under `profile`.
@@ -313,7 +358,7 @@ impl Project {
         let Some(file) = path.filter(|_| !self.overrides.is_empty()) else {
             return Vec::new();
         };
-        let located = located_path(file);
+        let located = located_path(&*self.file_system, file);
         let candidate = Candidate::new(self.filter.relative(&located));
         self.overrides
             .iter()
@@ -328,6 +373,8 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
+    use luck_resolver::FileSystemOs;
+
     use super::*;
     use crate::fixtures::project_with;
 
@@ -340,7 +387,8 @@ mod tests {
                 { "files": ["**/*.luau"], "format": { "line_width": 80 } }
             ] }"#,
         )]);
-        let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+        let project =
+            Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
         let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
         assert!(Arc::ptr_eq(&linter_at("src/a.luau"), &project.linter));
         let spec = linter_at("spec/a.luau");

@@ -1,28 +1,33 @@
-use std::path::{self, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use globset::{Candidate, GlobSet};
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_resolver::FileSystem;
 
 use crate::glob::{Glob, compiled, glob_set};
 
-/// `path` under its directory's canonical path, with its own name, so a
-/// symlink stays where it is and doesn't move to where it leads.
+/// `path` under its directory's canonical path in `file_system`, with its own
+/// name, so a symlink stays where it is and doesn't move to where it leads.
 ///
 /// A file takes the project of its directory, and its `include`, `exclude`,
 /// and `overrides` globs match this, so all of them go by the same path.
-pub fn located_path(path: &Path) -> PathBuf {
-    let absolute = path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    match (absolute.parent(), absolute.file_name()) {
-        (Some(directory), Some(name)) => FileSystemOs.canonicalize_existing(directory).join(name),
-        _ => FileSystemOs.canonicalize_existing(&absolute),
+pub fn located_path(file_system: &dyn FileSystem, path: &Path) -> PathBuf {
+    let directory = match path.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
+        Some(parent) => parent,
+        None => return file_system.canonicalize_existing(path),
+    };
+    match path.file_name() {
+        Some(name) => file_system.canonicalize_existing(directory).join(name),
+        None => file_system.canonicalize_existing(path),
     }
 }
 
 /// Decides whether a file belongs to the project from `include` and `exclude`
-/// globs, matched relative to the config directory. Exclude wins, and a
-/// definition file the project names is never one of its source files.
+/// globs, matched relative to the config directory. Exclude wins.
 #[derive(Debug, Clone)]
 pub struct ProjectFilter {
+    file_system: Arc<dyn FileSystem>,
     /// Canonical, as the paths matched against it are.
     root: PathBuf,
     /// `None` takes every `.luau` and `.lua` file.
@@ -31,19 +36,17 @@ pub struct ProjectFilter {
     /// The directory part of each exclude ending in `/**` or `/**/*`, every
     /// descendant of which that exclude covers.
     excluded_trees: GlobSet,
-    /// The canonical path of each file `definitions` names.
-    definitions: Vec<PathBuf>,
 }
 
 impl ProjectFilter {
     /// Every `.luau` and `.lua` file.
-    pub(crate) fn everything(root: &Path) -> Self {
+    pub(crate) fn everything(root: &Path, file_system: Arc<dyn FileSystem>) -> Self {
         Self {
-            root: FileSystemOs.canonicalize_existing(root),
+            root: file_system.canonicalize_existing(root),
+            file_system,
             include: None,
             exclude: GlobSet::empty(),
             excluded_trees: GlobSet::empty(),
-            definitions: Vec::new(),
         }
     }
 
@@ -51,7 +54,7 @@ impl ProjectFilter {
         root: &Path,
         include: Option<&[Glob]>,
         exclude: &[Glob],
-        definitions: &[PathBuf],
+        file_system: Arc<dyn FileSystem>,
     ) -> Result<Self, String> {
         let excluded_trees: Vec<String> = exclude
             .iter()
@@ -66,12 +69,12 @@ impl ProjectFilter {
             // The paths matched against it are canonical, so a root that
             // isn't would make `strip_prefix` fail and every glob see the
             // absolute path.
-            root: FileSystemOs.canonicalize_existing(root),
+            root: file_system.canonicalize_existing(root),
+            file_system,
             include: include.map(compiled).transpose()?,
             exclude: compiled(exclude)?,
             // A directory part that doesn't compile alone only costs the pruning.
             excluded_trees: glob_set(&excluded_trees).unwrap_or_default(),
-            definitions: definitions.to_vec(),
         })
     }
 
@@ -79,7 +82,7 @@ impl ProjectFilter {
     /// needn't enter it.
     pub fn excludes_tree(&self, directory: &Path) -> bool {
         !self.excluded_trees.is_empty()
-            && self.excludes_canonical_tree(&FileSystemOs.canonicalize_existing(directory))
+            && self.excludes_canonical_tree(&self.file_system.canonicalize_existing(directory))
     }
 
     /// [`excludes_tree`](Self::excludes_tree) for a canonical path, such as a
@@ -89,29 +92,29 @@ impl ProjectFilter {
     }
 
     pub fn is_included(&self, path: &Path) -> bool {
-        self.includes_located(&located_path(path))
+        self.includes_located(&located_path(&*self.file_system, path))
     }
 
     /// [`is_included`](Self::is_included) for a path [`located_path`] gives,
     /// or a walk from a canonical directory builds, which touches no disk.
     pub fn includes_located(&self, path: &Path) -> bool {
-        let candidate = Candidate::new(self.relative(path));
-        let is_taken = self
-            .include
-            .as_ref()
-            .map_or_else(|| is_source_file(path), |include| include.is_match_candidate(&candidate));
-        is_taken
-            && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
-            && !self.definitions.iter().any(|definitions| definitions == path)
+        (self.include.is_some() || is_source_file(path)) && self.includes_document(path)
     }
 
-    /// Whether an `exclude` glob matches `path`, or it's a definition file,
-    /// whatever `include` says. A file named on the command line is held to
-    /// this alone.
+    /// [`includes_located`](Self::includes_located) for a document an editor
+    /// opened as Luau, which with no `include` the project takes whatever its
+    /// name, as an editor's `inmemory://model/1` has none of Luau's.
+    pub fn includes_document(&self, path: &Path) -> bool {
+        let candidate = Candidate::new(self.relative(path));
+        self.include.as_ref().is_none_or(|include| include.is_match_candidate(&candidate))
+            && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
+    }
+
+    /// Whether an `exclude` glob matches `path`, whatever `include` says. A
+    /// file named on the command line is held to this alone.
     pub fn is_excluded(&self, path: &Path) -> bool {
-        let located = located_path(path);
-        (!self.exclude.is_empty() && self.exclude.is_match(self.relative(&located)))
-            || self.definitions.contains(&located)
+        let located = located_path(&*self.file_system, path);
+        !self.exclude.is_empty() && self.exclude.is_match(self.relative(&located))
     }
 
     /// `located`, a path under canonical directories, as the globs see it,
@@ -131,6 +134,8 @@ fn is_source_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use luck_resolver::FileSystemOs;
+
     use super::*;
     use crate::fixtures::glob;
 
@@ -140,7 +145,8 @@ mod tests {
 
     fn filter(include: Option<&[&str]>, exclude: &[&str]) -> ProjectFilter {
         let include_globs = include.map(globs);
-        ProjectFilter::new(Path::new("/proj"), include_globs.as_deref(), &globs(exclude), &[])
+        let root = Path::new("/proj");
+        ProjectFilter::new(root, include_globs.as_deref(), &globs(exclude), Arc::new(FileSystemOs))
             .expect("valid globs")
     }
 
@@ -172,7 +178,7 @@ mod tests {
 
     #[test]
     fn everything_takes_lua_and_luau_files_at_any_depth() {
-        let filter = ProjectFilter::everything(Path::new("/proj"));
+        let filter = ProjectFilter::everything(Path::new("/proj"), Arc::new(FileSystemOs));
         assert!(filter.is_included(Path::new("/proj/x.lua")));
         assert!(filter.is_included(Path::new("/proj/sub/y.luau")));
         assert!(filter.is_included(Path::new("/proj/.lua")));

@@ -6,12 +6,14 @@ mod common;
 
 mod build_preamble;
 mod config_transforms;
+mod definition_files;
 mod diagnostics;
 mod exit_codes;
 mod fmt_range;
 mod init;
 mod lint_fix;
 mod lint_output;
+mod luau_config;
 mod output_paths;
 mod path_selection;
 mod project_config;

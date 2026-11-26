@@ -4,19 +4,19 @@
 //! to the pool with the versions it reads, and sends on what the jobs give
 //! back unless it went stale first, as rust-analyzer's main loop does.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
 use std::mem;
 use std::num::NonZero;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use ls_types::notification::{
-    Cancel, DidChangeTextDocument, DidChangeWatchedFiles, DidChangeWorkspaceFolders,
-    DidCloseTextDocument, DidOpenTextDocument, Exit, Notification as _, PublishDiagnostics,
+    Cancel, DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles,
+    DidChangeWorkspaceFolders, DidCloseTextDocument, DidOpenTextDocument, Exit,
+    Notification as LspNotification, PublishDiagnostics,
 };
 use ls_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
@@ -26,21 +26,23 @@ use ls_types::request::{
     SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use ls_types::{
-    Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentSymbolResponse, FileChangeType, InitializeParams, NumberOrString,
-    PublishDiagnosticsParams, TextDocumentIdentifier, Uri, WorkspaceEdit,
+    Diagnostic, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidChangeWatchedFilesParams, DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentSymbolResponse, FileChangeType, InitializeParams,
+    NumberOrString, PublishDiagnosticsParams, TextDocumentIdentifier, Uri, WorkspaceEdit,
     WorkspaceFoldersChangeEvent, WorkspaceSymbolResponse,
 };
 use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
 };
+use luck_resolver::is_definition_file;
 use luck_type_checker::CancellationToken;
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities;
 use crate::definitions;
 use crate::document::{Document, DocumentState};
+use crate::files::Files;
 use crate::line_index::PositionEncoding;
 use crate::pool::{Pool, Priority};
 use crate::providers::{
@@ -49,6 +51,7 @@ use crate::providers::{
     signature_help, syntax_tree, workspace_symbol,
 };
 use crate::session::Session;
+use crate::settings::GivenConfig;
 use crate::type_check::{self, Types};
 use crate::workspace::{Walk, WorkspaceView};
 
@@ -95,6 +98,27 @@ impl LspRequest for FixAllWorkspace {
     const METHOD: &'static str = "luck/fixAllWorkspace";
 }
 
+/// `luck/didChangeFiles`: files the client holds, each with its text, or
+/// with none once it's deleted, which the server reads as it would a disk's
+/// once the client has given a config.
+enum DidChangeFiles {}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DidChangeFilesParams {
+    changes: Vec<FileChange>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FileChange {
+    uri: Uri,
+    text: Option<String>,
+}
+
+impl LspNotification for DidChangeFiles {
+    type Params = DidChangeFilesParams;
+    const METHOD: &'static str = "luck/didChangeFiles";
+}
+
 /// LSP 3.18's `workspace/textDocumentContent`, which `ls_types` doesn't
 /// have: the text of a document of a scheme the server registered.
 enum TextDocumentContent {}
@@ -117,6 +141,13 @@ impl LspRequest for TextDocumentContent {
 
 /// Serves one client over `connection` until it sends `exit`.
 ///
+/// A client that gives a config as its `initializationOptions`, the keys of a
+/// `luck.json` but `extends`, relative to its first workspace folder, or to
+/// `/` with none, has every document take that config's project, which
+/// `workspace/didChangeConfiguration` replaces with its `settings`, and the
+/// server reads only its open documents and the files it pushes with
+/// `luck/didChangeFiles`, never the disk.
+///
 /// Every job runs on the `threads` threads this starts, each with
 /// [`luck_ast::MIN_STACK_BYTES`] of stack.
 ///
@@ -128,16 +159,16 @@ impl LspRequest for TextDocumentContent {
 /// server exit with an error.
 pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> {
     let (id, params) = connection.initialize_start().map_err(io::Error::other)?;
-    let InitializeParams { capabilities: client, workspace_folders, .. } =
-        match serde_json::from_value::<InitializeParams>(params) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                let refusal =
-                    Response::new_err(id, ErrorCode::InvalidParams as i32, error.to_string());
-                let _ = connection.sender.send(refusal.into());
-                return Err(io::Error::other(error));
-            }
-        };
+    let InitializeParams {
+        capabilities: client, workspace_folders, initialization_options, ..
+    } = match serde_json::from_value::<InitializeParams>(params) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let refusal = Response::new_err(id, ErrorCode::InvalidParams as i32, error.to_string());
+            let _ = connection.sender.send(refusal.into());
+            return Err(io::Error::other(error));
+        }
+    };
     let offered = client.general.as_ref().and_then(|general| general.position_encodings.as_deref());
     let encoding = PositionEncoding::negotiate(offered.unwrap_or_default());
     let result = capabilities::initialize_result(encoding).map_err(io::Error::other)?;
@@ -145,9 +176,20 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
 
     let Connection { sender, receiver } = connection;
     let (tasks, finished) = unbounded();
+    let folders: Vec<Uri> =
+        workspace_folders.into_iter().flatten().map(|folder| folder.uri).collect();
+    let given = initialization_options.filter(|config| !config.is_null());
+    let files = if given.is_some() { Files::Client(Arc::default()) } else { Files::Disk };
+    let given = given.map(|config| GivenConfig {
+        root: folders
+            .first()
+            .and_then(|folder| files.path(folder))
+            .unwrap_or_else(|| PathBuf::from("/")),
+        text: config.to_string().into(),
+    });
     let mut server = Server {
         sender,
-        session: Arc::new(Session::new(encoding, tasks, threads)),
+        session: Arc::new(Session::new(encoding, tasks, threads, files, given)),
         pool: Pool::new(threads)?,
         pending: BTreeMap::new(),
         documents: BTreeMap::new(),
@@ -156,20 +198,18 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
         checks: CancellationToken::new(),
         is_shutting_down: false,
     };
-    server.set_workspace_folders(
-        workspace_folders.into_iter().flatten().map(|folder| folder.uri).collect(),
-    );
+    server.set_workspace_folders(folders);
     // Without file watchers, cached settings, resolutions, cached misses
     // included, and the workspace's files would live until a restart, so
     // creating or editing a config file or a module would do nothing. LSP
-    // has no static form of them.
+    // has no static form of them. A client's own files say they changed.
     let can_watch_files = client
         .workspace
         .as_ref()
         .and_then(|workspace| workspace.did_change_watched_files.as_ref())
         .and_then(|watched| watched.dynamic_registration)
         .unwrap_or(false);
-    if can_watch_files {
+    if can_watch_files && server.session.files().client().is_none() {
         server.send(capabilities::watcher_registration());
     }
     server.run(&receiver, &finished)
@@ -334,9 +374,14 @@ impl Server {
         });
     }
 
-    /// Makes `folders` the workspace and walks it.
+    /// Makes `folders` the workspace and walks it. A client's files with no
+    /// folder all are its workspace.
     fn set_workspace_folders(&mut self, folders: Vec<Uri>) {
-        let paths = folders.iter().filter_map(file_path).collect();
+        let files = self.session.files();
+        let mut paths: Vec<PathBuf> = folders.iter().filter_map(|uri| files.path(uri)).collect();
+        if paths.is_empty() && files.client().is_some() {
+            paths.push(PathBuf::from("/"));
+        }
         self.workspace_folders = folders;
         self.session.workspace().set_folders(paths);
         self.walk_workspace();
@@ -390,7 +435,17 @@ impl Server {
             }
             DidChangeWatchedFiles::METHOD => {
                 if let Ok(watched) = serde_json::from_value(params) {
-                    self.watched_files_changed(&watched);
+                    self.watched_files_changed(watched);
+                }
+            }
+            DidChangeFiles::METHOD => {
+                if let Ok(pushed) = serde_json::from_value(params) {
+                    self.pushed_files_changed(pushed);
+                }
+            }
+            DidChangeConfiguration::METHOD => {
+                if let Ok(changed) = serde_json::from_value(params) {
+                    self.configuration_changed(&changed);
                 }
             }
             DidChangeWorkspaceFolders::METHOD => {
@@ -409,9 +464,25 @@ impl Server {
 
     fn open(&mut self, params: DidOpenTextDocumentParams) {
         let item = params.text_document;
-        let path = file_path(&item.uri);
-        self.replace(item.uri, Arc::new(Document::new(item.version, Arc::from(item.text), path)));
-        self.republish();
+        let path = self.session.files().path(&item.uri);
+        let text: Arc<str> = Arc::from(item.text);
+        let is_created = self.open_in_client(&item.uri, Some(Arc::clone(&text)));
+        self.replace(item.uri, Arc::new(Document::new(item.version, text, path.clone())));
+        match path.filter(|created| is_created && is_module(created)) {
+            Some(created) => self.files_changed(&[(created, FileChangeType::CREATED)]),
+            None => self.republish(),
+        }
+    }
+
+    /// Makes `text` what's open at `uri` among the client's files, when the
+    /// client gave a config, and says whether that created or deleted the
+    /// file there.
+    fn open_in_client(&self, uri: &Uri, text: Option<Arc<str>>) -> bool {
+        let files = self.session.files();
+        let (Some(client), Some(path)) = (files.client(), files.path(uri)) else {
+            return false;
+        };
+        client.open(&path, uri.clone(), text)
     }
 
     fn change(&mut self, params: DidChangeTextDocumentParams) {
@@ -427,6 +498,7 @@ impl Server {
         if let Some(next) =
             current.changed(text_document.version, content_changes, self.session.encoding())
         {
+            self.open_in_client(&text_document.uri, Some(Arc::clone(next.text())));
             self.replace(text_document.uri, Arc::new(next));
             self.republish();
             return;
@@ -446,37 +518,88 @@ impl Server {
         if let Some(closed) = self.documents.remove(&uri) {
             closed.mark_stale();
         }
-        // What's on disk may not be what the document last held, which a
-        // client that watches no files never says.
-        if let Some(path) = file_path(&uri) {
-            self.session.workspace().forget(path);
-        }
+        let is_deleted = self.open_in_client(&uri, None);
         self.session.spare_arena().clear();
         // LSP has a server clear a closed file's diagnostics.
-        self.publish(uri, Vec::new(), None);
-        self.republish();
+        self.publish(uri.clone(), Vec::new(), None);
+        let Some(path) = self.session.files().path(&uri) else {
+            self.republish();
+            return;
+        };
+        if is_deleted && is_module(&path) {
+            self.files_changed(&[(path, FileChangeType::DELETED)]);
+        } else {
+            // What the files hold may not be what the document last held,
+            // which a client that watches no files never says.
+            self.session.workspace().forget(path);
+            self.republish();
+        }
     }
 
-    fn watched_files_changed(&mut self, params: &DidChangeWatchedFilesParams) {
+    fn watched_files_changed(&mut self, params: DidChangeWatchedFilesParams) {
+        if self.session.files().client().is_some() {
+            return;
+        }
+        let files = self.session.files();
+        let changes: Vec<(PathBuf, FileChangeType)> = params
+            .changes
+            .into_iter()
+            .filter_map(|change| Some((files.path(&change.uri)?, change.typ)))
+            .collect();
+        self.files_changed(&changes);
+    }
+
+    /// Takes in the files the client pushed, when it gave a config.
+    fn pushed_files_changed(&mut self, params: DidChangeFilesParams) {
+        let files = self.session.files();
+        let Some(client) = files.client() else {
+            return;
+        };
+        let mut changes = Vec::with_capacity(params.changes.len());
+        for FileChange { uri, text } in params.changes {
+            let Some(path) = files.path(&uri) else {
+                continue;
+            };
+            let is_deleted = text.is_none();
+            let typ = if !client.push(&path, uri, text.map(Arc::from)) {
+                FileChangeType::CHANGED
+            } else if is_deleted {
+                FileChangeType::DELETED
+            } else {
+                FileChangeType::CREATED
+            };
+            changes.push((path, typ));
+        }
+        self.files_changed(&changes);
+    }
+
+    /// Takes the client's new config, when it gave one to start with.
+    fn configuration_changed(&mut self, params: &DidChangeConfigurationParams) {
+        if !self.session.settings().is_given() {
+            return;
+        }
+        self.session.settings().set_given(params.settings.to_string());
+        self.reload_settings();
+    }
+
+    /// Brings everything to the files at each of `changes`' paths, which
+    /// changed as it says.
+    fn files_changed(&mut self, changes: &[(PathBuf, FileChangeType)]) {
         let (mut is_settings_change, mut is_resolution_change, mut is_file_added_or_removed) =
             (false, false, false);
         let mut is_module_change = false;
-        for change in &params.changes {
-            let Some(path) = file_path(&change.uri) else {
-                continue;
-            };
-            is_settings_change |= self.session.settings().is_settings_file(&path);
-            let is_module =
-                path.extension().is_some_and(|extension| extension == "luau" || extension == "lua");
-            let is_module_added_or_removed = is_module && change.typ != FileChangeType::CHANGED;
-            // A `.luaurc` edited, or a module created or deleted, can change
+        for (path, typ) in changes {
+            is_settings_change |= self.session.settings().is_settings_file(path);
+            let is_module = is_module(path);
+            let is_module_added_or_removed = is_module && *typ != FileChangeType::CHANGED;
+            // A config edited, or a module created or deleted, can change
             // what a require resolves to.
             is_resolution_change |= is_module_added_or_removed
-                || path.file_name().is_some_and(|name| name == ".luaurc");
+                || path.file_name().is_some_and(|name| name == ".luaurc" || name == ".config.luau");
             is_file_added_or_removed |= is_module_added_or_removed;
             if is_module {
-                self.session.type_checks().changed(Some(&path));
-                self.session.workspace().forget(path);
+                self.session.type_checks().changed(Some(path));
+                self.session.workspace().forget(path.clone());
                 is_module_change = true;
             }
         }
@@ -506,14 +629,16 @@ impl Server {
     }
 
     fn reload_settings(&mut self) {
-        // A config still broken reports itself again as documents reload.
-        for broken in self.session.settings().clear() {
-            if let Some(uri) = Uri::from_file_path(&broken) {
+        // A config still broken, or a definition file Luau still can't load,
+        // reports itself again as documents reload.
+        let mut broken = self.session.settings().clear();
+        broken.extend(self.session.type_checks().clear());
+        for path in broken {
+            if let Some(uri) = self.session.files().uri(&path) {
                 self.publish(uri, Vec::new(), None);
             }
         }
         self.session.workspace().clear();
-        self.session.type_checks().clear();
         self.walk_workspace();
         // Every open document gets a new version of the same text under the
         // new settings, whether or not its target or extra globals changed,
@@ -912,26 +1037,9 @@ impl Server {
     }
 }
 
-/// The path a `file:` URI names. `Uri::to_file_path` ignores the scheme, so
-/// it would turn an `untitled:` buffer into a relative path.
-fn file_path(uri: &Uri) -> Option<PathBuf> {
-    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
-        return None;
-    }
-    uri.to_file_path().map(Cow::into_owned)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr as _;
-
-    use super::*;
-
-    #[test]
-    fn only_a_file_uri_has_a_file_path() {
-        let untitled = Uri::from_str("untitled:Untitled-1").expect("valid URI");
-        assert_eq!(file_path(&untitled), None);
-        let saved = Uri::from_str("FILE:///tmp/main.luau").expect("valid URI");
-        assert!(file_path(&saved).is_some_and(|path| path.ends_with("main.luau")));
-    }
+/// Whether the file at `path` is a module, which a require can load: a
+/// `.luau` or `.lua` file that isn't a definition file.
+fn is_module(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "luau" || extension == "lua")
+        && !is_definition_file(path)
 }

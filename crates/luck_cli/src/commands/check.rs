@@ -9,11 +9,13 @@ use clap::Args;
 use luck_allocator::Allocator;
 use luck_config::DefinitionSource;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, is_definition_file, to_slash_lossy};
 use luck_semantic::SemanticBuilder;
 use luck_stdlib::{SecurityLevel, roblox_definitions};
 use luck_token::{LineIndex, Span, index_to_offset, offset_to_index};
-use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host};
+use luck_type_checker::{
+    CancellationToken, CheckError, Checker, Config, Host, luau_config_aliases,
+};
 use rustc_hash::FxHashMap;
 
 use crate::exit::{Exit, fail_with_diags};
@@ -48,8 +50,8 @@ impl CheckArgs {
         )?;
         let type_errors = type_errors(&files, threads)?;
 
-        let mut has_errors = !type_errors.luaurcs.is_empty();
-        print_files(&type_errors.luaurcs);
+        let mut has_errors = !type_errors.configs.is_empty();
+        print_files(&type_errors.configs);
         for_each_outcome_in_order(
             &files,
             |file, allocator| {
@@ -81,8 +83,8 @@ impl CheckArgs {
 struct TypeErrors<'files> {
     /// By file, for each file with any.
     by_path: FxHashMap<&'files Path, Vec<Diagnostic>>,
-    /// The E014 of each `.luaurc` Luau couldn't read.
-    luaurcs: Vec<FileDiagnostics>,
+    /// The E014 of each `.luaurc` and `.config.luau` Luau couldn't read.
+    configs: Vec<FileDiagnostics>,
 }
 
 /// The security level and definitions of a project, which decide what its
@@ -91,7 +93,8 @@ type Definitions<'files> = (SecurityLevel, &'files [DefinitionSource]);
 
 /// What Luau's type checker finds in `files`, from checking together, on
 /// `threads` threads, the files of the projects with one security level and
-/// one list of definitions, which need one checker.
+/// one list of definitions, which need one checker. A definition file is no
+/// module, so only loading it checks it.
 fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErrors<'_>, Exit> {
     let mut groups: Vec<(Definitions<'_>, Vec<&ProjectFile>)> = Vec::new();
     for file in files {
@@ -102,7 +105,7 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
         }
     }
 
-    let mut type_errors = TypeErrors { by_path: FxHashMap::default(), luaurcs: Vec::new() };
+    let mut type_errors = TypeErrors { by_path: FxHashMap::default(), configs: Vec::new() };
     for ((security, definitions), group) in groups {
         let host = FileHost::new()?;
         let names_and_texts: Vec<(String, Cow<'_, str>)> = definitions
@@ -116,6 +119,7 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
             .collect();
         let modules: Vec<(&Path, String)> = group
             .into_iter()
+            .filter(|file| !is_definition_file(&file.path))
             .filter_map(|file| {
                 let canonical = FileSystemOs.canonicalize(&file.path).ok()?;
                 Some((file.path.as_path(), host.module_name(&canonical)))
@@ -154,10 +158,10 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
                 .filter(|(_, diags)| !diags.is_empty())
                 .map(|((path, _), diags)| (path, diags)),
         );
-        // A `.luaurc` above files of two groups is read once for each.
-        for luaurc in mem::take(checker.host_mut().luaurc_errors.get_mut()) {
-            if !type_errors.luaurcs.iter().any(|known| known.path == luaurc.path) {
-                type_errors.luaurcs.push(luaurc);
+        // A config above files of two groups is read once for each.
+        for config in mem::take(checker.host_mut().config_errors.get_mut()) {
+            if !type_errors.configs.iter().any(|known| known.path == config.path) {
+                type_errors.configs.push(config);
             }
         }
     }
@@ -170,13 +174,15 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
 struct FileHost {
     working_directory: PathBuf,
     resolver: Resolver,
-    /// Each directory's `.luaurc`, if it has one, as read the first time a
-    /// module below it asked.
-    luaurcs: RefCell<FxHashMap<PathBuf, Option<String>>>,
-    /// The E014 of each `.luaurc` Luau couldn't read, from the first time it
+    configs: RefCell<FxHashMap<PathBuf, DirectoryConfigs>>,
+    /// The E014 of each config Luau couldn't read, from the first time it
     /// read it.
-    luaurc_errors: RefCell<Vec<FileDiagnostics>>,
+    config_errors: RefCell<Vec<FileDiagnostics>>,
 }
+
+/// A directory's `.luaurc` and `.config.luau`, where it has them, as read the
+/// first time a module below it asked.
+type DirectoryConfigs = (Option<String>, Option<String>);
 
 impl FileHost {
     fn new() -> Result<Self, Exit> {
@@ -185,9 +191,9 @@ impl FileHost {
             working_directory: FileSystemOs
                 .canonicalize(&working_directory)
                 .unwrap_or(working_directory),
-            resolver: Resolver::new(),
-            luaurcs: RefCell::default(),
-            luaurc_errors: RefCell::default(),
+            resolver: Resolver::new().with_luau_config(luau_config_aliases),
+            configs: RefCell::default(),
+            config_errors: RefCell::default(),
         })
     }
 
@@ -211,26 +217,38 @@ impl Host for FileHost {
         Some(self.module_name(&resolution.path))
     }
 
+    /// As luau-analyze reads them: a directory with both a `.luaurc` and a
+    /// `.config.luau` applies neither.
     fn config(&self, module: &str, config: &mut Config<'_>) {
         let path = self.path(module);
         let directories: Vec<&Path> = path.ancestors().skip(1).collect();
-        let mut luaurcs = self.luaurcs.borrow_mut();
+        let mut configs = self.configs.borrow_mut();
         for &directory in directories.iter().rev() {
             let mut is_first_read = false;
-            let luaurc = luaurcs.entry(directory.to_path_buf()).or_insert_with(|| {
-                is_first_read = true;
-                let text = FileSystemOs.read(&directory.join(".luaurc")).ok()?;
-                String::from_utf8(text).ok()
-            });
-            if let Some(text) = luaurc
-                && let Err(error) = config.apply_luaurc(text)
+            let (luaurc, luau_config) =
+                &*configs.entry(directory.to_path_buf()).or_insert_with(|| {
+                    is_first_read = true;
+                    let read = |name: &str| {
+                        String::from_utf8(FileSystemOs.read(&directory.join(name)).ok()?).ok()
+                    };
+                    (read(".luaurc"), read(".config.luau"))
+                });
+            let (name, text, applied) = match (luaurc, luau_config) {
+                (Some(text), Some(_)) => {
+                    (".luaurc", text, Err("Both .luaurc and .config.luau files exist".to_owned()))
+                }
+                (Some(text), None) => (".luaurc", text, config.apply_luaurc(text)),
+                (None, Some(source)) => (".config.luau", source, config.apply_luau_config(source)),
+                (None, None) => continue,
+            };
+            if let Err(error) = applied
                 && is_first_read
             {
-                let luaurc_path = directory.join(".luaurc");
-                let relative = luaurc_path.strip_prefix(&self.working_directory);
-                let diag = Diagnostic::e014(luaurc_error_span(&error, text), &error);
-                self.luaurc_errors.borrow_mut().push(FileDiagnostics {
-                    path: relative.map_or_else(|_| luaurc_path.clone(), Path::to_path_buf),
+                let config_path = directory.join(name);
+                let relative = config_path.strip_prefix(&self.working_directory);
+                let diag = Diagnostic::e014(config_error_span(&error, text), &error);
+                self.config_errors.borrow_mut().push(FileDiagnostics {
+                    path: relative.map_or_else(|_| config_path.clone(), Path::to_path_buf),
                     diags: vec![diag],
                 });
             }
@@ -238,9 +256,11 @@ impl Host for FileHost {
     }
 }
 
-/// The line Luau's error for a `.luaurc` names, as `at line 3`, in `text`.
-fn luaurc_error_span(error: &str, text: &str) -> Option<Span> {
-    let (_, after) = error.split_once(" at line ")?;
+/// The line Luau's error for a config names in `text`, as `at line 3` for a
+/// `.luaurc` and `config:3:` for a `.config.luau`.
+fn config_error_span(error: &str, text: &str) -> Option<Span> {
+    let after = error.split_once(" at line ").map(|(_, after)| after);
+    let after = after.or_else(|| error.strip_prefix("config:"))?;
     let line = after.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
     let start = LineIndex::new(text.as_bytes()).offset(line, 1)?;
     let line_text = text.get(offset_to_index(start)..)?.lines().next().unwrap_or_default();
@@ -248,7 +268,7 @@ fn luaurc_error_span(error: &str, text: &str) -> Option<Span> {
 }
 
 /// `file`'s syntax and compile errors, or else `type_errors`, rendered, or
-/// `None` when it has neither.
+/// `None` when it has neither. A definition file has syntax errors alone.
 fn check_file(
     allocator: &Allocator,
     file: &ProjectFile,
@@ -266,6 +286,10 @@ fn check_file(
         }
     };
 
+    if is_definition_file(file_path) {
+        let errors = luck_parser::parse_definitions(allocator, &source).errors;
+        return (!errors.is_empty()).then(|| render(&label, &source, &errors));
+    }
     let result = luck_parser::parse(allocator, &source);
     let errors = if result.errors.is_empty() {
         // The compile-time errors Luau reports beyond the grammar, such as an
@@ -279,14 +303,13 @@ fn check_file(
         result.errors
     };
     let errors = if errors.is_empty() { type_errors.to_vec() } else { errors };
-    if errors.is_empty() {
-        return None;
-    }
+    (!errors.is_empty()).then(|| render(&label, &source, &errors))
+}
 
+fn render(label: &str, source: &[u8], errors: &[Diagnostic]) -> Vec<u8> {
     let mut rendered = Vec::new();
-    let source_file = SourceFile { label: &label, text: Some(&source) };
-    DefaultReporter.render(source_file, &errors, &mut rendered);
-    Some(rendered)
+    DefaultReporter.render(SourceFile { label, text: Some(source) }, errors, &mut rendered);
+    rendered
 }
 
 #[cfg(test)]
@@ -297,6 +320,7 @@ mod tests {
     use clap::Parser as _;
     use luck_allocator::Allocator;
     use luck_config::Project;
+    use luck_resolver::FileSystemOs;
 
     use super::{CheckArgs, check_file};
     use crate::cli::Cli;
@@ -320,7 +344,7 @@ mod tests {
     #[test]
     fn an_unreadable_file_reports_e010() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf(), FileSystemOs));
         let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let rendered = check_file(&Allocator::new(), &file, &[]).expect("an unread file fails");

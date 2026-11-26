@@ -35,7 +35,7 @@ fn links(document: &DocumentState, is_wanted: impl Fn(&Require) -> bool) -> Vec<
             let resolution = document.resolve(require)?.ok()?;
             Some(DocumentLink {
                 range: require.range,
-                target: Some(Uri::from_file_path(&resolution.path)?),
+                target: Some(document.settings().project.uri(&resolution.path)?),
                 tooltip: Some(require.module.to_string()),
                 data: None,
             })
@@ -49,6 +49,7 @@ mod tests {
     use std::path::Path;
 
     use luck_config::Project;
+    use luck_resolver::FileSystemOs;
 
     use super::*;
     use crate::fixtures::document_at;
@@ -61,7 +62,7 @@ mod tests {
     fn main_beside(text: &str, directory: &Path) -> DocumentState {
         let main_path = directory.join("main.luau");
         fs::write(&main_path, text).expect("write main.luau");
-        let project = Project::defaults(directory.to_path_buf());
+        let project = Project::defaults(directory.to_path_buf(), FileSystemOs);
         document_at(text, project, &main_path)
     }
 
@@ -88,7 +89,7 @@ mod tests {
         let text = "local dep = require(\"@lib/dep\")\n";
         fs::write(&main_path, text).expect("write main.luau");
 
-        let project = Project::defaults(directory.path().to_path_buf());
+        let project = Project::defaults(directory.path().to_path_buf(), FileSystemOs);
         let links = document_links(&document_at(text, project, &main_path));
         assert_eq!(links.len(), 1, "{links:?}");
         let target = links[0].target.as_ref().expect("link target");

@@ -12,6 +12,7 @@ use luck_resolver::{FileSystem as _, FileSystemOs};
 
 use crate::analyzed::Arena;
 use crate::document::DocumentState;
+use crate::files::Files;
 use crate::line_index::{LineIndex, PositionEncoding};
 use crate::session::Session;
 use crate::settings::{DocumentSettings, LoadedProject};
@@ -19,7 +20,7 @@ use crate::settings::{DocumentSettings, LoadedProject};
 /// `text` as an untitled document with no `luck.json`, in UTF-16 positions,
 /// which a client that names no encoding gets.
 pub(crate) fn document(text: &str) -> DocumentState {
-    untitled(text, Project::defaults(PathBuf::from(".")))
+    untitled(text, Project::defaults(PathBuf::from("."), FileSystemOs))
 }
 
 /// [`document`], in a project that loads Roblox's API.
@@ -27,7 +28,7 @@ pub(crate) fn roblox_document(text: &str) -> DocumentState {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join(CONFIG_FILE_NAME);
     fs::write(&config_path, r#"{ "definitions": ["@roblox"] }"#).expect("write luck.json");
-    untitled(text, Project::load(&config_path).expect("the config loads"))
+    untitled(text, Project::load(&config_path, FileSystemOs).expect("the config loads"))
 }
 
 /// `text` as the document of the file at `path` under `project`'s settings.
@@ -39,7 +40,7 @@ pub(crate) fn document_at(text: &str, project: Project, path: &Path) -> Document
 /// `text` as an untitled document linted under `lint`.
 pub(crate) fn document_linted_by(text: &str, lint: LintConfig) -> DocumentState {
     let linter = Arc::new(Linter::new(lint));
-    document_with(text, Project::defaults(PathBuf::from(".")), linter, None)
+    document_with(text, Project::defaults(PathBuf::from("."), FileSystemOs), linter, None)
 }
 
 /// The URI the tests open their documents at.
@@ -50,7 +51,7 @@ pub(crate) fn uri() -> Uri {
 /// A session with no workspace folders, in UTF-16 positions, whose tasks
 /// nothing reads.
 pub(crate) fn session() -> Session {
-    Session::new(PositionEncoding::Utf16, unbounded().0, NonZero::<usize>::MIN)
+    Session::new(PositionEncoding::Utf16, unbounded().0, NonZero::<usize>::MIN, Files::Disk, None)
 }
 
 fn untitled(text: &str, project: Project) -> DocumentState {
@@ -66,10 +67,11 @@ fn document_with(
 ) -> DocumentState {
     let settings = DocumentSettings {
         path,
-        project: Arc::new(LoadedProject::new(project)),
+        project: Arc::new(LoadedProject::new(project, Files::Disk)),
         linter,
         format: FormatOptions::default(),
         is_included: true,
+        is_definitions: false,
     };
     DocumentState::new(
         Arc::from(text),

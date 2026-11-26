@@ -5,6 +5,10 @@
 //! the whole module graph before it hands out a task, and a task asks the
 //! host nothing. So a context is read on one thread at a time. A Rust panic
 //! in a callback aborts, since an `extern "C"` function can't unwind.
+//!
+//! What the shim passes a callback, a string or a record, lives until the
+//! callback returns, and a null string is none. Each `Cxx` type is one of the
+//! shim's C++ objects, which Rust only points at.
 
 #![expect(
     unsafe_code,
@@ -14,11 +18,28 @@
 use std::borrow::Cow;
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::{slice, str};
+use std::{iter, slice, str};
 
-use crate::checker::{Context, Host};
+use luck_token::Span;
+
+use crate::checker::{CompletionKind, Context, Host, Signature};
+
+#[repr(C)]
+struct CxxChecker([u8; 0]);
+
+#[repr(C)]
+struct CxxString([u8; 0]);
+
+#[repr(C)]
+struct CxxConfig([u8; 0]);
+
+#[repr(C)]
+struct CxxTask([u8; 0]);
+
+#[repr(C)]
+struct CxxCancellationToken([u8; 0]);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -32,96 +53,136 @@ impl LuckStr {
         Self { data: bytes.as_ptr(), len: bytes.len() }
     }
 
+    /// Its bytes, or `None` for a null string.
+    ///
     /// # Safety
     ///
-    /// `data` points at `len` bytes that stay put and unchanged for `'bytes`,
-    /// or `len` is 0.
-    unsafe fn bytes<'bytes>(self) -> &'bytes [u8] {
-        if self.len == 0 {
-            return &[];
+    /// `data` is null, or points at `len` bytes that stay put and unchanged
+    /// for `'bytes`.
+    unsafe fn bytes<'bytes>(self) -> Option<&'bytes [u8]> {
+        if self.data.is_null() {
+            return None;
         }
         // SAFETY: the caller promises `len` readable bytes at `data`.
-        unsafe { slice::from_raw_parts(self.data, self.len) }
+        Some(unsafe { slice::from_raw_parts(self.data, self.len) })
     }
+
+    /// # Safety
+    ///
+    /// As for [`Self::bytes`], for this call.
+    unsafe fn optional(self) -> Option<String> {
+        // SAFETY: the caller promises it.
+        unsafe { self.bytes() }.map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    /// # Safety
+    ///
+    /// As for [`Self::bytes`], for this call.
+    unsafe fn owned(self) -> String {
+        // SAFETY: the caller promises it.
+        unsafe { self.optional() }.unwrap_or_default()
+    }
+}
+
+/// Where something is as Luau counts it: lines and byte columns from 0.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct LuckLocation {
+    pub(crate) begin_line: u32,
+    pub(crate) begin_column: u32,
+    pub(crate) end_line: u32,
+    pub(crate) end_column: u32,
 }
 
 #[repr(C)]
 struct LuckHost {
     context: *mut c_void,
-    source: extern "C" fn(context: *mut c_void, module: LuckStr, source: *mut c_void) -> bool,
+    source:
+        extern "C" fn(context: *mut c_void, module: LuckStr, source: NonNull<CxxString>) -> bool,
     resolve: extern "C" fn(
         context: *mut c_void,
         requirer: LuckStr,
         path: LuckStr,
-        module: *mut c_void,
+        module: NonNull<CxxString>,
     ) -> bool,
-    config: extern "C" fn(context: *mut c_void, module: LuckStr, config: *mut c_void),
+    config: extern "C" fn(context: *mut c_void, module: LuckStr, config: NonNull<CxxConfig>),
 }
 
 #[repr(C)]
 struct LuckError {
-    module: usize,
+    module: LuckStr,
     is_syntax_error: bool,
     has_location: bool,
-    begin_line: u32,
-    begin_column: u32,
-    end_line: u32,
-    end_column: u32,
-    module_name: LuckStr,
+    location: LuckLocation,
     message: LuckStr,
 }
 
 #[repr(C)]
 struct LuckErrors {
     context: *mut c_void,
-    push: extern "C" fn(context: *mut c_void, error: *const LuckError),
+    push: extern "C" fn(context: *mut c_void, error: &LuckError),
+}
+
+impl LuckErrors {
+    fn new(errors: &mut Vec<LuauError>) -> Self {
+        Self { context: ptr::from_mut(errors).cast(), push: push_error }
+    }
+}
+
+#[repr(C)]
+struct LuckModule {
+    name: LuckStr,
+    errors: LuckErrors,
 }
 
 #[repr(C)]
 struct LuckExecutor {
     context: *mut c_void,
-    submit: extern "C" fn(context: *mut c_void, task: *mut c_void),
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct LuckLocation {
-    begin_line: u32,
-    begin_column: u32,
-    end_line: u32,
-    end_column: u32,
+    submit: extern "C" fn(context: *mut c_void, task: NonNull<CxxTask>),
 }
 
 #[repr(C)]
 struct LuckDocs {
-    has_symbol: bool,
     symbol: LuckStr,
-    has_definition: bool,
     module: LuckStr,
     location: LuckLocation,
+}
+
+impl LuckDocs {
+    /// # Safety
+    ///
+    /// Its strings are the shim's for the callback it's passed to.
+    unsafe fn owned(&self) -> LuauDocs {
+        // SAFETY: the caller promises it.
+        let symbol = unsafe { self.symbol.optional() };
+        // SAFETY: as for the symbol.
+        let module = unsafe { self.module.optional() };
+        LuauDocs { symbol, definition: module.map(|module| (module, self.location)) }
+    }
+}
+
+#[repr(C)]
+struct LuckRange {
+    start: u32,
+    end: u32,
 }
 
 #[repr(C)]
 struct LuckDescribed {
     context: *mut c_void,
-    describe: extern "C" fn(
-        context: *mut c_void,
-        location: LuckLocation,
-        ty: LuckStr,
-        docs: *const LuckDocs,
-    ),
+    describe:
+        extern "C" fn(context: *mut c_void, location: LuckLocation, ty: LuckStr, docs: &LuckDocs),
     signature:
-        extern "C" fn(context: *mut c_void, label: LuckStr, params: *const u32, count: usize),
+        extern "C" fn(context: *mut c_void, label: LuckStr, params: *const LuckRange, count: usize),
 }
 
 #[repr(C)]
 struct LuckEntry {
     name: LuckStr,
+    /// Luau's `AutocompleteEntryKind`.
     kind: u8,
-    has_type: bool,
     ty: LuckStr,
     is_deprecated: bool,
-    has_insert_text: bool,
     insert_text: LuckStr,
     docs: LuckDocs,
 }
@@ -129,95 +190,100 @@ struct LuckEntry {
 #[repr(C)]
 struct LuckEntries {
     context: *mut c_void,
-    push: extern "C" fn(context: *mut c_void, entry: *const LuckEntry),
+    push: extern "C" fn(context: *mut c_void, entry: &LuckEntry),
 }
 
-const LUCK_CANCELLED: u8 = 1;
-const LUCK_INTERNAL_ERROR: u8 = 2;
+#[repr(C)]
+struct LuckAliases {
+    context: *mut c_void,
+    push: extern "C" fn(context: *mut c_void, name: LuckStr, value: LuckStr),
+}
 
 unsafe extern "C" {
-    fn luck_string_assign(string: *mut c_void, value: LuckStr);
-    fn luck_config_apply_luaurc(config: *mut c_void, text: LuckStr, errors: LuckErrors);
-    fn luck_checker_new(host: LuckHost) -> *mut c_void;
-    fn luck_checker_free(checker: *mut c_void);
+    fn luck_string_assign(string: NonNull<CxxString>, value: LuckStr);
+    fn luck_config_apply_luaurc(config: NonNull<CxxConfig>, text: LuckStr, errors: LuckErrors);
+    fn luck_config_apply_luau_config(
+        config: NonNull<CxxConfig>,
+        source: LuckStr,
+        errors: LuckErrors,
+    );
+    fn luck_luau_config_aliases(source: LuckStr, errors: LuckErrors, aliases: LuckAliases);
+    fn luck_checker_new(host: LuckHost) -> NonNull<CxxChecker>;
+    fn luck_checker_free(checker: NonNull<CxxChecker>);
     fn luck_checker_load_definitions(
-        checker: *mut c_void,
+        checker: NonNull<CxxChecker>,
         name: LuckStr,
         source: LuckStr,
         errors: LuckErrors,
     );
-    fn luck_checker_return_named_type(checker: *mut c_void, owner: LuckStr, member: LuckStr);
-    fn luck_checker_bind_type_namespace(checker: *mut c_void, space: LuckStr, supertype: LuckStr);
-    fn luck_checker_mark_dirty(checker: *mut c_void, module: LuckStr);
-    fn luck_checker_retain_type_graphs(checker: *mut c_void);
-    fn luck_checker_describe(
-        checker: *mut c_void,
-        module: LuckStr,
-        line: u32,
-        column: u32,
-        out: LuckDescribed,
-    ) -> bool;
-    fn luck_checker_autocomplete(
-        checker: *mut c_void,
-        module: LuckStr,
-        line: u32,
-        column: u32,
-        out: LuckEntries,
+    fn luck_checker_return_named_type(
+        checker: NonNull<CxxChecker>,
+        owner: LuckStr,
+        member: LuckStr,
     );
+    fn luck_checker_bind_type_namespace(
+        checker: NonNull<CxxChecker>,
+        type_namespace: LuckStr,
+        supertype: LuckStr,
+    );
+    fn luck_checker_retain_type_graphs(checker: NonNull<CxxChecker>);
+    fn luck_checker_mark_dirty(checker: NonNull<CxxChecker>, module: LuckStr);
     fn luck_checker_check(
-        checker: *mut c_void,
-        modules: *const LuckStr,
+        checker: NonNull<CxxChecker>,
+        modules: *const LuckModule,
         count: usize,
-        cancellation: *const c_void,
+        cancellation: NonNull<CxxCancellationToken>,
         executor: LuckExecutor,
         errors: LuckErrors,
-    ) -> u8;
-    fn luck_task_run(task: *mut c_void);
-    safe fn luck_cancellation_new() -> *mut c_void;
-    fn luck_cancellation_cancel(token: *const c_void);
-    fn luck_cancellation_is_cancelled(token: *const c_void) -> bool;
-    fn luck_cancellation_free(token: *mut c_void);
+    );
+    fn luck_checker_describe(
+        checker: NonNull<CxxChecker>,
+        module: LuckStr,
+        line: u32,
+        column: u32,
+        described: LuckDescribed,
+    );
+    fn luck_checker_autocomplete(
+        checker: NonNull<CxxChecker>,
+        module: LuckStr,
+        line: u32,
+        column: u32,
+        entries: LuckEntries,
+    );
+    fn luck_task_run(task: NonNull<CxxTask>);
+    safe fn luck_cancellation_new() -> NonNull<CxxCancellationToken>;
+    fn luck_cancellation_cancel(token: NonNull<CxxCancellationToken>);
+    fn luck_cancellation_is_cancelled(token: NonNull<CxxCancellationToken>) -> bool;
+    fn luck_cancellation_free(token: NonNull<CxxCancellationToken>);
     safe fn luck_builtin_definitions() -> LuckStr;
 }
 
-/// An error Analysis reported, with its location as Luau counts it: lines
-/// and byte columns from 0.
+/// An error Analysis reported.
 pub(crate) struct LuauError {
-    /// The index of the checked module it's in.
-    pub(crate) module: usize,
-    pub(crate) module_name: String,
+    /// The module or definitions it's in, by name.
+    pub(crate) module: String,
     pub(crate) is_syntax_error: bool,
-    pub(crate) location: Option<[u32; 4]>,
+    pub(crate) location: Option<LuckLocation>,
     pub(crate) message: String,
-}
-
-pub(crate) enum Outcome {
-    /// The errors in the modules checked, in no order.
-    Checked(Vec<LuauError>),
-    Cancelled,
-    /// Analysis threw this `InternalCompilerError`.
-    InternalError(LuauError),
 }
 
 /// What Analysis records of the declaration a name refers to: Luau's
 /// documentation symbol for it, and the module and location it's declared at.
 pub(crate) struct LuauDocs {
     pub(crate) symbol: Option<String>,
-    pub(crate) definition: Option<(String, [u32; 4])>,
+    pub(crate) definition: Option<(String, LuckLocation)>,
 }
 
 pub(crate) struct LuauDescription {
-    pub(crate) location: [u32; 4],
+    pub(crate) location: LuckLocation,
     pub(crate) ty: String,
     pub(crate) docs: LuauDocs,
-    /// Each label, with the byte range of each parameter in it.
-    pub(crate) signatures: Vec<(String, Vec<[u32; 2]>)>,
+    pub(crate) signatures: Vec<Signature>,
 }
 
 pub(crate) struct LuauEntry {
     pub(crate) name: String,
-    /// Luau's `AutocompleteEntryKind`.
-    pub(crate) kind: u8,
+    pub(crate) kind: CompletionKind,
     pub(crate) ty: Option<String>,
     pub(crate) is_deprecated: bool,
     pub(crate) insert_text: Option<String>,
@@ -226,7 +292,7 @@ pub(crate) struct LuauEntry {
 
 /// A frontend over the host in a [`Context`] it owns.
 pub(crate) struct RawChecker<H> {
-    checker: *mut c_void,
+    checker: NonNull<CxxChecker>,
     context: NonNull<Context<H>>,
 }
 
@@ -261,7 +327,6 @@ impl<H: Host> RawChecker<H> {
 
     pub(crate) fn load_definitions(&mut self, name: &str, source: &str) -> Vec<LuauError> {
         let mut errors = Vec::new();
-        let sink = LuckErrors { context: (&raw mut errors).cast(), push: push_error };
         // SAFETY: the strings and `errors` outlive the call, which copies the
         // strings.
         unsafe {
@@ -269,7 +334,7 @@ impl<H: Host> RawChecker<H> {
                 self.checker,
                 LuckStr::new(name.as_bytes()),
                 LuckStr::new(source.as_bytes()),
-                sink,
+                LuckErrors::new(&mut errors),
             );
         }
         errors
@@ -297,14 +362,50 @@ impl<H: Host> RawChecker<H> {
         }
     }
 
+    pub(crate) fn retain_type_graphs(&mut self) {
+        // SAFETY: the frontend lives as long as `self`.
+        unsafe { luck_checker_retain_type_graphs(self.checker) };
+    }
+
     pub(crate) fn mark_dirty(&mut self, module: &str) {
         // SAFETY: the name outlives the call, which copies it.
         unsafe { luck_checker_mark_dirty(self.checker, LuckStr::new(module.as_bytes())) };
     }
 
-    pub(crate) fn retain_type_graphs(&mut self) {
-        // SAFETY: the frontend lives as long as `self`.
-        unsafe { luck_checker_retain_type_graphs(self.checker) };
+    /// The errors of each of `modules`, in order, from checking them, or the
+    /// internal compiler error Analysis threw. It hands each task Analysis
+    /// splits the work into to `submit`, and returns once every task has run.
+    pub(crate) fn check(
+        &mut self,
+        modules: &[&str],
+        cancellation: &CancellationToken,
+        mut submit: &mut dyn FnMut(Task),
+    ) -> Result<Vec<Vec<LuauError>>, LuauError> {
+        let mut errors: Vec<Vec<LuauError>> =
+            iter::repeat_with(Vec::new).take(modules.len()).collect();
+        let checked: Vec<LuckModule> = modules
+            .iter()
+            .zip(&mut errors)
+            .map(|(module, module_errors)| LuckModule {
+                name: LuckStr::new(module.as_bytes()),
+                errors: LuckErrors::new(module_errors),
+            })
+            .collect();
+        let mut failure = Vec::new();
+        let executor = LuckExecutor { context: (&raw mut submit).cast(), submit: submit_task };
+        // SAFETY: the names, the token, `submit`, and every list of errors
+        // outlive the call, which waits for every task it submits.
+        unsafe {
+            luck_checker_check(
+                self.checker,
+                checked.as_ptr(),
+                checked.len(),
+                cancellation.raw.0,
+                executor,
+                LuckErrors::new(&mut failure),
+            );
+        }
+        failure.pop().map_or(Ok(errors), Err)
     }
 
     /// What's at the zero-based `line` and byte `column` of `module`.
@@ -323,8 +424,14 @@ impl<H: Host> RawChecker<H> {
         // SAFETY: the name and `described` outlive the call, which copies the
         // name.
         unsafe {
-            luck_checker_describe(self.checker, LuckStr::new(module.as_bytes()), line, column, sink)
-        };
+            luck_checker_describe(
+                self.checker,
+                LuckStr::new(module.as_bytes()),
+                line,
+                column,
+                sink,
+            );
+        }
         described
     }
 
@@ -346,41 +453,6 @@ impl<H: Host> RawChecker<H> {
         }
         entries
     }
-
-    /// Checks `modules`, handing each task Analysis splits the work into to
-    /// `submit`, and returns once every task has run.
-    pub(crate) fn check(
-        &mut self,
-        modules: &[&str],
-        cancellation: &CancellationToken,
-        mut submit: &mut dyn FnMut(Task),
-    ) -> Outcome {
-        let names: Vec<LuckStr> =
-            modules.iter().map(|module| LuckStr::new(module.as_bytes())).collect();
-        let mut errors = Vec::new();
-        let executor = LuckExecutor { context: (&raw mut submit).cast(), submit: submit_task };
-        let sink = LuckErrors { context: (&raw mut errors).cast(), push: push_error };
-        // SAFETY: the names, the token, `submit`, and `errors` all outlive the
-        // call, which waits for every task it submits.
-        let outcome = unsafe {
-            luck_checker_check(
-                self.checker,
-                names.as_ptr(),
-                names.len(),
-                cancellation.raw.0,
-                executor,
-                sink,
-            )
-        };
-        match (outcome, errors.pop()) {
-            (LUCK_CANCELLED, _) => Outcome::Cancelled,
-            (LUCK_INTERNAL_ERROR, Some(error)) => Outcome::InternalError(error),
-            (_, last) => {
-                errors.extend(last);
-                Outcome::Checked(errors)
-            }
-        }
-    }
 }
 
 impl<H> Drop for RawChecker<H> {
@@ -395,7 +467,7 @@ impl<H> Drop for RawChecker<H> {
 }
 
 /// One piece of a check, which any thread can run.
-pub(crate) struct Task(NonNull<c_void>);
+pub(crate) struct Task(NonNull<CxxTask>);
 
 // SAFETY: Analysis hands its tasks to other threads to run, as
 // `checkQueuedModules` documents.
@@ -404,7 +476,7 @@ unsafe impl Send for Task {}
 impl Task {
     pub(crate) fn run(self) {
         // SAFETY: the task is run once, here, which frees it.
-        unsafe { luck_task_run(self.0.as_ptr()) };
+        unsafe { luck_task_run(self.0) };
     }
 }
 
@@ -412,8 +484,8 @@ impl Task {
 /// for the one call to [`Host::config`] that borrows it.
 #[derive(Debug)]
 pub struct Config<'config> {
-    config: NonNull<c_void>,
-    call: PhantomData<&'config mut c_void>,
+    config: NonNull<CxxConfig>,
+    call: PhantomData<&'config mut CxxConfig>,
 }
 
 impl Config<'_> {
@@ -425,16 +497,64 @@ impl Config<'_> {
     /// Returns Luau's error, in its own words, for the first key it can't
     /// read, where it stops with the keys before it applied.
     pub fn apply_luaurc(&mut self, text: &str) -> Result<(), String> {
-        let mut errors: Vec<LuauError> = Vec::new();
-        let sink = LuckErrors { context: (&raw mut errors).cast(), push: push_error };
+        let mut errors = Vec::new();
         // SAFETY: the config is the one the frontend asked the host for, for
         // the call `self` is borrowed in, and the text and `errors` outlive
         // the call.
         unsafe {
-            luck_config_apply_luaurc(self.config.as_ptr(), LuckStr::new(text.as_bytes()), sink);
+            luck_config_apply_luaurc(
+                self.config,
+                LuckStr::new(text.as_bytes()),
+                LuckErrors::new(&mut errors),
+            );
         }
         errors.pop().map_or(Ok(()), |error| Err(error.message))
     }
+
+    /// Runs the source of a `.config.luau` in Luau's sandbox and applies the
+    /// `luau` table it returns over what's set, as Luau's own
+    /// `extractLuauConfig` does.
+    ///
+    /// # Errors
+    ///
+    /// Returns Luau's error, in its own words, when the source doesn't run or
+    /// returns what Luau can't read, where it stops with the keys before it
+    /// applied.
+    pub fn apply_luau_config(&mut self, source: &str) -> Result<(), String> {
+        let mut errors = Vec::new();
+        // SAFETY: as for `apply_luaurc`.
+        unsafe {
+            luck_config_apply_luau_config(
+                self.config,
+                LuckStr::new(source.as_bytes()),
+                LuckErrors::new(&mut errors),
+            );
+        }
+        errors.pop().map_or(Ok(()), |error| Err(error.message))
+    }
+}
+
+/// The aliases the `.config.luau` whose source is `source` declares, by
+/// lowercased name, once Luau's own Config library runs it in its sandbox,
+/// as `luck_resolver::LuauConfigAliases` takes them.
+///
+/// # Errors
+///
+/// Returns Luau's error, in its own words, when the source doesn't run or
+/// returns what Luau can't read.
+pub fn luau_config_aliases(source: &str) -> Result<Vec<(String, String)>, String> {
+    let mut errors = Vec::new();
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    let sink = LuckAliases { context: (&raw mut aliases).cast(), push: push_alias };
+    // SAFETY: the source, `errors`, and `aliases` outlive the call.
+    unsafe {
+        luck_luau_config_aliases(
+            LuckStr::new(source.as_bytes()),
+            LuckErrors::new(&mut errors),
+            sink,
+        );
+    }
+    errors.pop().map_or(Ok(aliases), |error| Err(error.message))
 }
 
 /// Stops the checks it's passed to, from any thread. A check it stops returns
@@ -446,7 +566,7 @@ pub struct CancellationToken {
 }
 
 #[derive(Debug)]
-struct RawCancellationToken(*mut c_void);
+struct RawCancellationToken(NonNull<CxxCancellationToken>);
 
 // SAFETY: it points at a `shared_ptr` to Luau's `FrontendCancellationToken`,
 // which is only read, and whose one field is atomic.
@@ -490,133 +610,99 @@ impl Default for CancellationToken {
 pub fn builtin_definitions() -> Cow<'static, str> {
     let source = luck_builtin_definitions();
     // SAFETY: the shim builds the text once and keeps it for the process.
-    String::from_utf8_lossy(unsafe { source.bytes() })
+    String::from_utf8_lossy(unsafe { source.bytes() }.unwrap_or_default())
 }
 
+/// The context and the module a host callback is for.
+///
 /// # Safety
 ///
 /// `context` is the [`Context`] a [`RawChecker`] owns, which no other borrow
-/// of reaches during the callback.
-unsafe fn context<'context, H>(context: *mut c_void) -> &'context Context<H> {
+/// of reaches during the callback, and `module` is a string the shim passes
+/// for it.
+unsafe fn host_call<'call, H>(
+    context: *mut c_void,
+    module: LuckStr,
+) -> Option<(&'call Context<H>, &'call str)> {
     // SAFETY: the caller promises it.
-    unsafe { &*context.cast::<Context<H>>() }
-}
-
-/// # Safety
-///
-/// `name` is a string the shim passes for the callback it's in.
-unsafe fn module_name<'name>(name: LuckStr) -> Option<&'name str> {
-    // SAFETY: the caller promises it.
-    str::from_utf8(unsafe { name.bytes() }).ok()
+    let context = unsafe { &*context.cast::<Context<H>>() };
+    // SAFETY: as for the context.
+    let module = str::from_utf8(unsafe { module.bytes() }?).ok()?;
+    Some((context, module))
 }
 
 extern "C" fn read_source<H: Host>(
-    context_ptr: *mut c_void,
+    context: *mut c_void,
     module: LuckStr,
-    source_string: *mut c_void,
+    source: NonNull<CxxString>,
 ) -> bool {
     // SAFETY: the shim passes back the context `RawChecker::new` gave it, on
-    // the thread that called into the checker.
-    let context = unsafe { context::<H>(context_ptr) };
-    // SAFETY: the name is the shim's for this call.
-    let Some(module) = (unsafe { module_name(module) }) else {
+    // the thread that called into the checker, with a name for this call.
+    let Some((context, module)) = (unsafe { host_call::<H>(context, module) }) else {
         return false;
     };
-    let Some(source) = context.source(module) else {
+    let Some(text) = context.source(module) else {
         return false;
     };
     // SAFETY: the shim passes the `std::string` for this call.
-    unsafe { luck_string_assign(source_string, LuckStr::new(&source)) };
+    unsafe { luck_string_assign(source, LuckStr::new(&text)) };
     true
 }
 
 extern "C" fn resolve<H: Host>(
-    context_ptr: *mut c_void,
+    context: *mut c_void,
     requirer: LuckStr,
     path: LuckStr,
-    module_string: *mut c_void,
+    module: NonNull<CxxString>,
 ) -> bool {
     // SAFETY: as in `read_source`.
-    let context = unsafe { context::<H>(context_ptr) };
-    // SAFETY: the name is the shim's for this call.
-    let Some(requirer) = (unsafe { module_name(requirer) }) else {
+    let Some((context, requirer)) = (unsafe { host_call::<H>(context, requirer) }) else {
         return false;
     };
     // SAFETY: the path is the require's string, which the shim passes for
     // this call.
-    let Ok(path) = str::from_utf8(unsafe { path.bytes() }) else {
-        return false;
-    };
-    let Some(module) = context.host.resolve(requirer, path) else {
+    let path = unsafe { path.bytes() }.and_then(|bytes| str::from_utf8(bytes).ok());
+    let Some(resolved) = path.and_then(|path| context.host.resolve(requirer, path)) else {
         return false;
     };
     // SAFETY: the shim passes the `std::string` for this call.
-    unsafe { luck_string_assign(module_string, LuckStr::new(module.as_bytes())) };
+    unsafe { luck_string_assign(module, LuckStr::new(resolved.as_bytes())) };
     true
 }
 
-extern "C" fn read_config<H: Host>(context_ptr: *mut c_void, module: LuckStr, config: *mut c_void) {
+extern "C" fn read_config<H: Host>(
+    context: *mut c_void,
+    module: LuckStr,
+    config: NonNull<CxxConfig>,
+) {
     // SAFETY: as in `read_source`.
-    let context = unsafe { context::<H>(context_ptr) };
-    // SAFETY: the name is the shim's for this call.
-    let (Some(module), Some(config)) = (unsafe { module_name(module) }, NonNull::new(config))
-    else {
-        return;
-    };
-    context.host.config(module, &mut Config { config, call: PhantomData });
+    if let Some((context, module)) = unsafe { host_call::<H>(context, module) } {
+        context.host.config(module, &mut Config { config, call: PhantomData });
+    }
 }
 
-extern "C" fn submit_task(context: *mut c_void, task: *mut c_void) {
+extern "C" fn submit_task(context: *mut c_void, task: NonNull<CxxTask>) {
     // SAFETY: the context is the `submit` that `RawChecker::check` passes,
     // which Analysis calls only on the thread that called into it.
     let submit = unsafe { &mut *context.cast::<&mut dyn FnMut(Task)>() };
-    if let Some(task) = NonNull::new(task) {
-        submit(Task(task));
-    }
-}
-
-/// # Safety
-///
-/// `text` is a string the shim passes for the callback it's in.
-unsafe fn owned(text: LuckStr) -> String {
-    // SAFETY: the caller promises it.
-    String::from_utf8_lossy(unsafe { text.bytes() }).into_owned()
-}
-
-/// # Safety
-///
-/// `docs` is the shim's for the callback it's in.
-unsafe fn docs(docs: &LuckDocs) -> LuauDocs {
-    let LuckLocation { begin_line, begin_column, end_line, end_column } = docs.location;
-    LuauDocs {
-        // SAFETY: the caller promises it.
-        symbol: docs.has_symbol.then(|| unsafe { owned(docs.symbol) }),
-        definition: docs.has_definition.then(|| {
-            // SAFETY: as for the symbol.
-            let module = unsafe { owned(docs.module) };
-            (module, [begin_line, begin_column, end_line, end_column])
-        }),
-    }
+    submit(Task(task));
 }
 
 extern "C" fn push_description(
     context: *mut c_void,
     location: LuckLocation,
     ty: LuckStr,
-    found: *const LuckDocs,
+    docs: &LuckDocs,
 ) {
     // SAFETY: the context is the `Option` `RawChecker::describe` passes, which
     // nothing else borrows during the call.
     let described = unsafe { &mut *context.cast::<Option<LuauDescription>>() };
-    // SAFETY: the shim passes docs it built for this call.
-    let found = unsafe { &*found };
-    let LuckLocation { begin_line, begin_column, end_line, end_column } = location;
     *described = Some(LuauDescription {
-        location: [begin_line, begin_column, end_line, end_column],
+        location,
         // SAFETY: the type is the shim's for this call.
-        ty: unsafe { owned(ty) },
+        ty: unsafe { ty.owned() },
         // SAFETY: the docs' strings are the shim's for this call.
-        docs: unsafe { docs(found) },
+        docs: unsafe { docs.owned() },
         signatures: Vec::new(),
     });
 }
@@ -624,64 +710,77 @@ extern "C" fn push_description(
 extern "C" fn push_signature(
     context: *mut c_void,
     label: LuckStr,
-    offsets: *const u32,
+    params: *const LuckRange,
     count: usize,
 ) {
     // SAFETY: as in `push_description`.
     let described = unsafe { &mut *context.cast::<Option<LuauDescription>>() };
-    let offsets: &[u32] = if count == 0 {
+    let params: &[LuckRange] = if count == 0 {
         &[]
     } else {
-        // SAFETY: the shim passes `count` pairs of offsets for this call.
-        unsafe { slice::from_raw_parts(offsets, count * 2) }
+        // SAFETY: the shim passes `count` ranges for this call.
+        unsafe { slice::from_raw_parts(params, count) }
     };
     if let Some(description) = described {
-        // SAFETY: the label is the shim's for this call.
-        let label = unsafe { owned(label) };
-        description.signatures.push((label, offsets.as_chunks::<2>().0.to_vec()));
+        description.signatures.push(Signature {
+            // SAFETY: the label is the shim's for this call.
+            label: unsafe { label.owned() },
+            params: params.iter().map(|param| Span::new(param.start, param.end)).collect(),
+        });
     }
 }
 
-extern "C" fn push_entry(context: *mut c_void, entry: *const LuckEntry) {
+extern "C" fn push_entry(context: *mut c_void, entry: &LuckEntry) {
+    let kind = match entry.kind {
+        0 => CompletionKind::Property,
+        1 => CompletionKind::Binding,
+        2 => CompletionKind::Keyword,
+        3 => CompletionKind::String,
+        4 => CompletionKind::Type,
+        5 => CompletionKind::Module,
+        6 => CompletionKind::GeneratedFunction,
+        7 => CompletionKind::RequirePath,
+        8 => CompletionKind::HotComment,
+        _ => return,
+    };
     // SAFETY: the context is the `Vec` `RawChecker::autocomplete` passes,
     // which nothing else borrows during the call.
     let entries = unsafe { &mut *context.cast::<Vec<LuauEntry>>() };
-    // SAFETY: the shim passes an entry it built for this call.
-    let entry = unsafe { &*entry };
     entries.push(LuauEntry {
         // SAFETY: the entry's strings are the shim's for this call.
-        name: unsafe { owned(entry.name) },
-        kind: entry.kind,
+        name: unsafe { entry.name.owned() },
+        kind,
         // SAFETY: as for the name.
-        ty: entry.has_type.then(|| unsafe { owned(entry.ty) }),
+        ty: unsafe { entry.ty.optional() },
         is_deprecated: entry.is_deprecated,
         // SAFETY: as for the name.
-        insert_text: entry.has_insert_text.then(|| unsafe { owned(entry.insert_text) }),
+        insert_text: unsafe { entry.insert_text.optional() },
         // SAFETY: as for the name.
-        docs: unsafe { docs(&entry.docs) },
+        docs: unsafe { entry.docs.owned() },
     });
 }
 
-extern "C" fn push_error(context: *mut c_void, error: *const LuckError) {
-    // SAFETY: the context is the `Vec` a `RawChecker` method passes, which
+extern "C" fn push_error(context: *mut c_void, error: &LuckError) {
+    // SAFETY: the context is the `Vec` a `LuckErrors` was made over, which
     // nothing else borrows during the call.
     let errors = unsafe { &mut *context.cast::<Vec<LuauError>>() };
-    // SAFETY: the shim passes an error it built for this call.
-    let error = unsafe { &*error };
-    // SAFETY: the error's strings are the shim's for this call.
-    let module_name = unsafe { error.module_name.bytes() };
-    // SAFETY: as for the module's name.
-    let message = unsafe { error.message.bytes() };
     errors.push(LuauError {
-        module: error.module,
-        module_name: String::from_utf8_lossy(module_name).into_owned(),
+        // SAFETY: the error's strings are the shim's for this call.
+        module: unsafe { error.module.owned() },
         is_syntax_error: error.is_syntax_error,
-        location: error.has_location.then_some([
-            error.begin_line,
-            error.begin_column,
-            error.end_line,
-            error.end_column,
-        ]),
-        message: String::from_utf8_lossy(message).into_owned(),
+        location: error.has_location.then_some(error.location),
+        // SAFETY: as for the module.
+        message: unsafe { error.message.owned() },
     });
+}
+
+extern "C" fn push_alias(context: *mut c_void, name: LuckStr, value: LuckStr) {
+    // SAFETY: the context is the `Vec` `luau_config_aliases` passes, which
+    // nothing else borrows during the call.
+    let aliases = unsafe { &mut *context.cast::<Vec<(String, String)>>() };
+    // SAFETY: the strings are the shim's for this call.
+    let name = unsafe { name.owned() };
+    // SAFETY: as for the name.
+    let value = unsafe { value.owned() };
+    aliases.push((name, value));
 }

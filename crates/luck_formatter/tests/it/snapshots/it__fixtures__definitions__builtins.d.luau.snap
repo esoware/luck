@@ -1,7 +1,7 @@
 ---
 source: crates/luck_formatter/tests/it/fixtures.rs
 expression: snapshot
-input_file: tests/fixtures/definitions/builtins.luau
+input_file: tests/fixtures/definitions/builtins.d.luau
 ---
 -- line_width = 1
 -- From Luau's own built-in definitions, Analysis/src/EmbeddedBuiltinDefinitions.cpp.

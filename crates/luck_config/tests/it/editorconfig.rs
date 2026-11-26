@@ -3,12 +3,13 @@ use std::time::Duration;
 
 use luck_config::{Editorconfigs, Project};
 use luck_formatter::FormatOptions;
+use luck_resolver::FileSystemOs;
 
 use crate::common::{finishes_within, in_directory, project_with};
 
 /// The indent width the `.editorconfig` files above `file_path` give it.
 fn indent_width(file_path: &Path) -> u8 {
-    Project::defaults(PathBuf::from("."))
+    Project::defaults(PathBuf::from("."), FileSystemOs)
         .format_options(Some(file_path), Some(&Editorconfigs::default()))
         .indent_width
 }

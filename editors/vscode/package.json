@@ -51,8 +51,7 @@
         ],
         "extensions": [
           ".lua"
-        ],
-        "configuration": "./language-configuration/luau.json"
+        ]
       },
       {
         "id": "luau",
@@ -80,67 +79,12 @@
     ],
     "grammars": [
       {
-        "language": "lua",
-        "scopeName": "source.luau",
-        "path": "./syntaxes/luau.tmLanguage.json"
-      },
-      {
         "language": "luau",
         "scopeName": "source.luau",
         "path": "./syntaxes/luau.tmLanguage.json"
       }
     ],
     "semanticTokenScopes": [
-      {
-        "language": "lua",
-        "scopes": {
-          "namespace": [
-            "variable.other.object.luau"
-          ],
-          "namespace.defaultLibrary": [
-            "variable.other.object.luau"
-          ],
-          "variable": [
-            "variable.other.readwrite.luau"
-          ],
-          "variable.readonly": [
-            "variable.other.constant.luau"
-          ],
-          "variable.defaultLibrary": [
-            "variable.other.readwrite.luau"
-          ],
-          "property": [
-            "variable.other.property.luau"
-          ],
-          "property.readonly": [
-            "variable.other.constant.property.luau"
-          ],
-          "property.defaultLibrary": [
-            "variable.other.property.luau"
-          ],
-          "property.readonly.defaultLibrary": [
-            "variable.other.constant.property.luau"
-          ],
-          "parameter": [
-            "variable.parameter.luau"
-          ],
-          "function": [
-            "entity.name.function.luau"
-          ],
-          "function.defaultLibrary": [
-            "support.function.luau"
-          ],
-          "method": [
-            "entity.name.function.luau"
-          ],
-          "method.defaultLibrary": [
-            "support.function.luau"
-          ],
-          "type": [
-            "entity.name.type.luau"
-          ]
-        }
-      },
       {
         "language": "luau",
         "scopes": {
@@ -194,10 +138,6 @@
     ],
     "snippets": [
       {
-        "language": "lua",
-        "path": "./snippets/luau.json"
-      },
-      {
         "language": "luau",
         "path": "./snippets/luau.json"
       }
@@ -218,13 +158,6 @@
       }
     ],
     "configurationDefaults": {
-      "[lua]": {
-        "editor.defaultFormatter": "luck.luck",
-        "editor.formatOnSave": true,
-        "editor.codeActionsOnSave": {
-          "source.fixAll.luck": "explicit"
-        }
-      },
       "[luau]": {
         "editor.defaultFormatter": "luck.luck",
         "editor.formatOnSave": true,
@@ -240,6 +173,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable the luck language server."
+        },
+        "luck.treatLuaFilesAsLuau": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Treat `.lua` files as Luau: highlight them with the Luau grammar and run the language server on them. When off, they keep VS Code's Lua mode. The CLI takes the files `luck.json`'s `include` names either way."
         },
         "luck.server.path": {
           "type": "string",
@@ -391,33 +329,33 @@
         "command": "luck.applyAllFixesFile",
         "key": "ctrl+shift+.",
         "mac": "cmd+shift+.",
-        "when": "editorTextFocus && (editorLangId == lua || editorLangId == luau)"
+        "when": "editorTextFocus && editorLangId == luau"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "luck.formatDocument",
-          "when": "editorLangId == lua || editorLangId == luau"
+          "when": "editorLangId == luau"
         },
         {
           "command": "luck.formatSelection",
-          "when": "editorLangId == lua || editorLangId == luau"
+          "when": "editorLangId == luau"
         },
         {
           "command": "luck.applyAllFixesFile",
-          "when": "editorLangId == lua || editorLangId == luau"
+          "when": "editorLangId == luau"
         },
         {
           "command": "luck.viewSyntaxTree",
-          "when": "editorLangId == lua || editorLangId == luau"
+          "when": "editorLangId == luau"
         }
       ],
       "editor/context": [
         {
           "submenu": "luck.editorContext",
           "group": "1_modification@100",
-          "when": "editorLangId == lua || editorLangId == luau"
+          "when": "editorLangId == luau"
         }
       ],
       "luck.editorContext": [
@@ -441,7 +379,7 @@
       "editor/title": [
         {
           "command": "luck.formatDocument",
-          "when": "editorLangId == lua || editorLangId == luau",
+          "when": "editorLangId == luau",
           "group": "navigation"
         }
       ]
@@ -495,7 +433,6 @@
             "title": "Open a Luau file",
             "description": "Open any `.luau` or `.lua` file to activate the extension. Diagnostics will appear in the Problems panel.",
             "completionEvents": [
-              "onLanguage:lua",
               "onLanguage:luau"
             ]
           },

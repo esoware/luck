@@ -30,12 +30,12 @@ pub(crate) const SCHEME: &str = "luck";
 /// Where the server serves Luau's own definitions, which document its
 /// built-in library.
 pub(crate) fn luau_uri() -> Uri {
-    Uri::from_str("luck:/luau.luau").expect("a valid URI")
+    Uri::from_str("luck:/luau.d.luau").expect("a valid URI")
 }
 
 /// Where the server serves Roblox's API at `security`.
 pub(crate) fn roblox_uri(security: SecurityLevel) -> Uri {
-    Uri::from_str(&format!("luck:/roblox/{}.luau", security.name())).expect("a valid URI")
+    Uri::from_str(&format!("luck:/roblox/{}.d.luau", security.name())).expect("a valid URI")
 }
 
 /// The text of the definition file the server serves at `uri`.
@@ -89,6 +89,10 @@ impl Package {
 
     pub(crate) fn text(&self) -> &str {
         &self.text
+    }
+
+    pub(crate) const fn uri(&self) -> Option<&Uri> {
+        self.uri.as_ref()
     }
 
     /// The declaration `declaration` refers to in one of `packages`.

@@ -9,7 +9,7 @@ use luck_diagnostics::{Diagnostic, Severity};
 use luck_linter::{
     Category, FixError, FixKind, Fixed, LintConfig, Linter, Message, RuleId, RuleLevel, RuleTimings,
 };
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_resolver::{FileSystem as _, FileSystemOs, is_definition_file};
 use luck_stdlib::StdlibLibrary;
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -316,12 +316,12 @@ impl LintArgs {
     ) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
-        let path = Some(Path::new(stdin_path));
-        let (stdlib, linter) = (project.stdlib().library(), project.linter_for(path));
+        let path = Path::new(stdin_path);
+        let (stdlib, linter) = (project.stdlib().library(), project.linter_for(Some(path)));
         let allocator = Allocator::new();
         let fixes = self.fixes();
         let (current_source, messages, fix_error) =
-            fixed_or_linted(&linter, &allocator, &source, stdlib, fixes, timings);
+            fixed_or_linted(&linter, &allocator, path, &source, stdlib, fixes, timings);
 
         if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
@@ -410,7 +410,7 @@ impl LintArgs {
         let stdlib = file.project.stdlib().library();
         let linter = file.project.linter_for(Some(file_path));
         let (fixed, fixed_messages, fix_error) =
-            fixed_or_linted(&linter, allocator, &source, stdlib, self.fixes(), timings);
+            fixed_or_linted(&linter, allocator, file_path, &source, stdlib, self.fixes(), timings);
         let mut note =
             fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
@@ -418,7 +418,7 @@ impl LintArgs {
             (fixed, fixed_messages)
         } else if let Err(error) = fs::write(file_path, fixed) {
             note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-            (source.as_slice(), linted(&linter, allocator, &source, stdlib, timings))
+            (source.as_slice(), linted(&linter, allocator, file_path, &source, stdlib, timings))
         } else {
             is_fixed = true;
             (fixed, fixed_messages)
@@ -466,16 +466,18 @@ impl LintArgs {
 /// text's messages, and why fixing failed, if it did.
 ///
 /// A failure leaves `source` as it was, with its own messages. Each lint's
-/// rules are timed into `timings` when given.
+/// rules are timed into `timings` when given. A definition file at `path`,
+/// which no rule reads, has nothing to fix.
 fn fixed_or_linted<'ast>(
     linter: &Linter,
     allocator: &'ast Allocator,
+    path: &Path,
     source: &'ast [u8],
     stdlib: &StdlibLibrary<'_>,
     fixes: FixKind,
     timings: Option<&RuleTimings>,
 ) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
-    let fix_error = if fixes.is_empty() {
+    let fix_error = if fixes.is_empty() || is_definition_file(path) {
         None
     } else {
         match linter.fix(allocator, source, stdlib, fixes, timings) {
@@ -483,17 +485,24 @@ fn fixed_or_linted<'ast>(
             Err(error) => Some(error),
         }
     };
-    (source, linted(linter, allocator, source, stdlib, timings), fix_error)
+    (source, linted(linter, allocator, path, source, stdlib, timings), fix_error)
 }
 
-/// `source`'s messages, parsed into `allocator` and linted against `stdlib`.
+/// `source`'s messages, parsed into `allocator` and linted against `stdlib`,
+/// or when `path` names a definition file, which is no code for a rule to
+/// read, its syntax errors alone.
 fn linted(
     linter: &Linter,
     allocator: &Allocator,
+    path: &Path,
     source: &[u8],
     stdlib: &StdlibLibrary<'_>,
     timings: Option<&RuleTimings>,
 ) -> Vec<Message> {
+    if is_definition_file(path) {
+        let errors = luck_parser::parse_definitions(allocator, source).errors;
+        return errors.into_iter().map(|diagnostic| Message { diagnostic, fix: None }).collect();
+    }
     let parse = luck_parser::parse(allocator, source);
     linter.run(&parse, stdlib, FixKind::empty(), timings)
 }
@@ -590,7 +599,7 @@ mod tests {
     }
 
     fn lint_source(source: &str, library: &StdlibLibrary<'_>, linter: &Linter) -> Vec<Message> {
-        linted(linter, &Allocator::new(), source.as_bytes(), library, None)
+        linted(linter, &Allocator::new(), Path::new("main.luau"), source.as_bytes(), library, None)
     }
 
     #[test]
@@ -789,7 +798,7 @@ print(undefined_var)";
     #[test]
     fn an_unreadable_file_reports_e010_in_the_run_format() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf(), FileSystemOs));
         let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let outcome =

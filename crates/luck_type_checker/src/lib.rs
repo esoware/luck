@@ -6,8 +6,10 @@
 //!
 //! A [`Checker`] reads everything through a [`Host`] the caller implements:
 //! each module's source by the name the host gives it, the module each
-//! `require` string names, and the `.luaurc` files that make up a module's
-//! config, which Luau's own parser reads. So it works with nothing on disk. It
+//! `require` string names, and the `.luaurc` and `.config.luau` files that
+//! make up a module's config, which Luau's own Config library reads, running
+//! a `.config.luau` in its sandbox, as [`luau_config_aliases`] does for a
+//! caller that wants only its aliases. So it works with nothing on disk. It
 //! starts with Luau's built-in definitions, which [`builtin_definitions`]
 //! gives as text, loads more from text with
 //! [`Checker::load_definitions`], types what a definition file can't when
@@ -56,4 +58,4 @@ mod ffi;
 pub use checker::{
     CheckError, Checker, Completion, CompletionKind, Declaration, Description, Host, Signature,
 };
-pub use ffi::{CancellationToken, Config, builtin_definitions};
+pub use ffi::{CancellationToken, Config, builtin_definitions, luau_config_aliases};

@@ -4,6 +4,7 @@ const SECTION = "luck";
 
 interface Settings {
 	enable: boolean;
+	treatLuaFilesAsLuau: boolean;
 	"server.path": string;
 	"server.extraEnv": Readonly<Record<string, string>>;
 	"server.args": readonly string[];
@@ -17,6 +18,7 @@ export type SettingKey = keyof Settings;
 
 const DEFAULTS: Settings = {
 	enable: true,
+	treatLuaFilesAsLuau: true,
 	"server.path": "",
 	"server.extraEnv": {},
 	"server.args": [],

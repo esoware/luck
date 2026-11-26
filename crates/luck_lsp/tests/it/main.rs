@@ -2,6 +2,7 @@
 // otherwise reaches only the `#[test]` functions of an integration test binary.
 #![cfg(test)]
 
+mod client;
 mod common;
 mod server;
 mod types;
