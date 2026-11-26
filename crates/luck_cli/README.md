@@ -6,6 +6,8 @@ The `luck` command-line tool: bundler, minifier, formatter, linter, and language
 cargo install luck_cli
 ```
 
+Building it needs clang, which compiles Luau's type checker: install [LLVM](https://github.com/llvm/llvm-project/releases), or on macOS Xcode's command line tools.
+
 ## Commands
 
 | Command | Does |

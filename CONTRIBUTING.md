@@ -2,7 +2,9 @@
 
 ## Setup
 
-You need [rustup](https://rustup.rs), which installs the Rust version `rust-toolchain.toml` pins, [just](https://github.com/casey/just), Node.js for the VS Code extension, and a C++17 compiler, which `luck_type_checker` builds Luau's type checker with and `luck_conformance` the reference Luau interpreter. Then run `just init` once to fetch the Luau submodule and install the extension's packages and the cargo tools the checks use. `just luau` moves the submodule to another Luau release.
+You need [rustup](https://rustup.rs), which installs the Rust version `rust-toolchain.toml` pins, [just](https://github.com/casey/just), Node.js for the VS Code extension, the platform's C++ compiler, which `luck_conformance` builds the reference Luau interpreter with, and clang, which `luck_type_checker` builds Luau's type checker with. Then run `just init` once to fetch the Luau submodule and install the extension's packages and the cargo tools the checks use. `just luau` moves the submodule to another Luau release.
+
+Install clang and lld from [LLVM](https://github.com/llvm/llvm-project/releases) at the major version of the LLVM `rustc -vV` prints, which `just release-binary` needs to optimize the Rust and the C++ together, or on macOS, where that recipe doesn't run, use Xcode's clang. A build uses the clang `CXX` names, or else `clang-cl` for an MSVC target and `clang++` for any other, from `PATH` or, on Windows, from `C:\Program Files\LLVM\bin`, where LLVM's installer puts it.
 
 ## Checking a change
 

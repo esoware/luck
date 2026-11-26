@@ -92,6 +92,11 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      - uses: $/.github/actions/llvm
+
       - name: Check the workspace on the rust-version toolchain
         run: |
           msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)

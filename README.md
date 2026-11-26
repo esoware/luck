@@ -18,6 +18,8 @@ The lexer, parser, AST, and code generator are hand-written with no external par
 cargo install luck_cli
 ```
 
+Building it needs clang, which compiles Luau's type checker: install [LLVM](https://github.com/llvm/llvm-project/releases), or on macOS Xcode's command line tools.
+
 ```sh
 luck init          # scaffold a luck.json
 luck build         # bundle the project into a single file

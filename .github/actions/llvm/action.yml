@@ -1,0 +1,40 @@
+name: LLVM
+description: Install the clang and lld of the LLVM major version the pinned Rust toolchain uses, ahead of any other on PATH.
+
+runs:
+  using: composite
+  steps:
+    # On Linux, /usr/local/bin comes before the runner's own clang on PATH. On Windows, LLVM's own
+    # release archive replaces the runner's LLVM in C:\Program Files\LLVM, which is on PATH, since
+    # no Windows package manager installs LLVM by major version.
+    - name: Install LLVM
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        major=$(rustc -vV | sed -n 's/^LLVM version: \([0-9]*\)\..*/\1/p')
+        case "$RUNNER_OS" in
+          Linux)
+            codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+            curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+            echo "deb https://apt.llvm.org/$codename/ llvm-toolchain-$codename-$major main" | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "clang-$major" "lld-$major"
+            sudo ln -sf "/usr/lib/llvm-$major/bin/clang" "/usr/lib/llvm-$major/bin/clang++" /usr/local/bin/
+            ;;
+          Windows)
+            tag=$(gh release list --repo llvm/llvm-project --exclude-pre-releases --limit 100 --json tagName --jq "map(.tagName | select(startswith(\"llvmorg-$major.\")))[0]")
+            archive="clang+llvm-${tag#llvmorg-}-x86_64-pc-windows-msvc.tar.xz"
+            cd "$RUNNER_TEMP"
+            gh release download "$tag" --repo llvm/llvm-project --pattern "$archive"
+            gh attestation verify "$archive" --repo llvm/llvm-project
+            rm -rf "$PROGRAMFILES/LLVM"
+            mkdir "$PROGRAMFILES/LLVM"
+            "$SYSTEMROOT/System32/tar.exe" -xf "$archive" -C "$PROGRAMFILES/LLVM" --strip-components 1
+            ;;
+          *)
+            echo "::error::This action installs LLVM on Linux and Windows only."
+            exit 1
+            ;;
+        esac
+        clang --version

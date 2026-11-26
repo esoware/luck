@@ -67,6 +67,19 @@ advisories:
   cargo deny check advisories
   npm audit --prefix editors/vscode --omit=dev --audit-level=high
 
+# Without rustc's fat LTO, lld's LTO over the whole binary linked it smaller and checked as fast.
+# --target keeps the LTO flags off build scripts and proc macros, and apart from other release builds.
+
+# Build the release binary the extension ships into target/<target>/release, with lld optimizing its Rust and Luau's C++ together through cross-language LTO
+[windows]
+release-binary target=(arch() + "-pc-windows-msvc"):
+  $env:PATH += ";$env:ProgramFiles\LLVM\bin"; cargo build -p luck_cli --release --target {{target}} --config profile.release.lto=false --config "target.{{target}}.rustflags = ['-Clinker-plugin-lto', '-Clinker=lld-link']"
+
+# Build the release binary the extension ships into target/<target>/release, with lld optimizing its Rust and Luau's C++ together through cross-language LTO
+[linux]
+release-binary target=(arch() + "-unknown-linux-gnu"):
+  cargo build -p luck_cli --release --target {{target}} --config profile.release.lto=false --config "target.{{target}}.rustflags = ['-Clinker-plugin-lto', '-Clinker=clang', '-Clink-arg=-fuse-ld=lld', '-Clink-arg=--target={{target}}']"
+
 # Run the criterion benches, or one stage with --bench parser
 bench *args:
   cargo bench -p luck_benchmark {{args}}
