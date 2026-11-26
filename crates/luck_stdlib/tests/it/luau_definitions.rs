@@ -2,6 +2,7 @@
 //! from Luau's built-in definitions and Luau's library reference, and offline
 //! checks of the committed file.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
@@ -373,7 +374,7 @@ fn the_definitions_load_into_a_checker() {
     struct NoModules;
 
     impl Host for NoModules {
-        fn source(&self, _: &str) -> Option<Vec<u8>> {
+        fn source(&self, _: &str) -> Option<Cow<'_, [u8]>> {
             None
         }
 

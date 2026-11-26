@@ -287,3 +287,48 @@ fn a_definition_file_luau_cannot_load_is_reported_on_it() {
     assert_eq!(diags[0].message, "Unknown type 'Missing'");
     assert_eq!(diags[0].range, Range::new(Position::new(0, 25), Position::new(0, 32)));
 }
+
+#[test]
+fn a_config_luau_that_never_returns_is_stopped() {
+    let client = Client::start_given(json!({}), &folder());
+    client.push(&[
+        (&uri(".config.luau"), Some("while true do end\n")),
+        (&uri("lib/util.luau"), Some(UTIL)),
+    ]);
+    let main = uri("1");
+    client.open(&main, "local util = require(\"@lib/util\")\nreturn util\n");
+    let mut client = client;
+
+    let diags = client.diagnostics(&main, Some(1));
+
+    assert_eq!(codes(&diags), ["E004"], "{diags:?}");
+    assert!(diags[0].message.contains(".config.luau`, which doesn't load"), "{diags:?}");
+}
+
+#[test]
+fn a_deleted_definition_file_luau_cannot_load_has_its_problems_cleared() {
+    let client = Client::start_given(json!({ "definitions": ["bad.d.luau"] }), &folder());
+    let bad = uri("bad.d.luau");
+    client.push(&[(&bad, Some("declare function make(): Missing\n"))]);
+    client.open(&uri("1"), "make()\n");
+    let mut client = client;
+    assert_eq!(codes(&client.diagnostics(&bad, None)), ["E015"]);
+
+    client.push(&[(&bad, None)]);
+
+    assert_eq!(client.next_published(&bad).diagnostics, []);
+}
+
+#[test]
+fn a_deleted_definition_file_that_does_not_parse_has_its_problems_cleared() {
+    let client = Client::start_given(json!({ "definitions": ["broken.d.luau"] }), &folder());
+    let broken = uri("broken.d.luau");
+    client.push(&[(&broken, Some("declare function make(: ()\n"))]);
+    client.open(&uri("1"), "make()\n");
+    let mut client = client;
+    assert_eq!(codes(&client.diagnostics(&broken, None)), ["E008"]);
+
+    client.push(&[(&broken, None)]);
+
+    assert_eq!(client.next_published(&broken).diagnostics, []);
+}

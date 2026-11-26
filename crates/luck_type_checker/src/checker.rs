@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
 use std::num::NonZero;
@@ -21,8 +22,10 @@ use crate::ffi::{
 /// A panic in a method aborts the process, since it can't unwind through
 /// Luau's C++.
 pub trait Host {
-    /// The source of `module`, or `None` when no module has that name.
-    fn source(&self, module: &str) -> Option<Vec<u8>>;
+    /// The source of `module`, which the checker copies once, into Luau, so
+    /// one the host holds can be borrowed, or `None` when no module has that
+    /// name.
+    fn source(&self, module: &str) -> Option<Cow<'_, [u8]>>;
 
     /// The module that `require(path)` in `requirer` names, or `None` when it
     /// names none.
@@ -124,7 +127,7 @@ pub(crate) struct Context<H> {
 }
 
 impl<H: Host> Context<H> {
-    pub(crate) fn source(&self, module: &str) -> Option<Vec<u8>> {
+    pub(crate) fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
         let source = self.host.source(module)?;
         let lines = (LineIndex::new(&source), index_to_offset(source.len()));
         self.lines.borrow_mut().insert(module.to_owned(), lines);

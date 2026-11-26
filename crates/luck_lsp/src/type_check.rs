@@ -455,14 +455,14 @@ impl ModuleHost {
 }
 
 impl Host for ModuleHost {
-    fn source(&self, module: &str) -> Option<Vec<u8>> {
+    fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
         if let Some(text) = self.open.get(module) {
             self.read.borrow_mut().insert(module.to_owned(), Some(Arc::clone(text)));
-            return Some(text.as_bytes().to_vec());
+            return Some(Cow::Borrowed(text.as_bytes()));
         }
         let source = self.files.read(Path::new(module)).ok()?;
         self.read.borrow_mut().insert(module.to_owned(), None);
-        Some(source)
+        Some(Cow::Owned(source))
     }
 
     fn resolve(&self, requirer: &str, path: &str) -> Option<String> {

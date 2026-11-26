@@ -208,8 +208,8 @@ impl FileHost {
 }
 
 impl Host for FileHost {
-    fn source(&self, module: &str) -> Option<Vec<u8>> {
-        FileSystemOs.read(&self.path(module)).ok()
+    fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
+        FileSystemOs.read(&self.path(module)).ok().map(Cow::Owned)
     }
 
     fn resolve(&self, requirer: &str, path: &str) -> Option<String> {

@@ -3,6 +3,7 @@
 //! Creator Documentation, and offline checks of the committed file at each
 //! security level.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -670,8 +671,8 @@ fn missing_from_luau(candidates: &[String]) -> BTreeSet<String> {
     struct Probe(String);
 
     impl Host for Probe {
-        fn source(&self, module: &str) -> Option<Vec<u8>> {
-            (module == "probe").then(|| self.0.clone().into_bytes())
+        fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
+            (module == "probe").then_some(Cow::Borrowed(self.0.as_bytes()))
         }
 
         fn resolve(&self, _: &str, _: &str) -> Option<String> {
@@ -1055,7 +1056,7 @@ fn the_definitions_load_into_a_checker_at_every_level() {
     struct NoModules;
 
     impl Host for NoModules {
-        fn source(&self, _: &str) -> Option<Vec<u8>> {
+        fn source(&self, _: &str) -> Option<Cow<'_, [u8]>> {
             None
         }
 

@@ -96,3 +96,23 @@ fn a_config_luau_that_errors_is_reported_in_luau_s_words() {
     assert_eq!(built.status.code(), Some(1), "{build_stderr}");
     assert!(build_stderr.contains(".config.luau`, which doesn't load"), "{build_stderr}");
 }
+
+#[test]
+fn a_config_luau_that_never_returns_is_stopped_and_reported() {
+    let directory = project(".config.luau", "while true do end\n");
+
+    let checked = run(directory.path(), &["check", "main.luau"]);
+    let check_stderr = stderr_text(&checked);
+    assert_eq!(checked.status.code(), Some(1), "{check_stderr}");
+    assert!(
+        check_stderr
+            .contains("invalid config: config:1: Typeinfer failed to complete in allotted time"),
+        "{check_stderr}"
+    );
+    assert!(check_stderr.contains(".config.luau:1:1"), "{check_stderr}");
+
+    let built = run(directory.path(), &["build", "--quiet"]);
+    let build_stderr = stderr_text(&built);
+    assert_eq!(built.status.code(), Some(1), "{build_stderr}");
+    assert!(build_stderr.contains(".config.luau`, which doesn't load"), "{build_stderr}");
+}

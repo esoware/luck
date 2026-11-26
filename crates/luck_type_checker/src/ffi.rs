@@ -105,7 +105,12 @@ struct LuckHost {
         path: LuckStr,
         module: NonNull<CxxString>,
     ) -> bool,
-    config: extern "C" fn(context: *mut c_void, module: LuckStr, config: NonNull<CxxConfig>),
+    config: extern "C" fn(
+        context: *mut c_void,
+        module: LuckStr,
+        config: NonNull<CxxConfig>,
+        cancellation: NonNull<CxxCancellationToken>,
+    ),
 }
 
 #[repr(C)]
@@ -204,6 +209,7 @@ unsafe extern "C" {
     fn luck_config_apply_luaurc(config: NonNull<CxxConfig>, text: LuckStr, errors: LuckErrors);
     fn luck_config_apply_luau_config(
         config: NonNull<CxxConfig>,
+        cancellation: NonNull<CxxCancellationToken>,
         source: LuckStr,
         errors: LuckErrors,
     );
@@ -484,7 +490,10 @@ impl Task {
 /// for the one call to [`Host::config`] that borrows it.
 #[derive(Debug)]
 pub struct Config<'config> {
-    config: NonNull<CxxConfig>,
+    raw: NonNull<CxxConfig>,
+    /// The token of the check that asked for the config, a `shared_ptr` that
+    /// holds none when nothing can cancel it.
+    cancellation: NonNull<CxxCancellationToken>,
     call: PhantomData<&'config mut CxxConfig>,
 }
 
@@ -503,7 +512,7 @@ impl Config<'_> {
         // the call.
         unsafe {
             luck_config_apply_luaurc(
-                self.config,
+                self.raw,
                 LuckStr::new(text.as_bytes()),
                 LuckErrors::new(&mut errors),
             );
@@ -513,19 +522,22 @@ impl Config<'_> {
 
     /// Runs the source of a `.config.luau` in Luau's sandbox and applies the
     /// `luau` table it returns over what's set, as Luau's own
-    /// `extractLuauConfig` does.
+    /// `extractLuauConfig` does. It stops the source once it has run for a
+    /// second, or once the check that asked for the config is cancelled.
     ///
     /// # Errors
     ///
-    /// Returns Luau's error, in its own words, when the source doesn't run or
-    /// returns what Luau can't read, where it stops with the keys before it
-    /// applied.
+    /// Returns Luau's error, in its own words, when the source doesn't run,
+    /// is stopped, or returns what Luau can't read, where it stops with the
+    /// keys before it applied.
     pub fn apply_luau_config(&mut self, source: &str) -> Result<(), String> {
         let mut errors = Vec::new();
-        // SAFETY: as for `apply_luaurc`.
+        // SAFETY: as for `apply_luaurc`, and the token is the one the
+        // frontend passed with the config, for the same call.
         unsafe {
             luck_config_apply_luau_config(
-                self.config,
+                self.raw,
+                self.cancellation,
                 LuckStr::new(source.as_bytes()),
                 LuckErrors::new(&mut errors),
             );
@@ -536,12 +548,13 @@ impl Config<'_> {
 
 /// The aliases the `.config.luau` whose source is `source` declares, by
 /// lowercased name, once Luau's own Config library runs it in its sandbox,
-/// as `luck_resolver::LuauConfigAliases` takes them.
+/// as `luck_resolver::LuauConfigAliases` takes them. It stops the source once
+/// it has run for a second.
 ///
 /// # Errors
 ///
-/// Returns Luau's error, in its own words, when the source doesn't run or
-/// returns what Luau can't read.
+/// Returns Luau's error, in its own words, when the source doesn't run, is
+/// stopped, or returns what Luau can't read.
 pub fn luau_config_aliases(source: &str) -> Result<Vec<(String, String)>, String> {
     let mut errors = Vec::new();
     let mut aliases: Vec<(String, String)> = Vec::new();
@@ -674,10 +687,11 @@ extern "C" fn read_config<H: Host>(
     context: *mut c_void,
     module: LuckStr,
     config: NonNull<CxxConfig>,
+    cancellation: NonNull<CxxCancellationToken>,
 ) {
     // SAFETY: as in `read_source`.
     if let Some((context, module)) = unsafe { host_call::<H>(context, module) } {
-        context.host.config(module, &mut Config { config, call: PhantomData });
+        context.host.config(module, &mut Config { raw: config, cancellation, call: PhantomData });
     }
 }
 

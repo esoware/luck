@@ -8,10 +8,10 @@
 //! each module's source by the name the host gives it, the module each
 //! `require` string names, and the `.luaurc` and `.config.luau` files that
 //! make up a module's config, which Luau's own Config library reads, running
-//! a `.config.luau` in its sandbox, as [`luau_config_aliases`] does for a
-//! caller that wants only its aliases. So it works with nothing on disk. It
-//! starts with Luau's built-in definitions, which [`builtin_definitions`]
-//! gives as text, loads more from text with
+//! a `.config.luau` in its sandbox for at most a second, as
+//! [`luau_config_aliases`] does for a caller that wants only its aliases. So
+//! it works with nothing on disk. It starts with Luau's built-in definitions,
+//! which [`builtin_definitions`] gives as text, loads more from text with
 //! [`Checker::load_definitions`], types what a definition file can't when
 //! asked, with [`Checker::return_named_type`] and
 //! [`Checker::bind_type_namespace`], and keeps each module it checks until
@@ -29,6 +29,7 @@
 //! # Usage
 //!
 //! ```
+//! use std::borrow::Cow;
 //! use std::num::NonZero;
 //!
 //! use luck_type_checker::{CancellationToken, Checker, Config, Host};
@@ -36,8 +37,9 @@
 //! struct OneModule;
 //!
 //! impl Host for OneModule {
-//!     fn source(&self, module: &str) -> Option<Vec<u8>> {
-//!         (module == "main").then(|| b"--!strict\nlocal x: number = \"one\"\n".to_vec())
+//!     fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
+//!         let source = b"--!strict\nlocal x: number = \"one\"\n";
+//!         (module == "main").then_some(Cow::Borrowed(source.as_slice()))
 //!     }
 //!
 //!     fn resolve(&self, _: &str, _: &str) -> Option<String> {

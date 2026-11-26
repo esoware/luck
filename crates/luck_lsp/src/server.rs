@@ -561,9 +561,12 @@ impl Server {
                 continue;
             };
             let is_deleted = text.is_none();
-            let typ = if !client.push(&path, uri, text.map(Arc::from)) {
+            let typ = if !client.push(&path, uri.clone(), text.map(Arc::from)) {
                 FileChangeType::CHANGED
             } else if is_deleted {
+                // Once the client's files lose it, a reload can't find the URI
+                // of a definition file to clear the problems published on it.
+                self.publish(uri, Vec::new(), None);
                 FileChangeType::DELETED
             } else {
                 FileChangeType::CREATED

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::num::NonZero;
 
@@ -6,18 +7,19 @@ use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host};
 use rustc_hash::FxHashMap;
 
 /// Modules held in memory by name, where `require("./name")` names the module
-/// `name`, and one `.luaurc` governs them all.
+/// `name`, and one `.luaurc`, or else one `.config.luau`, governs them all.
 #[derive(Default)]
 pub(crate) struct MemoryHost {
     pub(crate) modules: FxHashMap<String, String>,
     pub(crate) luaurc: Option<String>,
-    /// What Luau said each time it couldn't read the `.luaurc`.
-    pub(crate) luaurc_errors: RefCell<Vec<String>>,
+    pub(crate) config_luau: Option<String>,
+    /// What Luau said each time it couldn't read the config.
+    pub(crate) config_errors: RefCell<Vec<String>>,
 }
 
 impl Host for MemoryHost {
-    fn source(&self, module: &str) -> Option<Vec<u8>> {
-        self.modules.get(module).map(|source| source.clone().into_bytes())
+    fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
+        self.modules.get(module).map(|source| Cow::Borrowed(source.as_bytes()))
     }
 
     fn resolve(&self, _: &str, path: &str) -> Option<String> {
@@ -26,10 +28,13 @@ impl Host for MemoryHost {
     }
 
     fn config(&self, _: &str, config: &mut Config<'_>) {
-        if let Some(luaurc) = &self.luaurc
-            && let Err(error) = config.apply_luaurc(luaurc)
-        {
-            self.luaurc_errors.borrow_mut().push(error);
+        let applied = match (&self.luaurc, &self.config_luau) {
+            (Some(luaurc), _) => config.apply_luaurc(luaurc),
+            (None, Some(source)) => config.apply_luau_config(source),
+            (None, None) => Ok(()),
+        };
+        if let Err(error) = applied {
+            self.config_errors.borrow_mut().push(error);
         }
     }
 }

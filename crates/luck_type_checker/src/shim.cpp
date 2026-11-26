@@ -15,6 +15,7 @@
 #include "Luau/LuauConfig.h"
 #include "Luau/Module.h"
 #include "Luau/Scope.h"
+#include "Luau/TimeTrace.h"
 #include "Luau/ToString.h"
 #include "Luau/Type.h"
 #include "Luau/TypeArena.h"
@@ -22,6 +23,7 @@
 #include "Luau/TypeFwd.h"
 #include "Luau/TypePack.h"
 #include "Luau/Variant.h"
+#include "lua.h"
 
 #include <cstdint>
 #include <cstring>
@@ -54,7 +56,12 @@ struct LuckHost {
     void* context;
     bool (*source)(void* context, LuckStr module, std::string* source);
     bool (*resolve)(void* context, LuckStr requirer, LuckStr path, std::string* module);
-    void (*config)(void* context, LuckStr module, Luau::Config* config);
+    void (*config)(
+        void* context,
+        LuckStr module,
+        Luau::Config* config,
+        const CancellationToken* cancellation
+    );
 };
 
 struct LuckError {
@@ -118,6 +125,8 @@ struct LuckAliases {
 }
 
 namespace {
+
+constexpr double CONFIG_TIME_LIMIT_SECONDS = 1.0;
 
 LuckStr borrowed(const std::string& text) {
     return {text.data(), text.size()};
@@ -217,10 +226,10 @@ struct Checker final : Luau::FileResolver, Luau::ConfigResolver {
 
     const Luau::Config& getConfig(
         const Luau::ModuleName& name,
-        const Luau::TypeCheckLimits&
+        const Luau::TypeCheckLimits& limits
     ) const override {
         config = Luau::Config{};
-        host.config(host.context, borrowed(name), &config);
+        host.config(host.context, borrowed(name), &config, &limits.cancellationToken);
         return config;
     }
 
@@ -412,23 +421,44 @@ void luck_config_apply_luaurc(Luau::Config* config, LuckStr text, LuckErrors err
 
 void luck_config_apply_luau_config(
     Luau::Config* config,
+    const CancellationToken* cancellation,
     LuckStr source,
     LuckErrors errors
-) noexcept {
+) noexcept try {
+    Luau::TypeCheckLimits limits;
+    limits.finishTime = Luau::TimeTrace::getClock() + CONFIG_TIME_LIMIT_SECONDS;
+    limits.cancellationToken = *cancellation;
+    Luau::InterruptCallbacks callbacks;
+    callbacks.initCallback = [&limits](lua_State* state) {
+        lua_callbacks(state)->userdata = &limits;
+    };
+    callbacks.interruptCallback = [](lua_State* state, int) {
+        const auto* limits =
+            static_cast<const Luau::TypeCheckLimits*>(lua_callbacks(state)->userdata);
+        if (Luau::TimeTrace::getClock() > *limits->finishTime) {
+            throw Luau::TimeLimitError(Luau::kLuauConfigName);
+        }
+        if (limits->cancellationToken && limits->cancellationToken->requested()) {
+            throw Luau::UserCancelError(Luau::kLuauConfigName);
+        }
+    };
     std::optional<std::string> error = Luau::extractLuauConfig(
         owned(source),
         *config,
         Luau::ConfigOptions::AliasOptions{std::nullopt, true},
-        Luau::InterruptCallbacks{}
+        std::move(callbacks)
     );
     if (error) {
         push(errors, "", false, std::nullopt, *error);
     }
+} catch (const Luau::InternalCompilerError& error) {
+    push(errors, "", false, std::nullopt, error.message);
 }
 
 void luck_luau_config_aliases(LuckStr source, LuckErrors errors, LuckAliases aliases) noexcept {
     Luau::Config config;
-    luck_config_apply_luau_config(&config, source, errors);
+    CancellationToken none;
+    luck_config_apply_luau_config(&config, &none, source, errors);
     for (const auto& [name, alias] : config.aliases) {
         aliases.push(aliases.context, borrowed(name), borrowed(alias.value));
     }
