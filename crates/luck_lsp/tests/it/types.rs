@@ -1,19 +1,16 @@
 use std::fs;
 use std::path::Path;
 
-use ls_types::request::{
-    Completion, GotoDefinition, HoverRequest, Request as LspRequest, SignatureHelpRequest,
-};
+use ls_types::request::{Completion, HoverRequest, Request as LspRequest, SignatureHelpRequest};
 use ls_types::{
-    CompletionParams, CompletionResponse, Diagnostic, Documentation, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, Location, NumberOrString,
-    ParameterLabel, PartialResultParams, Position, SignatureHelpParams, Uri,
-    WorkDoneProgressParams,
+    CompletionParams, CompletionResponse, Diagnostic, Documentation, Hover, HoverContents,
+    HoverParams, NumberOrString, ParameterLabel, PartialResultParams, Position,
+    SignatureHelpParams, Uri, WorkDoneProgressParams,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
-use crate::common::{Client, position_params, workspace_uri};
+use crate::common::{Client, definition, position_params, workspace_uri};
 
 /// `workspace/textDocumentContent`, which `ls_types` doesn't have.
 enum TextDocumentContent {}
@@ -86,20 +83,6 @@ fn markdown(hovered: &Hover) -> &str {
     &markup.value
 }
 
-fn definition(client: &mut Client, uri: &Uri, line: u32, utf16_column: u32) -> Location {
-    let found = client
-        .request::<GotoDefinition>(GotoDefinitionParams {
-            text_document_position_params: position_params(uri, line, utf16_column),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .expect("a definition");
-    let GotoDefinitionResponse::Scalar(location) = found else {
-        panic!("one location: {found:?}");
-    };
-    location
-}
-
 fn type_errors(diags: &[Diagnostic]) -> Vec<&str> {
     let e015 = Some(NumberOrString::String("E015".to_owned()));
     diags.iter().filter(|diag| diag.code == e015).map(|diag| diag.message.as_str()).collect()
@@ -121,7 +104,7 @@ return count
 ",
     );
 
-    let diags = client.diagnostics(&uri, Some(1));
+    let diags = client.diagnostics_where(&uri, Some(1), |checked| !type_errors(checked).is_empty());
     assert_eq!(type_errors(&diags), [MISMATCH], "{diags:?}");
     let error = diags.iter().find(|diag| diag.message == MISMATCH).expect("the type error");
     assert_eq!(error.range.start, Position::new(2, 22));
@@ -137,8 +120,7 @@ local count: number = 1
 return count
 ",
     );
-    let fixed = client.diagnostics(&uri, Some(2));
-    assert!(type_errors(&fixed).is_empty(), "{fixed:?}");
+    client.diagnostics_where(&uri, Some(2), |checked| type_errors(checked).is_empty());
 }
 
 #[test]
@@ -167,9 +149,67 @@ return count
 ",
     );
 
-    let first = client.next_published(&uri);
-    assert_eq!(first.version, Some(2), "the replaced version publishes nothing");
-    assert!(type_errors(&first.diagnostics).is_empty(), "{:?}", first.diagnostics);
+    loop {
+        let published = client.next_published(&uri);
+        let diags = &published.diagnostics;
+        assert!(
+            type_errors(diags).is_empty(),
+            "the replaced version's check is dropped: {diags:?}"
+        );
+        if published.version == Some(2) {
+            break;
+        }
+    }
+}
+
+#[test]
+fn a_hover_on_no_name_answers_without_waiting_for_the_check() {
+    let mut client = Client::start();
+    let uri = workspace_uri("slow.luau");
+    let params: Vec<String> = (0..4_000).map(|i| format!("a{i}")).collect();
+    let slow = format!(
+        "\
+--!strict
+local function f({}) end
+local count: number = \"one\"
+return f, count
+",
+        params.join(", ")
+    );
+    client.open(&uri, &slow);
+
+    let in_comment = client.request::<HoverRequest>(HoverParams {
+        text_document_position_params: position_params(&uri, 0, 4),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    });
+
+    assert_eq!(in_comment, None);
+    let is_checked = client.notifications().iter().any(|notification| {
+        notification.params.get("uri").and_then(|value| value.as_str()) == Some(uri.as_str())
+            && notification.params.to_string().contains(MISMATCH)
+    });
+    assert!(!is_checked, "the hover answered before the check was done");
+}
+
+#[test]
+fn an_open_definition_file_s_edit_reaches_the_types_of_an_open_module() {
+    let main = "\
+--!strict
+send(\"hi\", 1)
+";
+    let (directory, uri) = project(APP, main);
+    let definitions =
+        Uri::from_file_path(directory.path().join("app.d.luau")).expect("file path URI");
+    let mut client = Client::start();
+    client.open(&uri, main);
+    client.open(&definitions, APP);
+
+    client.replace_all(&definitions, 2, &APP.replace("port: number", "port: string"));
+
+    let diags = client.diagnostics_where(&uri, Some(1), |diags| !type_errors(diags).is_empty());
+    assert_eq!(type_errors(&diags), ["Expected this to be 'string', but got 'number'"]);
+    let sent = hover(&mut client, &uri, 1, 1);
+    assert!(markdown(&sent).contains("port: string"), "{}", markdown(&sent));
 }
 
 #[test]
@@ -358,7 +398,8 @@ return origin
     let mut client = Client::start();
     client.open(&main_uri, main);
 
-    let read_from_disk = client.diagnostics(&main_uri, Some(1));
+    let read_from_disk =
+        client.diagnostics_where(&main_uri, Some(1), |diags| !type_errors(diags).is_empty());
     assert_eq!(type_errors(&read_from_disk).len(), 1, "{read_from_disk:?}");
 
     client.open(&point_uri, &point.replace("y: number", "y: string"));

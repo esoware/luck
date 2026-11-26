@@ -1,5 +1,7 @@
 use ls_types::FoldingRange;
-use luck_ast::{FunctionBody, GetSpan as _, Statement, TableConstructor, Visit};
+use luck_ast::{
+    DeclaredExternType, FunctionBody, GetSpan as _, Statement, TableConstructor, Visit,
+};
 use luck_token::Span;
 
 use crate::document::DocumentState;
@@ -45,8 +47,7 @@ impl<'ast> Visit<'ast> for Folder<'_> {
             | Statement::RepeatLoop(_)
             | Statement::IfStatement(_)
             | Statement::NumericFor(_)
-            | Statement::GenericFor(_)
-            | Statement::DeclaredExternType(_) => self.push(stmt.span()),
+            | Statement::GenericFor(_) => self.push(stmt.span()),
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
@@ -57,11 +58,15 @@ impl<'ast> Visit<'ast> for Folder<'_> {
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::DeclaredGlobal(_)
-            | Statement::DeclaredFunction(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => {}
         }
         self.walk_stmt(stmt);
+    }
+
+    fn visit_declared_extern_type(&mut self, extern_type: &'ast DeclaredExternType<'ast>) {
+        self.push(extern_type.span);
+        self.walk_declared_extern_type(extern_type);
     }
 
     // Every function form reaches this: declarations, `local` functions, type

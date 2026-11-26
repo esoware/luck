@@ -3,16 +3,16 @@
 
 use crate::{
     Assignment, AstKind, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
-    DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
-    ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
-    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
-    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
-    InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment, LocalFunction,
-    MethodCall, Name, NamedType, NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression,
-    ParenthesizedType, RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix,
-    SuffixedExpression, TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration,
-    TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var,
-    VarArgParam, VariadicType, WhileLoop,
+    Declaration, DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs,
+    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
+    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
+    IfExpression, IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType,
+    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor,
+    OptionalType, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement,
+    Statement, StringLiteral, Suffix, SuffixedExpression, TableConstructor, TableType, Type,
+    TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName,
+    TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
 
 /// A walk over a tree that borrows it.
@@ -59,6 +59,11 @@ pub trait Visit<'ast> {
 
     #[inline]
     fn ascend(&mut self) {}
+
+    #[inline]
+    fn visit_declaration(&mut self, declaration: &'ast Declaration<'ast>) {
+        self.walk_declaration(declaration);
+    }
 
     #[inline]
     fn visit_declared_global(&mut self, declared_global: &'ast DeclaredGlobal<'ast>) {
@@ -397,6 +402,18 @@ pub trait Visit<'ast> {
     #[inline]
     fn visit_generic_type_param(&mut self, generic_type_param: &'ast GenericTypeParam<'ast>) {
         self.walk_generic_type_param(generic_type_param);
+    }
+
+    fn walk_declaration(&mut self, declaration: &'ast Declaration<'ast>) {
+        match declaration {
+            Declaration::Global(declared_global) => self.visit_declared_global(declared_global),
+            Declaration::Function(declared_function) => {
+                self.visit_declared_function(declared_function);
+            }
+            Declaration::ExternType(declared_extern_type) => {
+                self.visit_declared_extern_type(declared_extern_type);
+            }
+        }
     }
 
     #[inline]
@@ -795,15 +812,7 @@ pub trait Visit<'ast> {
             Statement::TypeDeclaration(type_declaration) => {
                 self.visit_type_declaration(type_declaration);
             }
-            Statement::DeclaredGlobal(declared_global) => {
-                self.visit_declared_global(declared_global);
-            }
-            Statement::DeclaredFunction(declared_function) => {
-                self.visit_declared_function(declared_function);
-            }
-            Statement::DeclaredExternType(declared_extern_type) => {
-                self.visit_declared_extern_type(declared_extern_type);
-            }
+            Statement::Declaration(declaration) => self.visit_declaration(declaration),
         }
     }
 

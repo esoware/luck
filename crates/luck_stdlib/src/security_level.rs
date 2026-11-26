@@ -32,12 +32,6 @@ impl SecurityLevel {
     }
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "None" => Some(Self::None),
-            "LocalUserSecurity" => Some(Self::LocalUserSecurity),
-            "PluginSecurity" => Some(Self::PluginSecurity),
-            "RobloxScriptSecurity" => Some(Self::RobloxScriptSecurity),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|level| level.name() == name)
     }
 }

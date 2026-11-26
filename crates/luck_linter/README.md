@@ -27,7 +27,8 @@ let parse = luck_parser::parse(&allocator, b"print(undefined_name)");
 let diags = linter.run(&parse, stdlib, FixKind::empty(), None);
 assert_eq!(diags[0].code, "undefined_variable");
 
-let fixed = linter.fix(&allocator, b"local unused = 1", stdlib, FixKind::all(), None);
+let parse = luck_parser::parse(&allocator, b"local unused = 1");
+let fixed = linter.fix(&allocator, parse, stdlib, FixKind::all(), None);
 assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"local _unused = 1"[..]));
 ```
 
@@ -47,7 +48,7 @@ assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"local _unused = 1"[..]))
 
 ## API
 
-- `Linter` lints a parse with `run`, or an `Analysis` with `run_analyzed`, and fixes a source with `fix`.
+- `Linter` lints a parse with `run`, or an `Analysis` with `run_analyzed`, and fixes a parse with `fix`.
 - `Analysis` is a parse with its semantic analysis and lint directives, from `Linter::analyze`.
 - `LintConfig`, `CategoryLevels`, `RuleSettings`, and `RuleLevel` pick which rules run and at what severity.
 - `RuleId` names a rule, and `RuleId::ALL` lists them all.

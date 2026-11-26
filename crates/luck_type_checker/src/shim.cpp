@@ -597,6 +597,7 @@ void luck_checker_check(
 ) noexcept try {
     Luau::Frontend& frontend = checker->frontend;
     std::vector<Luau::ModuleName> names;
+    names.reserve(count);
     for (size_t index = 0; index < count; ++index) {
         names.push_back(owned(modules[index].name));
     }
@@ -612,9 +613,8 @@ void luck_checker_check(
         return;
     }
     for (size_t index = 0; index < count; ++index) {
-        if (std::optional<Luau::CheckResult> result =
-                frontend.getCheckResult(names[index], false)) {
-            for (const Luau::TypeError& error : result->errors) {
+        if (Luau::ModulePtr module = frontend.moduleResolver.getModule(names[index])) {
+            for (const Luau::TypeError& error : module->errors) {
                 push_type_error(*checker, modules[index].errors, error);
             }
         }

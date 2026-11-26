@@ -18,18 +18,6 @@ pub struct FunctionBody<'ast> {
     pub block: Block<'ast>,
 }
 
-impl FunctionBody<'_> {
-    /// Span of the closing `end` keyword: the last three bytes of the body
-    /// span.
-    ///
-    /// Only meaningful for parsed ASTs, since synthetic bodies carry point
-    /// spans. Callers use it only for source-anchored trivia, which
-    /// synthetic ASTs don't have.
-    pub const fn end_keyword_span(&self) -> Span {
-        Span::new(self.span.end.saturating_sub(3), self.span.end)
-    }
-}
-
 /// `...`, where `span` starts at the dots.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct VarArgParam<'ast> {

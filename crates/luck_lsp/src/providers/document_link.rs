@@ -1,5 +1,5 @@
 //! A `require("path")` string becomes a clickable link resolved through
-//! [`luck_resolver`], the resolver the bundler uses, which the project keeps
+//! [`luck_resolver`], the resolver the bundler uses, which the session keeps
 //! for every request until the file watcher clears it.
 //!
 //! The strings are the requires of the document's record, which leave out a

@@ -5,7 +5,7 @@ use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
 use self_cell::{MutBorrow, self_cell};
 
-use crate::definitions::{LUAU, roblox_definitions};
+use crate::definitions::{luau_definitions, roblox_definitions};
 use crate::security_level::SecurityLevel;
 use crate::stdlib_model::StdlibLibrary;
 use crate::translate::layer;
@@ -36,7 +36,8 @@ self_cell!(
 static LUAU_LIBRARY: OnceLock<Stdlib> = OnceLock::new();
 
 /// Roblox's API over Luau's library at each level of [`SecurityLevel::ALL`].
-static ROBLOX_LIBRARIES: [OnceLock<Stdlib>; 4] = [const { OnceLock::new() }; 4];
+static ROBLOX_LIBRARIES: [OnceLock<Stdlib>; SecurityLevel::ALL.len()] =
+    [const { OnceLock::new() }; SecurityLevel::ALL.len()];
 
 /// Luau's own library, `luau.d.luau`'s, which every project's starts from,
 /// built the first time a process asks for it.
@@ -61,13 +62,21 @@ pub fn roblox_library(security: SecurityLevel) -> &'static StdlibLibrary<'static
     built_in_roblox(security).library()
 }
 
+/// The library a Roblox script runs against when `has_roblox`, which is
+/// [`roblox_library`] at [`SecurityLevel::None`], and else
+/// [`luau_library`].
+pub fn library_for(has_roblox: bool) -> &'static StdlibLibrary<'static> {
+    if has_roblox { roblox_library(SecurityLevel::None) } else { luau_library() }
+}
+
 fn built_in_luau() -> &'static Stdlib {
-    LUAU_LIBRARY.get_or_init(|| Stdlib::layered(None, false, LUAU).expect("luau.d.luau parses"))
+    LUAU_LIBRARY.get_or_init(|| {
+        Stdlib::layered(None, false, luau_definitions()).expect("luau.d.luau parses")
+    })
 }
 
 fn built_in_roblox(security: SecurityLevel) -> &'static Stdlib {
-    let level = SecurityLevel::ALL.iter().position(|level| *level == security).unwrap_or(0);
-    ROBLOX_LIBRARIES[level].get_or_init(|| built_in_luau().roblox_over(security))
+    ROBLOX_LIBRARIES[security as usize].get_or_init(|| built_in_luau().roblox_over(security))
 }
 
 impl Stdlib {
@@ -96,7 +105,7 @@ impl Stdlib {
     }
 
     fn roblox_over(&self, security: SecurityLevel) -> Self {
-        Self::layered(Some(self.clone()), true, &roblox_definitions(security))
+        Self::layered(Some(self.clone()), true, roblox_definitions(security))
             .expect("roblox.d.luau parses at every level")
     }
 

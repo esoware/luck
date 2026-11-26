@@ -326,13 +326,8 @@ impl<'ast> Parser<'ast> {
             }
             TokenKind::LeftParen => self.parse_paren_or_function_members(Packs::Rejected),
             _ => {
-                let span = self.token.span;
-                let message = format!(
-                    "expected `(` after attributes, found {}",
-                    self.token.display(self.source)
-                );
-                self.syntax_error(span, message);
-                Type::Error(span)
+                self.report_unexpected("expected `(` after attributes");
+                Type::Error(self.token.span)
             }
         };
         self.exit_depth();
@@ -584,15 +579,7 @@ impl<'ast> Parser<'ast> {
         for field in fields {
             match field {
                 TypeField::Indexer { span, key, .. } => {
-                    // `["a"]: T` is a named field, as `parseTableType` builds it.
-                    if let Type::StringLiteral(literal) = key {
-                        // The lexer reports a malformed escape on its own.
-                        if literal.value.contains(&0) {
-                            self.error(
-                                *span,
-                                "string literal contains malformed escape sequence or `\\0`",
-                            );
-                        }
+                    if matches!(key, Type::StringLiteral(_)) {
                         continue;
                     }
                     if has_seen_indexer {
@@ -633,14 +620,7 @@ impl<'ast> Parser<'ast> {
         let access_span = access.map(|_| self.advance());
 
         let field = if self.is_at(TokenKind::LeftBracket) {
-            let open = self.advance();
-            self.open(Closer::Bracket);
-            let key = self.parse_type();
-            self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
-            self.expect(TokenKind::Colon);
-            let value = self.parse_type();
-            let span = access_span.unwrap_or(open).merge(value.span());
-            TypeField::Indexer { span, access, key, value }
+            self.parse_type_indexer(access_span, access)
         } else if self.is_at_name() && self.peek_next() == TokenKind::Colon {
             let name = self.advance_name();
             self.advance();
@@ -656,6 +636,30 @@ impl<'ast> Parser<'ast> {
             TypeField::Array { span, access, value }
         };
         self.scratch.type_fields.push(field);
+    }
+
+    /// `[K]: V`, at its `[`, spanning from `start` when an access opens it.
+    /// `["name"]: T` is a named field, as Luau's `parseTableType` builds it,
+    /// so its key can't hold a `\0`.
+    pub(super) fn parse_type_indexer(
+        &mut self,
+        start: Option<Span>,
+        access: Option<TypeFieldAccess>,
+    ) -> TypeField<'ast> {
+        let open = self.advance();
+        self.open(Closer::Bracket);
+        let key = self.parse_type();
+        self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
+        self.expect(TokenKind::Colon);
+        let value = self.parse_type();
+        let span = start.unwrap_or(open).merge(value.span());
+        // The lexer reports a malformed escape on its own.
+        if let Type::StringLiteral(literal) = &key
+            && literal.value.contains(&0)
+        {
+            self.error(span, "string literal contains malformed escape sequence or `\\0`");
+        }
+        TypeField::Indexer { span, access, key, value }
     }
 
     /// Parse a parenthesized type `(T)`, a function type `(a: T, ...U) -> R`,

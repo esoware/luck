@@ -148,25 +148,16 @@ impl<'ast> ContextHost<'ast> {
         resolved.callees[index]
     }
 
-    /// When `node` is a call statement's chain, the index of its last
-    /// suffix, whose call drops what it returns.
-    pub(crate) fn statement_call(&self, node: &AstNode<'_>) -> Option<usize> {
-        let AstKind::SuffixedExpression(chain) = node.kind() else {
-            return None;
-        };
-        matches!(self.nodes.parent_kind(node.id()), Some(AstKind::Block(_)))
-            .then(|| chain.suffixes.len() - 1)
-    }
-
     /// The calls of `node`, a chain, whose results the code uses: every one
     /// but a call statement's last.
     pub(crate) fn used_calls<'node>(
         &self,
         node: &AstNode<'node>,
     ) -> impl Iterator<Item = Call<'node>> {
-        let dropped = self.statement_call(node);
-        node.kind()
-            .as_suffixed_expr()
+        let chain = node.kind().as_suffixed_expr();
+        let is_statement = matches!(self.nodes.parent_kind(node.id()), Some(AstKind::Block(_)));
+        let dropped = chain.filter(|_| is_statement).map(|chain| chain.suffixes.len() - 1);
+        chain
             .into_iter()
             .flat_map(SuffixedExpression::calls)
             .filter(move |&(index, _)| Some(index) != dropped)
@@ -321,22 +312,6 @@ os.time()";
                 ["string.format", "os.time", "string.format"].map(|name| Some(name.into()));
             assert_eq!(names, expected);
             assert!(host.callee(chains[1], 0).is_none(), "a field is no call");
-        });
-    }
-
-    #[test]
-    fn only_a_call_statement_has_a_statement_call() {
-        let source = "\
-f(1).g(2)
-local x = h(3)";
-        with_host(source, |host| {
-            let calls: Vec<Option<usize>> = host
-                .nodes
-                .iter()
-                .filter(|node| matches!(node.kind(), AstKind::SuffixedExpression(_)))
-                .map(|node| host.statement_call(node))
-                .collect();
-            assert_eq!(calls, [Some(2), None]);
         });
     }
 

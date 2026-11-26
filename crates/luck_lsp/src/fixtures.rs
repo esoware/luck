@@ -6,9 +6,8 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use ls_types::Uri;
 use luck_config::{CONFIG_FILE_NAME, Project};
-use luck_formatter::FormatOptions;
 use luck_linter::{LintConfig, Linter};
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_resolver::{FileSystem as _, FileSystemOs, ResolverGeneric};
 
 use crate::analyzed::Arena;
 use crate::document::DocumentState;
@@ -34,7 +33,7 @@ pub(crate) fn roblox_document(text: &str) -> DocumentState {
 /// `text` as the document of the file at `path` under `project`'s settings.
 pub(crate) fn document_at(text: &str, project: Project, path: &Path) -> DocumentState {
     let linter = project.linter_for(Some(path));
-    document_with(text, project, linter, Some(FileSystemOs.canonicalize_existing(path)))
+    document_with(text, project, linter, Some(path))
 }
 
 /// `text` as an untitled document linted under `lint`.
@@ -51,7 +50,8 @@ pub(crate) fn uri() -> Uri {
 /// A session with no workspace folders, in UTF-16 positions, whose tasks
 /// nothing reads.
 pub(crate) fn session() -> Session {
-    Session::new(PositionEncoding::Utf16, unbounded().0, NonZero::<usize>::MIN, Files::Disk, None)
+    let files = Files::new(None);
+    Session::new(PositionEncoding::Utf16, unbounded().0, NonZero::<usize>::MIN, files, None)
 }
 
 fn untitled(text: &str, project: Project) -> DocumentState {
@@ -63,14 +63,16 @@ fn document_with(
     text: &str,
     project: Project,
     linter: Arc<Linter>,
-    path: Option<PathBuf>,
+    path: Option<&Path>,
 ) -> DocumentState {
     let stdlib = project.stdlib().clone();
+    let files = Files::new(None);
+    let resolver = Arc::new(ResolverGeneric::new_with_file_system(files.clone()));
     let settings = DocumentSettings {
-        path,
-        project: Arc::new(LoadedProject::new(project, Files::Disk)),
+        path: path.map(|located| FileSystemOs.canonicalize_existing(located)),
+        located: path.map(Path::to_path_buf),
+        project: Arc::new(LoadedProject::new(project, files, resolver)),
         linter,
-        format: FormatOptions::default(),
         is_included: true,
         is_definitions: false,
     };

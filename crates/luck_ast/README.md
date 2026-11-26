@@ -50,10 +50,10 @@ assert_eq!(names.0, ["total", "count"]);
 - Expressions: `BinaryOp`, `UnaryOp`, `SuffixedExpression`, `FunctionDef`, `TableConstructor`, `IfExpression`, `InterpolatedString`, `TypeCast`, `ParenthesizedExpression`, and their parts
 - Types: `NamedType`, `FunctionType`, `TableType`, `UnionType`, `IntersectionType`, `OptionalType`, `TypeofType`, `TypePack`, and their parts
 - Leaves: `Name`, `NameIndex`, `NumberLiteral`, `StringLiteral`
-- Definition files: `DeclaredGlobal`, `DeclaredFunction`, `DeclaredExternType`, `ExternTypeMember`
+- Definition files: `Declaration`, `DeclaredGlobal`, `DeclaredFunction`, `DeclaredExternType`, `ExternTypeMember`
 - Traversal: `Visit`, `VisitMut`, `AstKind`, `AstType`, `AST_TYPE_MAX`
 - Queries: `GetSpan`, `ContentEq`, `Slot`, `Call`, `ChainHead`, `DottedPath`, `TreeCounts`
 - Building: `Synth`, `SpanCounter`, `FieldSpec`, `TypeFieldSpec`, `FunctionSignature`, `InterpolatedStringPart`
-- Depth: `MAX_NESTING_DEPTH`, `MIN_STACK_BYTES`, `block_nesting_depth`, `expr_nesting_depth`, `type_nesting_depth`, `spans_past_nesting_cap`
+- Depth: `MAX_NESTING_DEPTH`, `MIN_STACK_BYTES`, `block_nesting_depth`, `expr_nesting_depth`, `spans_past_nesting_cap`
 - Identifiers: `is_valid_identifier`, `sanitize_identifier`
 - Containers: `OneOrMore`

@@ -1,23 +1,23 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::num::NonZero;
+use std::path::Path;
 
 use luck_diagnostics::Diagnostic;
-use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host, SavedConfig};
+use luck_type_checker::{CancellationToken, CheckError, Checker, Config, DirectoryConfigs, Host};
 use rustc_hash::FxHashMap;
 
 /// Modules held in memory by name, where `require("./name")` names the module
-/// `name`, and one `.luaurc`, or else one `.config.luau`, governs them all.
+/// `name`, all in one directory, whose `.luaurc` or `.config.luau` governs
+/// them all.
 #[derive(Default)]
 pub(crate) struct MemoryHost {
     pub(crate) modules: FxHashMap<String, String>,
     pub(crate) luaurc: Option<String>,
     pub(crate) config_luau: Option<String>,
-    /// What Luau said each time it couldn't read the config.
+    /// The message of each E014 the directory's config got.
     pub(crate) config_errors: RefCell<Vec<String>>,
-    /// The config once read, which every module after takes, as a host keeps
-    /// a directory's.
-    pub(crate) saved: RefCell<Option<SavedConfig>>,
+    pub(crate) configs: DirectoryConfigs,
 }
 
 impl Host for MemoryHost {
@@ -30,20 +30,16 @@ impl Host for MemoryHost {
         self.modules.contains_key(module).then(|| module.to_owned())
     }
 
-    fn config(&self, _: &str, config: &mut Config<'_>) {
-        if let Some(saved) = &*self.saved.borrow() {
-            config.set(saved);
-            return;
-        }
-        let applied = match (&self.luaurc, &self.config_luau) {
-            (Some(luaurc), _) => config.apply_luaurc(luaurc),
-            (None, Some(source)) => config.apply_luau_config(source),
-            (None, None) => Ok(()),
+    fn config(&self, module: &str, config: &mut Config<'_>) {
+        let read = |path: &Path| match path.to_str()? {
+            ".luaurc" => self.luaurc.clone(),
+            ".config.luau" => self.config_luau.clone(),
+            _ => None,
         };
-        if let Err(error) = applied {
-            self.config_errors.borrow_mut().push(error);
-        }
-        *self.saved.borrow_mut() = config.saved();
+        let errors = self.configs.apply(Path::new(module), config, read);
+        self.config_errors
+            .borrow_mut()
+            .extend(errors.into_iter().map(|(_, diag)| diag.message.to_string()));
     }
 }
 

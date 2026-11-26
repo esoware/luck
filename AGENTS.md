@@ -73,12 +73,6 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - In the extension, labels take no period, and prose is full sentences that end with a period.
 - A diagnostic, help, or error message starts lowercase, has no closing period, is one sentence, and puts code in backticks, as rustc's do.
 
-### Scope
-
-- Three similar lines beat a premature helper.
-- No speculative config and no single-caller helpers.
-- Delete code nothing calls, unless it's public API of a published crate.
-
 ## Language server
 
 - The extension has no language logic. Everything that has to understand Luau runs in `luck_lsp`, so if the extension needs something new, add it there.

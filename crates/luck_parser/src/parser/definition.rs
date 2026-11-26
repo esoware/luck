@@ -3,8 +3,8 @@
 
 use luck_allocator::{Box, List};
 use luck_ast::{
-    DeclaredFunction, Expression, ExternTypeMember, FunctionAttribute, GetSpan as _, Statement,
-    SuffixedExpression, Type, TypeField, TypeFieldAccess,
+    Declaration, DeclaredFunction, Expression, ExternTypeMember, FunctionAttribute, GetSpan as _,
+    Statement, SuffixedExpression, Type, TypeField, TypeFieldAccess,
 };
 use luck_diagnostics::Diagnostic;
 use luck_token::{Span, TokenKind};
@@ -48,7 +48,7 @@ impl<'ast> Parser<'ast> {
         if self.eat(TokenKind::Function) {
             let function =
                 self.parse_declared_function(start, attributes, declare_chain, Declarer::Global);
-            return Statement::DeclaredFunction(function);
+            return Statement::Declaration(self.alloc(Declaration::Function(function)));
         }
         if !attributes.is_empty() {
             self.report_unexpected("expected `function` after attributes");
@@ -67,17 +67,7 @@ impl<'ast> Parser<'ast> {
         self.expect(TokenKind::Colon);
         let ty = self.parse_declared_type();
         let span = Span::new(declare.start, self.previous_end);
-        Statement::new_declared_global(span, name, ty, self.allocator)
-    }
-
-    /// A syntax error at the current token, which `expected` says what
-    /// should have been.
-    #[cold]
-    #[inline(never)]
-    fn report_unexpected(&mut self, expected: &str) {
-        let span = self.token.span;
-        let message = format!("{expected}, found {}", self.token.display(self.source));
-        self.syntax_error(span, message);
+        Statement::Declaration(self.alloc(Declaration::new_global(span, name, ty)))
     }
 
     /// The rest of a function declared without a body after its `function`
@@ -88,7 +78,7 @@ impl<'ast> Parser<'ast> {
         attributes: List<'ast, FunctionAttribute<'ast>>,
         declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
         declarer: Declarer,
-    ) -> Box<'ast, DeclaredFunction<'ast>> {
+    ) -> DeclaredFunction<'ast> {
         let name = self.expect_identifier_recover();
         let generics = (declarer == Declarer::Global && self.is_at(TokenKind::Less)).then(|| {
             let generics = self.parse_generic_type_list(GenericsOwner::Function);
@@ -103,7 +93,7 @@ impl<'ast> Parser<'ast> {
             self.alloc(ty)
         });
         let span = Span::new(start.start, self.previous_end);
-        let function = DeclaredFunction::boxed(
+        let function = DeclaredFunction::new(
             span,
             attributes,
             declare_chain,
@@ -112,7 +102,6 @@ impl<'ast> Parser<'ast> {
             params,
             vararg,
             return_type,
-            self.allocator,
         );
         // After a syntax error in the signature, a missing annotation would
         // only echo it.
@@ -171,21 +160,22 @@ impl<'ast> Parser<'ast> {
         }
         self.open(Closer::BlockEnd);
         let start = self.scratch.extern_type_members.len();
-        let mut indexer = None;
         while !self.is_at_block_end() {
-            self.parse_extern_type_member(&mut indexer);
+            self.parse_extern_type_member();
         }
         let members =
             List::split_off_in(&mut self.scratch.extern_type_members, start, self.allocator);
+        self.check_extern_type_indexers(&members);
         let end = self.expect_closer(TokenKind::End, Closer::BlockEnd, declare);
         let span = declare.merge(end);
-        Statement::new_declared_extern_type(span, name, supertype, members, self.allocator)
+        let extern_type = Declaration::new_extern_type(span, name, supertype, members);
+        Statement::Declaration(self.alloc(extern_type))
     }
 
     /// Parse one member onto the extern type being parsed, or skip a token
-    /// that opens none. `indexer` is where its indexer is, once it has one.
+    /// that opens none.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token opens a property")]
-    fn parse_extern_type_member(&mut self, indexer: &mut Option<Span>) {
+    fn parse_extern_type_member(&mut self) {
         let member = match self.peek() {
             TokenKind::At => {
                 let attributes = self.parse_function_attributes();
@@ -196,25 +186,15 @@ impl<'ast> Parser<'ast> {
                 }
                 let method =
                     self.parse_declared_function(start, attributes, None, Declarer::ExternType);
-                ExternTypeMember::Method(method)
+                ExternTypeMember::Method(self.alloc(method))
             }
             TokenKind::Function => {
                 let start = self.advance();
                 let method =
                     self.parse_declared_function(start, List::new(), None, Declarer::ExternType);
-                ExternTypeMember::Method(method)
+                ExternTypeMember::Method(self.alloc(method))
             }
-            TokenKind::LeftBracket => {
-                let open = self.advance();
-                self.open(Closer::Bracket);
-                let key = self.parse_type();
-                self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
-                self.expect(TokenKind::Colon);
-                let value = self.parse_type();
-                let span = open.merge(value.span());
-                self.check_extern_type_key(&key, span, indexer);
-                ExternTypeMember::Field(TypeField::Indexer { span, access: None, key, value })
-            }
+            TokenKind::LeftBracket => ExternTypeMember::Field(self.parse_type_indexer(None, None)),
             _ => {
                 let Some(field) = self.parse_extern_type_property() else {
                     return;
@@ -227,19 +207,24 @@ impl<'ast> Parser<'ast> {
 
     /// `["name"]: T` is a property, as in a table type, and any other key
     /// makes the indexer, of which there's one at most.
-    fn check_extern_type_key(&mut self, key: &Type<'ast>, span: Span, indexer: &mut Option<Span>) {
-        if let Type::StringLiteral(literal) = key {
-            // The lexer reports a malformed escape on its own.
-            if literal.value.contains(&0) {
-                self.error(span, "string literal contains malformed escape sequence or `\\0`");
+    fn check_extern_type_indexers(&mut self, members: &[ExternTypeMember<'ast>]) {
+        let mut first = None;
+        for member in members {
+            let ExternTypeMember::Field(TypeField::Indexer { span, key, .. }) = member else {
+                continue;
+            };
+            if matches!(key, Type::StringLiteral(_)) {
+                continue;
             }
-        } else if let Some(first) = *indexer {
-            let diag =
-                Diagnostic::e008(span, "cannot have more than one indexer on an extern type")
-                    .with_label(first, "first indexer here");
-            self.errors.push(diag);
-        } else {
-            *indexer = Some(span);
+            match first {
+                Some(first) => {
+                    let message = "cannot have more than one indexer on an extern type";
+                    let diag =
+                        Diagnostic::e008(*span, message).with_label(first, "first indexer here");
+                    self.errors.push(diag);
+                }
+                None => first = Some(*span),
+            }
         }
     }
 

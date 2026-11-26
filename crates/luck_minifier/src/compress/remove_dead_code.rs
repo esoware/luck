@@ -68,9 +68,7 @@ fn has_loop_exit(block: &Block<'_>) -> bool {
         | Statement::Return(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
-        | Statement::DeclaredGlobal(_)
-        | Statement::DeclaredFunction(_)
-        | Statement::DeclaredExternType(_)
+        | Statement::Declaration(_)
         | Statement::Error(_) => false,
     })
 }
@@ -266,9 +264,7 @@ impl<'ast> Compressor<'_, 'ast> {
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::DeclaredGlobal(_)
-            | Statement::DeclaredFunction(_)
-            | Statement::DeclaredExternType(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => Dropped::Nothing,
         }
     }

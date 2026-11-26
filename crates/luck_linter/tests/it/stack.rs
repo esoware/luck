@@ -24,8 +24,9 @@ fn linting_and_fixing_fit_the_smallest_stack() {
         let linter = Linter::new(every_rule());
         for library in [luau_library(), roblox_library(SecurityLevel::None)] {
             let allocator = Allocator::new();
+            let parse = luck_parser::parse(&allocator, source.as_bytes());
             let fixed = linter
-                .fix(&allocator, source.as_bytes(), library, FixKind::all(), None)
+                .fix(&allocator, parse, library, FixKind::all(), None)
                 .expect("the fixes converge");
             assert!(fixed.parse.errors.is_empty(), "{:?}", fixed.parse.errors.first());
         }

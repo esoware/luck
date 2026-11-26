@@ -7,7 +7,7 @@
 use std::{iter, slice};
 
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, ConditionalBinding, DeclaredExternType,
+    Assignment, Block, CompoundAssignment, ConditionalBinding, Declaration, DeclaredExternType,
     DeclaredFunction, Expression, ExternTypeMember, FunctionAttribute, FunctionName, GenericFor,
     GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind, NumericFor, ReturnStatement,
     Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
@@ -85,7 +85,15 @@ impl<'ast> Formatter<'ast> {
             Statement::Continue(_) => self.token("continue"),
             Statement::CompoundAssignment(compound) => self.write_compound_assignment(compound),
             Statement::TypeDeclaration(declaration) => self.write_type_declaration(declaration),
-            Statement::DeclaredGlobal(global) => {
+            Statement::Declaration(declaration) => self.write_declaration(declaration),
+            // A parse-recovery placeholder has no text to print.
+            Statement::Error(_) => {}
+        }
+    }
+
+    fn write_declaration(&mut self, declaration: &Declaration<'ast>) {
+        match declaration {
+            Declaration::Global(global) => {
                 self.token("declare");
                 self.space();
                 self.name(global.name);
@@ -93,14 +101,10 @@ impl<'ast> Formatter<'ast> {
                 self.space();
                 self.write_type(&global.ty);
             }
-            Statement::DeclaredFunction(function) => {
+            Declaration::Function(function) => {
                 self.write_declared_function(function, "declare function");
             }
-            Statement::DeclaredExternType(extern_type) => {
-                self.write_declared_extern_type(extern_type);
-            }
-            // A parse-recovery placeholder has no text to print.
-            Statement::Error(_) => {}
+            Declaration::ExternType(extern_type) => self.write_declared_extern_type(extern_type),
         }
     }
 
@@ -136,11 +140,7 @@ impl<'ast> Formatter<'ast> {
 
     /// One member to a line, keeping a blank line the source has above one.
     fn write_declared_extern_type(&mut self, extern_type: &DeclaredExternType<'ast>) {
-        self.token("declare");
-        self.space();
-        self.token("extern");
-        self.space();
-        self.token("type");
+        self.token("declare extern type");
         self.space();
         self.name(extern_type.name);
         if let Some(supertype) = extern_type.supertype {

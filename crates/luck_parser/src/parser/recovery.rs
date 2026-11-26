@@ -165,6 +165,16 @@ impl Parser<'_> {
         span
     }
 
+    /// A syntax error at the current token, which `expected` says what
+    /// should have been.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn report_unexpected(&mut self, expected: &str) {
+        let span = self.token.span;
+        let message = format!("{expected}, found {}", self.token.display(self.source));
+        self.syntax_error(span, message);
+    }
+
     #[cold]
     #[inline(never)]
     pub(super) fn error<Message>(&mut self, span: Span, message: Message)

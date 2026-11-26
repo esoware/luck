@@ -103,12 +103,14 @@ fn parse_source<'ast>(
     tokens: Tokens,
     kind: SourceKind,
 ) -> ParseResult<'ast> {
+    let is_definition_file = kind == SourceKind::Definitions;
     let lexer = match Lexer::new(source) {
         Ok(lexer) => lexer,
         Err(error) => {
             let block = Block::new(Span::new(0, 0), List::new());
             return ParseResult {
                 source,
+                is_definition_file,
                 chunk: block,
                 comments: Vec::new(),
                 tokens: Vec::new(),
@@ -134,7 +136,7 @@ fn parse_source<'ast>(
         source,
         text_source: TextBytes::new(source),
         lexer,
-        is_definition_file: kind == SourceKind::Definitions,
+        is_definition_file,
         token: placeholder,
         previous_end: 0,
         nesting_depth: 0,
@@ -275,6 +277,7 @@ impl<'ast> Parser<'ast> {
         self.groupings.finish();
         ParseResult {
             source: self.source,
+            is_definition_file: self.is_definition_file,
             chunk,
             comments: lexed.comments,
             tokens: lexed.tokens,

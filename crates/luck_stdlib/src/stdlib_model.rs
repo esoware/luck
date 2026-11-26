@@ -42,8 +42,7 @@ impl<'lib> StdlibEntry<'lib> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibFunction<'lib> {
-    /// At least one, in definition order. The first is the primary form,
-    /// shown where only one fits.
+    /// At least one, in definition order.
     pub signatures: &'lib [StdlibSignature<'lib>],
     pub deprecated: Option<StdlibDeprecation<'lib>>,
     pub is_read_only: bool,
@@ -73,13 +72,6 @@ impl<'lib> StdlibFunction<'lib> {
         self.signatures.iter().any(|signature| signature.accepts(count))
     }
 
-    pub fn matching_signatures(
-        &self,
-        count: usize,
-    ) -> impl Iterator<Item = &'lib StdlibSignature<'lib>> + Clone {
-        self.signatures.iter().filter(move |signature| signature.accepts(count))
-    }
-
     /// The constants that parameter `index` allows in each signature that
     /// accepts a call with `count` arguments, one list per signature in
     /// definition order.
@@ -92,7 +84,8 @@ impl<'lib> StdlibFunction<'lib> {
         index: usize,
         count: usize,
     ) -> Option<impl Iterator<Item = &'lib [&'lib str]> + Clone> {
-        let sets = self.matching_signatures(count).map(move |signature| {
+        let matching = self.signatures.iter().filter(move |signature| signature.accepts(count));
+        let sets = matching.map(move |signature| {
             let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
                 return None;
             };
@@ -103,30 +96,10 @@ impl<'lib> StdlibFunction<'lib> {
             checked.next().is_some_and(|set| set.is_some()) && checked.all(|set| set.is_some());
         is_constrained.then(|| sets.flatten())
     }
-
-    pub const fn primary_signature(&self) -> &'lib StdlibSignature<'lib> {
-        &self.signatures[0]
-    }
-
-    /// Index of the signature to highlight when the cursor sits on
-    /// parameter `active_param`: the first signature with a slot at
-    /// that position, else the last.
-    pub fn signature_index_for_active_param(&self, active_param: usize) -> usize {
-        self.signatures
-            .iter()
-            .position(|signature| {
-                active_param < signature.params.len()
-                    || signature
-                        .params
-                        .last()
-                        .is_some_and(|param| matches!(param.kind, StdlibArgKind::Vararg))
-            })
-            .unwrap_or_else(|| self.signatures.len() - 1)
-    }
 }
 
 /// One form of a function's call: its params, of which only the last can be
-/// a vararg, and the arities [`Self::new`] counts from them.
+/// a vararg, and the arities they allow.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibSignature<'lib> {
     pub params: &'lib [StdlibParam<'lib>],
@@ -138,7 +111,7 @@ pub struct StdlibSignature<'lib> {
 }
 
 impl<'lib> StdlibSignature<'lib> {
-    pub fn new(params: &'lib [StdlibParam<'lib>]) -> Self {
+    pub(crate) fn new(params: &'lib [StdlibParam<'lib>]) -> Self {
         let is_vararg = |param: &StdlibParam<'_>| matches!(param.kind, StdlibArgKind::Vararg);
         let min_args = params
             .iter()
@@ -148,7 +121,7 @@ impl<'lib> StdlibSignature<'lib> {
         Self { params, min_args, max_args }
     }
 
-    pub fn accepts(&self, count: usize) -> bool {
+    fn accepts(&self, count: usize) -> bool {
         count >= self.min_args && self.max_args.is_none_or(|max| count <= max)
     }
 }
@@ -160,21 +133,18 @@ pub struct StdlibParam<'lib> {
     pub is_required: bool,
 }
 
+/// What a param takes, as far as the library reads it.
 #[derive(Debug, Clone, Copy)]
 pub enum StdlibArgKind<'lib> {
-    Any,
-    Bool,
-    Number,
+    /// A `string`, which, taken first, makes a `string` function a method of
+    /// strings.
     String,
-    Function,
-    Table,
-    /// A type with no variant of its own, e.g. "buffer" or "thread". The
-    /// string is only a display label.
-    Display(&'lib str),
     /// A fixed set of string literals, e.g. the formats of `os.date`.
     Constant(&'lib [&'lib str]),
     /// `...`, matching zero or more values of any type.
     Vararg,
+    /// Any other type.
+    Other,
 }
 
 /// What a function's `@[deprecated {use = "...", reason = "..."}]` says, each
@@ -282,25 +252,6 @@ impl<'lib> StdlibLibrary<'lib> {
         }
         None
     }
-
-    /// Every member [`Self::shape_member`] finds in `shape`, each name once.
-    pub fn shape_members(&self, shape: &str) -> Vec<(&'lib str, &'lib StdlibEntry<'lib>)> {
-        let mut members = Vec::new();
-        let mut nearer: Vec<&'lib StdlibShape<'lib>> = Vec::new();
-        let mut current = self.shapes.get(shape);
-        while let Some(found) = current
-            && nearer.len() < self.shapes.len()
-        {
-            for (name, member) in &found.members {
-                if !nearer.iter().any(|shadowing| shadowing.members.contains_key(name)) {
-                    members.push((name, member));
-                }
-            }
-            nearer.push(found);
-            current = found.extends.and_then(|base| self.shapes.get(base));
-        }
-        members
-    }
 }
 
 #[cfg(test)]
@@ -314,13 +265,13 @@ mod tests {
     #[test]
     fn a_signature_counts_through_its_last_required_param_and_a_vararg() {
         let bounded = [
-            param(StdlibArgKind::Number, true),
-            param(StdlibArgKind::Number, true),
-            param(StdlibArgKind::Number, false),
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, false),
         ];
         let unbounded = [param(StdlibArgKind::String, true), param(StdlibArgKind::Vararg, false)];
         let optional_first =
-            [param(StdlibArgKind::Number, false), param(StdlibArgKind::Function, true)];
+            [param(StdlibArgKind::Other, false), param(StdlibArgKind::Other, true)];
         let [bounded, unbounded, optional_first] =
             [&bounded[..], &unbounded, &optional_first].map(StdlibSignature::new);
         assert_eq!((bounded.min_args, bounded.max_args), (2, Some(3)));
@@ -331,9 +282,9 @@ mod tests {
     #[test]
     fn overloads_answer_arity_queries() {
         let two_or_three = [
-            param(StdlibArgKind::Number, true),
-            param(StdlibArgKind::Number, true),
-            param(StdlibArgKind::Number, false),
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, false),
         ];
         let signatures = [StdlibSignature::new(&[]), StdlibSignature::new(&two_or_three)];
         let overloaded = StdlibFunction {
@@ -350,7 +301,5 @@ mod tests {
         assert!(overloaded.accepts_arg_count(2));
         assert!(overloaded.accepts_arg_count(3));
         assert!(!overloaded.accepts_arg_count(4));
-        assert_eq!(overloaded.matching_signatures(2).count(), 1);
-        assert_eq!(overloaded.signature_index_for_active_param(1), 1);
     }
 }

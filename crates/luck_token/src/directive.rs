@@ -242,28 +242,11 @@ impl<'text> Invalid<'text> {
 /// What follows the `luck:` or `#luck:` that opens a directive's text, past
 /// its delimiters and whitespace, and whether it's `#luck:`.
 fn command(text: &[u8], kind: CommentKind) -> Option<(&[u8], bool)> {
-    let body = match kind {
-        CommentKind::Line => split_at(text.get(2..)?, |b| b != b'-').1,
-        CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => block_body(text),
-        CommentKind::Shebang => return None,
-    };
-    let after_whitespace = trim_start(body);
+    let after_whitespace = trim_start(kind.body(text)?);
     match after_whitespace.strip_prefix(b"#luck:") {
         Some(command) => Some((command, true)),
         None => Some((after_whitespace.strip_prefix(b"luck:")?, false)),
     }
-}
-
-/// A block comment's text between its brackets, or to its end when the
-/// source cut it off before its closer.
-fn block_body(text: &[u8]) -> &[u8] {
-    let after_open = text.get(3..).unwrap_or_default();
-    let level = after_open.iter().take_while(|&&b| b == b'=').count();
-    let body = after_open.get(level + 1..).unwrap_or_default();
-    body.strip_suffix(b"]")
-        .and_then(|before| before.strip_suffix(after_open.get(..level)?))
-        .and_then(|before| before.strip_suffix(b"]"))
-        .unwrap_or(body)
 }
 
 fn read_command(command: &[u8], is_file_wide: bool) -> Result<Command<'_>, Invalid<'_>> {

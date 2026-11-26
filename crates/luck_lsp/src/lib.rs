@@ -28,13 +28,15 @@
 //! of its own, by the first job on the worker pool that needs it, and every
 //! request runs on that pool against the version current when it arrived.
 //! A version an edit or a close replaces stops its lint, and a request the
-//! client cancels before it starts never runs. Each project keeps one
+//! client cancels before it starts never runs. The session keeps one
 //! resolver, which the client's file watcher clears.
 //!
-//! Each change starts a generation, which checks every open document
-//! through the checker of its project's definitions, behind a lock, with the
-//! open documents' text in place of their files, and cancels the checks of
-//! the last.
+//! Each change lints every open document on a job of its own, and starts a
+//! generation, which checks them all through the checker of each project's
+//! definitions, behind a lock, with the open documents' text in place of
+//! their files, and cancels the checks of the last. A document's lints go out
+//! as soon as they're done, with the type errors of the last check until the
+//! new one's are, and nothing goes out that's what went out last.
 //!
 //! A request at a position finds the innermost node there in the analysis's
 //! [`luck_semantic::AstNodes`] and walks up through its parents, and a name
@@ -42,7 +44,7 @@
 //!
 //! The workspace is the client's folders. Each file's record holds what the
 //! other files see of it: the modules it requires, through the semantic
-//! analysis's `require` sites and its project's resolver, and where it names
+//! analysis's `require` sites and the session's resolver, and where it names
 //! a member of a module's table, the one it returns or one it requires. An
 //! open document's record comes from its analysis, and every other file's
 //! is read from its files once, as idle workers walk the folders ahead of the
@@ -54,7 +56,8 @@
 //! gives a config as its `initializationOptions`, the files the client holds,
 //! its open documents and the ones it pushes with `luck/didChangeFiles`, by
 //! paths made of their URIs. A `.d.luau` file is a definition file, which
-//! parses as one and is never checked as a module.
+//! parses as one and is never checked as a module, and which a project that
+//! lists it reads as its open document holds it.
 //!
 //! [`serve_stdio`] serves over stdio, as `luck lsp` does, [`serve_socket`]
 //! over TCP for debugging, and [`serve`] over any `lsp_server` connection.

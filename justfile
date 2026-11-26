@@ -80,6 +80,14 @@ release-binary target=(arch() + "-pc-windows-msvc"):
 release-binary target=(arch() + "-unknown-linux-gnu"):
   cargo build -p luck_cli --release --target {{target}} --config profile.release.lto=false --config "target.{{target}}.rustflags = ['-Clinker-plugin-lto', '-Clinker=clang', '-Clink-arg=-fuse-ld=lld', '-Clink-arg=--target={{target}}']"
 
+# rustc's -Clinker-plugin-lto passes Apple targets' linker -plugin-opt arguments, which neither
+# ld64 nor ld64.lld accepts, so macOS builds without cross-language LTO.
+
+# Build the release binary the extension ships into target/<target>/release, with rustc's fat LTO over its Rust
+[macos]
+release-binary target=(arch() + "-apple-darwin"):
+  cargo build -p luck_cli --release --target {{target}}
+
 # Run the criterion benches, or one stage with --bench parser
 bench *args:
   cargo bench -p luck_benchmark {{args}}

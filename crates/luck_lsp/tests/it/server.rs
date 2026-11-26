@@ -209,6 +209,60 @@ fn formatting_normalizes_spacing() {
     assert_ne!(new_text.as_str(), ugly, "formatter must change ugly source");
 }
 
+/// Formatting reads the `.editorconfig` files again once the watcher says one
+/// changed.
+#[test]
+fn an_editorconfig_s_change_reaches_formatting() {
+    fn formatted(client: &mut Client, uri: &Uri) -> String {
+        let edits = client.request::<Formatting>(formatting_params(uri));
+        edits.expect("the file formats")[0].new_text.clone()
+    }
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let editorconfig = directory.path().join(".editorconfig");
+    let tabs = "\
+[*]
+indent_style = tab
+";
+    fs::write(&editorconfig, tabs).expect("write .editorconfig");
+    let path = directory.path().join("main.luau");
+    let text = "\
+if x then
+print(x)
+end
+";
+    fs::write(&path, text).expect("write main.luau");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+    let mut client = Client::start();
+    client.open(&uri, text);
+    assert_eq!(
+        formatted(&mut client, &uri),
+        "\
+if x then
+\tprint(x)
+end
+"
+    );
+
+    let spaces = "\
+[*]
+indent_style = space
+indent_size = 2
+";
+    fs::write(&editorconfig, spaces).expect("rewrite .editorconfig");
+    client.file_changed(&editorconfig, FileChangeType::CHANGED);
+
+    assert_eq!(
+        formatted(&mut client, &uri),
+        "\
+if x then
+  print(x)
+end
+"
+    );
+}
+
 /// The editor runs the rules `luck lint` runs on the same project.
 #[test]
 fn lint_runs_the_default_rules_without_config() {
@@ -1283,8 +1337,8 @@ fn did_change_with_no_changes_stores_the_new_version() {
     client.open(&uri, "local a = 1\n");
     let _opened = client.diagnostics(&uri, Some(1));
 
+    // The same diagnostics don't go out again.
     client.change(&uri, 5, Vec::new());
-    let _republished = client.diagnostics(&uri, Some(5));
 
     // A repeated version is stale, so it changes and republishes nothing.
     client.replace_all(&uri, 5, "local b = 2\n");

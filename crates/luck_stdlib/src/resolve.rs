@@ -8,7 +8,7 @@
 //! A chain resolves from its prefix forward, a suffix at a time, so what it
 //! reads, or what any of its calls calls, costs one pass over it.
 
-use luck_ast::{AstKind, Call, ChainHead, Expression, Name, Suffix, SuffixedExpression};
+use luck_ast::{AstKind, ChainHead, Expression, Name, Suffix, SuffixedExpression};
 use luck_semantic::{Scoping, Semantic};
 
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
@@ -163,14 +163,6 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
             entry,
         })
     }
-
-    /// What `call` calls, read from its callee's prefix.
-    pub(crate) fn call_callee(self, call: Call<'input>) -> Option<ResolvedCallee<'input>>
-    where
-        'lib: 'input,
-    {
-        self.callee(call.callee, self.head_state(call.callee), call.method)
-    }
 }
 
 /// Each symbol's shape, by symbol index.
@@ -263,13 +255,7 @@ impl<'chain> ChainCallees<'chain> {
         Self { resolver, chain, state, read_count: 0 }
     }
 
-    pub const fn chain(&self) -> &'chain SuffixedExpression<'chain> {
-        self.chain
-    }
-
-    /// What the call at `index` calls, as
-    /// [`SemanticAnalysis::resolve_callee`](crate::SemanticAnalysis::resolve_callee)
-    /// gives it. `None` for a suffix that's no call.
+    /// What the call at `index` calls, or `None` for a suffix that's no call.
     ///
     /// A call is read on from the one asked for before it, so `index` is
     /// never below an earlier one.

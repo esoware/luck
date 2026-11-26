@@ -323,8 +323,9 @@ local a = 1
 print(a) -- luck: allow(unused_variable, undefined_variable)
 ";
     let allocator = Allocator::new();
+    let parse = luck_parser::parse(&allocator, source.as_bytes());
     let fixed = Linter::new(LintConfig::default())
-        .fix(&allocator, source.as_bytes(), luau_library(), FixKind::Fix, None)
+        .fix(&allocator, parse, luau_library(), FixKind::Fix, None)
         .expect("fixes converge");
     assert_eq!(
         fixed.parse.source,

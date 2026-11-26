@@ -12,9 +12,9 @@ use std::mem;
 
 use luck_allocator::Allocator;
 use luck_ast::{
-    DeclaredExternType, DeclaredFunction, Expression, ExternTypeMember, Field, FunctionAttribute,
-    FunctionType, GenericTypeList, GetSpan as _, Statement, Type, TypeDeclarationValue, TypeField,
-    TypeFieldAccess,
+    Declaration, DeclaredExternType, DeclaredFunction, Expression, ExternTypeMember, Field,
+    FunctionAttribute, FunctionType, GenericTypeList, Statement, Type, TypeDeclarationValue,
+    TypeField, TypeFieldAccess,
 };
 use luck_diagnostics::Diagnostic;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -48,7 +48,6 @@ pub(crate) fn layer<'lib>(
     let statements = &parsed.chunk.stmts;
     let mut translation = Translation {
         allocator,
-        source,
         base_shapes: base.map_or(StdlibMap::EMPTY, |library| library.shapes),
         extern_types: FxHashSet::default(),
         aliases: FxHashMap::default(),
@@ -62,7 +61,9 @@ pub(crate) fn layer<'lib>(
         declares_string: false,
     };
     for statement in statements {
-        if let Statement::DeclaredExternType(extern_type) = statement {
+        if let Statement::Declaration(declaration) = statement
+            && let Declaration::ExternType(extern_type) = &**declaration
+        {
             translation.extern_types.insert(extern_type.name.text.as_str());
         } else if let Statement::TypeDeclaration(declaration) = statement
             && let TypeDeclarationValue::Alias(ty) = &declaration.value
@@ -71,7 +72,9 @@ pub(crate) fn layer<'lib>(
         }
     }
     for statement in statements {
-        translation.declare(statement);
+        if let Statement::Declaration(declaration) = statement {
+            translation.declare(declaration);
+        }
     }
     Ok(translation.finish(has_roblox))
 }
@@ -153,7 +156,6 @@ impl<'lib> Declared<'lib> {
 
 struct Translation<'lib, 'ast> {
     allocator: &'lib Allocator,
-    source: &'ast str,
     base_shapes: StdlibMap<'lib, StdlibShape<'lib>>,
     extern_types: FxHashSet<&'ast str>,
     aliases: FxHashMap<&'ast str, &'ast Type<'ast>>,
@@ -170,19 +172,21 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
         self.names.entry(text).or_insert_with(|| allocator.alloc_str(text))
     }
 
-    fn declare(&mut self, statement: &'ast Statement<'ast>) {
-        let (name, entry) = if let Statement::DeclaredGlobal(global) = statement {
-            let declared = self.declared(&global.ty, &[], 0);
-            (global.name.text.as_str(), self.entry(declared, true))
-        } else if let Statement::DeclaredFunction(function) = statement {
-            (function.name.text.as_str(), self.declared_function(function, false))
-        } else if let Statement::DeclaredExternType(extern_type) = statement {
-            let shape = self.extern_type(extern_type);
-            let name = self.name(extern_type.name.text.as_str());
-            self.shapes.insert(name, shape);
-            return;
-        } else {
-            return;
+    fn declare(&mut self, declaration: &'ast Declaration<'ast>) {
+        let (name, entry) = match declaration {
+            Declaration::Global(global) => {
+                let declared = self.declared(&global.ty, &[], 0);
+                (global.name.text.as_str(), self.entry(declared, true))
+            }
+            Declaration::Function(function) => {
+                (function.name.text.as_str(), self.declared_function(function, false))
+            }
+            Declaration::ExternType(extern_type) => {
+                let shape = self.extern_type(extern_type);
+                let name = self.name(extern_type.name.text.as_str());
+                self.shapes.insert(name, shape);
+                return;
+            }
         };
         self.declares_string |= name == "string";
         let name = self.name(name);
@@ -269,7 +273,7 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
         let mut params: Vec<StdlibParam<'lib>> = typed
             .map(|param| match &param.type_annotation {
                 Some(ty) => self.param(ty, &generics),
-                None => StdlibParam { kind: StdlibArgKind::Any, is_required: false },
+                None => StdlibParam { kind: StdlibArgKind::Other, is_required: false },
             })
             .collect();
         if function.vararg.is_some() {
@@ -413,32 +417,31 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
                         let (kind, is_optional) = self.arg_kind(only, generics, depth);
                         (kind, is_optional || takes_nil(ty))
                     }
-                    _ => (StdlibArgKind::Display(self.label(ty)), takes_nil(ty)),
+                    _ => (StdlibArgKind::Other, takes_nil(ty)),
                 }
             }
-            Type::Nil(_) => (StdlibArgKind::Any, true),
-            Type::True(_) | Type::False(_) => (StdlibArgKind::Bool, false),
-            Type::Function(_) => (StdlibArgKind::Function, false),
-            Type::Table(_) => (StdlibArgKind::Table, false),
+            Type::Nil(_) => (StdlibArgKind::Other, true),
             Type::Name(name) => match name.text.as_str() {
-                "any" | "unknown" => (StdlibArgKind::Any, true),
-                "boolean" => (StdlibArgKind::Bool, false),
-                "number" => (StdlibArgKind::Number, false),
+                "any" | "unknown" => (StdlibArgKind::Other, true),
                 "string" => (StdlibArgKind::String, false),
-                generic if generics.contains(&generic) => (StdlibArgKind::Any, false),
+                generic if generics.contains(&generic) => (StdlibArgKind::Other, false),
                 aliased => match self.aliases.get(aliased) {
                     Some(alias) if depth < MAX_ALIAS_DEPTH => self.arg_kind(alias, &[], depth + 1),
-                    _ => (StdlibArgKind::Display(self.label(ty)), false),
+                    _ => (StdlibArgKind::Other, false),
                 },
             },
-            Type::Named(_)
+            Type::True(_)
+            | Type::False(_)
+            | Type::Function(_)
+            | Type::Table(_)
+            | Type::Named(_)
             | Type::Typeof(_)
             | Type::Intersection(_)
             | Type::Pack(_)
             | Type::StringLiteral(_)
             | Type::Variadic(_)
             | Type::GenericPack(_)
-            | Type::Error(_) => (StdlibArgKind::Display(self.label(ty)), false),
+            | Type::Error(_) => (StdlibArgKind::Other, false),
         }
     }
 
@@ -479,16 +482,6 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
             }
         }
         (!values.is_empty()).then(|| &*self.allocator.alloc_slice_copy(&values))
-    }
-
-    /// `ty` as the definition writes it, on one line.
-    fn label(&mut self, ty: &'ast Type<'ast>) -> &'lib str {
-        let text = &self.source[ty.span().start as usize..ty.span().end as usize];
-        if text.contains(['\n', '\r', '\t']) {
-            let collapsed: Vec<&str> = text.split_whitespace().collect();
-            return self.allocator.alloc_str(&collapsed.join(" "));
-        }
-        self.name(text)
     }
 
     /// The shape of what a function returns first.

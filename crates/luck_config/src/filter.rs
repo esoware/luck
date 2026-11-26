@@ -78,16 +78,10 @@ impl ProjectFilter {
         })
     }
 
-    /// Whether an exclude covers everything under `directory`, so a walk
+    /// Whether an exclude covers everything under `directory`, a canonical
+    /// path, such as a walk from a canonical directory builds, so the walk
     /// needn't enter it.
-    pub fn excludes_tree(&self, directory: &Path) -> bool {
-        !self.excluded_trees.is_empty()
-            && self.excludes_canonical_tree(&self.file_system.canonicalize_existing(directory))
-    }
-
-    /// [`excludes_tree`](Self::excludes_tree) for a canonical path, such as a
-    /// walk from a canonical directory builds, which touches no disk.
-    pub fn excludes_canonical_tree(&self, directory: &Path) -> bool {
+    pub(crate) fn excludes_tree(&self, directory: &Path) -> bool {
         !self.excluded_trees.is_empty() && self.excluded_trees.is_match(self.relative(directory))
     }
 
@@ -169,11 +163,14 @@ mod tests {
     #[test]
     fn excludes_tree_only_when_a_glob_covers_every_descendant() {
         let filter = filter(None, &["gen/**", "**/vendor/**", "dist/**/*", "shallow/*"]);
-        assert!(filter.excludes_tree(Path::new("/proj/gen")));
-        assert!(filter.excludes_tree(Path::new("/proj/sub/vendor")));
-        assert!(filter.excludes_tree(Path::new("/proj/dist")));
-        assert!(!filter.excludes_tree(Path::new("/proj/shallow")));
-        assert!(!filter.excludes_tree(Path::new("/proj/other")));
+        let excludes = |directory: &str| {
+            filter.excludes_tree(&FileSystemOs.canonicalize_existing(Path::new(directory)))
+        };
+        assert!(excludes("/proj/gen"));
+        assert!(excludes("/proj/sub/vendor"));
+        assert!(excludes("/proj/dist"));
+        assert!(!excludes("/proj/shallow"));
+        assert!(!excludes("/proj/other"));
     }
 
     #[test]

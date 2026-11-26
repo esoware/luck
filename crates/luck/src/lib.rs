@@ -129,7 +129,8 @@
 //! let diags = linter.run(&parse, stdlib, FixKind::empty(), None);
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = linter.fix(&allocator, b"local unused = 1", stdlib, FixKind::all(), None);
+//! let parse = luck::parser::parse(&allocator, b"local unused = 1");
+//! let fixed = linter.fix(&allocator, parse, stdlib, FixKind::all(), None);
 //! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"local _unused = 1"[..]));
 //! # }
 //! ```

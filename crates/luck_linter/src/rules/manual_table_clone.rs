@@ -63,9 +63,7 @@ fn manual_copy(
         | Statement::Continue(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
-        | Statement::DeclaredGlobal(_)
-        | Statement::DeclaredFunction(_)
-        | Statement::DeclaredExternType(_)
+        | Statement::Declaration(_)
         | Statement::Error(_) => false,
     };
     is_copy.then(|| Span::new(local.span.start, next.span().end))

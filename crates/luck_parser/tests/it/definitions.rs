@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_ast::{
-    DeclaredExternType, DeclaredFunction, Expression, ExternTypeMember, MAX_NESTING_DEPTH,
-    Statement, Type, TypeField, TypeFieldAccess, block_nesting_depth,
+    Declaration, DeclaredExternType, DeclaredFunction, Expression, ExternTypeMember,
+    MAX_NESTING_DEPTH, Statement, Type, TypeField, TypeFieldAccess, block_nesting_depth,
 };
 use luck_parser::{ParseResult, parse, parse_definitions, parse_definitions_with_tokens};
 use luck_testgen::{definition_fixtures, nested, with_the_smallest_stack};
@@ -22,10 +22,18 @@ fn only_stmt<'tree, 'ast>(result: &'tree ParseResult<'ast>) -> &'tree Statement<
     stmt
 }
 
+/// The only statement of a definition file that parsed cleanly, a `declare`.
+fn only_declaration<'tree, 'ast>(result: &'tree ParseResult<'ast>) -> &'tree Declaration<'ast> {
+    let Statement::Declaration(declaration) = only_stmt(result) else {
+        panic!("expected a declaration, got {:?}", result.chunk.stmts);
+    };
+    declaration
+}
+
 fn declared_function<'tree, 'ast>(
     result: &'tree ParseResult<'ast>,
 ) -> &'tree DeclaredFunction<'ast> {
-    let Statement::DeclaredFunction(function) = only_stmt(result) else {
+    let Declaration::Function(function) = only_declaration(result) else {
         panic!("expected a declared function, got {:?}", result.chunk.stmts);
     };
     function
@@ -34,7 +42,7 @@ fn declared_function<'tree, 'ast>(
 fn declared_extern_type<'tree, 'ast>(
     result: &'tree ParseResult<'ast>,
 ) -> &'tree DeclaredExternType<'ast> {
-    let Statement::DeclaredExternType(extern_type) = only_stmt(result) else {
+    let Declaration::ExternType(extern_type) = only_declaration(result) else {
         panic!("expected a declared extern type, got {:?}", result.chunk.stmts);
     };
     extern_type
@@ -42,7 +50,7 @@ fn declared_extern_type<'tree, 'ast>(
 
 /// The type a lone `declare name: T` gives.
 fn declared_type<'tree, 'ast>(result: &'tree ParseResult<'ast>) -> &'tree Type<'ast> {
-    let Statement::DeclaredGlobal(global) = only_stmt(result) else {
+    let Declaration::Global(global) = only_declaration(result) else {
         panic!("expected a declared global, got {:?}", result.chunk.stmts);
     };
     &global.ty
@@ -88,7 +96,7 @@ fn a_declared_global_holds_its_name_and_type() {
     let allocator = Allocator::new();
     let source = "declare foo: number";
     let result = parse_str(&allocator, source);
-    let Statement::DeclaredGlobal(global) = only_stmt(&result) else {
+    let Declaration::Global(global) = only_declaration(&result) else {
         panic!("expected a declared global");
     };
     assert_eq!(global.name.text, "foo");
@@ -103,7 +111,7 @@ fn a_global_may_take_a_contextual_keyword_s_name() {
     for name in ["class", "type", "typeof", "export", "read", "continue", "extends", "with"] {
         let source = format!("declare {name}: {{ x: number }}");
         let result = parse_definitions(&allocator, source.as_bytes());
-        let Statement::DeclaredGlobal(global) = only_stmt(&result) else {
+        let Declaration::Global(global) = only_declaration(&result) else {
             panic!("expected a declared global in {source:?}");
         };
         assert_eq!(global.name.text, name);
@@ -336,7 +344,8 @@ function f() declare inner: string end",
         }
         stmts => panic!("expected a `do` and a function, got {stmts:?}"),
     };
-    assert!(nested.iter().all(|stmts| matches!(stmts, [Statement::DeclaredGlobal(_)])));
+    let is_global = |stmts: &&[Statement<'_>]| matches!(stmts, [Statement::Declaration(declaration)] if matches!(**declaration, Declaration::Global(_)));
+    assert!(nested.iter().all(is_global));
 }
 
 #[test]
@@ -514,7 +523,7 @@ declare after: number",
             "expected `with` before the extern type's members, found identifier `c`",
         ]
     );
-    assert!(matches!(result.chunk.stmts.last(), Some(Statement::DeclaredGlobal(_))));
+    assert!(matches!(result.chunk.stmts.last(), Some(Statement::Declaration(_))));
 }
 
 #[test]
@@ -635,9 +644,7 @@ fn without_attributes_a_suffix_makes_declare_an_ordinary_name() {
     ] {
         let result = parse_str(&allocator, source);
         assert!(!result.errors.is_empty(), "{source} parses");
-        let is_declaration = |stmt: &Statement<'_>| {
-            matches!(stmt, Statement::DeclaredFunction(_) | Statement::DeclaredGlobal(_))
-        };
+        let is_declaration = |stmt: &Statement<'_>| matches!(stmt, Statement::Declaration(_));
         assert!(!result.chunk.stmts.iter().any(is_declaration), "{source}");
     }
     // Luau's `getIdentifier` names a local too, so a local `declare` still
@@ -650,6 +657,6 @@ declare x: number",
     assert_no_errors(&result);
     assert!(matches!(
         &result.chunk.stmts[..],
-        [Statement::LocalAssignment(_), Statement::DeclaredGlobal(_)]
+        [Statement::LocalAssignment(_), Statement::Declaration(_)]
     ));
 }

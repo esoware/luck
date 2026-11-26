@@ -1,26 +1,27 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::io::Write as _;
+use std::io::{self, Write as _};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use luck_allocator::Allocator;
+use luck_allocator::{Allocator, AllocatorPool};
 use luck_config::DefinitionSource;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, is_definition_file, to_slash_lossy};
 use luck_semantic::SemanticBuilder;
 use luck_stdlib::{SecurityLevel, roblox_definitions};
-use luck_token::{LineIndex, Span, index_to_offset, offset_to_index};
 use luck_type_checker::{
-    CancellationToken, CheckError, Checker, Config, Host, SavedConfig, luau_config_aliases,
+    CancellationToken, CheckError, Checker, Config, DirectoryConfigs, Host, luau_config_aliases,
+};
+use rayon::iter::{
+    IndexedParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _,
 };
 use rustc_hash::FxHashMap;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{ProjectFile, current_directory, project_files};
 use crate::reporter::{DefaultReporter, Reporter as _, SourceFile, print_files};
-use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
 #[derive(Args)]
@@ -40,6 +41,9 @@ pub(crate) struct CheckArgs {
 }
 
 impl CheckArgs {
+    /// Reads every file once, then checks types on this thread while rayon's
+    /// pool parses, since Luau reads the whole module graph on one thread
+    /// before it checks on several.
     pub(crate) fn run(self, verbosity: Verbosity, threads: NonZero<usize>) -> Result<(), Exit> {
         let files = project_files(
             self.config.as_deref(),
@@ -47,24 +51,42 @@ impl CheckArgs {
             self.no_error_on_unmatched_pattern,
             None,
         )?;
-        let type_errors = type_errors(&files, threads)?;
+        let sources: Vec<io::Result<Vec<u8>>> =
+            files.par_iter().map(|file| FileSystemOs.read(&file.path)).collect();
+        let pool = AllocatorPool::new(rayon::current_num_threads());
+        let mut compiled = Vec::new();
+        let typed = rayon::in_place_scope(|scope| {
+            scope.spawn(|_| {
+                compiled = files
+                    .par_iter()
+                    .zip(&sources)
+                    .map(|(file, source)| match source {
+                        Ok(source) => compile_errors(&pool.get(), file, source),
+                        Err(_) => Vec::new(),
+                    })
+                    .collect();
+            });
+            type_errors(&files, &sources, threads)
+        })?;
 
-        let mut has_errors = !type_errors.elsewhere.is_empty();
-        print_files(&type_errors.elsewhere);
-        for_each_outcome_in_order(
-            &files,
-            |file, allocator| {
-                let file_type_errors = type_errors.by_path.get(file.path.as_path());
-                check_file(allocator, file, file_type_errors.map_or(&[], Vec::as_slice))
-            },
-            |outcome, output| {
-                if let Some(rendered) = outcome {
-                    has_errors = true;
-                    let _ = output.stderr.write_all(&rendered);
-                }
-                Ok(())
-            },
-        )?;
+        let mut has_errors = !typed.elsewhere.is_empty();
+        print_files(&typed.elsewhere);
+        let reports: Vec<Option<Vec<u8>>> = files
+            .par_iter()
+            .zip(&sources)
+            .zip(compiled)
+            .zip(typed.by_file)
+            .map(|(((file, source), compile_errors), type_errors)| {
+                let errors = if compile_errors.is_empty() { type_errors } else { compile_errors };
+                report(file, source, &errors)
+            })
+            .collect();
+        let mut stderr = io::stderr().lock();
+        for rendered in reports.iter().flatten() {
+            has_errors = true;
+            // A failed write has nowhere to be reported.
+            let _ = stderr.write_all(rendered);
+        }
 
         if has_errors {
             return Err(Exit::Failure);
@@ -79,9 +101,9 @@ impl CheckArgs {
 }
 
 /// What Luau's type checker found.
-struct TypeErrors<'files> {
-    /// By file, for each file with any, a definition file's from loading it.
-    by_path: FxHashMap<&'files Path, Vec<Diagnostic>>,
+struct TypeErrors {
+    /// Each file's, in order, a definition file's from loading it.
+    by_file: Vec<Vec<Diagnostic>>,
     /// In files the run doesn't check: the errors of each definition file
     /// Luau couldn't load, and the E014 of each `.luaurc` and `.config.luau`
     /// it couldn't read.
@@ -92,60 +114,61 @@ struct TypeErrors<'files> {
 /// files are checked with.
 type Definitions<'files> = (SecurityLevel, &'files [DefinitionSource]);
 
-/// What Luau's type checker finds in `files`, from checking together, on
-/// `threads` threads, the files of the projects with one security level and
-/// one list of definitions, which need one checker. A definition file is no
-/// module, so only loading it checks it, and one Luau can't load adds
-/// nothing.
-fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErrors<'_>, Exit> {
-    let mut groups: Vec<(Definitions<'_>, Vec<&ProjectFile>)> = Vec::new();
-    for file in files {
+/// What Luau's type checker finds in `files`, whose bytes are `sources`, from
+/// checking together, on `threads` threads, the files of the projects with
+/// one security level and one list of definitions, which need one checker. A
+/// definition file is no module, so only loading it checks it, and one Luau
+/// can't load adds nothing.
+fn type_errors(
+    files: &[ProjectFile],
+    sources: &[io::Result<Vec<u8>>],
+    threads: NonZero<usize>,
+) -> Result<TypeErrors, Exit> {
+    let mut host = FileHost::new()?;
+    let modules: Vec<Option<String>> = files
+        .iter()
+        .map(|file| Some(host.module_name(&FileSystemOs.canonicalize(&file.path).ok()?)))
+        .collect();
+    host.sources = modules
+        .iter()
+        .zip(sources)
+        .filter_map(|(module, source)| Some((module.clone()?, source.as_deref().ok()?)))
+        .collect();
+    let mut groups: Vec<(Definitions<'_>, Vec<usize>)> = Vec::new();
+    for (index, file) in files.iter().enumerate() {
         let settings = (file.project.security(), file.project.definitions());
         match groups.iter_mut().find(|(group_settings, _)| *group_settings == settings) {
-            Some((_, group)) => group.push(file),
-            None => groups.push((settings, vec![file])),
+            Some((_, group)) => group.push(index),
+            None => groups.push((settings, vec![index])),
         }
     }
 
-    let host = FileHost::new()?;
-    let (mut by_path, mut elsewhere) = (FxHashMap::default(), Vec::new());
+    let mut by_file = vec![Vec::new(); files.len()];
+    let mut elsewhere = Vec::new();
     for ((security, definitions), group) in groups {
-        let names_and_texts: Vec<(String, Cow<'_, str>)> = definitions
+        let names_and_texts: Vec<(String, &str)> = definitions
             .iter()
             .map(|source| match source {
                 DefinitionSource::Roblox => ("@roblox".to_owned(), roblox_definitions(security)),
-                DefinitionSource::File { path, text } => {
-                    (host.module_name(path), Cow::Borrowed(text.as_str()))
-                }
+                DefinitionSource::File { path, text } => (host.module_name(path), text.as_str()),
             })
             .collect();
-        let (definition_files, modules): (Vec<_>, Vec<_>) = group
+        let (definition_files, group_modules): (Vec<_>, Vec<_>) = group
             .into_iter()
-            .filter_map(|file| {
-                let canonical = FileSystemOs.canonicalize(&file.path).ok()?;
-                Some((file.path.as_path(), host.module_name(&canonical)))
-            })
-            .partition(|(path, _)| is_definition_file(path));
-        let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
+            .filter_map(|index| Some((index, modules[index].as_deref()?)))
+            .partition(|&(index, _)| is_definition_file(&files[index].path));
+        let names: Vec<&str> = group_modules.iter().map(|&(_, name)| name).collect();
         let mut checker = Checker::new(&host);
         for (name, text) in &names_and_texts {
             if let Err(diags) = checker.load_definitions(name, text) {
-                match definition_files.iter().find(|(_, checked)| checked == name) {
-                    Some((path, _)) => {
-                        by_path.insert(*path, diags);
-                    }
+                match definition_files.iter().find(|&&(_, checked)| name == checked) {
+                    Some(&(index, _)) => by_file[index] = diags,
                     None => elsewhere.push(FileDiagnostics { path: PathBuf::from(name), diags }),
                 }
             }
         }
         if definitions.contains(&DefinitionSource::Roblox) {
-            // What Roblox Studio types past its definitions: the class a
-            // string names, and the `Enum.Material` its definitions call
-            // `EnumMaterial`.
-            checker.return_named_type("Instance", "new");
-            checker.return_named_type("ServiceProvider", "GetService");
-            checker.return_named_type("ServiceProvider", "FindService");
-            checker.bind_type_namespace("Enum", "EnumItem");
+            checker.type_as_roblox_studio();
         }
         let diags = match checker.check(&names, threads, &CancellationToken::new()) {
             Ok(diags) => diags,
@@ -156,34 +179,30 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
             // Nothing cancels the token.
             Err(CheckError::Cancelled) => Vec::new(),
         };
-        by_path.extend(
-            modules
-                .into_iter()
-                .zip(diags)
-                .filter(|(_, diags)| !diags.is_empty())
-                .map(|((path, _), diags)| (path, diags)),
-        );
+        for (&(index, _), module_diags) in group_modules.iter().zip(diags) {
+            by_file[index] = module_diags;
+        }
     }
     elsewhere.extend(host.config_errors.into_inner());
-    Ok(TypeErrors { by_path, elsewhere })
+    Ok(TypeErrors { by_file, elsewhere })
 }
 
 /// The file system as Luau's type checker reads it, with `require` resolved as
 /// `luck build` resolves it, and each module named by its canonical path,
 /// relative to the working directory when it's under it. Every group's
 /// checker reads through one, so a run reads each config once.
-struct FileHost {
+struct FileHost<'files> {
     working_directory: PathBuf,
     resolver: Resolver,
-    /// The config each directory gives the modules in it, from its `.luaurc`
-    /// or `.config.luau` and the ones above it, read the first time a module
-    /// below it asks, as `luau-analyze` keeps them.
-    configs: RefCell<FxHashMap<PathBuf, SavedConfig>>,
+    configs: DirectoryConfigs,
+    /// The source of each file the run checks, by its module, which Luau
+    /// reads from here rather than the disk.
+    sources: FxHashMap<String, &'files [u8]>,
     /// The E014 of each config Luau couldn't read.
     config_errors: RefCell<Vec<FileDiagnostics>>,
 }
 
-impl FileHost {
+impl FileHost<'_> {
     fn new() -> Result<Self, Exit> {
         let working_directory = current_directory()?;
         Ok(Self {
@@ -191,7 +210,8 @@ impl FileHost {
                 .canonicalize(&working_directory)
                 .unwrap_or(working_directory),
             resolver: Resolver::new().with_luau_config(luau_config_aliases),
-            configs: RefCell::default(),
+            configs: DirectoryConfigs::default(),
+            sources: FxHashMap::default(),
             config_errors: RefCell::default(),
         })
     }
@@ -206,9 +226,12 @@ impl FileHost {
     }
 }
 
-impl Host for &FileHost {
+impl Host for &FileHost<'_> {
     fn source(&self, module: &str) -> Option<Cow<'_, [u8]>> {
-        FileSystemOs.read(&self.path(module)).ok().map(Cow::Owned)
+        match self.sources.get(module) {
+            Some(source) => Some(Cow::Borrowed(source)),
+            None => FileSystemOs.read(&self.path(module)).ok().map(Cow::Owned),
+        }
     }
 
     fn resolve(&self, requirer: &str, path: &str) -> Option<String> {
@@ -216,104 +239,55 @@ impl Host for &FileHost {
         Some(self.module_name(&resolution.path))
     }
 
-    /// As luau-analyze reads them: a directory with both a `.luaurc` and a
-    /// `.config.luau` applies neither.
     fn config(&self, module: &str, config: &mut Config<'_>) {
-        let path = self.path(module);
-        let directories: Vec<&Path> = path.ancestors().skip(1).collect();
-        let mut configs = self.configs.borrow_mut();
-        let cached = directories.iter().position(|directory| configs.contains_key(*directory));
-        if let Some(index) = cached {
-            config.set(&configs[directories[index]]);
-        }
-        for &directory in directories[..cached.unwrap_or(directories.len())].iter().rev() {
-            let read =
-                |name: &str| String::from_utf8(FileSystemOs.read(&directory.join(name)).ok()?).ok();
-            let (luaurc, luau_config) = (read(".luaurc"), read(".config.luau"));
-            let applied = match (&luaurc, &luau_config) {
-                (Some(text), Some(_)) => Some((
-                    ".luaurc",
-                    text,
-                    Err("Both .luaurc and .config.luau files exist".to_owned()),
-                )),
-                (Some(text), None) => Some((".luaurc", text, config.apply_luaurc(text))),
-                (None, Some(source)) => {
-                    Some((".config.luau", source, config.apply_luau_config(source)))
-                }
-                (None, None) => None,
-            };
-            if let Some((name, text, Err(error))) = applied {
-                let config_path = directory.join(name);
-                let relative = config_path.strip_prefix(&self.working_directory);
-                let diag = Diagnostic::e014(config_error_span(&error, text), &error);
-                self.config_errors.borrow_mut().push(FileDiagnostics {
-                    path: relative.map_or_else(|_| config_path.clone(), Path::to_path_buf),
-                    diags: vec![diag],
-                });
+        let read = |path: &Path| String::from_utf8(FileSystemOs.read(path).ok()?).ok();
+        let errors = self.configs.apply(&self.path(module), config, read);
+        self.config_errors.borrow_mut().extend(errors.into_iter().map(|(config_path, diag)| {
+            let relative = config_path.strip_prefix(&self.working_directory);
+            FileDiagnostics {
+                path: relative.map_or_else(|_| config_path.clone(), Path::to_path_buf),
+                diags: vec![diag],
             }
-            if let Some(saved) = config.saved() {
-                configs.insert(directory.to_path_buf(), saved);
-            }
-        }
+        }));
     }
 }
 
-/// The line Luau's error for a config names in `text`, as `at line 3` for a
-/// `.luaurc` and `config:3:` for a `.config.luau`.
-fn config_error_span(error: &str, text: &str) -> Option<Span> {
-    let after = error.split_once(" at line ").map(|(_, after)| after);
-    let after = after.or_else(|| error.strip_prefix("config:"))?;
-    let line = after.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
-    let start = LineIndex::new(text.as_bytes()).offset(line, 1)?;
-    let line_text = text.get(offset_to_index(start)..)?.lines().next().unwrap_or_default();
-    Some(Span::new(start, start + index_to_offset(line_text.len())))
+/// The syntax errors of `file`, whose bytes are `source`, or else its compile
+/// errors, which a definition file has none of.
+fn compile_errors(allocator: &Allocator, file: &ProjectFile, source: &[u8]) -> Vec<Diagnostic> {
+    if is_definition_file(&file.path) {
+        return luck_parser::parse_definitions(allocator, source).errors;
+    }
+    let result = luck_parser::parse(allocator, source);
+    if !result.errors.is_empty() {
+        return result.errors;
+    }
+    // The compile-time errors Luau reports beyond the grammar, such as an
+    // assignment to a `const`.
+    SemanticBuilder::new().with_counts(result.counts).with_check(true).build(&result.chunk).errors
 }
 
-/// `file`'s syntax and compile errors, or else `type_errors`, rendered, or
-/// `None` when it has neither. A definition file has no compile errors, and
-/// its type errors are what Luau found as it loaded it.
-fn check_file(
-    allocator: &Allocator,
+/// `errors`, all in `file`, rendered over `source`, or `None` when there are
+/// none, or else an E010 when `source` couldn't be read.
+fn report(
     file: &ProjectFile,
-    type_errors: &[Diagnostic],
+    source: &io::Result<Vec<u8>>,
+    errors: &[Diagnostic],
 ) -> Option<Vec<u8>> {
-    let file_path = file.path.as_path();
-    let label = file_path.to_string_lossy();
-    let source = match FileSystemOs.read(file_path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let mut rendered = Vec::new();
-            let source_file = SourceFile { label: &label, text: None };
-            DefaultReporter.render(source_file, &[Diagnostic::e010(&label, &error)], &mut rendered);
-            return Some(rendered);
-        }
-    };
-
-    if is_definition_file(file_path) {
-        let errors = luck_parser::parse_definitions(allocator, &source).errors;
-        let errors = if errors.is_empty() { type_errors.to_vec() } else { errors };
-        return (!errors.is_empty()).then(|| render(&label, &source, &errors));
-    }
-    let result = luck_parser::parse(allocator, &source);
-    let errors = if result.errors.is_empty() {
-        // The compile-time errors Luau reports beyond the grammar, such as an
-        // assignment to a `const`.
-        SemanticBuilder::new()
-            .with_counts(result.counts)
-            .with_check(true)
-            .build(&result.chunk)
-            .errors
-    } else {
-        result.errors
-    };
-    let errors = if errors.is_empty() { type_errors.to_vec() } else { errors };
-    (!errors.is_empty()).then(|| render(&label, &source, &errors))
-}
-
-fn render(label: &str, source: &[u8], errors: &[Diagnostic]) -> Vec<u8> {
+    let label = file.path.to_string_lossy();
     let mut rendered = Vec::new();
-    DefaultReporter.render(SourceFile { label, text: Some(source) }, errors, &mut rendered);
-    rendered
+    match source {
+        Err(error) => {
+            let source_file = SourceFile { label: &label, text: None };
+            DefaultReporter.render(source_file, &[Diagnostic::e010(&label, error)], &mut rendered);
+        }
+        Ok(_) if errors.is_empty() => return None,
+        Ok(source) => {
+            let source_file = SourceFile { label: &label, text: Some(source) };
+            DefaultReporter.render(source_file, errors, &mut rendered);
+        }
+    }
+    Some(rendered)
 }
 
 #[cfg(test)]
@@ -322,11 +296,10 @@ mod tests {
     use std::sync::Arc;
 
     use clap::Parser as _;
-    use luck_allocator::Allocator;
     use luck_config::Project;
-    use luck_resolver::FileSystemOs;
+    use luck_resolver::{FileSystem as _, FileSystemOs};
 
-    use super::{CheckArgs, check_file};
+    use super::{CheckArgs, report};
     use crate::cli::Cli;
     use crate::commands::Command;
     use crate::project::ProjectFile;
@@ -351,7 +324,8 @@ mod tests {
         let project = Arc::new(Project::defaults(directory.path().to_path_buf(), FileSystemOs));
         let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
-        let rendered = check_file(&Allocator::new(), &file, &[]).expect("an unread file fails");
+        let rendered =
+            report(&file, &FileSystemOs.read(&file.path), &[]).expect("an unread file fails");
 
         let text = String::from_utf8(rendered).expect("the report is UTF-8");
         let label = file.path.to_string_lossy();

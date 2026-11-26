@@ -1,13 +1,16 @@
 name: LLVM
-description: Install the clang and lld of the LLVM major version the pinned Rust toolchain uses, ahead of any other on PATH.
+description: Install the clang and lld of the LLVM major version the pinned Rust toolchain uses, ahead of any other on PATH, except on macOS, which keeps Xcode's clang.
 
 runs:
   using: composite
   steps:
     # On Linux, /usr/local/bin comes before the runner's own clang on PATH. On Windows, LLVM's own
     # release archive replaces the runner's LLVM in C:\Program Files\LLVM, which is on PATH, since
-    # no Windows package manager installs LLVM by major version.
+    # no Windows package manager installs LLVM by major version. macOS keeps Xcode's clang, because
+    # an LLVM release's libc++ headers call symbols, such as `std::__hash_memory`, that older macOS
+    # versions' libc++ doesn't export.
     - name: Install LLVM
+      if: runner.os != 'macOS'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

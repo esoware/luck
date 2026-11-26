@@ -1,6 +1,6 @@
 use std::mem;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
@@ -28,8 +28,9 @@ pub struct Project {
     file_system: Arc<dyn FileSystem>,
     root: PathBuf,
     files: Vec<PathBuf>,
-    /// Luau's library with what `definitions` loads layered over it.
-    stdlib: Stdlib,
+    /// Built the first time it's asked for, since only the commands that
+    /// analyze code read it.
+    stdlib: OnceLock<Stdlib>,
     definitions: Vec<DefinitionSource>,
     security: SecurityLevel,
     filter: ProjectFilter,
@@ -173,21 +174,13 @@ impl Project {
             })
             .collect::<Result<_, String>>()
             .map_err(|message| invalid(&message))?;
-        let security = security.unwrap_or_default();
-        let mut stdlib = Stdlib::luau();
         let mut sources = Vec::with_capacity(definitions.len());
         for named in definitions {
             let source = match named {
                 // Loading checked that `@roblox` is the one built-in name.
-                DefinitionsEntry::BuiltIn(_) => {
-                    stdlib = stdlib.with_roblox(security);
-                    DefinitionSource::Roblox
-                }
+                DefinitionsEntry::BuiltIn(_) => DefinitionSource::Roblox,
                 DefinitionsEntry::File(path) => {
                     let text = read_text(&*file_system, &path)?;
-                    if let Ok(layered) = stdlib.layer(&text) {
-                        stdlib = layered;
-                    }
                     files.push(path.clone());
                     DefinitionSource::File { path, text }
                 }
@@ -198,9 +191,9 @@ impl Project {
             file_system,
             root,
             files,
-            stdlib,
+            stdlib: OnceLock::new(),
             definitions: sources,
-            security,
+            security: security.unwrap_or_default(),
             filter,
             format: format.unwrap_or_default(),
             overrides: compiled_overrides,
@@ -230,7 +223,7 @@ impl Project {
             file_system,
             root,
             files: Vec::new(),
-            stdlib: Stdlib::luau(),
+            stdlib: OnceLock::new(),
             definitions: Vec::new(),
             security: SecurityLevel::default(),
             filter,
@@ -268,8 +261,13 @@ impl Project {
 
     /// Luau's standard library with what `definitions` loads layered over
     /// it, in order, but for a definition file that doesn't parse.
-    pub const fn stdlib(&self) -> &Stdlib {
-        &self.stdlib
+    pub fn stdlib(&self) -> &Stdlib {
+        self.stdlib.get_or_init(|| {
+            self.definitions.iter().fold(Stdlib::luau(), |below, source| match source {
+                DefinitionSource::Roblox => below.with_roblox(self.security),
+                DefinitionSource::File { text, .. } => below.layer(text).unwrap_or(below),
+            })
+        })
     }
 
     /// What each entry of `definitions` loads, in order.
@@ -378,6 +376,15 @@ mod tests {
 
     use super::*;
     use crate::fixtures::project_with;
+
+    #[test]
+    fn the_standard_library_is_built_the_first_time_it_is_asked_for() {
+        let directory = project_with(&[("luck.json", r#"{ "definitions": ["@roblox"] }"#)]);
+        let project =
+            Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
+        assert!(project.stdlib.get().is_none());
+        assert!(project.stdlib().library().has_roblox);
+    }
 
     #[test]
     fn files_that_match_the_same_overrides_share_one_linter() {

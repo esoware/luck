@@ -56,9 +56,16 @@ end)()
     );
 }
 
+const MISMATCH: &str = "\
+local count: number = \"one\"
+return count
+";
+
+const STRICT: &str = "return { luau = { languagemode = \"strict\" } }\n";
+
 #[test]
 fn a_config_luau_stops_once_the_check_that_runs_it_is_cancelled() {
-    let mut checker = checker(&[("main", "return 1\n")]);
+    let mut checker = checker(&[("main", MISMATCH)]);
     checker.host_mut().config_luau = Some("while true do end\n".to_owned());
     let cancellation = CancellationToken::new();
     cancellation.cancel();
@@ -66,25 +73,27 @@ fn a_config_luau_stops_once_the_check_that_runs_it_is_cancelled() {
     let cancelled = checker.check(&["main"], NonZero::<usize>::MIN, &cancellation);
 
     assert_eq!(cancelled, Err(CheckError::Cancelled));
-    let host = checker.host_mut();
-    let errors = host.config_errors.get_mut();
+    let errors = checker.host_mut().config_errors.get_mut();
     assert!(!errors.is_empty(), "the config ran");
     assert!(
-        errors.iter().all(|error| error == "config:1: Analysis has been cancelled by user"),
+        errors
+            .iter()
+            .all(|error| error == "invalid config: config:1: Analysis has been cancelled by user"),
         "{errors:?}"
     );
-    assert!(host.saved.get_mut().is_none(), "a config stopped short isn't kept");
+
+    // Luau can finish a module this small before it sees the cancellation,
+    // under the config cut short, so the next check reads the config again
+    // and checks the module under it.
+    checker.host_mut().config_luau = Some(STRICT.to_owned());
+    let diags = check(&mut checker, &["main"]).unwrap();
+    assert_eq!(diags[0].len(), 1, "strict: {:?}", diags[0]);
 }
 
 #[test]
-fn a_saved_config_sets_a_config_luau_s_mode_on_every_module() {
-    let mismatch = "\
-local count: number = \"one\"
-return count
-";
-    let mut checker = checker(&[("first", mismatch), ("second", mismatch), ("third", mismatch)]);
-    checker.host_mut().config_luau =
-        Some("return { luau = { languagemode = \"strict\" } }\n".to_owned());
+fn a_directory_s_config_luau_sets_the_mode_of_every_module_in_it() {
+    let mut checker = checker(&[("first", MISMATCH), ("second", MISMATCH), ("third", MISMATCH)]);
+    checker.host_mut().config_luau = Some(STRICT.to_owned());
 
     let diags = check(&mut checker, &["first", "second", "third"]).unwrap();
 
@@ -92,7 +101,7 @@ return count
 }
 
 #[test]
-fn a_saved_config_runs_a_config_luau_once_for_every_module() {
+fn a_directory_s_config_luau_runs_once_for_every_module_in_it() {
     let mut checker =
         checker(&[("first", "return 1\n"), ("second", "return 2\n"), ("third", "return 3\n")]);
     checker.host_mut().config_luau = Some("while true do end\n".to_owned());
@@ -101,6 +110,6 @@ fn a_saved_config_runs_a_config_luau_once_for_every_module() {
 
     assert_eq!(
         *checker.host_mut().config_errors.get_mut(),
-        ["config:1: Typeinfer failed to complete in allotted time"]
+        ["invalid config: config:1: Typeinfer failed to complete in allotted time"]
     );
 }

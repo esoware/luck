@@ -8,7 +8,7 @@
 //! which changes something only at the end of a list.
 
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, ConditionalBinding, DeclaredFunction, Expression,
+    BinaryLink, BinaryOp, Block, ConditionalBinding, Declaration, DeclaredFunction, Expression,
     ExternTypeMember, Field, FunctionArgs, FunctionAttribute, FunctionBody, FunctionName,
     FunctionTypeParam, GenericTypeList, GenericTypeParam, IfStatement, Name, Statement,
     StringLiteral, Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration,
@@ -144,13 +144,20 @@ impl Printer {
                 self.close();
             }
             Statement::TypeDeclaration(declaration) => self.type_declaration(declaration),
-            Statement::DeclaredGlobal(global) => {
+            Statement::Declaration(declaration) => self.declaration(declaration),
+            Statement::Error(_) => self.line("Error"),
+        }
+    }
+
+    fn declaration(&mut self, declaration: &Declaration<'_>) {
+        match declaration {
+            Declaration::Global(global) => {
                 self.open(&format!("DeclaredGlobal {}", global.name.text));
                 self.ty(&global.ty);
                 self.close();
             }
-            Statement::DeclaredFunction(function) => self.declared_function(function),
-            Statement::DeclaredExternType(extern_type) => {
+            Declaration::Function(function) => self.declared_function(function),
+            Declaration::ExternType(extern_type) => {
                 let supertype = extern_type
                     .supertype
                     .map_or_else(String::new, |supertype| format!(" extends {}", supertype.text));
@@ -163,7 +170,6 @@ impl Printer {
                 }
                 self.close();
             }
-            Statement::Error(_) => self.line("Error"),
         }
     }
 

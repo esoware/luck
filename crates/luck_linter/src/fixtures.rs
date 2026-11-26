@@ -5,7 +5,7 @@ use std::slice;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::{Severity, Tag};
-use luck_stdlib::{SecurityLevel, Stdlib, luau_library, roblox_library};
+use luck_stdlib::{Stdlib, library_for, luau_library};
 use luck_token::{Span, line_breaks};
 use serde_json::{Value, json};
 
@@ -197,7 +197,7 @@ impl<'case> Tester<'case> {
                 .unwrap_or_else(|diags| panic!("{case}'s definitions don't parse: {diags:?}"))
         });
         let library =
-            layered.as_ref().map_or_else(|| case_library(case.has_roblox), Stdlib::library);
+            layered.as_ref().map_or_else(|| library_for(case.has_roblox), Stdlib::library);
         let mut messages = Linter::new(config).run(&parse, library, FixKind::all(), None);
         assert!(
             messages.iter().all(|message| RuleId::from_name(message.code).is_some()),
@@ -206,10 +206,6 @@ impl<'case> Tester<'case> {
         messages.retain(|message| message.code == self.rule.name());
         messages
     }
-}
-
-fn case_library(has_roblox: bool) -> &'static luck_stdlib::StdlibLibrary<'static> {
-    if has_roblox { roblox_library(SecurityLevel::None) } else { luau_library() }
 }
 
 /// Each of `messages`, found in `case`, as the snapshot shows it.

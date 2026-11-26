@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::mem;
 use std::num::NonZero;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,7 +16,7 @@ use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use ls_types::notification::{
     Cancel, DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles,
     DidChangeWorkspaceFolders, DidCloseTextDocument, DidOpenTextDocument, Exit,
-    Notification as LspNotification, PublishDiagnostics,
+    Notification as LspNotification, PublishDiagnostics, ShowMessage,
 };
 use ls_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
@@ -29,12 +29,14 @@ use ls_types::{
     Diagnostic, DidChangeConfigurationParams, DidChangeTextDocumentParams,
     DidChangeWatchedFilesParams, DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbolResponse, FileChangeType, InitializeParams,
-    NumberOrString, PublishDiagnosticsParams, TextDocumentIdentifier, Uri, WorkspaceEdit,
-    WorkspaceFoldersChangeEvent, WorkspaceSymbolResponse,
+    MessageType, NumberOrString, PublishDiagnosticsParams, ShowMessageParams,
+    TextDocumentIdentifier, Uri, WorkspaceEdit, WorkspaceFoldersChangeEvent,
+    WorkspaceSymbolResponse,
 };
 use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
 };
+use luck_config::EDITORCONFIG_FILE_NAME;
 use luck_resolver::is_definition_file;
 use luck_type_checker::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,7 @@ use crate::document::{Document, DocumentState};
 use crate::files::Files;
 use crate::line_index::PositionEncoding;
 use crate::pool::{Pool, Priority};
+use crate::providers::cursor::name_start;
 use crate::providers::{
     code_action, completion, definition, diagnostics, document_highlight, document_link,
     folding_range, formatting, hover, references, rename, selection_range, semantic_tokens,
@@ -52,7 +55,7 @@ use crate::providers::{
 };
 use crate::session::Session;
 use crate::settings::GivenConfig;
-use crate::type_check::{self, Types};
+use crate::type_check::{self, FileChanges, TypeErrors, Types};
 use crate::workspace::{Walk, WorkspaceView};
 
 /// What a job hands back to the main loop, which sends it on only if it
@@ -63,17 +66,57 @@ pub(crate) enum Task {
     Respond(Response),
     /// A message for the user, such as why formatting failed.
     Notify(Notification),
-    /// One version's diagnostics, unless a change since started another
-    /// publish of every open document's. A version analyzed again, against
-    /// the library its project's documents are analyzed against now, takes
-    /// the place of the one the main loop holds.
-    Publish { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic>, generation: u64 },
-    /// Why a `luck.json` doesn't load, unless the settings were reloaded
-    /// since the lookup read it.
-    ConfigError { generation: u64, notifications: Vec<Notification> },
+    /// One version's lints, unless a newer version or a close replaced it.
+    Lints { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic> },
+    /// What Luau found checking the open documents together, each with its
+    /// type errors, unless a change since cancelled the check that
+    /// `cancellation` stops.
+    Checked {
+        documents: Vec<(Uri, Arc<Document>, Vec<Diagnostic>)>,
+        problems: Vec<Problem>,
+        cancellation: CancellationToken,
+    },
+    /// Why a config doesn't load, unless the settings were reloaded since
+    /// the lookup read it.
+    ConfigError { generation: u64, problem: Problem },
     /// The files of a walk not yet read, which jobs read ahead of the first
     /// request that needs them, unless a new walk replaced it.
     Walked { walk: Arc<Walk>, unread: Vec<PathBuf> },
+}
+
+/// Why a config or a definition file doesn't load, as the user is shown it,
+/// and as it's published on the file at fault, unless that's a config no file
+/// holds or a file no URI names.
+#[derive(Debug)]
+pub(crate) struct Problem {
+    pub message: String,
+    pub published: Option<(Uri, Vec<Diagnostic>)>,
+}
+
+/// What the server last published on an open document: its lints, and the
+/// type errors the last check found, which go out together.
+#[derive(Debug, Default)]
+struct Published {
+    lints: Vec<Diagnostic>,
+    type_errors: Vec<Diagnostic>,
+    is_sent: bool,
+}
+
+impl Published {
+    /// Makes `diags` the part `part` picks, and gives every diagnostic it
+    /// holds, unless that part held `diags` already and went out.
+    fn update(
+        &mut self,
+        part: fn(&mut Self) -> &mut Vec<Diagnostic>,
+        diags: Vec<Diagnostic>,
+    ) -> Option<Vec<Diagnostic>> {
+        if self.is_sent && *part(self) == diags {
+            return None;
+        }
+        *part(self) = diags;
+        self.is_sent = true;
+        Some(self.lints.iter().chain(&self.type_errors).cloned().collect())
+    }
 }
 
 /// `luck/syntaxTree`: the open document's tree, dumped.
@@ -181,7 +224,7 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
     let folders: Vec<Uri> =
         workspace_folders.into_iter().flatten().map(|folder| folder.uri).collect();
     let given = initialization_options.filter(|config| !config.is_null());
-    let files = if given.is_some() { Files::Client(Arc::default()) } else { Files::Disk };
+    let files = Files::new(given.is_some().then(Arc::default));
     let given = given.map(|config| GivenConfig {
         root: folders
             .first()
@@ -195,8 +238,10 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
         pool: Pool::new(threads)?,
         pending: BTreeMap::new(),
         documents: BTreeMap::new(),
+        published: BTreeMap::new(),
+        config_problems: Vec::new(),
+        definition_problems: BTreeMap::new(),
         workspace_folders: Vec::new(),
-        generation: 0,
         checks: CancellationToken::new(),
         is_shutting_down: false,
     };
@@ -226,13 +271,19 @@ struct Server {
     pending: BTreeMap<RequestId, Arc<AtomicBool>>,
     /// The current version of each open document.
     documents: BTreeMap<Uri, Arc<Document>>,
+    /// What the server last published on each open document.
+    published: BTreeMap<Uri, Published>,
+    /// Each file a config's problem is published on, which a reload of the
+    /// settings clears.
+    config_problems: Vec<Uri>,
+    /// What's published on each definition file no document holds open
+    /// about why Luau can't load it.
+    definition_problems: BTreeMap<Uri, Vec<Diagnostic>>,
     /// The client's, which the workspace walks.
     workspace_folders: Vec<Uri>,
-    /// Bumped by each change to an open document or to a file one can read,
-    /// which starts a new publish of every open document's diagnostics.
-    generation: u64,
-    /// What stops the type checks of this generation, which the next one
-    /// cancels.
+    /// What stops the type checks that the last change to an open document,
+    /// or to a file one can read, started, which the next change, or
+    /// `shutdown`, cancels.
     checks: CancellationToken,
     is_shutting_down: bool,
 }
@@ -304,21 +355,42 @@ impl Server {
                 }
             }
             Task::Notify(notification) => self.send(notification),
-            Task::Publish { uri, document, diags, generation } => {
-                let is_current = self
-                    .documents
-                    .get(&uri)
-                    .is_some_and(|current| Arc::ptr_eq(current.text(), document.text()));
-                if is_current && generation == self.generation && !self.is_shutting_down {
-                    self.publish(uri.clone(), diags, Some(document.version()));
-                    self.documents.insert(uri, document);
+            Task::Lints { uri, document, diags } => {
+                self.update_published(uri, &document, |published| &mut published.lints, diags);
+            }
+            Task::Checked { documents, problems, cancellation } => {
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                for (uri, document, diags) in documents {
+                    self.update_published(
+                        uri,
+                        &document,
+                        |published| &mut published.type_errors,
+                        diags,
+                    );
+                }
+                let mut last = mem::take(&mut self.definition_problems);
+                for problem in problems {
+                    let Some((uri, diagnostics)) = &problem.published else {
+                        continue;
+                    };
+                    let (uri, diagnostics) = (uri.clone(), diagnostics.clone());
+                    if last.remove(&uri).as_ref() != Some(&diagnostics) {
+                        self.report(problem);
+                    }
+                    self.definition_problems.insert(uri, diagnostics);
+                }
+                for uri in last.into_keys() {
+                    self.publish(uri, Vec::new(), None);
                 }
             }
-            Task::ConfigError { generation, notifications } => {
+            Task::ConfigError { generation, problem } => {
                 if generation == self.session.settings().generation() {
-                    for notification in notifications {
-                        self.send(notification);
+                    if let Some((uri, _)) = &problem.published {
+                        self.config_problems.push(uri.clone());
                     }
+                    self.report(problem);
                 }
             }
             Task::Walked { walk, unread } => {
@@ -338,6 +410,35 @@ impl Server {
         }
     }
 
+    /// Publishes on `document`, if it's still what's open at `uri`, its
+    /// diagnostics with `diags` as the part `part` picks, unless that
+    /// changes nothing published.
+    fn update_published(
+        &mut self,
+        uri: Uri,
+        document: &Arc<Document>,
+        part: fn(&mut Published) -> &mut Vec<Diagnostic>,
+        diags: Vec<Diagnostic>,
+    ) {
+        if !self.documents.get(&uri).is_some_and(|current| Arc::ptr_eq(current, document)) {
+            return;
+        }
+        let published = self.published.entry(uri.clone()).or_default();
+        if let Some(all) = published.update(part, diags) {
+            self.publish(uri, all, Some(document.version()));
+        }
+    }
+
+    /// Shows `problem` and publishes it on its file.
+    fn report(&self, problem: Problem) {
+        let Problem { message, published } = problem;
+        let shown = ShowMessageParams { typ: MessageType::ERROR, message };
+        self.send(Notification::new(ShowMessage::METHOD.to_owned(), shown));
+        if let Some((uri, diagnostics)) = published {
+            self.publish(uri, diagnostics, None);
+        }
+    }
+
     /// Makes `document` what's open at `uri`, which leaves any job still
     /// linting what it replaces to stop with nothing to publish.
     fn replace(&mut self, uri: Uri, document: Arc<Document>) {
@@ -346,37 +447,61 @@ impl Server {
         }
     }
 
-    /// Starts a new generation, which stops the type checks of the last, and
-    /// publishes every open document's diagnostics in it, since a change to
-    /// one module can change the types of every module that requires it.
+    /// Gives each open document at `uris` a new version of the same text,
+    /// whose settings are found afresh.
+    fn reload(&mut self, uris: Vec<Uri>) {
+        for uri in uris {
+            if let Some(current) = self.documents.get(&uri) {
+                let reloaded = Arc::new(current.reloaded());
+                self.replace(uri, reloaded);
+            }
+        }
+    }
+
+    /// Stops the type checks the last change started, and lints every open
+    /// document and checks them all again, since a change to one module can
+    /// change the types of every module that requires it. Each document's
+    /// lints go out once they're done, with the type errors of the last
+    /// check until this one's are.
     fn republish(&mut self) {
-        self.generation += 1;
         self.checks.cancel();
         self.checks = CancellationToken::new();
         let documents = self.open_documents();
-        let (session, generation, cancellation) =
-            (Arc::clone(&self.session), self.generation, self.checks.clone());
+        for (uri, document) in &documents {
+            let (session, uri, document) =
+                (Arc::clone(&self.session), uri.clone(), Arc::clone(document));
+            self.pool.spawn(Priority::Background, move || {
+                if session.is_stopping() || document.is_stale() {
+                    return;
+                }
+                let Some(lints) = document.lints(&session) else {
+                    return;
+                };
+                let diags = diagnostics::to_lsp(&uri, document.state(&session), lints);
+                session.send(Task::Lints { uri, document, diags });
+            });
+        }
+        let (session, cancellation) = (Arc::clone(&self.session), self.checks.clone());
         self.pool.spawn(Priority::Background, move || {
             if session.is_stopping() {
                 return;
             }
-            let Some(type_errors) = type_check::type_errors(&session, &documents, &cancellation)
+            let Some(TypeErrors { documents: type_errors, problems }) =
+                type_check::type_errors(&session, &documents, &cancellation)
             else {
                 return;
             };
+            let mut checked = Vec::with_capacity(documents.len());
             for ((uri, document), errors) in documents.into_iter().zip(type_errors) {
                 if cancellation.is_cancelled() {
                     return;
                 }
-                let document = document.with_current_library(&session);
-                let diags = {
-                    let Some(lints) = document.lints(&session) else {
-                        continue;
-                    };
-                    diagnostics::to_lsp(&uri, document.state(&session), lints, &errors)
-                };
-                session.send(Task::Publish { uri, document, diags, generation });
+                let state = document.state(&session);
+                let diags = diagnostics::type_errors_to_lsp(&uri, state, &errors);
+                checked.push((uri, document, diags));
             }
+            session.send(Task::Checked { documents: checked, problems, cancellation });
+            session.type_checks().drop_unused();
         });
     }
 
@@ -472,25 +597,36 @@ impl Server {
         let item = params.text_document;
         let path = self.session.files().path(&item.uri);
         let text: Arc<str> = Arc::from(item.text);
-        let is_created = self.open_in_client(&item.uri, Some(Arc::clone(&text)));
-        self.replace(item.uri, Arc::new(Document::new(item.version, text, path.clone())));
-        match path.filter(|created| {
-            is_created && (is_module(created) || self.session.settings().is_settings_file(created))
-        }) {
-            Some(created) => self.files_changed(&[(created, FileChangeType::CREATED)]),
-            None => self.republish(),
+        // The document's own diagnostics take the place of its file's.
+        self.definition_problems.remove(&item.uri);
+        let document = Document::new(item.version, Arc::clone(&text), path);
+        self.replace(item.uri.clone(), Arc::new(document));
+        let change = self.lay_over(&item.uri, Some(text));
+        if !change.is_some_and(|change| self.files_changed(&[change])) {
+            self.republish();
         }
     }
 
-    /// Makes `text` what's open at `uri` among the client's files, when the
-    /// client gave a config, and says whether that created or deleted the
-    /// file there.
-    fn open_in_client(&self, uri: &Uri, text: Option<Arc<str>>) -> bool {
+    /// Makes `text`, or with `None`, nothing, what's open at `uri`: among the
+    /// client's files, when the client gave a config, and as the text a
+    /// definition file reads as. Gives how that changed the file there, if
+    /// it did.
+    fn lay_over(&self, uri: &Uri, text: Option<Arc<str>>) -> Option<(PathBuf, FileChangeType)> {
         let files = self.session.files();
-        let (Some(client), Some(path)) = (files.client(), files.path(uri)) else {
-            return false;
+        let path = files.path(uri)?;
+        let is_created_or_deleted =
+            files.client().is_some_and(|client| client.open(&path, uri.clone(), text.clone()));
+        let is_definitions = is_definition_file(&path);
+        let typ = match (is_created_or_deleted, &text) {
+            (true, Some(_)) => FileChangeType::CREATED,
+            (true, None) => FileChangeType::DELETED,
+            (false, _) if is_definitions => FileChangeType::CHANGED,
+            (false, _) => return None,
         };
-        client.open(&path, uri.clone(), text)
+        if is_definitions {
+            files.set_open_definition(&path, text);
+        }
+        Some((path, typ))
     }
 
     fn change(&mut self, params: DidChangeTextDocumentParams) {
@@ -506,9 +642,12 @@ impl Server {
         if let Some(next) =
             current.changed(text_document.version, content_changes, self.session.encoding())
         {
-            self.open_in_client(&text_document.uri, Some(Arc::clone(next.text())));
-            self.replace(text_document.uri, Arc::new(next));
-            self.republish();
+            let text = Arc::clone(next.text());
+            self.replace(text_document.uri.clone(), Arc::new(next));
+            let change = self.lay_over(&text_document.uri, Some(text));
+            if !change.is_some_and(|change| self.files_changed(&[change])) {
+                self.republish();
+            }
             return;
         }
         // A range that doesn't fit means we've already desynced from the
@@ -517,6 +656,7 @@ impl Server {
         if let Some(desynced) = self.documents.remove(&text_document.uri) {
             desynced.mark_stale();
         }
+        self.published.remove(&text_document.uri);
         self.publish(text_document.uri, Vec::new(), None);
         self.republish();
     }
@@ -526,20 +666,17 @@ impl Server {
         if let Some(closed) = self.documents.remove(&uri) {
             closed.mark_stale();
         }
-        let is_deleted = self.open_in_client(&uri, None);
+        self.published.remove(&uri);
+        let change = self.lay_over(&uri, None);
         self.session.spare_arena().clear();
         // LSP has a server clear a closed file's diagnostics.
         self.publish(uri.clone(), Vec::new(), None);
-        let Some(path) = self.session.files().path(&uri) else {
-            self.republish();
-            return;
-        };
-        if is_deleted && (is_module(&path) || self.session.settings().is_settings_file(&path)) {
-            self.files_changed(&[(path, FileChangeType::DELETED)]);
-        } else {
+        if let Some(path) = self.session.files().path(&uri) {
             // What the files hold may not be what the document last held,
             // which a client that watches no files never says.
             self.session.workspace().forget(path);
+        }
+        if !change.is_some_and(|change| self.files_changed(&[change])) {
             self.republish();
         }
     }
@@ -569,12 +706,9 @@ impl Server {
                 continue;
             };
             let is_deleted = text.is_none();
-            let typ = if !client.push(&path, uri.clone(), text.map(Arc::from)) {
+            let typ = if !client.push(&path, uri, text.map(Arc::from)) {
                 FileChangeType::CHANGED
             } else if is_deleted {
-                // Once the client's files lose it, a reload can't find the URI
-                // of a definition file to clear the problems published on it.
-                self.publish(uri, Vec::new(), None);
                 FileChangeType::DELETED
             } else {
                 FileChangeType::CREATED
@@ -594,41 +728,77 @@ impl Server {
     }
 
     /// Brings everything to the files at each of `changes`' paths, which
-    /// changed as it says.
-    fn files_changed(&mut self, changes: &[(PathBuf, FileChangeType)]) {
-        let (mut is_settings_change, mut is_resolution_change, mut is_file_added_or_removed) =
-            (false, false, false);
-        let mut is_module_change = false;
+    /// changed as it says, and says whether that republished, as a change
+    /// to a settings file, a definition file a project lists, a module, or a
+    /// `.luaurc` or `.config.luau` does.
+    fn files_changed(&mut self, changes: &[(PathBuf, FileChangeType)]) -> bool {
+        let session = Arc::clone(&self.session);
+        let mut affected = FileChanges::default();
+        let (mut is_settings_change, mut is_walk_stale) = (false, false);
+        let mut definitions = Vec::new();
         for (path, typ) in changes {
-            is_settings_change |= self.session.settings().is_settings_file(path);
-            let is_module = is_module(path);
-            let is_module_added_or_removed = is_module && *typ != FileChangeType::CHANGED;
-            // A config edited, or a module created or deleted, can change
-            // what a require resolves to.
-            is_resolution_change |= is_module_added_or_removed
-                || path.file_name().is_some_and(|name| name == ".luaurc" || name == ".config.luau");
-            is_file_added_or_removed |= is_module_added_or_removed;
-            if is_module {
-                self.session.type_checks().changed(Some(path));
-                self.session.workspace().forget(path.clone());
-                is_module_change = true;
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            let is_added_or_removed = *typ != FileChangeType::CHANGED;
+            let is_luau =
+                path.extension().is_some_and(|extension| extension == "luau" || extension == "lua");
+            let is_created = *typ == FileChangeType::CREATED;
+            is_settings_change |= session.settings().is_settings_file(path, is_created);
+            if name == EDITORCONFIG_FILE_NAME {
+                session.settings().clear_editorconfigs();
+            } else if name == ".luaurc" || name == ".config.luau" {
+                affected.is_config_changed = true;
+            } else if is_definition_file(path) {
+                definitions.push(name);
+            } else if is_luau {
+                affected.modules.push(path.clone());
+                affected.is_module_added_or_removed |= is_added_or_removed;
             }
+            if is_luau {
+                session.workspace().forget(path.clone());
+                is_walk_stale |= is_added_or_removed;
+            }
+        }
+        let is_resolution_change =
+            affected.is_module_added_or_removed || affected.is_config_changed;
+        if is_resolution_change {
+            session.resolver().clear_cache();
+        }
+        let is_module_change = is_resolution_change || !affected.modules.is_empty();
+        if is_module_change {
+            session.type_checks().changed(&affected);
         }
         if is_settings_change {
             self.reload_settings();
-            return;
+            return true;
         }
-        if is_file_added_or_removed {
-            self.session.workspace().walk_again();
+        if is_walk_stale {
+            session.workspace().walk_again();
             self.walk_workspace();
         }
-        if is_resolution_change {
-            self.session.settings().clear_resolvers();
-            self.session.type_checks().changed(None);
+        let mut is_definition_change = false;
+        for name in definitions {
+            is_definition_change |= session.settings().definition_changed(name);
+            // A job may still be finding a document's settings under a
+            // project that read the file before it changed.
+            let stale: Vec<Uri> = self
+                .documents
+                .iter()
+                .filter(|(_, document)| {
+                    let found = document.found_settings();
+                    found.is_none_or(|settings| settings.project.lists_definition(name))
+                })
+                .map(|(uri, _)| uri.clone())
+                .collect();
+            is_definition_change |= !stale.is_empty();
+            self.reload(stale);
         }
-        if is_resolution_change || is_module_change {
+        let is_republished = is_module_change || is_definition_change;
+        if is_republished {
             self.republish();
         }
+        is_republished
     }
 
     fn workspace_folders_changed(&mut self, params: DidChangeWorkspaceFoldersParams) {
@@ -640,28 +810,18 @@ impl Server {
     }
 
     fn reload_settings(&mut self) {
-        // A config still broken, or a definition file Luau still can't load,
-        // reports itself again as documents reload.
-        let mut broken = self.session.settings().clear();
-        broken.extend(self.session.type_checks().clear());
-        for path in broken {
-            if let Some(uri) = self.session.files().uri(&path) {
-                self.publish(uri, Vec::new(), None);
-            }
+        self.session.settings().clear();
+        // A config still broken reports itself again as documents reload.
+        for uri in mem::take(&mut self.config_problems) {
+            self.publish(uri, Vec::new(), None);
         }
-        self.session.workspace().clear();
+        self.session.workspace().walk_again();
         self.walk_workspace();
         // Every open document gets a new version of the same text under the
         // new settings, whether or not its target or extra globals changed,
         // so a lint under the old ones has nothing to publish.
-        let reloaded: Vec<(Uri, Arc<Document>)> = self
-            .documents
-            .iter()
-            .map(|(uri, current)| (uri.clone(), Arc::new(current.reloaded())))
-            .collect();
-        for (uri, document) in reloaded {
-            self.replace(uri, document);
-        }
+        let uris = self.documents.keys().cloned().collect();
+        self.reload(uris);
         self.republish();
     }
 
@@ -781,14 +941,21 @@ impl Server {
     }
 
     /// Answers `request` as [`Self::spawn_on_document`] does, with what
-    /// `answer` gives for the document's types once Luau has checked it with
-    /// the open documents as they stood when the request came, or with
-    /// `null` once a change stops the check.
-    fn spawn_on_types<R, U, A, T>(&mut self, request: Request, uri_of: U, answer: A)
-    where
+    /// `answer` gives for the document's types at what `target` finds in it,
+    /// once Luau has checked it with the open documents as they stood when
+    /// the request came, or with `null` where `target` finds nothing, or
+    /// once a change stops the check.
+    fn spawn_on_types<R, U, G, A, Target, T>(
+        &mut self,
+        request: Request,
+        uri_of: U,
+        target: G,
+        answer: A,
+    ) where
         R: LspRequest<Result = Option<T>>,
         U: FnOnce(&R::Params) -> &Uri,
-        A: FnOnce(&DocumentState, &mut Types<'_>, R::Params) -> Option<T> + Send + 'static,
+        G: FnOnce(&DocumentState, R::Params) -> Option<Target> + Send + 'static,
+        A: FnOnce(&DocumentState, Target, &mut Types<'_>) -> Option<T> + Send + 'static,
         T: 'static,
     {
         let Some((id, params)) = self.params::<R>(request) else {
@@ -803,15 +970,13 @@ impl Server {
                 return Ok(None);
             };
             let state = open.state(session);
-            let open_modules = type_check::open_modules(session, &documents);
-            let answered = type_check::with_types(
-                session,
-                &uri,
-                state,
-                open_modules,
-                &cancellation,
-                |types| answer(state, types, params),
-            );
+            let Some(found) = target(state, params) else {
+                return Ok(None);
+            };
+            let answered =
+                type_check::with_types(session, &uri, state, &documents, &cancellation, |types| {
+                    answer(state, found, types)
+                });
             Ok(answered.flatten())
         });
     }
@@ -843,29 +1008,30 @@ impl Server {
                     Ok(formatting::formatting(session, document, Some(params.range)))
                 },
             ),
-            HoverRequest::METHOD => self.spawn_on_types::<HoverRequest, _, _, _>(
+            HoverRequest::METHOD => self.spawn_on_types::<HoverRequest, _, _, _, _, _>(
                 request,
                 |params| &params.text_document_position_params.text_document.uri,
-                |document, types, params| {
-                    hover::hover(document, params.text_document_position_params.position, types)
+                |document, params| {
+                    name_start(document, params.text_document_position_params.position)
                 },
+                hover::hover,
             ),
-            Completion::METHOD => self.spawn_on_types::<Completion, _, _, _>(
+            Completion::METHOD => self.spawn_on_types::<Completion, _, _, _, _, _>(
                 request,
                 |params| &params.text_document_position.text_document.uri,
-                |document, types, params| {
-                    let position = params.text_document_position.position;
-                    Some(completion::completion(document, position, types))
-                },
+                |_, params| Some(params.text_document_position.position),
+                |document, position, types| Some(completion::completion(document, position, types)),
             ),
-            SignatureHelpRequest::METHOD => self.spawn_on_types::<SignatureHelpRequest, _, _, _>(
-                request,
-                |params| &params.text_document_position_params.text_document.uri,
-                |document, types, params| {
-                    let position = params.text_document_position_params.position;
-                    signature_help::signature_help(document, position, types)
-                },
-            ),
+            SignatureHelpRequest::METHOD => self
+                .spawn_on_types::<SignatureHelpRequest, _, _, _, _, _>(
+                    request,
+                    |params| &params.text_document_position_params.text_document.uri,
+                    |document, params| {
+                        let position = params.text_document_position_params.position;
+                        signature_help::call_at(document, position)
+                    },
+                    signature_help::signature_help,
+                ),
             DocumentSymbolRequest::METHOD => self
                 .spawn_on_document::<DocumentSymbolRequest, _, _, _>(
                     request,
@@ -932,14 +1098,16 @@ impl Server {
                     if let Some(found) = definition::goto(&workspace, &uri, state, position) {
                         return Ok(Some(found));
                     }
-                    let open_modules = type_check::open_modules(session, &documents);
+                    let Some(start) = name_start(state, position) else {
+                        return Ok(None);
+                    };
                     let declared = type_check::with_types(
                         session,
                         &uri,
                         state,
-                        open_modules,
+                        &documents,
                         &cancellation,
-                        |types| definition::declared(state, position, types),
+                        |types| definition::declared(start, types),
                     );
                     Ok(declared.flatten())
                 });
@@ -958,7 +1126,7 @@ impl Server {
                             ),
                             data: None,
                         })?;
-                    Ok(TextDocumentContentResult { text: text.into_owned() })
+                    Ok(TextDocumentContentResult { text: text.to_owned() })
                 });
             }
             References::METHOD => self.spawn_on_workspace::<References, _, _, _>(
@@ -1048,9 +1216,33 @@ impl Server {
     }
 }
 
-/// Whether the file at `path` is a module, which a require can load: a
-/// `.luau` or `.lua` file that isn't a definition file.
-fn is_module(path: &Path) -> bool {
-    path.extension().is_some_and(|extension| extension == "luau" || extension == "lua")
-        && !is_definition_file(path)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostic(message: &str) -> Diagnostic {
+        Diagnostic { message: message.to_owned(), ..Diagnostic::default() }
+    }
+
+    #[test]
+    fn a_document_s_diagnostics_go_out_once_a_part_of_them_changes() {
+        let lints: fn(&mut Published) -> &mut Vec<Diagnostic> = |published| &mut published.lints;
+        let type_errors: fn(&mut Published) -> &mut Vec<Diagnostic> =
+            |published| &mut published.type_errors;
+        let mut published = Published::default();
+        assert_eq!(published.update(lints, Vec::new()), Some(Vec::new()), "the first goes out");
+        assert_eq!(published.update(lints, Vec::new()), None);
+
+        let mismatch = diagnostic("Expected this to be 'number', but got 'string'");
+        let checked = published.update(type_errors, vec![mismatch.clone()]);
+        assert_eq!(checked, Some(vec![mismatch.clone()]));
+        assert_eq!(published.update(type_errors, vec![mismatch.clone()]), None);
+
+        let unused = diagnostic("`count` is never used");
+        assert_eq!(
+            published.update(lints, vec![unused.clone()]),
+            Some(vec![unused, mismatch]),
+            "lints go out with the last check's type errors"
+        );
+    }
 }

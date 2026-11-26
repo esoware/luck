@@ -4,7 +4,7 @@
 use luck_allocator::{List, ThinBytes, ThinStr};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, Declaration,
     DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
     ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
@@ -18,7 +18,8 @@ use crate::{
     VarArgParam, VariadicType, WhileLoop,
 };
 
-const LAYOUTS: [(&str, usize, usize); 77] = [
+const LAYOUTS: [(&str, usize, usize); 78] = [
+    ("Declaration", size_of::<Declaration<'_>>(), align_of::<Declaration<'_>>()),
     ("DeclaredGlobal", size_of::<DeclaredGlobal<'_>>(), align_of::<DeclaredGlobal<'_>>()),
     ("DeclaredFunction", size_of::<DeclaredFunction<'_>>(), align_of::<DeclaredFunction<'_>>()),
     (

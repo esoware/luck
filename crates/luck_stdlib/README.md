@@ -60,7 +60,7 @@ assert!(analysis.is_known_global("app"));
 - `StdlibEntry`, `StdlibNamespace`, `StdlibFunction`, `StdlibSignature`, `StdlibParam`, `StdlibArgKind`, `StdlibValue`, `StdlibShape`, and `StdlibDeprecation` describe an entry.
 - `StdlibMap` looks entries up by name.
 - `analyze` builds a chunk's semantic analysis against a library.
-- `SemanticAnalysis` is that analysis, with `is_known_global`, `resolve_callee`, and `chain_callees`.
+- `SemanticAnalysis` is that analysis, with `is_known_global` and `chain_callees`.
 - `ResolvedCallee` and `ChainCallees` are what a call resolves to.
 - `SecurityLevel` is `None`, `LocalUserSecurity`, `PluginSecurity`, or `RobloxScriptSecurity`.
 - `luau_definitions` and `roblox_definitions` return the built-in definition files as text.

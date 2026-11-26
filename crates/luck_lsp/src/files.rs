@@ -6,6 +6,9 @@
 //! as `inmemory://model/1` is `/inmemory/model/1`, so the resolver, the
 //! project's globs, and Luau's checker read it as they read a file on disk,
 //! and each path the server hands back goes by the URI the file came with.
+//!
+//! An open definition file reads as its document holds it, so a project
+//! loads the declarations being typed.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -15,14 +18,20 @@ use std::sync::Arc;
 use std::{io, iter};
 
 use ls_types::Uri;
-use luck_resolver::{DirEntry, FileMetadata, FileSystem, FileSystemOs, lexically_normalized};
+use luck_resolver::{
+    DirEntry, FileMetadata, FileSystem, FileSystemOs, is_definition_file, lexically_normalized,
+};
 use parking_lot::RwLock;
 
 #[derive(Debug, Clone)]
-pub(crate) enum Files {
-    Disk,
-    Client(Arc<ClientFiles>),
+pub(crate) struct Files {
+    /// `None` for the disk.
+    client: Option<Arc<ClientFiles>>,
+    open_definitions: Arc<RwLock<OpenDefinitions>>,
 }
+
+/// Each open definition file's text, by its path as the client spells it.
+type OpenDefinitions = Vec<(PathBuf, Arc<str>)>;
 
 /// The files a client holds, by the path its URI makes.
 #[derive(Debug, Default)]
@@ -41,40 +50,67 @@ struct ClientFile {
 }
 
 impl Files {
+    /// The disk's files, or with `client`, the files it holds.
+    pub(crate) fn new(client: Option<Arc<ClientFiles>>) -> Self {
+        Self { client, open_definitions: Arc::default() }
+    }
+
     /// The path of the file `uri` names: on disk, a `file:` URI's, and of the
     /// client's, any URI's.
     pub(crate) fn path(&self, uri: &Uri) -> Option<PathBuf> {
-        match self {
-            Self::Disk => file_path(uri),
-            Self::Client(_) => Some(client_path(uri)),
+        match self.client {
+            None => file_path(uri),
+            Some(_) => Some(client_path(uri)),
         }
     }
 
     /// The URI of the file at `path`, which [`Self::path`] gave.
     pub(crate) fn uri(&self, path: &Path) -> Option<Uri> {
-        match self {
-            Self::Disk => Uri::from_file_path(path),
-            Self::Client(client) => client.files.read().get(path).map(|file| file.uri.clone()),
+        match &self.client {
+            None => Uri::from_file_path(path),
+            Some(client) => client.files.read().get(path).map(|file| file.uri.clone()),
         }
     }
 
     pub(crate) fn client(&self) -> Option<&ClientFiles> {
-        match self {
-            Self::Disk => None,
-            Self::Client(client) => Some(client),
-        }
+        self.client.as_deref()
+    }
+
+    /// Makes `text`, or with `None`, nothing, what the definition file at
+    /// `path`, as the client spells it, has open.
+    pub(crate) fn set_open_definition(&self, path: &Path, text: Option<Arc<str>>) {
+        let mut open = self.open_definitions.write();
+        open.retain(|(spelled, _)| spelled != path);
+        open.extend(text.map(|open_text| (path.to_path_buf(), open_text)));
+    }
+
+    /// The open text of the definition file at `path`, a canonical path.
+    fn open_definition(&self, path: &Path) -> Option<Arc<str>> {
+        // Canonicalizing can read the disk, which the main loop mustn't wait
+        // on to change what's open.
+        let open = self.open_definitions.read().clone();
+        open.into_iter().find_map(|(spelled, text)| {
+            let is_same = spelled.file_name() == path.file_name()
+                && self.file_system().canonicalize_existing(&spelled) == path;
+            is_same.then_some(text)
+        })
     }
 
     fn file_system(&self) -> &dyn FileSystem {
-        match self {
-            Self::Disk => &FileSystemOs,
-            Self::Client(client) => &**client,
+        match &self.client {
+            None => &FileSystemOs,
+            Some(client) => &**client,
         }
     }
 }
 
 impl FileSystem for Files {
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        if is_definition_file(path)
+            && let Some(text) = self.open_definition(path)
+        {
+            return Ok(text.as_bytes().to_vec());
+        }
         self.file_system().read(path)
     }
 
@@ -125,13 +161,6 @@ impl ClientFiles {
     /// Every file's path, in order.
     pub(crate) fn paths(&self) -> Vec<PathBuf> {
         self.files.read().keys().cloned().collect()
-    }
-
-    /// What the client last pushed of each file, by its path.
-    pub(crate) fn pushed(&self) -> BTreeMap<PathBuf, Arc<str>> {
-        let files = self.files.read();
-        let pushed = files.iter().filter_map(|(path, file)| Some((path, file.pushed.as_ref()?)));
-        pushed.map(|(path, text)| (path.clone(), Arc::clone(text))).collect()
     }
 
     /// Whether a file lies under `path`, which is then a directory.
@@ -227,14 +256,15 @@ mod tests {
 
     #[test]
     fn only_a_file_uri_has_a_path_on_disk() {
-        assert_eq!(Files::Disk.path(&uri("untitled:Untitled-1")), None);
-        let saved = Files::Disk.path(&uri("FILE:///tmp/main.luau"));
+        let disk = Files::new(None);
+        assert_eq!(disk.path(&uri("untitled:Untitled-1")), None);
+        let saved = disk.path(&uri("FILE:///tmp/main.luau"));
         assert!(saved.is_some_and(|path| path.ends_with("main.luau")));
     }
 
     #[test]
     fn a_client_uri_is_a_path_of_its_scheme_authority_and_path() {
-        let files = Files::Client(Arc::default());
+        let files = Files::new(Some(Arc::default()));
         let path = |text: &str| files.path(&uri(text)).expect("every URI has a client path");
         assert_eq!(
             path("inmemory://model/1"),
@@ -248,6 +278,24 @@ mod tests {
             path("untitled:Untitled-1"),
             lexically_normalized(Path::new("/untitled/Untitled-1"))
         );
+    }
+
+    #[test]
+    fn an_open_definition_file_reads_as_its_document_holds_it() {
+        let client = Arc::new(ClientFiles::default());
+        let files = Files::new(Some(Arc::clone(&client)));
+        let path = lexically_normalized(Path::new("/inmemory/model/app.d.luau"));
+        client.push(
+            &path,
+            uri("inmemory://model/app.d.luau"),
+            Some(Arc::from("declare x: number")),
+        );
+
+        files.set_open_definition(&path, Some(Arc::from("declare x: string")));
+        assert_eq!(files.read(&path).expect("the file"), b"declare x: string");
+
+        files.set_open_definition(&path, None);
+        assert_eq!(files.read(&path).expect("the file"), b"declare x: number");
     }
 
     #[test]

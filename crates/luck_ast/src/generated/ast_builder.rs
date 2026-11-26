@@ -5,7 +5,7 @@ use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
 use luck_token::{BinOp, CompoundOp, Span, UnOp};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, Declaration,
     DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
     ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
@@ -19,20 +19,51 @@ use crate::{
     WhileLoop,
 };
 
+impl<'ast> Declaration<'ast> {
+    #[inline]
+    pub const fn new_global(span: Span, name: Name<'ast>, ty: Type<'ast>) -> Self {
+        Self::Global(DeclaredGlobal::new(span, name, ty))
+    }
+
+    #[inline]
+    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
+    pub const fn new_function(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
+        name: Name<'ast>,
+        generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+        params: List<'ast, TypedName<'ast>>,
+        vararg: Option<Box<'ast, VarArgParam<'ast>>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
+    ) -> Self {
+        Self::Function(DeclaredFunction::new(
+            span,
+            attributes,
+            declare_chain,
+            name,
+            generics,
+            params,
+            vararg,
+            return_type,
+        ))
+    }
+
+    #[inline]
+    pub const fn new_extern_type(
+        span: Span,
+        name: Name<'ast>,
+        supertype: Option<Name<'ast>>,
+        members: List<'ast, ExternTypeMember<'ast>>,
+    ) -> Self {
+        Self::ExternType(DeclaredExternType::new(span, name, supertype, members))
+    }
+}
+
 impl<'ast> DeclaredGlobal<'ast> {
     #[inline]
     pub const fn new(span: Span, name: Name<'ast>, ty: Type<'ast>) -> Self {
         Self { span, name, ty }
-    }
-
-    #[inline]
-    pub fn boxed(
-        span: Span,
-        name: Name<'ast>,
-        ty: Type<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name, ty), allocator)
     }
 }
 
@@ -81,17 +112,6 @@ impl<'ast> DeclaredExternType<'ast> {
         members: List<'ast, ExternTypeMember<'ast>>,
     ) -> Self {
         Self { span, name, supertype, members }
-    }
-
-    #[inline]
-    pub fn boxed(
-        span: Span,
-        name: Name<'ast>,
-        supertype: Option<Name<'ast>>,
-        members: List<'ast, ExternTypeMember<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, name, supertype, members), allocator)
     }
 }
 
@@ -834,55 +854,6 @@ impl<'ast> Statement<'ast> {
             generics,
             value,
             allocator,
-        ))
-    }
-
-    #[inline]
-    pub fn new_declared_global(
-        span: Span,
-        name: Name<'ast>,
-        ty: Type<'ast>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::DeclaredGlobal(DeclaredGlobal::boxed(span, name, ty, allocator))
-    }
-
-    #[inline]
-    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
-    pub fn new_declared_function(
-        span: Span,
-        attributes: List<'ast, FunctionAttribute<'ast>>,
-        declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
-        name: Name<'ast>,
-        generics: Option<Box<'ast, GenericTypeList<'ast>>>,
-        params: List<'ast, TypedName<'ast>>,
-        vararg: Option<Box<'ast, VarArgParam<'ast>>>,
-        return_type: Option<Box<'ast, Type<'ast>>>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::DeclaredFunction(DeclaredFunction::boxed(
-            span,
-            attributes,
-            declare_chain,
-            name,
-            generics,
-            params,
-            vararg,
-            return_type,
-            allocator,
-        ))
-    }
-
-    #[inline]
-    pub fn new_declared_extern_type(
-        span: Span,
-        name: Name<'ast>,
-        supertype: Option<Name<'ast>>,
-        members: List<'ast, ExternTypeMember<'ast>>,
-        allocator: &'ast Allocator,
-    ) -> Self {
-        Self::DeclaredExternType(DeclaredExternType::boxed(
-            span, name, supertype, members, allocator,
         ))
     }
 }

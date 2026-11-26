@@ -9,10 +9,12 @@
 //! The first job that needs the files walks the folders, and the main loop
 //! starts a new walk once a file is created or deleted, the folders change,
 //! or the settings do. Each file that isn't open is read once into a record,
-//! which outlives the arena it was parsed in, until the client's watcher says
-//! it changed. A cross-file request reads every open document as it stood
-//! when the request came, and every other file's record.
+//! which outlives the arena it was parsed in and knows nothing of settings,
+//! until the client's watcher says it changed. A cross-file request reads
+//! every open document as it stood when the request came, and every other
+//! file's record.
 
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::mem;
 use std::ops::Deref;
@@ -22,7 +24,7 @@ use std::sync::OnceLock;
 
 use ls_types::{Position, Uri};
 use luck_config::{ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor, walk_source_files};
-use luck_resolver::{FileSystem as _, FileSystemOs, is_definition_file};
+use luck_resolver::{FileSystem as _, FileSystemOs, ResolverGeneric, is_definition_file};
 use luck_semantic::SemanticBuilder;
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -43,7 +45,7 @@ pub(crate) struct Workspace {
     files: RwLock<FxHashMap<PathBuf, Arc<DiskFile>>>,
     /// Each file the watcher reported changed since a job last read the
     /// files, as the client named it.
-    changed: Mutex<Vec<PathBuf>>,
+    changed: Mutex<BTreeSet<PathBuf>>,
 }
 
 /// One walk of the folders, which the first job that needs its files runs.
@@ -65,7 +67,6 @@ pub(crate) struct DiskFile {
 #[derive(Debug)]
 struct FileRecord {
     uri: Uri,
-    project: Arc<LoadedProject>,
     record: ModuleRecord,
 }
 
@@ -102,14 +103,7 @@ impl Workspace {
 
     /// Makes the next job that needs the file at `path` read it again.
     pub(crate) fn forget(&self, path: PathBuf) {
-        self.changed.lock().push(path);
-    }
-
-    /// Forgets every file read and starts a new walk, as new settings need,
-    /// since they decide the files and each one's project.
-    pub(crate) fn clear(&self) {
-        self.files.write().clear();
-        self.walk_again();
+        self.changed.lock().insert(path);
     }
 
     /// The file at `path`, a canonical path.
@@ -154,13 +148,13 @@ impl Walk {
 
 impl DiskFile {
     /// Reads the file the first time a job asks, on that job's thread.
-    pub(crate) fn source(&self, session: &Session) -> Option<Source<'_>> {
+    pub(crate) fn source<'file>(&'file self, session: &'file Session) -> Option<Source<'file>> {
         let read = self.record.get_or_init(|| read_record(session, &self.path)).as_ref()?;
         Some(Source {
             uri: &read.uri,
             path: &self.path,
             record: &read.record,
-            project: &read.project,
+            resolver: session.resolver(),
         })
     }
 }
@@ -250,7 +244,6 @@ impl Deref for ProjectFilterOf {
 /// one, or `None` when it can't be read or no URI names it. A file that isn't
 /// UTF-8 reads as an editor would show it.
 fn read_record(session: &Session, path: &Path) -> Option<FileRecord> {
-    let project = session.project_for(Some(path), None);
     let bytes = session.files().read(path).ok()?;
     let text = String::from_utf8_lossy(&bytes);
     let allocator = session.allocators().get();
@@ -265,7 +258,7 @@ fn read_record(session: &Session, path: &Path) -> Option<FileRecord> {
     let line_index = LineIndex::new(&text, session.encoding());
     let mut positions = line_index.positions(&text);
     let record = ModuleRecord::new(chunk, &semantic, |span| positions.range(span));
-    Some(FileRecord { uri: session.files().uri(path)?, project, record })
+    Some(FileRecord { uri: session.files().uri(path)?, record })
 }
 
 /// A file's record, with what resolves its requires.
@@ -275,7 +268,7 @@ pub(crate) struct Source<'file> {
     /// Canonical.
     path: &'file Path,
     pub record: &'file ModuleRecord,
-    project: &'file LoadedProject,
+    resolver: &'file ResolverGeneric<Files>,
 }
 
 impl<'file> Source<'file> {
@@ -287,7 +280,7 @@ impl<'file> Source<'file> {
             uri,
             path: settings.path.as_deref()?,
             record: document.record(),
-            project: &settings.project,
+            resolver: settings.project.resolver(),
         })
     }
 
@@ -297,8 +290,8 @@ impl<'file> Source<'file> {
         match table {
             Table::Returned | Table::Exported => Some(self.path.to_path_buf()),
             Table::Required(i) => {
-                let resolver = self.project.resolver();
-                Some(resolver.resolve(self.path, &self.record.requires()[i].module).ok()?.path)
+                let module = &self.record.requires()[i].module;
+                Some(self.resolver.resolve(self.path, module).ok()?.path)
             }
         }
     }
@@ -359,10 +352,7 @@ impl<'job> WorkspaceView<'job> {
         let text: Arc<str> = String::from_utf8_lossy(&bytes).into();
         let settings = self.session.document_settings(Some(path));
         let line_index = LineIndex::new(&text, self.session.encoding());
-        let stdlib = self
-            .session
-            .type_checks()
-            .stdlib(settings.project.project(), self.session.settings().generation());
+        let stdlib = settings.project.project().stdlib().clone();
         let document = DocumentState::new(
             text,
             Arc::new(settings),

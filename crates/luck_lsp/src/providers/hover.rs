@@ -1,21 +1,19 @@
 //! The type of the name at the cursor as Luau prints it, and the comment a
 //! definition file has above what it names.
 
-use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
+use ls_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::name_at;
 use crate::type_check::Types;
 
+/// The hover of the name that starts at `name_start`, which
+/// [`name_start`](crate::providers::cursor::name_start) finds.
 pub(crate) fn hover(
     document: &DocumentState,
-    position: Position,
+    name_start: u32,
     types: &mut Types<'_>,
 ) -> Option<Hover> {
-    // Only a name hovers, so the space inside a function doesn't hover the
-    // whole function.
-    let (_, name) = name_at(document, document.offset(position))?;
-    let description = types.describe(name.span.start)?;
+    let description = types.describe(name_start)?;
     let mut value = format!("```luau\n{}\n```", description.ty);
     if let Some(documentation) = types.documentation(&description.declaration) {
         value.push_str("\n\n");

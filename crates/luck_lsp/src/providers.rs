@@ -44,7 +44,8 @@ mod tests {
 
     use super::*;
     use crate::fixtures::{document_at, session, uri};
-    use crate::type_check::{OpenModules, with_types};
+    use crate::providers::cursor::name_start;
+    use crate::type_check::with_types;
     use crate::workspace::WorkspaceView;
 
     fn serve_every_request(source: &str) {
@@ -61,14 +62,17 @@ mod tests {
             .into_iter()
             .map(|index| document.position(u32::try_from(index).expect("a small source")))
             .collect();
-        let open = OpenModules::default();
         let checked =
-            with_types(&session, &uri, &document, open, &CancellationToken::new(), |types| {
+            with_types(&session, &uri, &document, &[], &CancellationToken::new(), |types| {
                 for &position in &positions {
-                    let _ = hover::hover(&document, position, types);
+                    if let Some(start) = name_start(&document, position) {
+                        let _ = hover::hover(&document, start, types);
+                        let _ = definition::declared(start, types);
+                    }
                     let _ = completion::completion(&document, position, types);
-                    let _ = signature_help::signature_help(&document, position, types);
-                    let _ = definition::declared(&document, position, types);
+                    if let Some(call) = signature_help::call_at(&document, position) {
+                        let _ = signature_help::signature_help(&document, call, types);
+                    }
                 }
             });
         assert!(checked.is_some(), "nothing cancels the check");
@@ -81,7 +85,7 @@ mod tests {
         let session = session();
         let workspace = WorkspaceView::new(&session, &[], &|| false);
         let lints = document.lint(&|| false).expect("nothing cancels it");
-        let diagnostics = diagnostics::to_lsp(&uri, &document, &lints, &[]);
+        let diagnostics = diagnostics::to_lsp(&uri, &document, &lints);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
         let _ = code_action::code_action(

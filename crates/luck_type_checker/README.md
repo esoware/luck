@@ -49,9 +49,9 @@ assert_eq!(diags[0][0].code, "E015");
 ## API
 
 - `Checker` is the checker, with `check`, `load_definitions`, `invalidate`, `retain_type_graphs`, `describe`, and `autocomplete`.
-- `Checker::return_named_type` and `Checker::bind_type_namespace` add types a definition file can't express.
+- `Checker::type_as_roblox_studio` adds the types Roblox Studio gives past what Roblox's definition file can express.
 - `Host` is what you implement, with `source`, `resolve`, and `config`.
-- `Config` is a module's Luau config, and `SavedConfig` is one kept for a directory.
+- `Config` is a module's Luau config, and `DirectoryConfigs` sets it from the `.luaurc` and `.config.luau` files it keeps for each directory.
 - `CancellationToken` stops a running check.
 - `CheckError` says why a check returned no diagnostics.
 - `Description`, `Declaration`, and `Signature` are what `describe` returns.

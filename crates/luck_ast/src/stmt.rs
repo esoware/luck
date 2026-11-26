@@ -4,7 +4,7 @@ use luck_allocator::{Box, List};
 use luck_ast_macros::Ast;
 use luck_token::{CompoundOp, Span};
 
-use crate::definition::{DeclaredExternType, DeclaredFunction, DeclaredGlobal};
+use crate::definition::Declaration;
 use crate::expr::{Expression, SuffixedExpression, Var};
 use crate::function::{FunctionAttribute, FunctionBody};
 use crate::leaf::Name;
@@ -35,8 +35,7 @@ impl Block<'_> {
 /// Two words, like [`Expression`].
 ///
 /// A `;` isn't one. It only separates statements, so the tree leaves it out,
-/// as it does a list's commas. Only a definition file's parse builds the
-/// `Declared` variants.
+/// as it does a list's commas.
 #[derive(Debug, PartialEq, Eq, Ast)]
 #[expect(
     clippy::enum_variant_names,
@@ -60,9 +59,7 @@ pub enum Statement<'ast> {
     Continue(Span),
     CompoundAssignment(Box<'ast, CompoundAssignment<'ast>>),
     TypeDeclaration(Box<'ast, TypeDeclaration<'ast>>),
-    DeclaredGlobal(Box<'ast, DeclaredGlobal<'ast>>),
-    DeclaredFunction(Box<'ast, DeclaredFunction<'ast>>),
-    DeclaredExternType(Box<'ast, DeclaredExternType<'ast>>),
+    Declaration(Box<'ast, Declaration<'ast>>),
     Error(Span),
 }
 
@@ -104,9 +101,7 @@ impl<'ast> Statement<'ast> {
             | Self::Break(_)
             | Self::Continue(_)
             | Self::TypeDeclaration(_)
-            | Self::DeclaredGlobal(_)
-            | Self::DeclaredFunction(_)
-            | Self::DeclaredExternType(_)
+            | Self::Declaration(_)
             | Self::Error(_) => return None,
         };
         while let Expression::Suffixed(chain) = current {
@@ -133,9 +128,7 @@ impl<'ast> Statement<'ast> {
             | Self::LocalAssignment(_)
             | Self::CompoundAssignment(_)
             | Self::TypeDeclaration(_)
-            | Self::DeclaredGlobal(_)
-            | Self::DeclaredFunction(_)
-            | Self::DeclaredExternType(_)
+            | Self::Declaration(_)
             | Self::Error(_) => false,
         }
     }

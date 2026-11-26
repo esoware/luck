@@ -12,7 +12,7 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [features]
-# Derive `JsonSchema` for `Variant`, for the schema `luck_config` generates.
+# Derive `JsonSchema` for `SecurityLevel`, for the schema `luck_config` generates.
 schemars = ["dep:schemars"]
 
 [lints]

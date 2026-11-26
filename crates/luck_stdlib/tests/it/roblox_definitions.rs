@@ -19,6 +19,8 @@ use saphyr::{LoadableYamlNode as _, SafelyIndex as _, Yaml};
 use serde_json::Value;
 use tar::Archive;
 
+use crate::common::NoModules;
+
 const DUMP_URL: &str =
     "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json";
 
@@ -1035,11 +1037,8 @@ fn regenerate_roblox_definitions() {
 }
 
 /// Each security level's definitions, which every test below reads.
-fn every_level() -> Vec<(SecurityLevel, String)> {
-    SecurityLevel::ALL
-        .iter()
-        .map(|&level| (level, roblox_definitions(level).into_owned()))
-        .collect()
+fn every_level() -> [(SecurityLevel, &'static str); 4] {
+    SecurityLevel::ALL.map(|level| (level, roblox_definitions(level)))
 }
 
 #[test]
@@ -1053,23 +1052,9 @@ fn the_definitions_parse_at_every_level() {
 
 #[test]
 fn the_definitions_load_into_a_checker_at_every_level() {
-    struct NoModules;
-
-    impl Host for NoModules {
-        fn source(&self, _: &str) -> Option<Cow<'_, [u8]>> {
-            None
-        }
-
-        fn resolve(&self, _: &str, _: &str) -> Option<String> {
-            None
-        }
-
-        fn config(&self, _: &str, _: &mut Config<'_>) {}
-    }
-
     for (level, text) in every_level() {
         let mut checker = Checker::new(NoModules);
-        let loaded = checker.load_definitions("@roblox", &text);
+        let loaded = checker.load_definitions("@roblox", text);
         assert!(loaded.is_ok(), "{level:?}: {loaded:?}");
     }
 }
@@ -1089,7 +1074,7 @@ fn declares(members: &[&str], member: &str) -> bool {
 #[test]
 fn a_member_is_declared_from_the_level_it_needs_up() {
     for (level, text) in every_level() {
-        let instance = extern_type(&text, "Instance");
+        let instance = extern_type(text, "Instance");
         assert_eq!(
             declares(&instance, "function GetDebugId("),
             level >= SecurityLevel::PluginSecurity,
@@ -1101,12 +1086,12 @@ fn a_member_is_declared_from_the_level_it_needs_up() {
 #[test]
 fn a_member_left_out_takes_its_summary_with_it() {
     let levels = every_level();
-    let full = extern_type(&levels[3].1, "Instance");
+    let full = extern_type(levels[3].1, "Instance");
     let index = full.iter().position(|line| line.contains("function GetDebugId(")).unwrap();
     let summary = full[index - 1];
     assert!(summary.trim_start().starts_with("-- "), "{summary}");
 
-    assert!(!extern_type(&levels[0].1, "Instance").contains(&summary));
+    assert!(!extern_type(levels[0].1, "Instance").contains(&summary));
 }
 
 /// Any script reads `HttpService.HttpEnabled`, but writing it needs
@@ -1114,7 +1099,7 @@ fn a_member_left_out_takes_its_summary_with_it() {
 #[test]
 fn a_property_a_level_can_only_read_is_read_only_there() {
     for (level, text) in every_level() {
-        let http = extern_type(&text, "HttpService");
+        let http = extern_type(text, "HttpService");
         let member = if level >= SecurityLevel::LocalUserSecurity {
             "HttpEnabled: boolean"
         } else {
@@ -1129,7 +1114,7 @@ fn a_property_a_level_can_only_read_is_read_only_there() {
 #[test]
 fn no_level_reaches_what_needs_roblox_security() {
     for (level, text) in every_level() {
-        let player = extern_type(&text, "Player");
+        let player = extern_type(text, "Player");
         assert!(!declares(&player, "function GetGameSessionID("), "{level:?}");
         assert!(declares(&player, "read AgeChecked: "), "{level:?}");
     }

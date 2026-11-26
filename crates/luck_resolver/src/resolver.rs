@@ -19,7 +19,7 @@ pub struct Resolution {
     pub path: PathBuf,
     /// `@self` named the requiring module although a `.luaurc` in effect
     /// declares an alias named `self`, which can't override it.
-    pub is_self_alias_shadowed: bool,
+    pub(crate) is_self_alias_shadowed: bool,
 }
 
 impl Resolution {

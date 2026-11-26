@@ -7,7 +7,7 @@
 use ls_types::{GotoDefinitionResponse, Location, Position, Range, Uri};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::{local_at, name_at};
+use crate::providers::cursor::local_at;
 use crate::providers::document_link;
 use crate::type_check::Types;
 use crate::workspace::{Source, WorkspaceView};
@@ -52,13 +52,10 @@ pub(crate) fn goto(
     }))
 }
 
-/// Where a definition file declares what the name at `position` refers to.
-pub(crate) fn declared(
-    document: &DocumentState,
-    position: Position,
-    types: &mut Types<'_>,
-) -> Option<GotoDefinitionResponse> {
-    let (_, name) = name_at(document, document.offset(position))?;
-    let description = types.describe(name.span.start)?;
+/// Where a definition file declares what the name that starts at
+/// `name_start` refers to, which
+/// [`name_start`](crate::providers::cursor::name_start) finds.
+pub(crate) fn declared(name_start: u32, types: &mut Types<'_>) -> Option<GotoDefinitionResponse> {
+    let description = types.describe(name_start)?;
     types.location(&description.declaration).map(GotoDefinitionResponse::Scalar)
 }

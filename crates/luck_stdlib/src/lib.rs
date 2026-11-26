@@ -57,7 +57,7 @@ pub use analysis::{SemanticAnalysis, analyze};
 pub use definitions::{luau_definitions, roblox_definitions};
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use security_level::SecurityLevel;
-pub use stdlib::{Stdlib, luau_library, roblox_library};
+pub use stdlib::{Stdlib, library_for, luau_library, roblox_library};
 pub use stdlib_map::StdlibMap;
 pub use stdlib_model::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibNamespace,

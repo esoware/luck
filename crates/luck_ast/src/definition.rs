@@ -12,6 +12,14 @@ use crate::leaf::Name;
 use crate::stmt::TypedName;
 use crate::types::{GenericTypeList, Type, TypeField};
 
+/// A `declare`, which only a definition file's parse builds.
+#[derive(Debug, PartialEq, Eq, Ast)]
+pub enum Declaration<'ast> {
+    Global(DeclaredGlobal<'ast>),
+    Function(DeclaredFunction<'ast>),
+    ExternType(DeclaredExternType<'ast>),
+}
+
 /// `declare name: T`, a global of type `T`.
 #[derive(Debug, PartialEq, Eq, Ast)]
 pub struct DeclaredGlobal<'ast> {

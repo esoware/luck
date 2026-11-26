@@ -92,13 +92,9 @@ jobs:
           rustup toolchain install
           rustup target add "$RUST_TARGET"
 
-      # macOS keeps Xcode's clang, because an LLVM release's libc++ headers call symbols, such as
-      # `std::__hash_memory`, that older macOS versions' libc++ doesn't export.
-      - if: runner.os != 'macOS'
-        uses: $/.github/actions/llvm
+      - uses: $/.github/actions/llvm
 
-      - if: runner.os != 'macOS'
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: just@1.59.0
 
@@ -115,15 +111,8 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build luck
-        if: runner.os != 'macOS'
         shell: bash
         run: just release-binary "$RUST_TARGET"
-
-      # rustc's -Clinker-plugin-lto passes Apple targets' linker -plugin-opt arguments, which
-      # neither ld64 nor ld64.lld accepts, so macOS builds without cross-language LTO.
-      - name: Build luck
-        if: runner.os == 'macOS'
-        run: cargo build -p luck_cli --release --target "$RUST_TARGET"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

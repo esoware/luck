@@ -144,5 +144,5 @@ return count
     assert_eq!(diags[0].len(), 1, "{:?}", diags[0]);
     let errors = checker.host_mut().config_errors.get_mut();
     assert!(!errors.is_empty(), "{errors:?}");
-    assert_eq!(errors[0], "Expected ',' or '}' at line 1, got \"lint\" instead");
+    assert_eq!(errors[0], "invalid config: Expected ',' or '}' at line 1, got \"lint\" instead");
 }

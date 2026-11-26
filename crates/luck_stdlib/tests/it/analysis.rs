@@ -1,12 +1,12 @@
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, TreeCounts};
-use luck_stdlib::{SemanticAnalysis, analyze};
+use luck_stdlib::{SemanticAnalysis, analyze, library_for};
 
-use crate::common::{library, parse};
+use crate::common::parse;
 
 fn analyze_source<'ast>(allocator: &'ast Allocator, source: &'ast str) -> SemanticAnalysis<'ast> {
     let chunk = parse(allocator, source);
-    analyze(chunk, TreeCounts::default(), library(false)).0
+    analyze(chunk, TreeCounts::default(), library_for(false)).0
 }
 
 #[test]
@@ -35,8 +35,8 @@ fn extra_globals_are_known_globals() {
 fn roblox_globals_are_known_only_with_roblox_s_api() {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, "print(game, bit32)");
-    let (standalone, _) = analyze(chunk, TreeCounts::default(), library(false));
-    let (roblox, _) = analyze(chunk, TreeCounts::default(), library(true));
+    let (standalone, _) = analyze(chunk, TreeCounts::default(), library_for(false));
+    let (roblox, _) = analyze(chunk, TreeCounts::default(), library_for(true));
     assert!(!standalone.is_known_global("game"));
     assert!(roblox.is_known_global("game"));
     assert!(standalone.is_known_global("bit32"));
@@ -52,7 +52,7 @@ fn analysis_reports_the_checker_s_errors() {
 const x = 1
 x = 2",
     );
-    let (_, diagnostics) = analyze(chunk, TreeCounts::default(), library(false));
+    let (_, diagnostics) = analyze(chunk, TreeCounts::default(), library_for(false));
     let messages: Vec<&str> = diagnostics.iter().map(|diag| &*diag.message).collect();
     assert_eq!(messages, ["attempt to assign to const variable `x`"]);
 }
@@ -128,7 +128,7 @@ table.insert(s)",
 fn last_call_callee(source: &str, has_roblox: bool) -> Option<String> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), library(has_roblox));
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(has_roblox));
     let last_stmt = chunk.stmts.last();
     let chain = if let Some(Statement::FunctionCall(chain)) = last_stmt {
         chain
@@ -139,11 +139,12 @@ fn last_call_callee(source: &str, has_roblox: bool) -> Option<String> {
     } else {
         panic!("the last statement must be a call or a local assignment of one");
     };
-    Some(analysis.resolve_callee(chain.last_call()?)?.name())
+    let (index, _) = chain.calls().last()?;
+    Some(analysis.chain_callees(chain).callee(index)?.name())
 }
 
 #[test]
-fn resolve_callee_bails_on_a_global_the_file_rebinds() {
+fn a_call_of_a_global_the_file_rebinds_resolves_to_nothing() {
     let source = "\
 function tostring(a, b) return a end
 tostring(1, 2)";
@@ -155,23 +156,16 @@ tostring(1, 2)";
 }
 
 /// The callee of each call in the last statement's chain, from one
-/// `chain_callees`. Each must match what `resolve_callee` gives the call
-/// alone.
+/// `chain_callees`.
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), library(false));
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(false));
     let Some(Statement::FunctionCall(chain)) = chunk.stmts.last() else {
         panic!("the last statement must be a call");
     };
     let mut callees = analysis.chain_callees(chain);
-    let mut names = Vec::new();
-    for (index, call) in chain.calls() {
-        let name = callees.callee(index).map(|callee| callee.name());
-        assert_eq!(name, analysis.resolve_callee(call).map(|callee| callee.name()));
-        names.push(name);
-    }
-    names
+    chain.calls().map(|(index, _)| callees.callee(index).map(|callee| callee.name())).collect()
 }
 
 #[test]

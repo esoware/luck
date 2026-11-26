@@ -4,16 +4,15 @@
 use std::str::FromStr as _;
 
 use ls_types::notification::{DidChangeConfiguration, DidCloseTextDocument};
-use ls_types::request::{Formatting, GotoDefinition, HoverRequest, Rename};
+use ls_types::request::{Formatting, HoverRequest, Rename};
 use ls_types::{
     Diagnostic, DidChangeConfigurationParams, DidCloseTextDocumentParams, DocumentFormattingParams,
-    FormattingOptions, GotoDefinitionParams, GotoDefinitionResponse, HoverContents, HoverParams,
-    Location, MessageType, NumberOrString, PartialResultParams, Position, Range, RenameParams, Uri,
-    WorkDoneProgressParams,
+    FormattingOptions, HoverContents, HoverParams, MessageType, NumberOrString, Position, Range,
+    RenameParams, Uri, WorkDoneProgressParams,
 };
 use serde_json::{Value, json};
 
-use crate::common::{Client, document, position_params};
+use crate::common::{Client, definition, document, position_params};
 
 /// The URI an editor gives `name` in its own scheme.
 fn uri(name: &str) -> Uri {
@@ -68,6 +67,12 @@ fn codes(diags: &[Diagnostic]) -> Vec<&str> {
         .collect()
 }
 
+/// The next diagnostics published for `uri` with a type error, which go out
+/// after the lints.
+fn checked(client: &mut Client, uri: &Uri, version: Option<i32>) -> Vec<Diagnostic> {
+    client.diagnostics_where(uri, version, |diags| codes(diags).contains(&"E015"))
+}
+
 /// The next diagnostics published for `uri` with one whose message is
 /// `message`.
 fn wait_for(client: &mut Client, uri: &Uri, message: &str) -> Vec<Diagnostic> {
@@ -79,25 +84,11 @@ fn wait_for(client: &mut Client, uri: &Uri, message: &str) -> Vec<Diagnostic> {
     }
 }
 
-fn definition(client: &mut Client, uri: &Uri, line: u32, utf16_column: u32) -> Location {
-    let found = client
-        .request::<GotoDefinition>(GotoDefinitionParams {
-            text_document_position_params: position_params(uri, line, utf16_column),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-        })
-        .expect("a definition");
-    let GotoDefinitionResponse::Scalar(location) = found else {
-        panic!("one location: {found:?}");
-    };
-    location
-}
-
 #[test]
 fn a_document_reads_the_pushed_definitions_and_modules() {
     let (mut client, main) = started();
 
-    let diags = client.diagnostics(&main, Some(1));
+    let diags = checked(&mut client, &main, Some(1));
 
     assert_eq!(codes(&diags), ["E015"], "only the wrong argument: {diags:?}");
     assert_eq!(diags[0].message, "Expected this to be 'number', but got 'string'");
@@ -178,7 +169,7 @@ fn a_member_renames_across_the_pushed_files() {
 #[test]
 fn a_pushed_definition_file_s_update_reaches_the_documents() {
     let (mut client, main) = started();
-    assert_eq!(codes(&client.diagnostics(&main, Some(1))), ["E015"]);
+    assert_eq!(codes(&checked(&mut client, &main, Some(1))), ["E015"]);
 
     client.push(&[(
         &uri("app.d.luau"),
@@ -196,7 +187,7 @@ fn a_pushed_definition_file_s_update_reaches_the_documents() {
 #[test]
 fn a_deleted_module_no_longer_resolves() {
     let (mut client, main) = started();
-    assert_eq!(codes(&client.diagnostics(&main, Some(1))), ["E015"]);
+    assert_eq!(codes(&checked(&mut client, &main, Some(1))), ["E015"]);
 
     client.push(&[(&uri("util.luau"), None)]);
 
@@ -229,7 +220,7 @@ return count
     );
     let mut client = client;
 
-    let diags = client.diagnostics(&main, Some(1));
+    let diags = checked(&mut client, &main, Some(1));
 
     assert_eq!(codes(&diags), ["E015"], "the alias resolves, so `greet` is typed: {diags:?}");
     assert_eq!(diags[0].message, "Expected this to be 'number', but got 'string'");
@@ -362,7 +353,13 @@ alert(\"hi\", \"eight\")
     wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
 
     client.open(&definitions, "declare function alert(message: string, seconds: Missing): ()\n");
-    let rejected = client.diagnostics(&definitions, Some(1));
+    let rejected = loop {
+        let published = client.next_published(&definitions);
+        assert_ne!(published.version, None, "only the document's own publish carries it");
+        if !published.diagnostics.is_empty() {
+            break published.diagnostics;
+        }
+    };
     assert_eq!(codes(&rejected), ["E015"], "{rejected:?}");
     assert_eq!(rejected[0].message, "Unknown type 'Missing'");
     wait_for(&mut client, &main, "Unknown global 'alert'; consider assigning to it first");
@@ -372,7 +369,7 @@ alert(\"hi\", \"eight\")
         2,
         "declare function alert(message: string, seconds: boolean): ()\n",
     );
-    assert_eq!(client.diagnostics(&definitions, Some(2)), []);
+    client.diagnostics_where(&definitions, Some(2), <[Diagnostic]>::is_empty);
     wait_for(&mut client, &main, "Expected this to be 'boolean', but got 'string'");
 
     client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
@@ -450,13 +447,13 @@ alert(game.Name, \"eight\")
 
     client.replace_all(&definitions, 2, DEFINITIONS);
 
-    assert_eq!(client.diagnostics(&definitions, Some(2)), []);
+    client.diagnostics_where(&definitions, Some(2), <[Diagnostic]>::is_empty);
     let loaded = wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
     assert_eq!(codes(&loaded), ["E015"], "{loaded:?}");
 }
 
 /// A global an open definition file declares, and its pushed file doesn't,
-/// is known to the lints exactly while the checker knows it.
+/// is known to the lints and the checker alike.
 #[test]
 fn an_open_definition_file_s_globals_reach_the_lints_with_the_types() {
     fn wait_until_known(client: &mut Client, uri: &Uri, is_known: bool) {
@@ -465,8 +462,7 @@ fn an_open_definition_file_s_globals_reach_the_lints_with_the_types() {
             let is_linted = codes(&diags).contains(&"undefined_variable");
             let is_typed =
                 diags.iter().any(|diag| diag.message.starts_with("Unknown global 'notify'"));
-            assert_eq!(is_linted, is_typed, "the lints and the types disagree: {diags:?}");
-            if is_linted != is_known {
+            if is_linted != is_known && is_typed != is_known {
                 return;
             }
         }

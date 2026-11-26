@@ -269,11 +269,23 @@ unsafe extern "C" {
 
 /// An error Analysis reported.
 pub(crate) struct LuauError {
-    /// The module or definitions it's in, by name.
-    pub(crate) module: String,
     pub(crate) is_syntax_error: bool,
     pub(crate) location: Option<LuckLocation>,
     pub(crate) message: String,
+}
+
+impl LuauError {
+    /// # Safety
+    ///
+    /// Its strings are the shim's for the callback it's passed to.
+    unsafe fn new(error: &LuckError) -> Self {
+        Self {
+            is_syntax_error: error.is_syntax_error,
+            location: error.has_location.then_some(error.location),
+            // SAFETY: the caller promises it.
+            message: unsafe { error.message.owned() },
+        }
+    }
 }
 
 /// What Analysis records of the declaration a name refers to: Luau's
@@ -349,6 +361,12 @@ impl<H: Host> RawChecker<H> {
         errors
     }
 
+    /// Makes a call of `member`, a function in the table the global `owner`
+    /// holds, or else a method of the extern type `owner`, whose first
+    /// argument is a string literal, return the global extern type the string
+    /// names when that extends the extern type `member` returns, or else
+    /// report the name as an unknown type. It does nothing when `owner` has no
+    /// such member or the member returns no extern type.
     pub(crate) fn return_named_type(&mut self, owner: &str, member: &str) {
         // SAFETY: the names outlive the call, which copies them.
         unsafe {
@@ -360,6 +378,10 @@ impl<H: Host> RawChecker<H> {
         }
     }
 
+    /// Moves each extern type that extends `supertype`, and whose name is
+    /// `namespace` and more, under the type namespace `namespace` by the rest
+    /// of its name, which Luau then names it after, so `EnumMaterial` is
+    /// `Enum.Material`.
     pub(crate) fn bind_type_namespace(&mut self, namespace: &str, supertype: &str) {
         // SAFETY: the names outlive the call, which copies them.
         unsafe {
@@ -382,14 +404,15 @@ impl<H: Host> RawChecker<H> {
     }
 
     /// The errors of each of `modules`, in order, from checking them, or the
-    /// internal compiler error Analysis threw. It hands each task Analysis
-    /// splits the work into to `submit`, and returns once every task has run.
+    /// internal compiler error Analysis threw, with the module it threw in. It
+    /// hands each task Analysis splits the work into to `submit`, and returns
+    /// once every task has run.
     pub(crate) fn check(
         &mut self,
         modules: &[&str],
         cancellation: &CancellationToken,
         mut submit: &mut dyn FnMut(Task),
-    ) -> Result<Vec<Vec<LuauError>>, LuauError> {
+    ) -> Result<Vec<Vec<LuauError>>, (String, LuauError)> {
         let mut errors: Vec<Vec<LuauError>> =
             iter::repeat_with(Vec::new).take(modules.len()).collect();
         let checked: Vec<LuckModule> = modules
@@ -400,10 +423,11 @@ impl<H: Host> RawChecker<H> {
                 errors: LuckErrors::new(module_errors),
             })
             .collect();
-        let mut failure = Vec::new();
+        let mut failure: Option<(String, LuauError)> = None;
         let executor = LuckExecutor { context: (&raw mut submit).cast(), submit: submit_task };
-        // SAFETY: the names, the token, `submit`, and every list of errors
-        // outlive the call, which waits for every task it submits.
+        let failures = LuckErrors { context: (&raw mut failure).cast(), push: push_failure };
+        // SAFETY: the names, the token, `submit`, every list of errors, and
+        // `failure` outlive the call, which waits for every task it submits.
         unsafe {
             luck_checker_check(
                 self.checker,
@@ -411,10 +435,10 @@ impl<H: Host> RawChecker<H> {
                 checked.len(),
                 cancellation.raw.0,
                 executor,
-                LuckErrors::new(&mut failure),
+                failures,
             );
         }
-        failure.pop().map_or(Ok(errors), Err)
+        failure.map_or(Ok(errors), Err)
     }
 
     /// What's at the zero-based `line` and byte `column` of `module`.
@@ -490,7 +514,8 @@ impl Task {
 }
 
 /// The config Luau checks a module under, which starts as Luau's defaults,
-/// for the one call to [`Host::config`] that borrows it.
+/// for the one call to [`Host::config`] that borrows it, and which
+/// [`DirectoryConfigs::apply`](crate::DirectoryConfigs::apply) sets.
 #[derive(Debug)]
 pub struct Config<'config> {
     raw: NonNull<CxxConfig>,
@@ -502,13 +527,10 @@ pub struct Config<'config> {
 
 impl Config<'_> {
     /// Applies the text of a `.luaurc` over what's set, as Luau's own
-    /// `parseConfig` reads it.
-    ///
-    /// # Errors
-    ///
-    /// Returns Luau's error, in its own words, for the first key it can't
-    /// read, where it stops with the keys before it applied.
-    pub fn apply_luaurc(&mut self, text: &str) -> Result<(), String> {
+    /// `parseConfig` reads it, or returns Luau's error, in its own words, for
+    /// the first key it can't read, where it stops with the keys before it
+    /// applied.
+    pub(crate) fn apply_luaurc(&mut self, text: &str) -> Result<(), String> {
         let mut errors = Vec::new();
         // SAFETY: the config is the one the frontend asked the host for, for
         // the call `self` is borrowed in, and the text and `errors` outlive
@@ -528,12 +550,10 @@ impl Config<'_> {
     /// `extractLuauConfig` does. It stops the source once it has run for a
     /// second, or once the check that asked for the config is cancelled.
     ///
-    /// # Errors
-    ///
-    /// Returns Luau's error, in its own words, when the source doesn't run,
+    /// It returns Luau's error, in its own words, when the source doesn't run,
     /// is stopped, or returns what Luau can't read, where it stops with the
     /// keys before it applied.
-    pub fn apply_luau_config(&mut self, source: &str) -> Result<(), String> {
+    pub(crate) fn apply_luau_config(&mut self, source: &str) -> Result<(), String> {
         let mut errors = Vec::new();
         // SAFETY: as for `apply_luaurc`, and the token is the one the
         // frontend passed with the config, for the same call.
@@ -548,15 +568,11 @@ impl Config<'_> {
         errors.pop().map_or(Ok(()), |error| Err(error.message))
     }
 
-    /// A copy of what's set, which [`Self::set`] sets on another module, so
-    /// a host that keeps the config of each directory, as `luau-analyze`
-    /// does, runs a `.config.luau` once for every module below it, or `None`
-    /// once the check that asked for the config is cancelled, which may have
-    /// stopped a `.config.luau` short.
-    pub fn saved(&self) -> Option<SavedConfig> {
-        // SAFETY: the token is the one the frontend passed with the config,
-        // for the call `self` is borrowed in.
-        if unsafe { luck_cancellation_is_cancelled(self.cancellation) } {
+    /// A copy of what's set, which [`Self::set`] sets on another module, or
+    /// `None` once the check that asked for the config is cancelled, which
+    /// may have stopped a `.config.luau` short.
+    pub(crate) fn saved(&self) -> Option<SavedConfig> {
+        if self.is_cancelled() {
             return None;
         }
         // SAFETY: the config is the one the frontend asked the host for, for
@@ -565,16 +581,23 @@ impl Config<'_> {
     }
 
     /// Sets what `saved` holds in place of what's set.
-    pub fn set(&mut self, saved: &SavedConfig) {
+    pub(crate) fn set(&mut self, saved: &SavedConfig) {
         // SAFETY: as for `apply_luaurc`, and `saved` outlives the call, which
         // copies it.
         unsafe { luck_config_set(self.raw, saved.raw) };
     }
+
+    /// Whether the check that asked for the config is cancelled.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        // SAFETY: the token is the one the frontend passed with the config,
+        // for the call `self` is borrowed in.
+        unsafe { luck_cancellation_is_cancelled(self.cancellation) }
+    }
 }
 
-/// A copy of a [`Config`], which a host keeps to set on other modules.
+/// A copy of a [`Config`], kept to set on other modules.
 #[derive(Debug)]
-pub struct SavedConfig {
+pub(crate) struct SavedConfig {
     raw: NonNull<CxxConfig>,
 }
 
@@ -734,7 +757,7 @@ extern "C" fn read_config<H: Host>(
 ) {
     // SAFETY: as in `read_source`.
     if let Some((context, module)) = unsafe { host_call::<H>(context, module) } {
-        context.host.config(module, &mut Config { raw: config, cancellation, call: PhantomData });
+        context.config(module, &mut Config { raw: config, cancellation, call: PhantomData });
     }
 }
 
@@ -821,14 +844,18 @@ extern "C" fn push_error(context: *mut c_void, error: &LuckError) {
     // SAFETY: the context is the `Vec` a `LuckErrors` was made over, which
     // nothing else borrows during the call.
     let errors = unsafe { &mut *context.cast::<Vec<LuauError>>() };
-    errors.push(LuauError {
-        // SAFETY: the error's strings are the shim's for this call.
-        module: unsafe { error.module.owned() },
-        is_syntax_error: error.is_syntax_error,
-        location: error.has_location.then_some(error.location),
-        // SAFETY: as for the module.
-        message: unsafe { error.message.owned() },
-    });
+    // SAFETY: the error's strings are the shim's for this call.
+    errors.push(unsafe { LuauError::new(error) });
+}
+
+extern "C" fn push_failure(context: *mut c_void, error: &LuckError) {
+    // SAFETY: the context is the failure `RawChecker::check` passes, which
+    // nothing else borrows during the call.
+    let failure = unsafe { &mut *context.cast::<Option<(String, LuauError)>>() };
+    // SAFETY: the error's strings are the shim's for this call.
+    let module = unsafe { error.module.owned() };
+    // SAFETY: as for the module.
+    *failure = Some((module, unsafe { LuauError::new(error) }));
 }
 
 extern "C" fn push_alias(context: *mut c_void, name: LuckStr, value: LuckStr) {

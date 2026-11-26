@@ -59,76 +59,76 @@ fn the_builtin_definitions_are_luaus_and_luck_parses_them() {
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
 }
 
-const SHAPES: &str = "
-declare extern type Shape with
-    Sides: number
-end
-declare extern type Circle extends Shape with end
-declare extern type Square extends Shape with end
-declare extern type Registry with
-    function Get(self, kind: string): Shape
-end
-declare Shapes: { new: (kind: string) -> Shape }
-declare registry: Registry
-
-declare extern type ColorItem with
+const ROBLOX: &str = "
+declare extern type Instance with
     Name: string
 end
-declare extern type ColorRed extends ColorItem with end
-declare extern type ColorBlue extends ColorItem with end
-declare Color: { Red: ColorRed, Blue: ColorBlue }
+declare extern type Part extends Instance with end
+declare extern type Players extends Instance with end
+declare extern type ServiceProvider extends Instance with
+    function FindService(self, className: string): Instance
+    function GetService(self, className: string): Instance
+end
+declare Instance: { new: (className: string) -> Instance }
+declare game: ServiceProvider
+
+declare extern type EnumItem with
+    Name: string
+end
+declare extern type EnumMaterial extends EnumItem with end
+declare extern type EnumFont extends EnumItem with end
+declare Enum: { Material: { Plastic: EnumMaterial }, Font: { Arial: EnumFont } }
 ";
 
-const SHAPES_MAIN: &str = r#"--!strict
-local circle: Circle = Shapes.new("Circle")
-local square: Square = registry:Get("Square")
-local triangle = Shapes.new("Triangle")
-local color = Shapes.new("ColorItem")
-local function make(kind: string): Shape
-    return Shapes.new(kind)
+const ROBLOX_MAIN: &str = r#"--!strict
+local part: Part = Instance.new("Part")
+local players: Players = game:GetService("Players")
+local found: Players = game:FindService("Players")
+local typo = Instance.new("Parts")
+local item = Instance.new("EnumItem")
+local function make(className: string): Instance
+    return Instance.new(className)
 end
-local red: Color.Red = Color.Red
-local blue: Color.Blue = Color.Red
-return circle, square, triangle, color, make, red, blue
+local plastic: Enum.Material = Enum.Material.Plastic
+local arial: Enum.Material = Enum.Font.Arial
+return part, players, found, typo, item, make, plastic, arial
 "#;
 
-/// `Triangle` names no type, and `ColorItem` one that isn't a `Shape`.
+/// `Parts` names no type, and `EnumItem` one that isn't an `Instance`.
 #[test]
-fn hooks_return_the_type_a_string_names_and_bind_a_type_namespace() {
-    let mut checker = checker(&[("main", SHAPES_MAIN)]);
-    checker.load_definitions("@shapes", SHAPES).unwrap();
-    checker.return_named_type("Shapes", "new");
-    checker.return_named_type("Registry", "Get");
-    checker.bind_type_namespace("Color", "ColorItem");
+fn roblox_studio_types_a_class_a_string_names_and_binds_enum() {
+    let mut checker = checker(&[("main", ROBLOX_MAIN)]);
+    checker.load_definitions("@roblox", ROBLOX).unwrap();
+    checker.type_as_roblox_studio();
 
     let diags = check(&mut checker, &["main"]).unwrap();
 
     assert_eq!(
-        described(&diags[0], SHAPES_MAIN),
+        described(&diags[0], ROBLOX_MAIN),
         [
-            ("E015", "Unknown type 'Triangle'".to_owned(), "\"Triangle\""),
-            ("E015", "Unknown type 'ColorItem'".to_owned(), "\"ColorItem\""),
+            ("E015", "Unknown type 'Parts'".to_owned(), "\"Parts\""),
+            ("E015", "Unknown type 'EnumItem'".to_owned(), "\"EnumItem\""),
             (
                 "E015",
-                "Expected this to be 'Color.Blue', but got 'Color.Red'".to_owned(),
-                "Color.Red"
+                "Expected this to be 'Enum.Material', but got 'Enum.Font'".to_owned(),
+                "Enum.Font.Arial"
             ),
         ]
     );
 }
 
 #[test]
-fn definitions_alone_name_no_type_by_a_string_and_bind_no_namespace() {
-    let mut checker = checker(&[("main", SHAPES_MAIN)]);
-    checker.load_definitions("@shapes", SHAPES).unwrap();
+fn roblox_definitions_alone_name_no_class_by_a_string_and_bind_no_enum() {
+    let mut checker = checker(&[("main", ROBLOX_MAIN)]);
+    checker.load_definitions("@roblox", ROBLOX).unwrap();
 
     let diags = check(&mut checker, &["main"]).unwrap();
 
     let messages: Vec<String> =
-        described(&diags[0], SHAPES_MAIN).into_iter().map(|(_, message, _)| message).collect();
+        described(&diags[0], ROBLOX_MAIN).into_iter().map(|(_, message, _)| message).collect();
     assert!(
-        messages.contains(&"Expected this to be 'Circle', but got 'Shape'".to_owned()),
+        messages.contains(&"Expected this to be 'Part', but got 'Instance'".to_owned()),
         "{messages:?}"
     );
-    assert!(messages.contains(&"Unknown type 'Color.Red'".to_owned()), "{messages:?}");
+    assert!(messages.contains(&"Unknown type 'Enum.Material'".to_owned()), "{messages:?}");
 }

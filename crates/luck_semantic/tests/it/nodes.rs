@@ -110,7 +110,7 @@ do end",
     });
     assert_eq!(body_block.map(|block| block.scope().index()), Some(1));
     assert_eq!(
-        nodes.ancestor_kinds(body).map(AstKind::ty).collect::<Vec<_>>(),
+        nodes.ancestor_ids(body).map(|ancestor| nodes.kind(ancestor).ty()).collect::<Vec<_>>(),
         [AstType::LocalFunction, AstType::Block]
     );
 }

@@ -148,7 +148,7 @@ where
                     let directory = WalkEntry { path, depth };
                     let is_excluded = visitor
                         .directory_filter(&directory)
-                        .is_some_and(|filter| filter.excludes_canonical_tree(&canonical));
+                        .is_some_and(|filter| filter.excludes_tree(&canonical));
                     return if is_excluded || !visitor.enters(&directory) {
                         WalkState::Skip
                     } else {

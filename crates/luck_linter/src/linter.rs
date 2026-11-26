@@ -75,7 +75,8 @@ impl Linter {
     /// A parse with errors yields its errors, each an E008, and no rules run,
     /// so neither config nor a directive turns one off. So does a clean parse
     /// of a chunk Luau refuses to compile, with the errors semantic analysis
-    /// finds, such as a write to a `const` local.
+    /// finds, such as a write to a `const` local. A definition file's parse,
+    /// which holds no code for a rule to read, yields its errors alone.
     ///
     /// # Panics
     ///
@@ -87,7 +88,7 @@ impl Linter {
         fixes: FixKind,
         timings: Option<&RuleTimings>,
     ) -> Vec<Message> {
-        if !parse.errors.is_empty() {
+        if parse.is_definition_file || !parse.errors.is_empty() {
             return error_messages(&parse.errors);
         }
         let analysis = self.analyze(parse, stdlib);
@@ -111,8 +112,9 @@ impl Linter {
         timings: Option<&RuleTimings>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Option<Vec<Message>> {
-        if !analysis.parse.errors.is_empty() {
-            return Some(error_messages(&analysis.parse.errors));
+        let parse = analysis.parse;
+        if parse.is_definition_file || !parse.errors.is_empty() {
+            return Some(error_messages(&parse.errors));
         }
         if !analysis.errors.is_empty() {
             return Some(error_messages(&analysis.errors));

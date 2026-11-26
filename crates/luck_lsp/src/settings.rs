@@ -2,26 +2,25 @@
 //! gives a config, every document takes the project of that config.
 //!
 //! Results, misses and configs that don't load included, stay cached until a
-//! config file changes, or the client gives another config. A lookup reads
-//! the files, so only workers make one.
+//! config file changes, or the client gives another config, and a project
+//! that lists a definition file until that file changes. A lookup reads the
+//! files, so only workers make one.
 
-use std::ffi::OsString;
-use std::mem;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ls_types::Uri;
 use luck_config::{
-    CONFIG_FILE_NAME, ConfigError, EDITORCONFIG_FILE_NAME, Editorconfigs, Project, find_config,
+    CONFIG_FILE_NAME, ConfigError, DefinitionSource, Editorconfigs, Project, find_config,
 };
-use luck_formatter::FormatOptions;
 use luck_linter::Linter;
 use luck_resolver::{FileSystem as _, ResolverGeneric, is_definition_file};
-use luck_type_checker::luau_config_aliases;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::files::Files;
+use crate::type_check::{TypeCheck, TypeChecks};
 
 /// What a document's path and the project around it fix, which every
 /// version of the document shares until the settings change.
@@ -29,12 +28,14 @@ use crate::files::Files;
 pub(crate) struct DocumentSettings {
     /// Canonical, or `None` for a document with no file.
     pub path: Option<PathBuf>,
+    /// As [`located_path`](luck_config::located_path) gives it, which the
+    /// project's globs and the `.editorconfig` files match.
+    pub located: Option<PathBuf>,
     pub project: Arc<LoadedProject>,
     /// The linter of the project's lint settings, with the overrides the
     /// path matches. Publishing, code actions, and fix-all all lint with it,
     /// so none of them fixes a diagnostic the user was never shown.
     pub linter: Arc<Linter>,
-    pub format: FormatOptions,
     /// Whether the project's `include` and `exclude` take the document in.
     /// One they leave out gets no diagnostics and no fixes.
     pub is_included: bool,
@@ -43,33 +44,50 @@ pub(crate) struct DocumentSettings {
     pub is_definitions: bool,
 }
 
-/// A project, and the resolver its files' requires go through, so each
-/// request answers from what the ones before it read.
+/// A project, with the session's resolver, which its files' requires go
+/// through, and the checker of its files once a job needs it.
 #[derive(Debug)]
 pub(crate) struct LoadedProject {
     project: Project,
     files: Files,
-    resolver: ResolverGeneric<Files>,
+    resolver: Arc<ResolverGeneric<Files>>,
+    check: OnceLock<Arc<TypeCheck>>,
 }
 
 impl LoadedProject {
-    pub(crate) fn new(project: Project, files: Files) -> Self {
-        let resolver = ResolverGeneric::new_with_file_system(files.clone())
-            .with_luau_config(luau_config_aliases);
-        Self { project, files, resolver }
+    pub(crate) const fn new(
+        project: Project,
+        files: Files,
+        resolver: Arc<ResolverGeneric<Files>>,
+    ) -> Self {
+        Self { project, files, resolver, check: OnceLock::new() }
     }
 
     pub(crate) const fn project(&self) -> &Project {
         &self.project
     }
 
-    pub(crate) const fn resolver(&self) -> &ResolverGeneric<Files> {
+    pub(crate) fn resolver(&self) -> &ResolverGeneric<Files> {
         &self.resolver
     }
 
     /// The URI of the file at `path`, as the project's files name it.
     pub(crate) fn uri(&self, path: &Path) -> Option<Uri> {
         self.files.uri(path)
+    }
+
+    /// The checker of its files, which it holds from the first time a job
+    /// asks, so `checks` keeps it.
+    pub(crate) fn type_check(&self, checks: &TypeChecks) -> &Arc<TypeCheck> {
+        self.check.get_or_init(|| checks.of(&self.project))
+    }
+
+    /// Whether it lists a definition file named `name`.
+    pub(crate) fn lists_definition(&self, name: &OsStr) -> bool {
+        self.project.definitions().iter().any(|source| match source {
+            DefinitionSource::File { path, .. } => path.file_name() == Some(name),
+            DefinitionSource::Roblox => false,
+        })
     }
 }
 
@@ -94,6 +112,7 @@ pub(crate) struct GivenConfig {
 #[derive(Debug)]
 pub(crate) struct SettingsCache {
     files: Files,
+    resolver: Arc<ResolverGeneric<Files>>,
     given: Option<GivenConfig>,
     /// One lock for all of them, so a reader never sees a directory without
     /// its project.
@@ -105,6 +124,9 @@ struct Lookups {
     /// Bumped by each clear, so a lookup that read the disk before one
     /// neither keeps nor reports what it read.
     generation: u64,
+    /// Bumped by each change to a definition file, so a lookup that read
+    /// one before keeps no project that lists one.
+    definition_edits: u64,
     /// Shared by every document without a file path.
     untitled: Option<Arc<LoadedProject>>,
     /// By the directory a document is in. A client's config gives every
@@ -113,18 +135,16 @@ struct Lookups {
     /// By the path of their `luck.json`, so documents in several of a
     /// project's directories share it.
     by_config: FxHashMap<PathBuf, Arc<LoadedProject>>,
-    /// Every project above, once each.
-    projects: Vec<Arc<LoadedProject>>,
     /// The `.editorconfig` files formatting has read, each read once until a
-    /// watched config file changes.
+    /// watched one changes.
     editorconfigs: Arc<Editorconfigs>,
-    /// The name of every file a project read, beside `luck.json`, which a
-    /// watched change has to touch to matter.
+    /// The name of every file but a definition file that a project read
+    /// beside `luck.json`, which a watched change has to touch to matter.
     config_names: FxHashSet<OsString>,
-    /// Each config file a reported load error is in. While there's one, any
-    /// JSON file a broken chain might extend, and any Luau file it might name
-    /// as a definition file, matters.
-    broken: Vec<PathBuf>,
+    /// Whether a lookup reported a config that doesn't load. While one
+    /// doesn't, creating any JSON file a broken chain might extend, or any
+    /// Luau file it might name as a definition file, matters.
+    is_broken: bool,
 }
 
 impl Lookups {
@@ -150,16 +170,17 @@ impl Lookups {
             self.remember(directory, &existing);
             return (existing, None);
         }
-        let names = project.project().files().iter().filter_map(|file| file.file_name());
-        self.config_names.extend(names.map(OsString::from));
-        if let Some(ConfigError::File(broken)) = &error {
-            self.config_names.extend(broken.path.file_name().map(OsString::from));
-            self.broken.push(broken.path.clone());
+        let read = project.project().files().iter().filter(|file| !is_definition_file(file));
+        self.config_names.extend(read.filter_map(|file| file.file_name()).map(OsString::from));
+        if let Some(problem) = &error {
+            self.is_broken = true;
+            if let ConfigError::File(broken) = problem {
+                self.config_names.extend(broken.path.file_name().map(OsString::from));
+            }
         }
         if let Some(config) = config_path {
             self.by_config.insert(config, Arc::clone(&project));
         }
-        self.projects.push(Arc::clone(&project));
         self.remember(directory, &project);
         (project, error)
     }
@@ -176,10 +197,15 @@ impl Lookups {
 }
 
 impl SettingsCache {
-    /// Reads every project through `files`, and gives every document the
-    /// project of `given`, when the client gives a config.
-    pub(crate) fn new(files: Files, given: Option<GivenConfig>) -> Self {
-        Self { files, given, lookups: RwLock::default() }
+    /// Reads every project through `files`, resolving their requires through
+    /// `resolver`, and gives every document the project of `given`, when the
+    /// client gives a config.
+    pub(crate) fn new(
+        files: Files,
+        resolver: Arc<ResolverGeneric<Files>>,
+        given: Option<GivenConfig>,
+    ) -> Self {
+        Self { files, resolver, given, lookups: RwLock::default() }
     }
 
     /// Whether the client gave a config.
@@ -203,14 +229,18 @@ impl SettingsCache {
         project: Arc<LoadedProject>,
         file: Option<&Path>,
     ) -> DocumentSettings {
-        let editorconfigs = Arc::clone(&self.lookups.read().editorconfigs);
         let loaded = project.project();
         let linter = loaded.linter_for(file);
-        let format = loaded.format_options(file, Some(&editorconfigs));
         let is_included = file.is_none_or(|located| loaded.filter().includes_document(located));
         let is_definitions = file.is_some_and(is_definition_file);
         let path = file.map(|located| self.files.canonicalize_existing(located));
-        DocumentSettings { path, project, linter, format, is_included, is_definitions }
+        let located = file.map(Path::to_path_buf);
+        DocumentSettings { path, located, project, linter, is_included, is_definitions }
+    }
+
+    /// The `.editorconfig` files formatting reads.
+    pub(crate) fn editorconfigs(&self) -> Arc<Editorconfigs> {
+        Arc::clone(&self.lookups.read().editorconfigs)
     }
 
     /// The project of the nearest `luck.json` above the file at
@@ -231,15 +261,17 @@ impl SettingsCache {
         spelled: Option<&Path>,
     ) -> (Arc<LoadedProject>, Option<LoadError>) {
         let directory = document_path.filter(|_| self.given.is_none()).and_then(Path::parent);
-        let generation = {
+        let stamp = {
             let lookups = self.lookups.read();
             if let Some(project) = lookups.cached(directory) {
                 return (Arc::clone(project), None);
             }
-            lookups.generation
+            Stamp { generation: lookups.generation, definition_edits: lookups.definition_edits }
         };
         let files = &self.files;
-        let loaded = |project| Arc::new(LoadedProject::new(project, files.clone()));
+        let loaded = |project| {
+            Arc::new(LoadedProject::new(project, files.clone(), Arc::clone(&self.resolver)))
+        };
         let defaults = |root| loaded(Project::defaults(root, files.clone()));
         if let Some(given) = &self.given {
             let text = given.text.read().clone();
@@ -248,7 +280,7 @@ impl SettingsCache {
                     Ok(project) => (loaded(project), None),
                     Err(error) => (defaults(given.root.clone()), Some(error)),
                 };
-            return self.keep(generation, None, None, project, error);
+            return self.keep(stamp, None, None, project, error);
         }
         // Discovery stats every directory up to the root, loading reads every
         // file in the `extends` chain, and the defaults' filter canonicalizes
@@ -274,24 +306,33 @@ impl SettingsCache {
                 (defaults(root), None)
             }
         };
-        self.keep(generation, directory, config_path, project, error)
+        self.keep(stamp, directory, config_path, project, error)
     }
 
-    /// Keeps `project`, which a lookup in `generation` found, unless the cache
-    /// was cleared since.
+    /// Keeps `project`, which a lookup that started at `stamp` found, unless
+    /// the cache was cleared since, or it lists a definition file and one
+    /// changed since.
     fn keep(
         &self,
-        generation: u64,
+        stamp: Stamp,
         directory: Option<&Path>,
         config_path: Option<PathBuf>,
         project: Arc<LoadedProject>,
         error: Option<ConfigError>,
     ) -> (Arc<LoadedProject>, Option<LoadError>) {
         let mut lookups = self.lookups.write();
-        if lookups.generation != generation {
+        let lists_definitions = project
+            .project()
+            .definitions()
+            .iter()
+            .any(|source| matches!(source, DefinitionSource::File { .. }));
+        if lookups.generation != stamp.generation
+            || (lists_definitions && lookups.definition_edits != stamp.definition_edits)
+        {
             return (project, None);
         }
         let (kept, reported) = lookups.keep(directory, config_path, project, error);
+        let generation = stamp.generation;
         (kept, reported.map(|problem| LoadError { error: problem, generation }))
     }
 
@@ -300,41 +341,57 @@ impl SettingsCache {
         self.lookups.read().generation
     }
 
-    /// Whether a change to the file at `path` can change a document's
-    /// settings. With a config the client gave, any definition file can,
-    /// since the config may name one the client hasn't pushed yet.
-    pub(crate) fn is_settings_file(&self, path: &Path) -> bool {
+    /// Whether a change to the file at `path`, which created it when
+    /// `is_created`, can change a project, but by the definition files it
+    /// lists.
+    pub(crate) fn is_settings_file(&self, path: &Path, is_created: bool) -> bool {
         let Some(name) = path.file_name() else {
             return false;
         };
         let lookups = self.lookups.read();
-        (self.given.is_some() && is_definition_file(path))
-            || name == CONFIG_FILE_NAME
-            || name == EDITORCONFIG_FILE_NAME
+        name == CONFIG_FILE_NAME
             || lookups.config_names.contains(name)
-            || (!lookups.broken.is_empty()
+            || (is_created
+                && lookups.is_broken
                 && path.extension().is_some_and(|extension| {
                     ["json", "luau", "lua"].iter().any(|known| extension == *known)
                 }))
     }
 
-    /// Forgets every lookup, every `.editorconfig` read, and every resolver,
-    /// and returns each config file a load error was reported in.
-    pub(crate) fn clear(&self) -> Vec<PathBuf> {
+    /// Forgets every lookup and every `.editorconfig` read.
+    pub(crate) fn clear(&self) {
         let mut lookups = self.lookups.write();
         let generation = lookups.generation + 1;
-        let Lookups { broken, .. } =
-            mem::replace(&mut *lookups, Lookups { generation, ..Lookups::default() });
-        broken
+        *lookups = Lookups { generation, ..Lookups::default() };
     }
 
-    /// Makes every project's resolver read the disk again, as a module
-    /// created or deleted, or a `.luaurc` edited, needs.
-    pub(crate) fn clear_resolvers(&self) {
-        for project in &self.lookups.read().projects {
-            project.resolver.clear_cache();
-        }
+    /// Forgets every `.editorconfig` read.
+    pub(crate) fn clear_editorconfigs(&self) {
+        self.lookups.write().editorconfigs = Arc::default();
     }
+
+    /// Forgets every project that lists a definition file named `name`, as a
+    /// change to one needs, and says whether there was one.
+    pub(crate) fn definition_changed(&self, name: &OsStr) -> bool {
+        let mut lookups = self.lookups.write();
+        lookups.definition_edits += 1;
+        let cached = lookups.by_directory.len() + lookups.by_config.len();
+        lookups.by_directory.retain(|_, project| !project.lists_definition(name));
+        lookups.by_config.retain(|_, project| !project.lists_definition(name));
+        let is_untitled_listing =
+            lookups.untitled.as_ref().is_some_and(|project| project.lists_definition(name));
+        if is_untitled_listing {
+            lookups.untitled = None;
+        }
+        is_untitled_listing || lookups.by_directory.len() + lookups.by_config.len() != cached
+    }
+}
+
+/// When a lookup started.
+#[derive(Debug, Clone, Copy)]
+struct Stamp {
+    generation: u64,
+    definition_edits: u64,
 }
 
 /// `path`, a canonical path in `files`, as the client spells the files near
@@ -363,11 +420,17 @@ mod tests {
 
     use super::*;
 
+    fn cache() -> SettingsCache {
+        let files = Files::new(None);
+        let resolver = Arc::new(ResolverGeneric::new_with_file_system(files.clone()));
+        SettingsCache::new(files, resolver, None)
+    }
+
     #[test]
     fn a_document_with_no_config_takes_the_defaults_rooted_at_its_directory() {
         let directory = tempfile::tempdir().expect("tempdir");
         let file = directory.path().join("foo.luau");
-        let cache = SettingsCache::new(Files::Disk, None);
+        let cache = cache();
         let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
         assert!(!project.project().stdlib().library().has_roblox);
@@ -387,7 +450,7 @@ mod tests {
         fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
         let first = directory.path().join("first.luau");
         let nested = directory.path().join("sub/nested.luau");
-        let cache = SettingsCache::new(Files::Disk, None);
+        let cache = cache();
 
         let (project, _) = cache.project_for(Some(&first), None);
         assert!(project.project().stdlib().library().has_roblox);
@@ -409,7 +472,7 @@ mod tests {
         fs::write(directory.path().join("luck.json"), r#"{ "definitions": ["@bogus"] }"#)
             .expect("write luck.json");
         let file = directory.path().join("a.luau");
-        let cache = SettingsCache::new(Files::Disk, None);
+        let cache = cache();
 
         let (project, first_error) = cache.project_for(Some(&file), None);
         let error = first_error.expect("the error comes with the first lookup");
@@ -419,48 +482,85 @@ mod tests {
         assert!(!project.project().stdlib().library().has_roblox);
         assert!(cache.project_for(Some(&file), None).1.is_none(), "reported once");
 
-        assert!(cache.is_settings_file(&directory.path().join("other.json")));
-        let broken = cache.clear();
-        assert_eq!(broken.len(), 1, "{broken:?}");
-        assert!(!cache.is_settings_file(&directory.path().join("other.json")));
+        let other = directory.path().join("other.json");
+        assert!(cache.is_settings_file(&other, true), "a chain may extend it once it's created");
+        assert!(!cache.is_settings_file(&other, false));
+        cache.clear();
+        assert!(!cache.is_settings_file(&other, true));
     }
 
     #[test]
     fn a_file_a_project_extends_is_a_settings_file() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("shared.json"), "{}").expect("write shared.json");
-        fs::write(directory.path().join("luck.json"), r#"{ "extends": ["shared.json"] }"#)
-            .expect("write luck.json");
-        let cache = SettingsCache::new(Files::Disk, None);
+        fs::write(directory.path().join("app.d.luau"), "declare app: {}")
+            .expect("write app.d.luau");
+        fs::write(
+            directory.path().join("luck.json"),
+            r#"{ "extends": ["shared.json"], "definitions": ["app.d.luau"] }"#,
+        )
+        .expect("write luck.json");
+        let cache = cache();
         let sourcemap = directory.path().join("sourcemap.json");
         let shared = directory.path().join("shared.json");
-        assert!(!cache.is_settings_file(&shared));
+        assert!(!cache.is_settings_file(&shared, false));
 
         let _ = cache.project_for(Some(&directory.path().join("a.luau")), None);
-        assert!(cache.is_settings_file(&shared));
-        assert!(cache.is_settings_file(&directory.path().join("luck.json")));
-        assert!(cache.is_settings_file(&directory.path().join(".editorconfig")));
-        assert!(!cache.is_settings_file(&sourcemap), "Rojo rewrites it on every change");
+        assert!(cache.is_settings_file(&shared, false));
+        assert!(cache.is_settings_file(&directory.path().join("luck.json"), false));
+        assert!(!cache.is_settings_file(&sourcemap, false), "Rojo rewrites it on every change");
         assert!(
-            !cache.is_settings_file(&directory.path().join(".luaurc")),
+            !cache.is_settings_file(&directory.path().join(".luaurc"), false),
             "a `.luaurc` changes how requires resolve, not settings"
+        );
+        assert!(
+            !cache.is_settings_file(&directory.path().join("app.d.luau"), false),
+            "a definition file changes only the projects that list it"
         );
     }
 
     #[test]
-    fn a_project_resolves_through_one_resolver_until_its_cache_is_cleared() {
+    fn a_definition_file_s_change_forgets_only_the_projects_that_list_it() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+        for (name, text) in [
+            ("listing/app.d.luau", "declare app: {}"),
+            ("listing/luck.json", r#"{ "definitions": ["app.d.luau"] }"#),
+            ("other/luck.json", "{}"),
+        ] {
+            let path = directory.path().join(name);
+            fs::create_dir_all(path.parent().expect("a directory")).expect("mkdir");
+            fs::write(path, text).expect("write a config");
+        }
+        let (listing, other) =
+            (directory.path().join("listing/a.luau"), directory.path().join("other/a.luau"));
+        let cache = cache();
+        let (listing_project, _) = cache.project_for(Some(&listing), None);
+        let (other_project, _) = cache.project_for(Some(&other), None);
+
+        assert!(!cache.definition_changed(OsStr::new("unlisted.d.luau")));
+        assert!(cache.definition_changed(OsStr::new("app.d.luau")));
+
+        assert!(!Arc::ptr_eq(&listing_project, &cache.project_for(Some(&listing), None).0));
+        assert!(Arc::ptr_eq(&other_project, &cache.project_for(Some(&other), None).0));
+    }
+
+    #[test]
+    fn every_project_resolves_through_the_session_s_resolver() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
+        fs::write(directory.path().join("sub/luck.json"), "{}").expect("write luck.json");
         let main = directory.path().join("main.luau");
-        let cache = SettingsCache::new(Files::Disk, None);
+        let cache = cache();
         let (project, _) = cache.project_for(Some(&main), None);
+        let (nested, _) = cache.project_for(Some(&directory.path().join("sub/a.luau")), None);
+        assert!(!Arc::ptr_eq(&project, &nested));
         let resolver = project.resolver();
-        assert!(ptr::eq(resolver, cache.project_for(Some(&main), None).0.resolver()));
+        assert!(ptr::eq(resolver, nested.resolver()));
         assert!(resolver.resolve(&main, "./late").is_err(), "nothing named `late` exists yet");
 
         fs::write(directory.path().join("late.luau"), "return {}\n").expect("write late.luau");
         assert!(resolver.resolve(&main, "./late").is_err(), "the listing is cached");
-        cache.clear_resolvers();
+        resolver.clear_cache();
         assert!(resolver.resolve(&main, "./late").is_ok(), "the cleared resolver reads the disk");
     }
 }

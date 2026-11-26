@@ -1,8 +1,8 @@
 use std::ptr;
 
 use luck_stdlib::{
-    SecurityLevel, Stdlib, StdlibArgKind, StdlibEntry, StdlibFunction, StdlibLibrary, luau_library,
-    roblox_library,
+    SecurityLevel, Stdlib, StdlibArgKind, StdlibEntry, StdlibFunction, StdlibLibrary, library_for,
+    luau_library, roblox_library,
 };
 
 #[test]
@@ -33,8 +33,8 @@ fn method<'lib>(
     function
 }
 
-/// Each signature's params, as `number`, `string?` for an optional one,
-/// `<label>` for a display label, the constants, or `...`.
+/// Each signature's params, as `string`, the constants it allows, or `_` for
+/// any other type, with `?` after an optional one, or as `...`.
 fn params(function: &StdlibFunction<'_>) -> Vec<Vec<String>> {
     function
         .signatures
@@ -45,15 +45,10 @@ fn params(function: &StdlibFunction<'_>) -> Vec<Vec<String>> {
                 .iter()
                 .map(|param| {
                     let kind = match param.kind {
-                        StdlibArgKind::Any => "any".to_owned(),
-                        StdlibArgKind::Bool => "boolean".to_owned(),
-                        StdlibArgKind::Number => "number".to_owned(),
                         StdlibArgKind::String => "string".to_owned(),
-                        StdlibArgKind::Function => "function".to_owned(),
-                        StdlibArgKind::Table => "table".to_owned(),
-                        StdlibArgKind::Display(label) => format!("<{label}>"),
                         StdlibArgKind::Constant(values) => format!("{values:?}"),
                         StdlibArgKind::Vararg => return "...".to_owned(),
+                        StdlibArgKind::Other => "_".to_owned(),
                     };
                     if param.is_required { kind } else { format!("{kind}?") }
                 })
@@ -75,7 +70,7 @@ end
     );
     let library = stdlib.library();
     let connect = function(library, &["connect"]);
-    assert_eq!(params(connect), [["string", "number?", "table?"]]);
+    assert_eq!(params(connect), [["string", "_?", "_?"]]);
     assert_eq!((connect.min_args(), connect.max_args()), (1, Some(3)));
     assert_eq!(connect.returns_shape, Some("Socket"));
     let send = method(library, "Socket", "send");
@@ -99,7 +94,7 @@ declare greet: (name: string) -> string
     assert!(matches!(library.lookup(["app"]), Some(StdlibEntry::Namespace(_))));
     assert!(matches!(library.lookup(["app", "name"]), Some(StdlibEntry::Value(_))));
     assert!(matches!(library.lookup(["app", "net"]), Some(StdlibEntry::Namespace(_))));
-    assert_eq!(params(function(library, &["app", "net", "listen"])), [["number"]]);
+    assert_eq!(params(function(library, &["app", "net", "listen"])), [["_"]]);
     assert_eq!(params(function(library, &["greet"])), [["string"]]);
 }
 
@@ -133,7 +128,7 @@ fn a_param_is_optional_when_its_type_takes_nil() {
     let stdlib =
         layered("declare function f(a: number?, b: nil | string, c: any, d: unknown, e: boolean)");
     let f = function(stdlib.library(), &["f"]);
-    assert_eq!(params(f), [["number?", "string?", "any?", "any?", "boolean"]]);
+    assert_eq!(params(f), [["_?", "string?", "_?", "_?", "_"]]);
     assert_eq!(
         f.min_args(),
         5,
@@ -151,9 +146,7 @@ declare sum: (number, ...number) -> number
 ",
     );
     let library = stdlib.library();
-    for (path, expected) in
-        [("log", ["number", "..."]), ("run", ["function", "..."]), ("sum", ["number", "..."])]
-    {
+    for (path, expected) in [("log", ["_", "..."]), ("run", ["_", "..."]), ("sum", ["_", "..."])] {
         let found = function(library, &[path]);
         assert_eq!(params(found), [expected], "{path}");
         assert_eq!(found.max_args(), None, "{path}");
@@ -176,25 +169,24 @@ declare function seek(whence: "set" | "cur" | number)
         open.allowed_constants(1, 3).map(Iterator::collect::<Vec<_>>),
         Some(vec![&["r", "w"][..]])
     );
-    assert_eq!(params(function(library, &["seek"])), [[r#"<"set" | "cur" | number>"#]]);
+    assert_eq!(params(function(library, &["seek"])), [["_"]]);
 }
 
 #[test]
-fn other_types_are_labelled_as_written_and_generics_take_anything() {
+fn a_generic_takes_anything_and_names_no_shape() {
     let stdlib = layered(
         "
-declare function f(b: buffer, t: thread, list: {number}, callback: (number) -> (), v: vector | Vector3)
+declare extern type T with
+end
 declare function id<T>(value: T): T
+declare function make(): T
 ",
     );
     let library = stdlib.library();
-    assert_eq!(
-        params(function(library, &["f"])),
-        [["<buffer>", "<thread>", "table", "function", "<vector | Vector3>"]]
-    );
     let id = function(library, &["id"]);
-    assert_eq!(params(id), [["any"]]);
+    assert_eq!(params(id), [["_"]]);
     assert_eq!(id.returns_shape, None);
+    assert_eq!(function(library, &["make"]).returns_shape, Some("T"));
 }
 
 #[test]
@@ -210,7 +202,7 @@ end
 ",
     );
     let library = stdlib.library();
-    let expected = [vec!["number"], vec!["string", "string"]];
+    let expected = [vec!["_"], vec!["string", "string"]];
     assert_eq!(params(function(library, &["pick"])), expected);
     assert_eq!(params(method(library, "Picker", "Pick")), expected);
     assert!(!function(library, &["pick"]).accepts_arg_count(0));
@@ -351,6 +343,7 @@ fn a_process_builds_each_built_in_library_once_and_roblox_s_at_each_level() {
     assert!(ptr::eq(roblox, roblox_library(SecurityLevel::None)));
     assert!(ptr::eq(Stdlib::luau().library(), luau_library()));
     assert!(ptr::eq(Stdlib::luau().with_roblox(SecurityLevel::None).library(), roblox));
+    assert!(ptr::eq(library_for(true), roblox) && ptr::eq(library_for(false), luau_library()));
     let at_plugin = roblox_library(SecurityLevel::PluginSecurity);
     assert!(roblox.shape_member("Instance", "GetDebugId").is_none());
     assert!(at_plugin.shape_member("Instance", "GetDebugId").is_some());
@@ -408,13 +401,13 @@ fn the_string_shape_mirrors_the_string_namespace() {
             if let Some(StdlibEntry::Function(method)) = shape.members.get(name) {
                 assert!(method.is_method, "{name}");
                 assert_eq!(
-                    method.primary_signature().params.len() + 1,
-                    source.primary_signature().params.len(),
+                    method.signatures[0].params.len() + 1,
+                    source.signatures[0].params.len(),
                     "{name}"
                 );
             }
         }
-        assert!(shape.members.keys().all(|name| namespace.members.contains_key(name)));
+        assert!(shape.members.iter().all(|(name, _)| namespace.members.contains_key(name)));
     }
 }
 

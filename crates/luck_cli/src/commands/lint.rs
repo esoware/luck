@@ -9,6 +9,7 @@ use luck_diagnostics::{Diagnostic, Severity};
 use luck_linter::{
     Category, FixError, FixKind, Fixed, LintConfig, Linter, Message, RuleId, RuleLevel, RuleTimings,
 };
+use luck_parser::ParseResult;
 use luck_resolver::{FileSystem as _, FileSystemOs, is_definition_file};
 use luck_stdlib::StdlibLibrary;
 
@@ -466,8 +467,7 @@ impl LintArgs {
 /// text's messages, and why fixing failed, if it did.
 ///
 /// A failure leaves `source` as it was, with its own messages. Each lint's
-/// rules are timed into `timings` when given. A definition file at `path`,
-/// which no rule reads, has nothing to fix.
+/// rules are timed into `timings` when given.
 fn fixed_or_linted<'ast>(
     linter: &Linter,
     allocator: &'ast Allocator,
@@ -477,20 +477,16 @@ fn fixed_or_linted<'ast>(
     fixes: FixKind,
     timings: Option<&RuleTimings>,
 ) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
-    let fix_error = if fixes.is_empty() || is_definition_file(path) {
-        None
-    } else {
-        match linter.fix(allocator, source, stdlib, fixes, timings) {
-            Ok(Fixed { parse, messages }) => return (parse.source, messages, None),
-            Err(error) => Some(error),
+    let parse = parsed(allocator, path, source);
+    match linter.fix(allocator, parse, stdlib, fixes, timings) {
+        Ok(Fixed { parse, messages }) => (parse.source, messages, None),
+        Err(error) => {
+            (source, linted(linter, allocator, path, source, stdlib, timings), Some(error))
         }
-    };
-    (source, linted(linter, allocator, path, source, stdlib, timings), fix_error)
+    }
 }
 
-/// `source`'s messages, parsed into `allocator` and linted against `stdlib`,
-/// or when `path` names a definition file, which is no code for a rule to
-/// read, its syntax errors alone.
+/// `source`'s messages, parsed into `allocator` and linted against `stdlib`.
 fn linted(
     linter: &Linter,
     allocator: &Allocator,
@@ -499,12 +495,17 @@ fn linted(
     stdlib: &StdlibLibrary<'_>,
     timings: Option<&RuleTimings>,
 ) -> Vec<Message> {
+    linter.run(&parsed(allocator, path, source), stdlib, FixKind::empty(), timings)
+}
+
+/// `source`'s parse into `allocator`, as a definition file when `path` names
+/// one.
+fn parsed<'ast>(allocator: &'ast Allocator, path: &Path, source: &'ast [u8]) -> ParseResult<'ast> {
     if is_definition_file(path) {
-        let errors = luck_parser::parse_definitions(allocator, source).errors;
-        return errors.into_iter().map(|diagnostic| Message { diagnostic, fix: None }).collect();
+        luck_parser::parse_definitions(allocator, source)
+    } else {
+        luck_parser::parse(allocator, source)
     }
-    let parse = luck_parser::parse(allocator, source);
-    linter.run(&parse, stdlib, FixKind::empty(), timings)
 }
 
 /// Count `messages` by severity, as `(errors, warnings)`.

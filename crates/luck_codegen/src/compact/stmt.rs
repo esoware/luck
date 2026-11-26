@@ -1,5 +1,5 @@
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, ConditionalBinding, DeclaredExternType,
+    Assignment, Block, CompoundAssignment, ConditionalBinding, Declaration, DeclaredExternType,
     DeclaredFunction, DoBlock, Expression, ExternTypeMember, FunctionAttribute, FunctionBody,
     FunctionDecl, GenericFor, GenericTypeList, IfStatement, LocalAssignment, LocalAssignmentKind,
     LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement, Type,
@@ -44,19 +44,23 @@ impl Printer {
             Statement::Continue(_) => self.piece("continue"),
             Statement::CompoundAssignment(compound) => self.print_compound_assignment(compound),
             Statement::TypeDeclaration(declaration) => self.print_type_declaration(declaration),
-            Statement::DeclaredGlobal(global) => {
+            Statement::Declaration(declaration) => self.print_declaration(declaration),
+            Statement::Error(_) => {}
+        }
+    }
+
+    fn print_declaration(&mut self, declaration: &Declaration<'_>) {
+        match declaration {
+            Declaration::Global(global) => {
                 self.piece("declare");
                 self.name(global.name.text.as_str());
                 self.piece(":");
                 self.print_type(&global.ty);
             }
-            Statement::DeclaredFunction(function) => {
+            Declaration::Function(function) => {
                 self.print_declared_function(function, "declare function");
             }
-            Statement::DeclaredExternType(extern_type) => {
-                self.print_declared_extern_type(extern_type);
-            }
-            Statement::Error(_) => {}
+            Declaration::ExternType(extern_type) => self.print_declared_extern_type(extern_type),
         }
     }
 
@@ -363,13 +367,16 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::LocalAssignment(_)
         | Statement::Return(_)
         | Statement::CompoundAssignment(_)
-        | Statement::DeclaredGlobal(_)
         // Prints nothing, so whatever it follows ends the output.
         | Statement::Error(_) => true,
         Statement::TypeDeclaration(declaration) => {
             matches!(declaration.value, TypeDeclarationValue::Alias(_))
         }
-        Statement::DeclaredFunction(function) => function.return_type.is_some(),
+        Statement::Declaration(declaration) => match &**declaration {
+            Declaration::Global(_) => true,
+            Declaration::Function(function) => function.return_type.is_some(),
+            Declaration::ExternType(_) => false,
+        },
         Statement::DoBlock(_)
         | Statement::WhileLoop(_)
         | Statement::IfStatement(_)
@@ -378,7 +385,6 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
         | Statement::Break(_)
-        | Statement::Continue(_)
-        | Statement::DeclaredExternType(_) => false,
+        | Statement::Continue(_) => false,
     }
 }

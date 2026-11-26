@@ -1,8 +1,8 @@
+use std::ops;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{ops, ptr};
 
 use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent};
 use luck_linter::{Analysis, FixKind, Message};
@@ -90,9 +90,19 @@ impl Document {
         Self::new(self.version, Arc::clone(&self.text), self.settings.path.clone())
     }
 
+    /// Its settings, found without analyzing it.
+    pub(crate) fn settings(&self, session: &Session) -> &DocumentSettings {
+        self.settings.resolve(session)
+    }
+
+    /// Its settings, unless no job has found them yet.
+    pub(crate) fn found_settings(&self) -> Option<&DocumentSettings> {
+        self.settings.resolved.get().map(|found| &**found)
+    }
+
     /// The canonical path of its file, or `None` when it has none.
     pub(crate) fn path(&self, session: &Session) -> Option<&Path> {
-        self.settings.resolve(session).path.as_deref()
+        self.settings(session).path.as_deref()
     }
 
     pub(crate) fn mark_stale(&self) {
@@ -115,27 +125,9 @@ impl Document {
                 Arc::clone(settings),
                 Arc::clone(self.line_index(session.encoding())),
                 Arena::from_spare(session.spare_arena()),
-                session
-                    .type_checks()
-                    .stdlib(settings.project.project(), session.settings().generation()),
+                settings.project.project().stdlib().clone(),
             )
         })
-    }
-
-    /// This version, analyzed again unless it was analyzed against the
-    /// library its project's documents are analyzed against now.
-    pub(crate) fn with_current_library(self: Arc<Self>, session: &Session) -> Arc<Self> {
-        let state = self.state(session);
-        let project = state.settings().project.project();
-        let stdlib = session.type_checks().stdlib(project, session.settings().generation());
-        if ptr::eq(state.semantic().stdlib(), stdlib.library()) {
-            return self;
-        }
-        Arc::new(Self::with_settings(
-            self.version,
-            Arc::clone(&self.text),
-            Arc::clone(&self.settings),
-        ))
     }
 
     /// This version's lints, which publishing, code actions, and fix-all
@@ -282,7 +274,7 @@ impl DocumentState {
         })
     }
 
-    /// What `require` loads, through the project's resolver, or `None` for
+    /// What `require` loads, through the session's resolver, or `None` for
     /// a document with no file, which no relative path starts from.
     pub(crate) fn resolve(&self, require: &Require) -> Option<Result<Resolution, ResolveError>> {
         let path = self.settings.path.as_deref()?;
@@ -325,16 +317,10 @@ impl DocumentState {
 
     /// Lints with the linter that built the analysis, building every kind
     /// of fix, since a suggestion is still a quick fix, or `None` once
-    /// `is_cancelled` stops it. A document the project leaves out has none,
-    /// and a definition file, which is no code for a rule to read, its
-    /// syntax errors alone.
+    /// `is_cancelled` stops it. A document the project leaves out has none.
     pub(crate) fn lint(&self, is_cancelled: &dyn Fn() -> bool) -> Option<Vec<Message>> {
         if !self.settings.is_included {
             return Some(Vec::new());
-        }
-        if self.settings.is_definitions {
-            let errors = self.parse().errors.iter().cloned();
-            return Some(errors.map(|diagnostic| Message { diagnostic, fix: None }).collect());
         }
         self.settings.linter.run_analyzed(self.analysis(), FixKind::all(), None, is_cancelled)
     }

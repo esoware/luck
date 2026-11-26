@@ -4,7 +4,7 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, Declaration,
     DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
     ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
@@ -16,6 +16,16 @@ use crate::{
     TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType,
     UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
+
+impl GetSpan for Declaration<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Global(declared_global) => declared_global.span(),
+            Self::Function(declared_function) => declared_function.span(),
+            Self::ExternType(declared_extern_type) => declared_extern_type.span(),
+        }
+    }
+}
 
 impl GetSpan for DeclaredGlobal<'_> {
     #[inline]
@@ -273,9 +283,7 @@ impl GetSpan for Statement<'_> {
             Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
             Self::CompoundAssignment(compound_assignment) => compound_assignment.span(),
             Self::TypeDeclaration(type_declaration) => type_declaration.span(),
-            Self::DeclaredGlobal(declared_global) => declared_global.span(),
-            Self::DeclaredFunction(declared_function) => declared_function.span(),
-            Self::DeclaredExternType(declared_extern_type) => declared_extern_type.span(),
+            Self::Declaration(declaration) => declaration.span(),
         }
     }
 }

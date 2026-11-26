@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use luck_resolver::{Resolution, ResolveError, Resolver, ResolverGeneric, to_slash_lossy};
+use luck_token::Span;
 use tempfile::TempDir;
 
 use crate::common::{MemoryFileSystem, canonical, sample_project, write_files};
@@ -209,7 +210,7 @@ fn self_alias_resolves_from_an_init_files_own_directory() {
     let resolved = resolve(&project, "src/components/init.luau", "@self/button")
         .expect("resolve @self/button");
     assert_eq!(resolved.path, canonical(&project, "src/components/button.luau"));
-    assert!(!resolved.is_self_alias_shadowed);
+    assert_eq!(resolved.to_diagnostic(Span::default()), None);
 }
 
 #[test]
@@ -222,7 +223,8 @@ fn a_luaurc_alias_named_self_is_shadowed() {
     let resolved =
         resolve(&project, "src/init.luau", "@self/utils").expect("resolve built-in self");
     assert_eq!(resolved.path, canonical(&project, "src/utils.luau"));
-    assert!(resolved.is_self_alias_shadowed);
+    let warning = resolved.to_diagnostic(Span::default()).expect("a shadowed `self` warns");
+    assert_eq!(warning.code, "W004");
 }
 
 #[test]

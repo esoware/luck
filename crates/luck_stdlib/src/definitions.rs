@@ -1,16 +1,13 @@
-use std::borrow::Cow;
+use std::sync::OnceLock;
 
 use crate::SecurityLevel;
 
 /// Luau's standard library as a definition file, as `just stdlib` generates
-/// it.
-pub(crate) const LUAU: &str = include_str!("../stdlib_data/luau.d.luau");
-
-/// Luau's standard library as a definition file: Luau's built-in definitions,
-/// with a declaration for each function they leave to Luau's C++, and the
-/// library reference's description above each declaration it documents.
+/// it: Luau's built-in definitions, with a declaration for each function they
+/// leave to Luau's C++, and the library reference's description above each
+/// declaration it documents.
 pub const fn luau_definitions() -> &'static str {
-    LUAU
+    include_str!("../stdlib_data/luau.d.luau")
 }
 
 /// Roblox's API as a Luau definition file at `RobloxScriptSecurity`. A member
@@ -24,13 +21,22 @@ pub const fn luau_definitions() -> &'static str {
 )]
 const ROBLOX: &str = include_str!("../stdlib_data/roblox.d.luau");
 
+/// Roblox's API at each level of [`SecurityLevel::ALL`] below
+/// `RobloxScriptSecurity`.
+static FILTERED: [OnceLock<String>; SecurityLevel::ALL.len() - 1] =
+    [const { OnceLock::new() }; SecurityLevel::ALL.len() - 1];
+
 /// Roblox's API for a script at `security`, the definitions a project's
 /// `@roblox` loads over Luau's built-in ones, as Luau's `loadDefinitionFile`
-/// reads them.
-pub fn roblox_definitions(security: SecurityLevel) -> Cow<'static, str> {
+/// reads them, filtered the first time a process asks for its level.
+pub fn roblox_definitions(security: SecurityLevel) -> &'static str {
     if security == SecurityLevel::RobloxScriptSecurity {
-        return Cow::Borrowed(ROBLOX);
+        return ROBLOX;
     }
+    FILTERED[security as usize].get_or_init(|| filter(security))
+}
+
+fn filter(security: SecurityLevel) -> String {
     let mut text = String::with_capacity(ROBLOX.len());
     let mut last_line_start = 0;
     for line in ROBLOX.split_inclusive('\n') {
@@ -57,7 +63,7 @@ pub fn roblox_definitions(security: SecurityLevel) -> Cow<'static, str> {
             }
         }
     }
-    Cow::Owned(text)
+    text
 }
 
 /// What a member's trailing comment says it needs.

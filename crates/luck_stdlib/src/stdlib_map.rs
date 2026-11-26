@@ -70,16 +70,8 @@ impl<'lib, V> StdlibMap<'lib, V> {
         self.entries.iter().map(pair)
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &'lib str> {
-        self.entries.iter().map(|(name, _)| *name)
-    }
-
-    pub const fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 }
 

@@ -5,18 +5,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::Sender;
-use ls_types::notification::{Notification as _, PublishDiagnostics, ShowMessage};
-use ls_types::{MessageType, PublishDiagnosticsParams, ShowMessageParams};
-use lsp_server::Notification;
 use luck_allocator::AllocatorPool;
 use luck_config::{ConfigError, Project, located_path};
-use luck_resolver::FileSystem as _;
+use luck_resolver::{FileSystem as _, ResolverGeneric};
+use luck_type_checker::luau_config_aliases;
 
 use crate::analyzed::SpareArena;
 use crate::files::Files;
 use crate::line_index::PositionEncoding;
 use crate::providers::diagnostics;
-use crate::server::Task;
+use crate::server::{Problem, Task};
 use crate::settings::{DocumentSettings, GivenConfig, LoadError, LoadedProject, SettingsCache};
 use crate::type_check::TypeChecks;
 use crate::workspace::Workspace;
@@ -26,6 +24,9 @@ use crate::workspace::Workspace;
 pub(crate) struct Session {
     encoding: PositionEncoding,
     files: Files,
+    /// What every require resolves through, which the main loop clears once
+    /// a file changes in a way that can change what one resolves to.
+    resolver: Arc<ResolverGeneric<Files>>,
     settings: SettingsCache,
     workspace: Workspace,
     type_checks: TypeChecks,
@@ -48,11 +49,15 @@ impl Session {
         files: Files,
         given: Option<GivenConfig>,
     ) -> Self {
+        let resolver = ResolverGeneric::new_with_file_system(files.clone())
+            .with_luau_config(luau_config_aliases);
+        let resolver = Arc::new(resolver);
         Self {
             encoding,
-            settings: SettingsCache::new(files.clone(), given),
+            settings: SettingsCache::new(files.clone(), Arc::clone(&resolver), given),
+            resolver,
             workspace: Workspace::new(files.clone()),
-            type_checks: TypeChecks::new(files.clone()),
+            type_checks: TypeChecks::default(),
             files,
             spare_arena: Arc::default(),
             allocators: AllocatorPool::new(threads.get()),
@@ -68,6 +73,10 @@ impl Session {
 
     pub(crate) const fn files(&self) -> &Files {
         &self.files
+    }
+
+    pub(crate) const fn resolver(&self) -> &Arc<ResolverGeneric<Files>> {
+        &self.resolver
     }
 
     pub(crate) const fn settings(&self) -> &SettingsCache {
@@ -152,18 +161,14 @@ impl Session {
             "luck: {config} doesn't load, so its files use the defaults: {}",
             problems.join("; ")
         );
-        let shown = ShowMessageParams { typ: MessageType::ERROR, message };
-        let mut notifications = vec![Notification::new(ShowMessage::METHOD.to_owned(), shown)];
-        if let Some(file) = file
-            && let Some(uri) = self.files.uri(&file.path)
-        {
+        let published = file.and_then(|file| {
+            let uri = self.files.uri(&file.path)?;
             // A file that can't be read has no text to place the problem in.
             let bytes = self.files.read(&file.path).unwrap_or_default();
             let text = String::from_utf8_lossy(&bytes);
             let diagnostics = diagnostics::config_to_lsp(&uri, &file.diags, &text, self.encoding);
-            let published = PublishDiagnosticsParams { uri, diagnostics, version: None };
-            notifications.push(Notification::new(PublishDiagnostics::METHOD.to_owned(), published));
-        }
-        self.send(Task::ConfigError { generation, notifications });
+            Some((uri, diagnostics))
+        });
+        self.send(Task::ConfigError { generation, problem: Problem { message, published } });
     }
 }

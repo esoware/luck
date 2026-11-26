@@ -380,9 +380,7 @@ impl<'walk, 'ast> Compressor<'walk, 'ast> {
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
-            | Statement::DeclaredGlobal(_)
-            | Statement::DeclaredFunction(_)
-            | Statement::DeclaredExternType(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => {}
         }
         self.walk_stmt(stmt);

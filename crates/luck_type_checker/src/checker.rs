@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
+use std::mem;
 use std::num::NonZero;
 use std::thread;
 
-use crossbeam_channel::SendError;
 use luck_ast::MIN_STACK_BYTES;
 use luck_diagnostics::Diagnostic;
 use luck_token::{LineIndex, Span, index_to_offset};
@@ -31,9 +31,11 @@ pub trait Host {
     /// names none.
     fn resolve(&self, requirer: &str, path: &str) -> Option<String>;
 
-    /// Applies the `.luaurc` and `.config.luau` files that govern `module` to
-    /// `config`, outermost first, or sets what [`Config::saved`] kept of
-    /// them. Analysis asks for each module's config twice a check.
+    /// Sets on `config` what the `.luaurc` and `.config.luau` files that
+    /// govern `module` set, as [`DirectoryConfigs::apply`] does, or nothing.
+    /// Analysis asks for each module's config twice a check.
+    ///
+    /// [`DirectoryConfigs::apply`]: crate::DirectoryConfigs::apply
     fn config(&self, module: &str, config: &mut Config<'_>);
 }
 
@@ -119,12 +121,15 @@ pub enum CompletionKind {
 
 pub(crate) struct Context<H> {
     pub(crate) host: H,
-    /// Where each line starts in each module, as Luau last read it, and its
+    /// Where each line starts in each module, as Luau last read it, and in
+    /// each definition file loaded, by the name it was loaded under, and its
     /// length, which turn Luau's locations into spans.
     lines: RefCell<FxHashMap<String, (LineIndex, u32)>>,
-    /// As `lines`, for each definition file loaded, by the name it was loaded
-    /// under.
-    definition_lines: FxHashMap<String, (LineIndex, u32)>,
+    /// Each module whose config the host set as the check that asked was
+    /// cancelled, which may have stopped it short of what its files set.
+    /// Luau can still finish checking such a module, so the check marks it
+    /// to be checked again.
+    cut_short: RefCell<Vec<String>>,
 }
 
 impl<H: Host> Context<H> {
@@ -134,13 +139,20 @@ impl<H: Host> Context<H> {
         self.lines.borrow_mut().insert(module.to_owned(), lines);
         Some(source)
     }
+
+    pub(crate) fn config(&self, module: &str, config: &mut Config<'_>) {
+        self.host.config(module, config);
+        if config.is_cancelled() {
+            self.cut_short.borrow_mut().push(module.to_owned());
+        }
+    }
 }
 
 impl<H> Context<H> {
     /// Where `location` is in the module or definitions named `name`.
     fn span(&self, name: &str, location: LuckLocation) -> Option<Span> {
         let lines = self.lines.borrow();
-        span(location, lines.get(name).or_else(|| self.definition_lines.get(name))?)
+        span(location, lines.get(name)?)
     }
 
     fn declaration(&self, docs: LuauDocs) -> Declaration {
@@ -156,8 +168,7 @@ impl<H> Context<H> {
 impl<H: Host> Checker<H> {
     /// A checker with Luau's built-in definitions loaded.
     pub fn new(host: H) -> Self {
-        let context =
-            Context { host, lines: RefCell::default(), definition_lines: FxHashMap::default() };
+        let context = Context { host, lines: RefCell::default(), cut_short: RefCell::default() };
         Self { raw: RawChecker::new(context) }
     }
 
@@ -177,7 +188,7 @@ impl<H: Host> Checker<H> {
         let lines = (LineIndex::new(source.as_bytes()), index_to_offset(source.len()));
         let errors = self.raw.load_definitions(name, source);
         if errors.is_empty() {
-            self.raw.context_mut().definition_lines.insert(name.to_owned(), lines);
+            self.raw.context_mut().lines.get_mut().insert(name.to_owned(), lines);
             return Ok(());
         }
         Err(sorted(errors.into_iter().map(|error| diagnostic(error, Some(&lines))).collect()))
@@ -235,29 +246,18 @@ impl<H: Host> Checker<H> {
         Some((line - 1, column - 1))
     }
 
-    /// Makes a call of `member`, a function in the table the global `owner`
-    /// holds, or else a method of the extern type `owner`, whose first
-    /// argument is a string literal, return the global extern type the string
-    /// names when that extends the extern type `member` returns, or else
-    /// report the name as an unknown type, as Roblox Studio types
-    /// `Instance.new("Part")` as a `Part`. Any other argument keeps the type
-    /// `member` returns. It does nothing when `owner` has no such member or
-    /// the member returns no extern type.
+    /// Types what Roblox Studio types past Roblox's definitions: the class a
+    /// string literal names, for `Instance.new`, `GetService`, and
+    /// `FindService`, or an unknown type when it names none that the member
+    /// can return, and the `Enum.Material` its definitions call
+    /// `EnumMaterial`.
     ///
     /// It applies to the modules checked after, as definitions do.
-    pub fn return_named_type(&mut self, owner: &str, member: &str) {
-        self.raw.return_named_type(owner, member);
-    }
-
-    /// Moves each extern type that extends `supertype`, and whose name is
-    /// `namespace` and more, under the type namespace `namespace`, by the
-    /// rest of its name, which is what Luau names it after, as Roblox Studio
-    /// binds `Enum.Material`. So `EnumMaterial`, which a definition file can
-    /// name, is `Enum.Material`.
-    ///
-    /// It applies to the modules checked after, as definitions do.
-    pub fn bind_type_namespace(&mut self, namespace: &str, supertype: &str) {
-        self.raw.bind_type_namespace(namespace, supertype);
+    pub fn type_as_roblox_studio(&mut self) {
+        self.raw.return_named_type("Instance", "new");
+        self.raw.return_named_type("ServiceProvider", "GetService");
+        self.raw.return_named_type("ServiceProvider", "FindService");
+        self.raw.bind_type_namespace("Enum", "EnumItem");
     }
 
     /// Marks `module`, and every module that requires it, to be checked
@@ -267,7 +267,9 @@ impl<H: Host> Checker<H> {
     }
 
     /// The diagnostics of each of `modules`, in order, from checking them and
-    /// what they require on `threads` threads it starts and joins.
+    /// what they require, on a thread it starts and joins for each piece of
+    /// work Luau hands out, up to `threads`, so a check with nothing to do
+    /// starts none.
     ///
     /// Each is an E015, or an E008 for a syntax error, in Luau's own words,
     /// and a module no source was found for has none. Luau decides each
@@ -284,20 +286,23 @@ impl<H: Host> Checker<H> {
         cancellation: &CancellationToken,
     ) -> Result<Vec<Vec<Diagnostic>>, CheckError> {
         let names: Vec<&str> = modules.iter().map(AsRef::as_ref).collect();
-        let (sender, receiver) = crossbeam_channel::unbounded::<Task>();
         let checked = thread::scope(|scope| {
-            for _ in 0..threads.get() {
-                let tasks = receiver.clone();
-                // A worker that can't start leaves its tasks to the others, or
-                // to this thread once there are none.
-                let _ = thread::Builder::new()
-                    .name("luck-type-checker".to_owned())
-                    .stack_size(MIN_STACK_BYTES)
-                    .spawn_scoped(scope, move || tasks.iter().for_each(Task::run));
-            }
-            drop(receiver);
+            let (sender, receiver) = crossbeam_channel::unbounded::<Task>();
+            let (mut starts, mut has_worker) = (0, false);
             let checked = self.raw.check(&names, cancellation, &mut |task| {
-                if let Err(SendError(task)) = sender.send(task) {
+                if starts < threads.get() {
+                    starts += 1;
+                    let tasks = receiver.clone();
+                    let worker = thread::Builder::new()
+                        .name("luck-type-checker".to_owned())
+                        .stack_size(MIN_STACK_BYTES)
+                        .spawn_scoped(scope, move || tasks.iter().for_each(Task::run));
+                    has_worker |= worker.is_ok();
+                }
+                if has_worker {
+                    // `receiver` outlives the check, so the channel is open.
+                    let _ = sender.send(task);
+                } else {
                     task.run();
                 }
             });
@@ -306,12 +311,14 @@ impl<H: Host> Checker<H> {
         });
 
         if cancellation.is_cancelled() {
+            for module in mem::take(self.raw.context_mut().cut_short.get_mut()) {
+                self.raw.mark_dirty(&module);
+            }
             return Err(CheckError::Cancelled);
         }
         let lines = self.raw.context().lines.borrow();
         match checked {
-            Err(error) => {
-                let module = error.module.clone();
+            Err((module, error)) => {
                 Err(CheckError::Internal { diag: diagnostic(error, lines.get(&module)), module })
             }
             Ok(errors) => Ok(errors

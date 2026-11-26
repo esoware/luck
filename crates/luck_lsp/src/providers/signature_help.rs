@@ -16,11 +16,20 @@ use crate::line_index::LineIndex;
 use crate::providers::cursor::{TextKind, text_kind_at};
 use crate::type_check::Types;
 
-pub(crate) fn signature_help(
-    document: &DocumentState,
-    position: Position,
-    types: &mut Types<'_>,
-) -> Option<SignatureHelp> {
+/// The innermost call whose parentheses hold the cursor.
+pub(crate) struct Call {
+    /// The callee as written.
+    name: String,
+    /// A place in the callee that Luau reads as the whole callee: the
+    /// method's name, or else the callee's last byte.
+    callee_end: u32,
+    /// How many arguments come before the cursor.
+    active_param: usize,
+}
+
+/// The call around `position`, or `None` in a comment or outside every
+/// call's parentheses.
+pub(crate) fn call_at(document: &DocumentState, position: Position) -> Option<Call> {
     let offset = document.offset(position);
     if text_kind_at(document, offset) == TextKind::Comment {
         return None;
@@ -59,8 +68,6 @@ pub(crate) fn signature_help(
                 .is_some_and(|token| token.kind == TokenKind::Comma && token.span.end <= offset)
         })
         .count();
-    // The callee as written, and a place in it that Luau reads as the whole
-    // callee: the method's name, or else the callee's last byte.
     let callee = call.callee.span();
     let (name, callee_end) = match call.method {
         Some(method) => {
@@ -68,6 +75,16 @@ pub(crate) fn signature_help(
         }
         None => (span_text(document.text(), callee).to_owned(), callee.end.saturating_sub(1)),
     };
+    Some(Call { name, callee_end, active_param })
+}
+
+/// Each signature of the type of `call`'s callee.
+pub(crate) fn signature_help(
+    document: &DocumentState,
+    call: Call,
+    types: &mut Types<'_>,
+) -> Option<SignatureHelp> {
+    let Call { name, callee_end, active_param } = call;
     let description = types.describe(callee_end)?;
     let documentation = types.documentation(&description.declaration).map(|value| {
         Documentation::MarkupContent(MarkupContent { kind: MarkupKind::Markdown, value })

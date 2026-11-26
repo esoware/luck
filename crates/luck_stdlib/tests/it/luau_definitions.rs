@@ -2,14 +2,15 @@
 //! from Luau's built-in definitions and Luau's library reference, and offline
 //! checks of the committed file.
 
-use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
 use luck_allocator::Allocator;
-use luck_ast::{GetSpan as _, Statement, Type, TypeField, is_valid_identifier};
-use luck_type_checker::{Checker, Config, Host, builtin_definitions};
+use luck_ast::{Declaration, GetSpan as _, Statement, Type, TypeField, is_valid_identifier};
+use luck_type_checker::{Checker, builtin_definitions};
+
+use crate::common::NoModules;
 
 const REFERENCE_URL: &str =
     "https://raw.githubusercontent.com/luau-lang/site/master/src/content/docs/reference/library.md";
@@ -241,13 +242,14 @@ fn built_ins(source: &str) -> (Vec<BuiltIn>, Vec<(String, usize)>) {
     let mut declared = Vec::new();
     let mut tables = Vec::new();
     for statement in &parsed.chunk.stmts {
-        if let Statement::DeclaredFunction(function) = statement {
+        let Statement::Declaration(declaration) = statement else { continue };
+        if let Declaration::Function(function) = &**declaration {
             declared.push(BuiltIn {
                 name: function.name.text.as_str().to_owned(),
                 line_start: line_start(function.span.start),
                 attribute_at: line_start(function.span.start),
             });
-        } else if let Statement::DeclaredGlobal(global) = statement
+        } else if let Declaration::Global(global) = &**declaration
             && let Type::Table(table) = &global.ty
         {
             let library = global.name.text.as_str();
@@ -371,20 +373,6 @@ fn the_definitions_parse() {
 
 #[test]
 fn the_definitions_load_into_a_checker() {
-    struct NoModules;
-
-    impl Host for NoModules {
-        fn source(&self, _: &str) -> Option<Cow<'_, [u8]>> {
-            None
-        }
-
-        fn resolve(&self, _: &str, _: &str) -> Option<String> {
-            None
-        }
-
-        fn config(&self, _: &str, _: &mut Config<'_>) {}
-    }
-
     let mut checker = Checker::new(NoModules);
     let loaded = checker.load_definitions("@luau", &committed());
     assert!(loaded.is_ok(), "{loaded:?}");

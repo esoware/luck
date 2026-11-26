@@ -7,20 +7,22 @@
 //! where Analysis records it, which it does for a member a symbol doesn't
 //! reach, such as a field of a field of a declared global. Its documentation
 //! is the comment directly above it. Luau's own definitions and Roblox's are
-//! in no workspace, so the server serves them under its own `luck:` scheme.
+//! in no workspace, so the server serves them under its own `luck:` scheme,
+//! and every checker shares one package of each.
 
 use std::borrow::Cow;
 use std::str::FromStr as _;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use ls_types::{Location, Uri};
 use luck_allocator::Allocator;
 use luck_ast::{ExternTypeMember, Statement, Type, TypeDeclarationValue, TypeField};
 use luck_stdlib::{SecurityLevel, luau_definitions, roblox_definitions};
-use luck_token::{Comment, CommentKind, CommentPosition, Span, index_to_offset, offset_to_index};
+use luck_token::{Comment, CommentPosition, Span, index_to_offset, offset_to_index};
 use luck_type_checker::Declaration;
 use rustc_hash::FxHashMap;
 
+use crate::document::span_text;
 use crate::line_index::{LineIndex, PositionEncoding};
 
 /// The scheme of the definition files the server serves itself, through
@@ -29,19 +31,40 @@ pub(crate) const SCHEME: &str = "luck";
 
 /// Where the server serves Luau's own definitions, which document its
 /// built-in library.
-pub(crate) fn luau_uri() -> Uri {
+fn luau_uri() -> Uri {
     Uri::from_str("luck:/luau.d.luau").expect("a valid URI")
 }
 
 /// Where the server serves Roblox's API at `security`.
-pub(crate) fn roblox_uri(security: SecurityLevel) -> Uri {
+fn roblox_uri(security: SecurityLevel) -> Uri {
     Uri::from_str(&format!("luck:/roblox/{}.d.luau", security.name())).expect("a valid URI")
 }
 
+/// Luau's own definitions, which every checker starts with.
+pub(crate) fn luau_package() -> Arc<Package> {
+    static PACKAGE: OnceLock<Arc<Package>> = OnceLock::new();
+    let package = PACKAGE.get_or_init(|| {
+        let text = Cow::Borrowed(luau_definitions());
+        Arc::new(Package::new("@luau".to_owned(), Some(luau_uri()), text))
+    });
+    Arc::clone(package)
+}
+
+/// Roblox's API at `security`, which `@roblox` loads.
+pub(crate) fn roblox_package(security: SecurityLevel) -> Arc<Package> {
+    static PACKAGES: [OnceLock<Arc<Package>>; SecurityLevel::ALL.len()] =
+        [const { OnceLock::new() }; SecurityLevel::ALL.len()];
+    let package = PACKAGES[security as usize].get_or_init(|| {
+        let text = Cow::Borrowed(roblox_definitions(security));
+        Arc::new(Package::new("@roblox".to_owned(), Some(roblox_uri(security)), text))
+    });
+    Arc::clone(package)
+}
+
 /// The text of the definition file the server serves at `uri`.
-pub(crate) fn served_text(uri: &Uri) -> Option<Cow<'static, str>> {
+pub(crate) fn served_text(uri: &Uri) -> Option<&'static str> {
     if *uri == luau_uri() {
-        return Some(Cow::Borrowed(luau_definitions()));
+        return Some(luau_definitions());
     }
     let level = SecurityLevel::ALL.into_iter().find(|level| roblox_uri(*level) == *uri)?;
     Some(roblox_definitions(level))
@@ -67,7 +90,6 @@ struct Declarations {
     /// its name, by its documentation symbol without the file's name.
     by_symbol: FxHashMap<String, (u32, Span)>,
     comments: Vec<Comment>,
-    line_index: LineIndex,
 }
 
 /// A declaration in a definition file.
@@ -97,9 +119,8 @@ impl Package {
 
     /// The declaration `declaration` refers to in one of `packages`.
     pub(crate) fn find<'package>(
-        packages: &'package [Self],
+        packages: &'package [Arc<Self>],
         declaration: &Declaration,
-        encoding: PositionEncoding,
     ) -> Option<Declared<'package>> {
         let by_symbol = declaration.documentation_symbol.as_deref().and_then(|symbol| {
             // An overload's symbol names the function it overloads first.
@@ -110,19 +131,19 @@ impl Package {
                     Some((package, symbol.strip_prefix(&package.name)?.strip_prefix('/')?))
                 })
                 .max_by_key(|(package, _)| package.name.len())?;
-            let declarations = package.declarations(encoding);
+            let declarations = package.declarations();
             let &(start, name) = declarations.by_symbol.get(declared)?;
             Some(Declared { package, declarations, start, name })
         });
         by_symbol.or_else(|| {
             let (module, span) = declaration.definition.as_ref()?;
             let package = packages.iter().find(|package| package.name == *module)?;
-            let declarations = package.declarations(encoding);
+            let declarations = package.declarations();
             Some(Declared { package, declarations, start: span.start, name: *span })
         })
     }
 
-    fn declarations(&self, encoding: PositionEncoding) -> &Declarations {
+    fn declarations(&self) -> &Declarations {
         self.declarations.get_or_init(|| {
             let allocator = Allocator::new();
             let parsed = luck_parser::parse_definitions(&allocator, self.text.as_bytes());
@@ -136,40 +157,45 @@ impl Package {
                     reason = "only these statements declare, and a definition file holds no other"
                 )]
                 match statement {
-                    Statement::DeclaredGlobal(global) => {
-                        let name = global.name.text.as_str();
-                        declare(format!("global/{name}"), global.span.start, global.name.span);
-                        fields(&global.ty, &mut |field, start, span| {
-                            declare(format!("global/{name}.{field}"), start, span);
-                        });
-                    }
-                    Statement::DeclaredFunction(function) => {
-                        let name = function.name.text.as_str();
-                        declare(format!("global/{name}"), function.span.start, function.name.span);
-                    }
-                    Statement::DeclaredExternType(extern_type) => {
-                        let type_name = extern_type.name.text.as_str();
-                        declare(
-                            format!("globaltype/{type_name}"),
-                            extern_type.span.start,
-                            extern_type.name.span,
-                        );
-                        for member in &extern_type.members {
-                            let (start, member_name) = match member {
-                                ExternTypeMember::Field(TypeField::Named {
-                                    span, name, ..
-                                }) => (span.start, name),
-                                ExternTypeMember::Method(method) => {
-                                    (method.span.start, &method.name)
-                                }
-                                ExternTypeMember::Field(
-                                    TypeField::Indexer { .. } | TypeField::Array { .. },
-                                ) => continue,
-                            };
-                            let symbol = format!("globaltype/{type_name}.{}", member_name.text);
-                            declare(symbol, start, member_name.span);
+                    Statement::Declaration(declaration) => match &**declaration {
+                        luck_ast::Declaration::Global(global) => {
+                            let name = global.name.text.as_str();
+                            declare(format!("global/{name}"), global.span.start, global.name.span);
+                            fields(&global.ty, &mut |field, start, span| {
+                                declare(format!("global/{name}.{field}"), start, span);
+                            });
                         }
-                    }
+                        luck_ast::Declaration::Function(function) => {
+                            let name = function.name.text.as_str();
+                            let start = function.span.start;
+                            declare(format!("global/{name}"), start, function.name.span);
+                        }
+                        luck_ast::Declaration::ExternType(extern_type) => {
+                            let type_name = extern_type.name.text.as_str();
+                            declare(
+                                format!("globaltype/{type_name}"),
+                                extern_type.span.start,
+                                extern_type.name.span,
+                            );
+                            for member in &extern_type.members {
+                                let (start, member_name) = match member {
+                                    ExternTypeMember::Field(TypeField::Named {
+                                        span,
+                                        name,
+                                        ..
+                                    }) => (span.start, name),
+                                    ExternTypeMember::Method(method) => {
+                                        (method.span.start, &method.name)
+                                    }
+                                    ExternTypeMember::Field(
+                                        TypeField::Indexer { .. } | TypeField::Array { .. },
+                                    ) => continue,
+                                };
+                                let symbol = format!("globaltype/{type_name}.{}", member_name.text);
+                                declare(symbol, start, member_name.span);
+                            }
+                        }
+                    },
                     Statement::TypeDeclaration(alias) => {
                         let name = alias.name.text.as_str();
                         declare(format!("globaltype/{name}"), alias.span.start, alias.name.span);
@@ -182,11 +208,7 @@ impl Package {
                     _ => {}
                 }
             }
-            Declarations {
-                by_symbol,
-                comments: parsed.comments,
-                line_index: LineIndex::new(&self.text, encoding),
-            }
+            Declarations { by_symbol, comments: parsed.comments }
         })
     }
 }
@@ -220,21 +242,24 @@ impl Declared<'_> {
         let comments = &self.declarations.comments;
         let mut above = line_start(text, self.start);
         // A member on the line of what holds it has no line of its own above.
-        if !text[offset_to_index(above)..offset_to_index(self.start)].trim().is_empty() {
+        if !span_text(text, Span::new(above, self.start)).trim().is_empty() {
             return None;
         }
         let mut lines = Vec::new();
         let before = comments.partition_point(|comment| comment.span.end <= above);
         for comment in comments[..before].iter().rev() {
-            let gap = &text[offset_to_index(comment.span.end)..offset_to_index(above)];
+            let gap = span_text(text, Span::new(comment.span.end, above));
             let is_directly_above = comment.position == CommentPosition::Leading
                 && gap.trim_matches([' ', '\t', '\r']) == "\n";
             if !is_directly_above {
                 break;
             }
-            let written =
-                &text[offset_to_index(comment.span.start)..offset_to_index(comment.span.end)];
-            lines.push(comment_text(written, comment.kind));
+            let written = span_text(text, comment.span).as_bytes();
+            let Some(body) = comment.kind.body(written).and_then(|body| str::from_utf8(body).ok())
+            else {
+                break;
+            };
+            lines.push(body.trim());
             above = line_start(text, comment.span.start);
         }
         if lines.is_empty() {
@@ -244,9 +269,11 @@ impl Declared<'_> {
         Some(lines.join("\n"))
     }
 
-    pub(crate) fn location(&self) -> Option<Location> {
+    /// Where its name is, in `encoding`'s positions.
+    pub(crate) fn location(&self, encoding: PositionEncoding) -> Option<Location> {
         let uri = self.package.uri.clone()?;
-        let range = self.declarations.line_index.range(self.package.text(), self.name);
+        let before = &self.package.text()[..offset_to_index(self.name.end)];
+        let range = LineIndex::new(before, encoding).range(before, self.name);
         Some(Location { uri, range })
     }
 }
@@ -254,20 +281,6 @@ impl Declared<'_> {
 /// Where the line that holds `offset` starts.
 fn line_start(text: &str, offset: u32) -> u32 {
     text[..offset_to_index(offset)].rfind('\n').map_or(0, |newline| index_to_offset(newline + 1))
-}
-
-/// A comment's text inside its delimiters, `--` and any more dashes, or a
-/// block's brackets.
-fn comment_text(comment: &str, kind: CommentKind) -> &str {
-    let inside = match kind {
-        CommentKind::Line | CommentKind::Shebang => comment.trim_start_matches('-'),
-        CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
-            let opened = comment.trim_start_matches('-').trim_start_matches('[');
-            let opened = opened.trim_start_matches('=').trim_start_matches('[');
-            opened.trim_end_matches(']').trim_end_matches('=').trim_end_matches(']')
-        }
-    };
-    inside.trim()
 }
 
 #[cfg(test)]
@@ -281,6 +294,7 @@ mod tests {
 
 --- Greets someone.
 --[[ By name. ]]
+--[==[ See t[1]. ]==]
 declare function greet(name: string): string
 declare app: { -- trailing
     -- Starts the app.
@@ -288,23 +302,33 @@ declare app: { -- trailing
     stop: () -> (),
 }
 ";
-        let packages = [Package::new("@app".to_owned(), None, Cow::Borrowed(text))];
+        let packages = [Arc::new(Package::new("@app".to_owned(), None, Cow::Borrowed(text)))];
         let documentation = |symbol: &str| {
             let declaration =
                 Declaration { documentation_symbol: Some(symbol.to_owned()), definition: None };
-            Package::find(&packages, &declaration, PositionEncoding::Utf16)?.documentation()
+            Package::find(&packages, &declaration)?.documentation()
         };
 
         assert_eq!(
             documentation("@app/global/greet").as_deref(),
-            Some("Greets someone.\nBy name.")
+            Some("Greets someone.\nBy name.\nSee t[1].")
         );
         assert_eq!(documentation("@app/global/app.start").as_deref(), Some("Starts the app."));
         assert_eq!(documentation("@app/global/app.stop"), None);
         assert_eq!(documentation("@app/global/app"), None);
         assert_eq!(
             documentation("@app/global/greet/overload/(string) -> string").as_deref(),
-            Some("Greets someone.\nBy name.")
+            Some("Greets someone.\nBy name.\nSee t[1].")
         );
+    }
+
+    #[test]
+    fn every_checker_shares_one_index_of_roblox_s_api() {
+        let declaration = Declaration {
+            documentation_symbol: Some("@roblox/globaltype/Part.Anchored".to_owned()),
+            definition: None,
+        };
+        let _ = Package::find(&[roblox_package(SecurityLevel::None)], &declaration);
+        assert!(roblox_package(SecurityLevel::None).declarations.get().is_some());
     }
 }
