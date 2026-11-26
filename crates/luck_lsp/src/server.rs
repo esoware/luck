@@ -93,29 +93,31 @@ pub(crate) struct Problem {
     pub published: Option<(Uri, Vec<Diagnostic>)>,
 }
 
-/// What the server last published on an open document: its lints, and the
-/// type errors the last check found, which go out together.
+/// What goes out on an open document: its lints, and the type errors the
+/// last check found, which go out together.
 #[derive(Debug, Default)]
 struct Published {
     lints: Vec<Diagnostic>,
     type_errors: Vec<Diagnostic>,
-    is_sent: bool,
+    /// Whether `lints` are the open version's, which a publish waits for.
+    is_linted: bool,
+    /// What went out last.
+    sent: Option<Vec<Diagnostic>>,
 }
 
 impl Published {
-    /// Makes `diags` the part `part` picks, and gives every diagnostic it
-    /// holds, unless that part held `diags` already and went out.
-    fn update(
-        &mut self,
-        part: fn(&mut Self) -> &mut Vec<Diagnostic>,
-        diags: Vec<Diagnostic>,
-    ) -> Option<Vec<Diagnostic>> {
-        if self.is_sent && *part(self) == diags {
+    /// Every diagnostic to publish, once the open version's lints are in,
+    /// unless that's what went out last.
+    fn next(&mut self) -> Option<Vec<Diagnostic>> {
+        if !self.is_linted {
             return None;
         }
-        *part(self) = diags;
-        self.is_sent = true;
-        Some(self.lints.iter().chain(&self.type_errors).cloned().collect())
+        let all: Vec<Diagnostic> = self.lints.iter().chain(&self.type_errors).cloned().collect();
+        if self.sent.as_ref() == Some(&all) {
+            return None;
+        }
+        self.sent = Some(all.clone());
+        Some(all)
     }
 }
 
@@ -356,19 +358,19 @@ impl Server {
             }
             Task::Notify(notification) => self.send(notification),
             Task::Lints { uri, document, diags } => {
-                self.update_published(uri, &document, |published| &mut published.lints, diags);
+                self.update_published(uri, &document, |published| {
+                    published.lints = diags;
+                    published.is_linted = true;
+                });
             }
             Task::Checked { documents, problems, cancellation } => {
                 if cancellation.is_cancelled() {
                     return;
                 }
                 for (uri, document, diags) in documents {
-                    self.update_published(
-                        uri,
-                        &document,
-                        |published| &mut published.type_errors,
-                        diags,
-                    );
+                    self.update_published(uri, &document, |published| {
+                        published.type_errors = diags;
+                    });
                 }
                 let mut last = mem::take(&mut self.definition_problems);
                 for problem in problems {
@@ -410,21 +412,20 @@ impl Server {
         }
     }
 
-    /// Publishes on `document`, if it's still what's open at `uri`, its
-    /// diagnostics with `diags` as the part `part` picks, unless that
-    /// changes nothing published.
+    /// Applies `change` to what goes out on `document`, if it's still what's
+    /// open at `uri`, and publishes that if it's due.
     fn update_published(
         &mut self,
         uri: Uri,
         document: &Arc<Document>,
-        part: fn(&mut Published) -> &mut Vec<Diagnostic>,
-        diags: Vec<Diagnostic>,
+        change: impl FnOnce(&mut Published),
     ) {
         if !self.documents.get(&uri).is_some_and(|current| Arc::ptr_eq(current, document)) {
             return;
         }
         let published = self.published.entry(uri.clone()).or_default();
-        if let Some(all) = published.update(part, diags) {
+        change(published);
+        if let Some(all) = published.next() {
             self.publish(uri, all, Some(document.version()));
         }
     }
@@ -440,8 +441,12 @@ impl Server {
     }
 
     /// Makes `document` what's open at `uri`, which leaves any job still
-    /// linting what it replaces to stop with nothing to publish.
+    /// linting what it replaces to stop with nothing to publish, and what
+    /// goes out on it waiting for its own lints.
     fn replace(&mut self, uri: Uri, document: Arc<Document>) {
+        if let Some(published) = self.published.get_mut(&uri) {
+            published.is_linted = false;
+        }
         if let Some(replaced) = self.documents.insert(uri, document) {
             replaced.mark_stale();
         }
@@ -1225,22 +1230,23 @@ mod tests {
     }
 
     #[test]
-    fn a_document_s_diagnostics_go_out_once_a_part_of_them_changes() {
-        let lints: fn(&mut Published) -> &mut Vec<Diagnostic> = |published| &mut published.lints;
-        let type_errors: fn(&mut Published) -> &mut Vec<Diagnostic> =
-            |published| &mut published.type_errors;
+    fn a_document_s_diagnostics_go_out_once_its_lints_are_in_and_a_part_changes() {
         let mut published = Published::default();
-        assert_eq!(published.update(lints, Vec::new()), Some(Vec::new()), "the first goes out");
-        assert_eq!(published.update(lints, Vec::new()), None);
-
         let mismatch = diagnostic("Expected this to be 'number', but got 'string'");
-        let checked = published.update(type_errors, vec![mismatch.clone()]);
-        assert_eq!(checked, Some(vec![mismatch.clone()]));
-        assert_eq!(published.update(type_errors, vec![mismatch.clone()]), None);
+        published.type_errors = vec![mismatch.clone()];
+        assert_eq!(published.next(), None, "type errors wait for the version's lints");
+
+        published.is_linted = true;
+        assert_eq!(published.next(), Some(vec![mismatch.clone()]), "the first goes out");
+        assert_eq!(published.next(), None, "the same don't go out again");
 
         let unused = diagnostic("`count` is never used");
+        published.is_linted = false;
+        published.lints = vec![unused.clone()];
+        assert_eq!(published.next(), None, "a replaced version waits for its own lints");
+        published.is_linted = true;
         assert_eq!(
-            published.update(lints, vec![unused.clone()]),
+            published.next(),
             Some(vec![unused, mismatch]),
             "lints go out with the last check's type errors"
         );
