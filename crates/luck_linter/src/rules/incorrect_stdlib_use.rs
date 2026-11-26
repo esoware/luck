@@ -155,6 +155,8 @@ local a = UDim2.new(0, 0, 1, 0)
 local b = UDim2.new(u, u)",
         "game:GetService('ProximityPromptService')",
         "local x = script:IsA('BasePart')",
+        // The Creator Documentation calls `timeOut` optional.
+        "local child = script:WaitForChild('x')",
         "Instance.new('Folder')",
         "BrickColor.new('Bright red')",
         "BrickColor.new(1, 0, 0)",

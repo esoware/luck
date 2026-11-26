@@ -9521,7 +9521,7 @@ declare extern type Instance extends Object with
 	-- Sets the attribute with the given name to the given value.
 	function SetAttribute(self, attribute: string, value: any): ()
 	-- Returns the child of the `Instance` with the given name. If the child does not exist, it will yield the current thread until it does.
-	function WaitForChild(self, childName: string, timeOut: number): Instance
+	function WaitForChild(self, childName: string, timeOut: number?): Instance
 	-- Returns an array of the object's children.
 	@[deprecated {use = "GetChildren", reason = "This item has been superseded by `Instance:GetChildren()` which should be used in all new work."}] function children(self): { Instance }
 	@[deprecated {use = "Clone", reason = "This deprecated function is a variant of `Instance:Clone()` which should be used instead."}] function clone(self): Instance
@@ -12965,7 +12965,7 @@ declare extern type CaptureService extends Instance with
 	-- Prompts the user to save specified captures to their gallery.
 	function PromptSaveCapturesToGallery(self, captures: { any }, resultCallback: ((...any) -> ...any)): ()
 	-- Prompts the user to share a specified capture.
-	function PromptShareCapture(self, captureContent: Content, launchData: string, onAcceptedCallback: ((...any) -> ...any), onDeniedCallback: ((...any) -> ...any)): ()
+	function PromptShareCapture(self, captureContent: Content, launchData: string?, onAcceptedCallback: ((...any) -> ...any)?, onDeniedCallback: ((...any) -> ...any)?): ()
 	function RetrieveCaptures(self): { any } -- RobloxScriptSecurity
 	function SaveCaptureObjectToExternalStorage(self, capture: Capture): () -- RobloxScriptSecurity
 	function SaveCaptureToExternalStorage(self, capturePath: string): () -- RobloxScriptSecurity
@@ -13363,7 +13363,7 @@ declare extern type LocalizationTable extends Instance with
 	-- Returns an array of dictionaries, where each dictionary represents an entry of localization data.
 	function GetEntries(self): { any }
 	-- Returns a translation based on the specified language and key.
-	@[deprecated {use = "GetTranslator", reason = "This item has been superseded by `LocalizationTable:GetTranslator()` which should be used in all new work."}] function GetString(self, targetLocaleId: string, key: string): string
+	@[deprecated {use = "GetTranslator", reason = "This item has been superseded by `LocalizationTable:GetTranslator()` which should be used in all new work."}] function GetString(self, targetLocaleId: string, key: string?): string
 	-- Returns a `Translator` for entries in this LocalizationTable, in the specified locale.
 	function GetTranslator(self, localeId: string): Instance
 	-- Removes an entry from the LocalizationTable, using the specified `key`, `source`, and `context` to narrow down the specific entry to be removed.
@@ -26559,7 +26559,7 @@ declare PhysicalProperties: {
 
 declare Random: {
 	-- Returns a new pseudorandom generator using an optional seed.
-	new: (seed: number) -> Random,
+	new: (seed: number?) -> Random,
 }
 
 declare Ray: {

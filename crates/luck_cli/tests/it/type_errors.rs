@@ -150,6 +150,20 @@ fn check_reports_a_class_name_roblox_has_no_class_for() {
     assert!(stderr.contains("Unknown type 'Parts'"), "{stderr}");
 }
 
+/// The Creator Documentation calls `timeOut` optional, so a strict file can
+/// leave it out.
+#[test]
+fn check_takes_wait_for_child_without_a_time_out() {
+    let stderr = roblox_type_errors(
+        "--!strict
+local child: Instance = script:WaitForChild(\"x\")
+return child
+",
+    );
+
+    assert!(!stderr.contains("[E015]"), "{stderr}");
+}
+
 #[test]
 fn check_takes_a_class_name_that_isnt_a_literal() {
     let stderr = roblox_type_errors(

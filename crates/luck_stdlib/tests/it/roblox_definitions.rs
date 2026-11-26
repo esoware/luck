@@ -250,6 +250,41 @@ struct Param {
     ty: String,
 }
 
+/// Whether a parameter's docs summary calls it optional: it starts so, as
+/// "An optional time out parameter." or "**(Optional)** Lower bound" do, which
+/// a summary that only mentions something optional doesn't.
+fn is_called_optional(param: &Yaml<'static>) -> bool {
+    let summary = text(param, "summary").trim_start();
+    let summary =
+        summary.strip_prefix("**(").or_else(|| summary.strip_prefix('(')).unwrap_or(summary);
+    let summary =
+        summary.strip_prefix("An ").or_else(|| summary.strip_prefix("A ")).unwrap_or(summary);
+    summary
+        .strip_prefix("Optional")
+        .or_else(|| summary.strip_prefix("optional"))
+        .is_some_and(|rest| !rest.starts_with(|character: char| character.is_ascii_alphanumeric()))
+}
+
+/// Each of `params`, with whether it has a default and whether its summary
+/// calls it optional, as a declaration types it: optional when it has a
+/// default, and when its summary calls it optional and every one after it is
+/// optional too, since a call can leave out only the last ones.
+fn optional_params(params: Vec<(Param, bool, bool)>) -> Vec<Param> {
+    let mut is_rest_optional = true;
+    let mut typed: Vec<Param> = params
+        .into_iter()
+        .rev()
+        .map(|(param, has_default, is_called_optional)| {
+            let is_vararg = param.ty.starts_with("...");
+            let is_optional = has_default || (is_called_optional && is_rest_optional);
+            is_rest_optional &= is_optional || is_vararg || optional(&param.ty) == param.ty;
+            if is_optional { Param { ty: optional(&param.ty), ..param } } else { param }
+        })
+        .collect();
+    typed.reverse();
+    typed
+}
+
 /// `params` as a declaration lists them, after `self` for a method, or as a
 /// function type does.
 fn param_list(params: &[Param], is_method: bool, is_type: bool) -> String {
@@ -358,19 +393,29 @@ impl Names {
         self.named(name)
     }
 
-    fn dump_params(&self, member: &Value) -> Vec<Param> {
-        member["Parameters"]
+    /// A member's parameters, where `docs` is its docs entry, if it has one.
+    fn dump_params(&self, member: &Value, docs: Option<&Yaml<'static>>) -> Vec<Param> {
+        let documented = docs.map(|found| list(found, "parameters")).unwrap_or_default();
+        let params = member["Parameters"]
             .as_array()
             .map(Vec::as_slice)
             .unwrap_or_default()
             .iter()
             .map(|param| {
-                let ty = self.dump(&param["Type"]);
-                let ty = if param.get("Default").is_some() { optional(&ty) } else { ty };
                 let name = param["Name"].as_str().expect("a parameter's Name");
-                Param { name: param_name(name), ty }
+                let is_called_optional = documented
+                    .iter()
+                    .find(|docs_param| text(docs_param, "name") == name)
+                    .is_some_and(is_called_optional);
+                let has_default = param.get("Default").is_some();
+                (
+                    Param { name: param_name(name), ty: self.dump(&param["Type"]) },
+                    has_default,
+                    is_called_optional,
+                )
             })
-            .collect()
+            .collect();
+        optional_params(params)
     }
 
     fn dump_returns(&self, member: &Value) -> String {
@@ -383,19 +428,20 @@ impl Names {
     }
 
     fn docs_params(&self, function: &Yaml<'static>) -> Vec<Param> {
-        list(function, "parameters")
+        let params = list(function, "parameters")
             .iter()
             .map(|param| {
                 let ty = self.docs(text(param, "type"));
                 let name = text(param, "name");
                 if name == "..." {
                     let rest = ty.strip_prefix("...").unwrap_or(&ty);
-                    return Param { name: String::new(), ty: format!("...{rest}") };
+                    return (Param { name: String::new(), ty: format!("...{rest}") }, false, false);
                 }
                 let has_default = param.get("default").is_some_and(|default| !default.is_null());
-                Param { name: param_name(name), ty: if has_default { optional(&ty) } else { ty } }
+                (Param { name: param_name(name), ty }, has_default, is_called_optional(param))
             })
-            .collect()
+            .collect();
+        optional_params(params)
     }
 
     /// What `function` returns, which for a constructor, which lists none, is
@@ -501,8 +547,13 @@ fn dump_tags(node: &Value) -> Vec<&str> {
 
 /// `member`'s line in its class, with the comment that names the levels it
 /// needs, or `None` when no script can reach it. A function starts with
-/// `deprecated`.
-fn member_line(names: &Names, member: &Value, deprecated: &str) -> Option<String> {
+/// `deprecated`, and `docs` is its docs entry, if it has one.
+fn member_line(
+    names: &Names,
+    member: &Value,
+    docs: Option<&Yaml<'static>>,
+    deprecated: &str,
+) -> Option<String> {
     let tags = dump_tags(member);
     if tags.contains(&"NotScriptable") {
         return None;
@@ -547,7 +598,7 @@ fn member_line(names: &Names, member: &Value, deprecated: &str) -> Option<String
                 "Function" => {
                     format!(
                         "{deprecated}function {name}{}: {}",
-                        param_list(&names.dump_params(member), true, false),
+                        param_list(&names.dump_params(member, docs), true, false),
                         names.dump_returns(member)
                     )
                 }
@@ -555,7 +606,7 @@ fn member_line(names: &Names, member: &Value, deprecated: &str) -> Option<String
                 "Callback" => format!(
                     "{write_keyword}{}: {} -> {}",
                     key(name),
-                    param_list(&names.dump_params(member), false, true),
+                    param_list(&names.dump_params(member, docs), false, true),
                     names.dump_returns(member)
                 ),
                 _ => panic!("unknown member type {kind}"),
@@ -839,7 +890,10 @@ fn regenerate_roblox_definitions() {
             } else {
                 String::new()
             };
-            let Some(line) = member_line(&names, member, &deprecated) else { continue };
+            let member_docs = methods.get(member_name).copied();
+            let Some(line) = member_line(&names, member, member_docs, &deprecated) else {
+                continue;
+            };
             write_summary(&mut out, "\t", summaries.get(member_name).map(String::as_str));
             writeln!(out, "\t{line}").expect("write to a string");
         }
