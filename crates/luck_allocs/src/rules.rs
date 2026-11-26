@@ -4,7 +4,7 @@ use std::{fs, io};
 use luck_allocator::Allocator;
 use luck_benchmark_files::TestFile;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, Linter, RuleId, RuleLevel};
-use luck_stdlib::library_for;
+use luck_stdlib::{SecurityLevel, luau_library, roblox_library};
 
 use crate::every_rule;
 use crate::snapshot::render_entry;
@@ -24,7 +24,9 @@ pub(crate) fn write_report(allocator: &mut Allocator, files: &[TestFile]) -> io:
     for file in files {
         allocator.reset();
         let parse = luck_parser::parse(allocator, &file.source_text);
-        let analysis = every_rule.analyze(&parse, library_for(file.variant));
+        let library =
+            if file.has_roblox { roblox_library(SecurityLevel::None) } else { luau_library() };
+        let analysis = every_rule.analyze(&parse, library);
         let mut entries: Vec<(&str, StageStats)> = linters
             .iter()
             .map(|(rule, linter)| {

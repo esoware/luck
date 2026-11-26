@@ -101,11 +101,10 @@ pub(crate) fn initialize_result(encoding: PositionEncoding) -> InitializeResult 
 /// an answer.
 pub(crate) fn watcher_registration() -> Request {
     let watchers = [
-        // Any JSON or TOML file, since a `luck.json` can extend a file, or
-        // name a std definition, of any name. A change touching none the
-        // projects read is ignored.
+        // Any JSON file, since a `luck.json` can extend a file of any name,
+        // and below, any Luau file, which it can name as a definition file.
+        // A change touching none the projects read is ignored.
         "**/*.json",
-        "**/*.toml",
         "**/.editorconfig",
         "**/.luaurc",
         "**/*.{luau,lua}",

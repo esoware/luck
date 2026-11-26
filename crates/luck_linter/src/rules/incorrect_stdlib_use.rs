@@ -7,8 +7,8 @@ use crate::context::LintContext;
 use crate::diagnostic::Finding;
 use crate::rule::{Rule, declare_lint_rule};
 
-/// How many allowed values a message lists. Generated sets (Roblox service
-/// and class names) run to hundreds of values.
+/// How many allowed values a message lists, since a definition's union of
+/// strings can run to hundreds.
 const LISTED_VALUE_LIMIT: usize = 8;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,12 +86,12 @@ fn invalid_constant_args(
         let (value, span) = arg.string_literal_value()?;
         let allowed_sets = function.allowed_constants(index, arg_count)?;
         let allowed = || allowed_sets.clone().flatten();
-        if allowed().any(|constant| constant.value == value) {
+        if allowed().any(|constant| *constant == value) {
             return None;
         }
         let allowed_list = allowed()
             .take(LISTED_VALUE_LIMIT)
-            .map(|constant| format!("`{}`", constant.value))
+            .map(|constant| format!("`{constant}`"))
             .collect::<Vec<_>>()
             .join(", ");
         let allowed_count = allowed().count();
@@ -119,23 +119,23 @@ mod tests {
 
     const PASS: &[&str] = &[
         "table.insert(t, 1)",
-        "collectgarbage('collect')",
         // `obj` has no known shape, so `foo` doesn't resolve to the stdlib.
         "obj:foo()",
         "\
 local type = f
 type(1, 2, 3)",
-        // `error()` raises a nil error.
-        "error()",
+        // One overload of `os.date` takes any string.
+        "local now = os.date('%c')",
     ];
 
     const FAIL: &[&str] = &[
         "table.insert()",
         "type(1, 2, 3)",
-        // `collectgarbage` first arg must be one of the option names.
-        "collectgarbage('frob')",
-        "collectgarbage'frob'",
         "local s = ('x'):rep()",
+        // Luau's definitions take a message, as its checker says.
+        "error()",
+        // `table.insert` takes two or three, as its overloads do.
+        "table.insert(t, 1, 2, 3)",
     ];
 
     const ROBLOX_PASS: &[&str] = &[
@@ -157,7 +157,6 @@ local b = UDim2.new(u, u)",
         "local x = script:IsA('BasePart')",
         "Instance.new('Folder')",
         "BrickColor.new('Bright red')",
-        // The three-number form skips the name check.
         "BrickColor.new(1, 0, 0)",
     ];
 
@@ -168,23 +167,24 @@ local b = UDim2.new(u, u)",
         "\
 local child = script:FindFirstChild('x')
 local grandchild = child:FindFirstChild()",
-        "\
-local child = script:WaitForChild('x')
-local is_part = child:IsA('Partz')",
-        "game:GetService('Playerz')",
-        "game:GetService'Playerz'",
-        "Instance.new('Playerz')",
-        // `BasePart` exists but isn't creatable, so `IsA` accepts it and
-        // `Instance.new` doesn't.
-        "Instance.new('BasePart')",
         "game:GetService()",
-        "BrickColor.new('Bright rad')",
+        "BrickColor.new(1, 0)",
     ];
+
+    const DEFINITIONS: &str = r#"
+type Mode = "r" | "w"
+declare fs: { open: (path: string, mode: Mode?) -> () }
+"#;
+
+    const DEFINITIONS_PASS: &[&str] = &["fs.open('a', 'r')", "fs.open('a')", "fs.open('a', mode)"];
+
+    const DEFINITIONS_FAIL: &[&str] = &["fs.open('a', 'x')", "fs.open()"];
 
     #[test]
     fn test() {
         Tester::new(RuleId::IncorrectStdlibUse, PASS, FAIL)
             .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .with_definitions(DEFINITIONS, DEFINITIONS_PASS, DEFINITIONS_FAIL)
             .test_and_snapshot();
     }
 }

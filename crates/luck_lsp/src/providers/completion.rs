@@ -212,35 +212,17 @@ fn constant_value_completions(
     let interior = document.range(string_interior(literal, is_unterminated));
     let mut seen_values: FxHashSet<&str> = FxHashSet::default();
     let mut items: Vec<CompletionItem> = Vec::new();
-    for constant in allowed_sets.into_iter().flatten() {
-        if !seen_values.insert(constant.value) {
+    for &constant in allowed_sets.into_iter().flatten() {
+        if !seen_values.insert(constant) {
             continue;
         }
-        let is_deprecated = constant.deprecated.is_some();
-        // Rank: curated common values, then the rest, deprecated last.
-        let rank = if is_deprecated {
-            '2'
-        } else if constant.is_common {
-            '0'
-        } else {
-            '1'
-        };
         items.push(CompletionItem {
-            label: constant.value.to_owned(),
+            label: constant.to_owned(),
             kind: Some(CompletionItemKind::ENUM_MEMBER),
-            sort_text: Some(format!("{rank}{}", constant.value)),
-            filter_text: Some(constant.value.to_owned()),
-            deprecated: Some(is_deprecated),
-            tags: is_deprecated.then(|| vec![CompletionItemTag::DEPRECATED]),
-            documentation: constant.deprecated.as_ref().map(|deprecation| {
-                Documentation::MarkupContent(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: format!("**Deprecated:** {}", deprecation.message),
-                })
-            }),
+            filter_text: Some(constant.to_owned()),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range: interior,
-                new_text: constant.value.to_owned(),
+                new_text: constant.to_owned(),
             })),
             ..Default::default()
         });
@@ -332,18 +314,9 @@ fn item_for_entry(name: &str, entry: &StdlibEntry<'_>) -> CompletionItem {
         StdlibEntry::Namespace(_) => {
             (CompletionItemKind::MODULE, "namespace", false, format!("`{name}` namespace"))
         }
-        StdlibEntry::Constant(value) => (
-            CompletionItemKind::CONSTANT,
-            "constant",
-            value.deprecated.is_some(),
-            format!("`{name}` constant"),
-        ),
-        StdlibEntry::Property(value) => (
-            CompletionItemKind::PROPERTY,
-            "property",
-            value.deprecated.is_some(),
-            format!("`{name}` property"),
-        ),
+        StdlibEntry::Value(_) => {
+            (CompletionItemKind::PROPERTY, "property", false, format!("`{name}` property"))
+        }
     };
 
     // Insert the bare name without placeholders. The stdlib model has
@@ -377,13 +350,12 @@ fn function_documentation(name: &str, function: &StdlibFunction<'_>) -> String {
         String::new()
     };
     let deprecation_note = function.deprecated.as_ref().map_or_else(String::new, |deprecation| {
-        format!("\n\n**Deprecated:** {}", deprecation.message)
+        match deprecation.advice() {
+            Some(advice) => format!("\n\n**Deprecated:** {advice}"),
+            None => "\n\n**Deprecated**".to_owned(),
+        }
     });
-    let must_use_note = if function.is_must_use { "\n\n_must_use_" } else { "" };
-    let pure_note = if function.is_pure { " \u{b7} _pure_" } else { "" };
-    format!(
-        "```luau\nfunction {name}({params})\n```{overload_note}{deprecation_note}{must_use_note}{pure_note}"
-    )
+    format!("```luau\nfunction {name}({params})\n```{overload_note}{deprecation_note}")
 }
 
 const KEYWORD_COMPLETIONS: &[&str] = &[
@@ -396,7 +368,7 @@ mod tests {
     use ls_types::Range as LspRange;
 
     use super::*;
-    use crate::fixtures::{document, roblox_document};
+    use crate::fixtures::{defined_document, document, roblox_document};
 
     fn items_at(document: &DocumentState, line: u32, utf16_column: u32) -> Vec<CompletionItem> {
         match completion(document, Position::new(line, utf16_column)) {
@@ -472,19 +444,21 @@ function g(x)
         assert!(variables_of(&items_at(&unclosed, 1, 2)).contains(&"x"), "with no `end` yet");
     }
 
+    const MODES: &str = r#"declare function open(path: string, mode: "read" | "write")"#;
+
     /// A string the line cut off is still being typed at its end, so its
     /// values complete there and replace all of it after the quote.
     #[test]
     fn an_unterminated_string_completes_its_values_at_its_end() {
-        let text = "local p = game:GetService('Pla";
-        let document = roblox_document(text);
+        let text = "open('a', 'rea";
+        let document = defined_document(MODES, text);
         let utf16_column = index_to_offset(text.len());
         let items = items_at(&document, 0, utf16_column);
-        let players = items.iter().find(|item| item.label == "Players").expect("Players offered");
-        let Some(CompletionTextEdit::Edit(edit)) = &players.text_edit else {
-            panic!("{players:?}");
+        let read = items.iter().find(|item| item.label == "read").expect("read offered");
+        let Some(CompletionTextEdit::Edit(edit)) = &read.text_edit else {
+            panic!("{read:?}");
         };
-        let quote = index_to_offset(text.find('\'').expect("the quote") + 1);
+        let quote = index_to_offset(text.rfind('\'').expect("the quote") + 1);
         assert_eq!(
             edit.range,
             LspRange::new(Position::new(0, quote), Position::new(0, utf16_column))
@@ -492,45 +466,15 @@ function g(x)
     }
 
     #[test]
-    fn get_service_string_completes_services_ranked() {
-        let text = "local p = game:GetService('')";
-        let document = roblox_document(text);
-        // Cursor between the quotes.
-        let utf16_column = index_to_offset(text.find("('").expect("literal") + 2);
+    fn a_string_completes_the_values_its_union_allows() {
+        let text = "open('a', '')";
+        let document = defined_document(MODES, text);
+        let utf16_column = index_to_offset(text.len() - 2);
         let items = items_at(&document, 0, utf16_column);
-
-        let players = items.iter().find(|item| item.label == "Players").expect("Players offered");
-        assert!(
-            players.sort_text.as_deref() == Some("0Players"),
-            "common services rank first: {:?}",
-            players.sort_text
-        );
-        let obscure = items
-            .iter()
-            .find(|item| item.label == "AccountService")
-            .expect("full service list offered");
-        assert_eq!(obscure.sort_text.as_deref(), Some("1AccountService"));
-        let dead = items
-            .iter()
-            .find(|item| item.label == "PointsService")
-            .expect("dead services offered (tagged)");
-        assert_eq!(dead.sort_text.as_deref(), Some("2PointsService"));
-        assert_eq!(dead.deprecated, Some(true));
-        // Constant-value mode replaces identifier completion entirely.
-        assert!(!items.iter().any(|item| item.label == "print"));
-    }
-
-    #[test]
-    fn instance_new_string_completes_class_names() {
-        let text = "local f = Instance.new('Fol')";
-        let document = roblox_document(text);
-        let utf16_column = index_to_offset(text.find("('").expect("literal") + 4);
-        let items = items_at(&document, 0, utf16_column);
-        assert!(items.iter().any(|item| item.label == "Folder"));
-        assert!(
-            !items.iter().any(|item| item.label == "BasePart"),
-            "abstract classes are not creatable"
-        );
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["read", "write"]);
+        let first_argument = items_at(&document, 0, 6);
+        assert!(first_argument.is_empty(), "`path` takes any string: {first_argument:?}");
     }
 
     #[test]
@@ -571,18 +515,6 @@ function g(x)
             !items.iter().any(|item| item.label == "Grass"),
             "items are dot members, not methods"
         );
-    }
-
-    #[test]
-    fn deprecated_enum_item_completion_is_tagged() {
-        let text = "local a = Enum.AlignType.";
-        let document = roblox_document(text);
-        let items = items_at(&document, 0, index_to_offset(text.len()));
-        let parallel = items
-            .iter()
-            .find(|item| item.label == "Parallel")
-            .expect("deprecated items still offered");
-        assert_eq!(parallel.deprecated, Some(true));
     }
 
     #[test]
@@ -666,19 +598,19 @@ math.";
 
     #[test]
     fn constant_completion_in_a_long_string_replaces_only_its_interior() {
-        let text = "collectgarbage([[c]])";
-        let document = document(text);
-        let items = items_at(&document, 0, 18);
-        let collect = items
+        let text = "open('a', [[r]])";
+        let document = defined_document(MODES, text);
+        let items = items_at(&document, 0, 13);
+        let read = items
             .iter()
-            .find(|item| item.label == "collect")
+            .find(|item| item.label == "read")
             .expect("constant values inside the string");
-        let Some(CompletionTextEdit::Edit(edit)) = &collect.text_edit else {
-            panic!("constant completion carries a text edit: {collect:?}");
+        let Some(CompletionTextEdit::Edit(edit)) = &read.text_edit else {
+            panic!("constant completion carries a text edit: {read:?}");
         };
         assert_eq!(
             edit.range,
-            LspRange::new(Position::new(0, 17), Position::new(0, 18)),
+            LspRange::new(Position::new(0, 12), Position::new(0, 13)),
             "only the `c` inside `[[` and `]]` may be replaced, or the brackets break"
         );
     }

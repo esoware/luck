@@ -78,7 +78,6 @@ syn                   = { version = "3", default-features = false, features = ["
 tar                   = "0.4"
 tempfile              = "3"
 thread_local          = "1.1"
-toml                  = { version = "1.2", default-features = false, features = ["parse", "serde", "std"] }
 unicode-width         = { version = "0.2", default-features = false }
 ureq                  = "3"
 

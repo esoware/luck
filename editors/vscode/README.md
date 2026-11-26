@@ -4,7 +4,7 @@ Luau language support powered by the luck toolchain:
 
 - **Diagnostics** from `luck_linter` on every change, with the rules `luck lint` runs on the same project, each linking to its rule, with the places it's about as related locations, and unused code faded and deprecated code struck through, a `require` that doesn't resolve shown where it's named, as `luck build` reports it, and a `luck.json` that doesn't load shown as an error on the file
 - **Formatting** + range formatting from `luck_formatter`
-- **Hover** with stdlib signatures, deprecation, and must-use / pure markers
+- **Hover** with stdlib signatures and deprecations
 - **Completion** of stdlib globals, namespace members, locals, keywords, and constant string arguments such as Roblox service names
 - **Signature help** with active-parameter tracking
 - **Go to definition**, find references, and rename for locals, and across the workspace for the members of a module's table, such as `util.greet` from `local util = require("./util")`, and `require` paths jump to the module file
@@ -23,7 +23,7 @@ Supports Luau, standalone or with the Roblox API. Every `.luau` and `.lua` file 
 1. Install the extension.
 2. Open a `.luau` or `.lua` file. Parse errors show up right away.
 3. Format with `Shift+Alt+F` or enable `editor.formatOnSave`.
-4. Configure the variant, formatter style, and lint rules by running `Luck: Create luck.json` from the command palette.
+4. Configure the definitions your Luau runs with, such as Roblox's API, formatter style, and lint rules by running `Luck: Create luck.json` from the command palette.
 
 ## Commands
 
@@ -42,6 +42,6 @@ All commands are under the `Luck:` prefix in the command palette:
 
 ## Configuration highlights
 
-- Formatter style, lint rules, the variant (`standalone` or `roblox`), and globals are all read from `luck.json` / `.editorconfig` by the server. There are no editor settings for them.
+- Formatter style, lint rules, the definitions (such as `@roblox`), and globals are all read from `luck.json` / `.editorconfig` by the server. There are no editor settings for them.
 - `luck.server.path` is an explicit path to the `luck` binary, overriding the bundled one.
 - `luck.trace.server` traces LSP messages for debugging.

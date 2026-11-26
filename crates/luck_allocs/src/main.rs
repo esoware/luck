@@ -24,7 +24,7 @@ use luck_formatter::FormatOptions;
 use luck_linter::{CategoryLevels, FixKind, LintConfig, Linter, RuleLevel};
 use luck_minifier::TransformConfig;
 use luck_semantic::SemanticBuilder;
-use luck_stdlib::library_for;
+use luck_stdlib::{SecurityLevel, luau_library, roblox_library};
 
 use crate::heap::{HEAP, TrackedAllocator};
 use crate::snapshot::write_snapshot;
@@ -101,7 +101,10 @@ fn run(report: Report) -> io::Result<()> {
 /// last.
 fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()] {
     HEAP.reset();
-    let (source, variant) = (file.source_text.as_slice(), file.variant);
+    let source = file.source_text.as_slice();
+    // Built before the measurements, since a process builds it once.
+    let library =
+        if file.has_roblox { roblox_library(SecurityLevel::None) } else { luau_library() };
 
     let ((), lexer) = record_stats_in(allocator, || drop(luck_lexer::lex(source)));
     let (mut parse, parser) = record_stats_in(allocator, || luck_parser::parse(allocator, source));
@@ -118,7 +121,7 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     });
     let every_rule = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
-        drop(every_rule.run(&parse, library_for(variant), FixKind::empty(), None));
+        drop(every_rule.run(&parse, library, FixKind::empty(), None));
     });
     let ((), codegen) = record_stats_in(allocator, || {
         drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));

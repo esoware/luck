@@ -2,55 +2,55 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | function f(x) if x then return 1 end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local function f(x) if x then return 1 end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local f = function(x) if x then return 1 end end
   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | type function t1(a) if a then return a end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:14
+ --> Luau:1:14
 1 | function f() local function g(x) if x then return 1 end end end
   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | function f(x, y) if x then return 1 elseif y then return 2 end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | function f() for i = 1, 10 do return i end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local function f(c, d) if c then return 1 end while true do if d then break end end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit
 
 warning: function returns on some paths but falls through on others
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local function f(x, y) if x then return end if y then return 1 end end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add a `return` on the fallthrough path to make the implicit `nil` explicit

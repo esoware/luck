@@ -1,6 +1,6 @@
-use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, mem};
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
@@ -8,16 +8,16 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
-use luck_stdlib::{SecurityLevel, Stdlib, Variant};
+use luck_stdlib::{SecurityLevel, Stdlib};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::build::{BuildConfig, BuildKeys};
-use crate::config::{Entries, LuckConfig, OverrideConfig};
+use crate::config::{DefinitionsEntry, Entries, LuckConfig, OverrideConfig};
 use crate::editorconfig::Editorconfigs;
 use crate::filter::{ProjectFilter, located_path};
 use crate::glob::compiled;
-use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
+use crate::load::{self, Loaded, config_directory, in_file, unreadable};
 
 /// A `luck.json` loaded through its `extends` chain and validated, or the
 /// defaults where there's none, and the settings it gives each file.
@@ -25,8 +25,9 @@ use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
 pub struct Project {
     root: PathBuf,
     files: Vec<PathBuf>,
-    /// The variant's library, with the `std` definitions over it.
+    /// Luau's library with what `definitions` loads layered over it.
     stdlib: Stdlib,
+    definitions: Vec<DefinitionSource>,
     security: SecurityLevel,
     filter: ProjectFilter,
     format: FormatConfig,
@@ -40,6 +41,16 @@ pub struct Project {
     dynamic_require: DynamicRequire,
     transforms: TransformConfig,
     build: BuildKeys,
+}
+
+/// What an entry of a project's `definitions` loads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefinitionSource {
+    /// Roblox's API, which `"@roblox"` names, at the project's security
+    /// level.
+    Roblox,
+    /// A definition file, by its canonical path, with its text.
+    File { path: PathBuf, text: String },
 }
 
 #[derive(Debug)]
@@ -56,16 +67,16 @@ impl Project {
     ///
     /// # Errors
     ///
-    /// Returns E010 when `config_path` or a std definition it names can't be
-    /// read, and E014 when it, a file it extends, or a std definition isn't
-    /// valid, each in the file at fault and placed where the problem is.
+    /// Returns E010 when `config_path` or a definition file it names can't
+    /// be read, E014 when it or a file it extends isn't valid, and E008 where
+    /// a definition file doesn't parse, each in the file at fault and placed
+    /// where the problem is.
     pub fn load(config_path: &Path) -> Result<Self, FileDiagnostics> {
         let Loaded { config, mut files } = load::load(config_path)?;
         let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
         let LuckConfig {
-            variant,
             security,
-            std,
+            definitions,
             root: _,
             extends: _,
             include,
@@ -87,17 +98,30 @@ impl Project {
         if entry.is_some() && entries.is_some() {
             return Err(invalid("`entry` and `entries` can't both be set, so keep one"));
         }
-        let variant = variant.unwrap_or_default();
-        if security.is_some() && !variant.is_roblox() {
+        let definitions = definitions.unwrap_or_default();
+        let has_roblox =
+            definitions.iter().any(|named| matches!(named, DefinitionsEntry::BuiltIn(_)));
+        if security.is_some() && !has_roblox {
             return Err(invalid(
-                "`security` applies only to a Roblox project, so set `variant` to `roblox` or \
-                 remove `security`",
+                "`security` applies only to a project that loads `@roblox`, so add `@roblox` to \
+                 `definitions` or remove `security`",
             ));
         }
         let root = config_directory(config_path);
-        let filter =
-            ProjectFilter::new(&root, include.as_deref(), exclude.as_deref().unwrap_or_default())
-                .map_err(|message| invalid(&message))?;
+        let definition_files: Vec<PathBuf> = definitions
+            .iter()
+            .filter_map(|named| match named {
+                DefinitionsEntry::File(path) => Some(path.clone()),
+                DefinitionsEntry::BuiltIn(_) => None,
+            })
+            .collect();
+        let filter = ProjectFilter::new(
+            &root,
+            include.as_deref(),
+            exclude.as_deref().unwrap_or_default(),
+            &definition_files,
+        )
+        .map_err(|message| invalid(&message))?;
         let compiled_overrides = overrides
             .unwrap_or_default()
             .into_iter()
@@ -111,23 +135,33 @@ impl Project {
             })
             .collect::<Result<_, String>>()
             .map_err(|message| invalid(&message))?;
-        let std_paths = std.unwrap_or_default();
-        let definitions = std_paths
-            .iter()
-            .map(|std_path| read_std_definition(std_path))
-            .collect::<Result<Vec<_>, _>>()?;
-        let stdlib = std_paths.iter().zip(&definitions).try_fold(
-            Stdlib::new(variant),
-            |stdlib, (std_path, definition)| {
-                stdlib.layer(definition).map_err(|diag| in_file(std_path, diag))
-            },
-        )?;
-        files.extend(std_paths);
+        let security = security.unwrap_or_default();
+        let mut stdlib = Stdlib::luau();
+        let mut sources = Vec::with_capacity(definitions.len());
+        for named in definitions {
+            let source = match named {
+                // Loading checked that `@roblox` is the one built-in name.
+                DefinitionsEntry::BuiltIn(_) => {
+                    stdlib = stdlib.with_roblox(security);
+                    DefinitionSource::Roblox
+                }
+                DefinitionsEntry::File(path) => {
+                    let text = fs::read_to_string(&path).map_err(|e| unreadable(&path, &e))?;
+                    stdlib = stdlib
+                        .layer(&text)
+                        .map_err(|diags| FileDiagnostics { path: path.clone(), diags })?;
+                    files.push(path.clone());
+                    DefinitionSource::File { path, text }
+                }
+            };
+            sources.push(source);
+        }
         Ok(Self {
             root,
             files,
             stdlib,
-            security: security.unwrap_or_default(),
+            definitions: sources,
+            security,
             filter,
             format: format.unwrap_or_default(),
             overrides: compiled_overrides,
@@ -155,7 +189,8 @@ impl Project {
         Self {
             root,
             files: Vec::new(),
-            stdlib: Stdlib::new(Variant::default()),
+            stdlib: Stdlib::luau(),
+            definitions: Vec::new(),
             security: SecurityLevel::default(),
             filter,
             format: FormatConfig::default(),
@@ -175,7 +210,7 @@ impl Project {
     }
 
     /// The canonical path of every config file the project read: its
-    /// `luck.json`, each file it extends, and each std definition.
+    /// `luck.json`, each file it extends, and each definition file.
     pub fn files(&self) -> &[PathBuf] {
         &self.files
     }
@@ -184,21 +219,21 @@ impl Project {
         &self.filter
     }
 
-    /// Where every file of the project runs, which its `variant` key names.
-    pub fn variant(&self) -> Variant {
-        self.stdlib.variant()
-    }
-
-    /// The security level a Roblox project's files run at, which its
-    /// `security` key names, and `None` for any other project.
+    /// The security level the project's files reach Roblox's API at, which
+    /// its `security` key names, `None` unless it names one.
     pub const fn security(&self) -> SecurityLevel {
         self.security
     }
 
-    /// The variant's standard library, with the `std` definitions layered
-    /// over it.
+    /// Luau's standard library with what `definitions` loads layered over
+    /// it, in order.
     pub const fn stdlib(&self) -> &Stdlib {
         &self.stdlib
+    }
+
+    /// What each entry of `definitions` loads, in order.
+    pub fn definitions(&self) -> &[DefinitionSource] {
+        &self.definitions
     }
 
     /// The linter of the `lint` section with the overrides `path` matches

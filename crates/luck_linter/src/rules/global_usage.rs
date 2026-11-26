@@ -16,7 +16,7 @@ declare_lint_rule!(
 impl Rule for GlobalUsage {
     fn run_once(&self, context: &LintContext<'_, '_>) {
         let tree = context.scoping();
-        let is_roblox = context.semantic.variant().is_roblox();
+        let is_roblox = context.semantic.stdlib().has_roblox;
         let environments = [tree.name_id("_G"), tree.name_id("shared").filter(|_| is_roblox)];
         for reference in tree.global_references() {
             if environments.contains(&Some(reference.name)) {

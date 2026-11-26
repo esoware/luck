@@ -1,12 +1,12 @@
 use luck_allocator::Allocator;
 use luck_ast::{Expression, Statement, TreeCounts};
-use luck_stdlib::{SemanticAnalysis, Variant, analyze, library_for};
+use luck_stdlib::{SemanticAnalysis, analyze};
 
-use crate::common::parse;
+use crate::common::{library, parse};
 
 fn analyze_source<'ast>(allocator: &'ast Allocator, source: &'ast str) -> SemanticAnalysis<'ast> {
     let chunk = parse(allocator, source);
-    analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone)).0
+    analyze(chunk, TreeCounts::default(), library(false)).0
 }
 
 #[test]
@@ -32,11 +32,11 @@ fn extra_globals_are_known_globals() {
 }
 
 #[test]
-fn roblox_globals_are_known_only_on_roblox() {
+fn roblox_globals_are_known_only_with_roblox_s_api() {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, "print(game, bit32)");
-    let (standalone, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone));
-    let (roblox, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Roblox));
+    let (standalone, _) = analyze(chunk, TreeCounts::default(), library(false));
+    let (roblox, _) = analyze(chunk, TreeCounts::default(), library(true));
     assert!(!standalone.is_known_global("game"));
     assert!(roblox.is_known_global("game"));
     assert!(standalone.is_known_global("bit32"));
@@ -52,7 +52,7 @@ fn analysis_reports_the_checker_s_errors() {
 const x = 1
 x = 2",
     );
-    let (_, diagnostics) = analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone));
+    let (_, diagnostics) = analyze(chunk, TreeCounts::default(), library(false));
     let messages: Vec<&str> = diagnostics.iter().map(|diag| &*diag.message).collect();
     assert_eq!(messages, ["attempt to assign to const variable `x`"]);
 }
@@ -125,10 +125,10 @@ table.insert(s)",
 
 /// The display path of what the last statement's call calls, where the last
 /// statement is a call or a local assignment whose last value is one.
-fn last_call_callee(source: &str, variant: Variant) -> Option<String> {
+fn last_call_callee(source: &str, has_roblox: bool) -> Option<String> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(variant));
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), library(has_roblox));
     let last_stmt = chunk.stmts.last();
     let chain = if let Some(Statement::FunctionCall(chain)) = last_stmt {
         chain
@@ -148,7 +148,7 @@ fn resolve_callee_bails_on_a_global_the_file_rebinds() {
 function tostring(a, b) return a end
 tostring(1, 2)";
     assert_eq!(
-        last_call_callee(source, Variant::Standalone),
+        last_call_callee(source, false),
         None,
         "the chunk replaced the global tostring, so the call must not match the stdlib entry"
     );
@@ -160,7 +160,7 @@ tostring(1, 2)";
 fn chain_callee_names(source: &str) -> Vec<Option<String>> {
     let allocator = Allocator::new();
     let chunk = parse(&allocator, source);
-    let (analysis, _) = analyze(chunk, TreeCounts::default(), library_for(Variant::Standalone));
+    let (analysis, _) = analyze(chunk, TreeCounts::default(), library(false));
     let Some(Statement::FunctionCall(chain)) = chunk.stmts.last() else {
         panic!("the last statement must be a call");
     };
@@ -205,8 +205,8 @@ fn chain_callees_resolve_a_long_method_chain() {
 
 #[test]
 fn get_service_call_resolves() {
-    let name = last_call_callee("game:GetService('Players')", Variant::Roblox)
-        .expect("game:GetService resolves");
+    let name =
+        last_call_callee("game:GetService('Players')", true).expect("game:GetService resolves");
     assert_eq!(name, "game:GetService");
 }
 
@@ -216,7 +216,7 @@ fn get_service_chain_resolves() {
         "\
 local players = game:GetService('Players')
 local x = players:FindFirstChild('x')",
-        Variant::Roblox,
+        true,
     )
     .expect("chained FindFirstChild resolves");
     assert_eq!(name, "players:FindFirstChild");
@@ -228,7 +228,7 @@ fn script_parent_chain_resolves() {
         "\
 local container = script.Parent
 local x = container:WaitForChild('Config')",
-        Variant::Roblox,
+        true,
     )
     .expect("script.Parent chain resolves");
     assert_eq!(name, "container:WaitForChild");
@@ -236,36 +236,36 @@ local x = container:WaitForChild('Config')",
 
 #[test]
 fn user_settings_call_chain_resolves() {
-    let name = last_call_callee("UserSettings():GetService('UserGameSettings')", Variant::Roblox)
+    let name = last_call_callee("UserSettings():GetService('UserGameSettings')", true)
         .expect("UserSettings():GetService resolves");
     assert_eq!(name, "UserSettings:GetService");
 }
 
 #[test]
 fn workspace_raycast_resolves() {
-    let name = last_call_callee("workspace:Raycast(origin, direction)", Variant::Roblox)
+    let name = last_call_callee("workspace:Raycast(origin, direction)", true)
         .expect("workspace:Raycast resolves");
     assert_eq!(name, "workspace:Raycast");
 }
 
 #[test]
 fn enum_get_enum_items_resolves() {
-    let name = last_call_callee("local items = Enum.Material:GetEnumItems()", Variant::Roblox)
+    let name = last_call_callee("local items = Enum.Material:GetEnumItems()", true)
         .expect("Enum.Material:GetEnumItems resolves");
     assert_eq!(name, "Enum:GetEnumItems");
 }
 
 #[test]
 fn enum_from_name_resolves() {
-    let name = last_call_callee("local item = Enum.Material:FromName('Grass')", Variant::Roblox)
+    let name = last_call_callee("local item = Enum.Material:FromName('Grass')", true)
         .expect("Enum.Material:FromName resolves");
     assert_eq!(name, "Enum:FromName");
 }
 
 #[test]
 fn enum_global_get_enums_resolves() {
-    let name = last_call_callee("local all = Enum:GetEnums()", Variant::Roblox)
-        .expect("Enum:GetEnums resolves");
+    let name =
+        last_call_callee("local all = Enum:GetEnums()", true).expect("Enum:GetEnums resolves");
     assert_eq!(name, "Enum:GetEnums");
 }
 
@@ -273,7 +273,7 @@ fn enum_global_get_enums_resolves() {
 fn enum_item_name_is_string_shaped() {
     // EnumItem.Name carries the string shape, so string methods
     // chain off it.
-    let name = last_call_callee("local upper = Enum.Material.Grass.Name:upper()", Variant::Roblox)
+    let name = last_call_callee("local upper = Enum.Material.Grass.Name:upper()", true)
         .expect("Name:upper() resolves through the string shape");
     assert_eq!(name, "string:upper");
 }

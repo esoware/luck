@@ -9434,7 +9434,7 @@ declare extern type Object with
 	function GetPropertyChangedSignal(self, property: string): RBXScriptSignal
 	-- Returns true if an object's class matches or inherits from a given class.
 	function IsA(self, className: string): boolean
-	@deprecated function isA(self, className: string): boolean
+	@[deprecated {use = "IsA", reason = "This deprecated function is a variant of `Object:IsA()` which should be used instead."}] function isA(self, className: string): boolean
 	-- Fires immediately after a property of the object changes, with some limitations.
 	read Changed: RBXScriptSignal
 end
@@ -9513,7 +9513,7 @@ declare extern type Instance extends Object with
 	-- Returns an array containing all descendants of the instance that match the `selector` string.
 	function QueryDescendants(self, selector: string): { Instance }
 	-- Sets the object's `Parent` to `nil`, and does the same for all its descendants.
-	@deprecated function Remove(self): ()
+	@[deprecated {reason = "This item is deprecated in favor of `Instance:Destroy()` and `Instance:ClearAllChildren()`. If you must remove an object from the game, and wish to use the object later, set its `Parent` property to `nil` instead of using this method."}] function Remove(self): ()
 	-- Removes a tag from the instance.
 	function RemoveTag(self, tag: string): ()
 	-- Resets a property to its default value.
@@ -9523,13 +9523,13 @@ declare extern type Instance extends Object with
 	-- Returns the child of the `Instance` with the given name. If the child does not exist, it will yield the current thread until it does.
 	function WaitForChild(self, childName: string, timeOut: number): Instance
 	-- Returns an array of the object's children.
-	@deprecated function children(self): { Instance }
-	@deprecated function clone(self): Instance
-	@deprecated function destroy(self): ()
-	@deprecated function findFirstChild(self, name: string, recursive: boolean?): Instance
-	@deprecated function getChildren(self): { Instance }
-	@deprecated function isDescendantOf(self, ancestor: Instance): boolean
-	@deprecated function remove(self): ()
+	@[deprecated {use = "GetChildren", reason = "This item has been superseded by `Instance:GetChildren()` which should be used in all new work."}] function children(self): { Instance }
+	@[deprecated {use = "Clone", reason = "This deprecated function is a variant of `Instance:Clone()` which should be used instead."}] function clone(self): Instance
+	@[deprecated {use = "Destroy", reason = "This deprecated function is a variant of `Instance:Destroy()` which should be used instead."}] function destroy(self): ()
+	@[deprecated {use = "FindFirstChild", reason = "This deprecated function is a variant of `Instance:FindFirstChild()` which should be used instead."}] function findFirstChild(self, name: string, recursive: boolean?): Instance
+	@[deprecated {use = "GetChildren", reason = "This deprecated function is a variant of `Instance:GetChildren()` which should be used instead."}] function getChildren(self): { Instance }
+	@[deprecated {use = "IsDescendantOf", reason = "This deprecated function is a variant of `Instance:IsDescendantOf()` which should be used instead."}] function isDescendantOf(self, ancestor: Instance): boolean
+	@[deprecated {use = "Remove", reason = "This deprecated function is a variant of `Instance:Remove()` which has also been deprecated. Neither function should be used in new work."}] function remove(self): ()
 	-- Fires when the `Instance.Parent` property of this object or one of its ancestors is changed.
 	read AncestryChanged: RBXScriptSignal
 	-- Fires whenever an attribute is changed on the `Instance`.
@@ -9643,35 +9643,35 @@ declare extern type Model extends PVInstance with
 	-- Returns the size of the smallest bounding box that contains all of the `BaseParts` in the `Model`, aligned with the `Model.PrimaryPart` if it is set.
 	function GetExtentsSize(self): Vector3
 	-- This value historically returned the CFrame of a central position in the model.
-	@deprecated function GetModelCFrame(self): CFrame
+	@[deprecated {use = "GetPrimaryPartCFrame", reason = "This function has been deprecated as it did not provide reliable results. You can instead use `Model:GetPrimaryPartCFrame()` to retrieve the `CFrame` of the model's primary part."}] function GetModelCFrame(self): CFrame
 	-- Returns the Vector3 size of the Model.
-	@deprecated function GetModelSize(self): Vector3
+	@[deprecated {use = "GetExtentsSize", reason = "This item is deprecated. Do not use it for new work. Developers can instead use `Model.GetExtentsSize`."}] function GetModelSize(self): Vector3
 	-- Returns all the `Player` objects that this model object is persistent for. Behavior varies based on whether this method is called from a `Script` or a `LocalScript`.
 	function GetPersistentPlayers(self): { Instance }
 	-- Returns the `CFrame` of the model's `Model.PrimaryPart`. This function will throw an error if no primary part exists for the `Model`.
-	@deprecated function GetPrimaryPartCFrame(self): CFrame
+	@[deprecated {use = "GetPivot"}] function GetPrimaryPartCFrame(self): CFrame
 	-- Returns the canonical scale of the model, which defaults to 1 for newly created models and will change as it is scaled via `Model:ScaleTo()`.
 	function GetScale(self): number
 	-- Goes through all `BaseParts` in the `Model`. If any part's side has a SurfaceType that can make a joint it will create a joint with any adjacent parts.
-	@deprecated function MakeJoints(self): ()
+	@[deprecated {reason = "This joint type has been deprecated. Don't use it for new work. Use `WeldConstraints` and `HingeConstraints` instead."}] function MakeJoints(self): ()
 	-- Moves the `PrimaryPart` to the given position. If a primary part has not been specified, the root part of the model will be used.
 	function MoveTo(self, position: Vector3): ()
 	-- Makes this model no longer persistent for the specified player. `ModelStreamingMode` must be set to `PersistentPerPlayer` for behavior to be changed as a result of removal.
 	function RemovePersistentPlayer(self, playerInstance: Player?): ()
 	-- Resets the rotation of the model's parts to the previously set identity rotation, which is done through the `Model:SetIdentityOrientation()` method.
-	@deprecated function ResetOrientationToIdentity(self): ()
+	@[deprecated {use = "SetPrimaryPartCFrame", reason = "This function has been deprecated; it remains to prevent legacy scripts from throwing errors, but it does nothing when called."}] function ResetOrientationToIdentity(self): ()
 	-- Sets the scale factor of the model, adjusting the sizing and location of all descendant Instances such that they have that scale factor relative to their initial sizes and locations when scale factor was 1.
 	function ScaleTo(self, newScaleFactor: number): ()
 	-- Sets the identity rotation of the given model, allowing you to reset the rotation of the entire model later, through the use of the `ResetOrientationToIdentity` method.
-	@deprecated function SetIdentityOrientation(self): ()
+	@[deprecated {use = "SetPrimaryPartCFrame", reason = "This function has been deprecated; it remains to prevent legacy scripts from throwing errors, but it does nothing when called."}] function SetIdentityOrientation(self): ()
 	-- Sets the `BasePart.CFrame` of the model's `Model.PrimaryPart`. All other parts in the model will also be moved and will maintain their orientation and offset respective to the `Model.PrimaryPart`.
-	@deprecated function SetPrimaryPartCFrame(self, cframe: CFrame): ()
+	@[deprecated {use = "PivotTo"}] function SetPrimaryPartCFrame(self, cframe: CFrame): ()
 	-- Shifts a `Model` by the given `Vector3` offset, preserving the model's orientation. If another `BasePart` or `Terrain` already exists at the new position then the `Model` will overlap said object.
 	function TranslateBy(self, delta: Vector3): ()
-	@deprecated function breakJoints(self): ()
-	@deprecated function makeJoints(self): ()
-	@deprecated function move(self, location: Vector3): ()
-	@deprecated function moveTo(self, location: Vector3): ()
+	@[deprecated {use = "BreakJoints", reason = "This deprecated function is a variant of `Model:BreakJoints()` which should be used instead."}] function breakJoints(self): ()
+	@[deprecated {use = "MakeJoints", reason = "This deprecated function is a variant of `Model:MakeJoints()` which should be used instead."}] function makeJoints(self): ()
+	@[deprecated {use = "MoveTo", reason = "This item has been superseded by `Model:MoveTo()` which should be used in all new work"}] function move(self, location: Vector3): ()
+	@[deprecated {use = "MoveTo", reason = "This deprecated function is a variant of `Model:MoveTo()` which should be used instead."}] function moveTo(self, location: Vector3): ()
 end
 
 -- An `Actor` is a container for code that can be safely split into its own thread.
@@ -9731,7 +9731,7 @@ declare extern type LayerCollector extends GuiBase2d with
 	-- Controls how `GuiObject.ZIndex` behaves on all descendants of this `LayerCollector`.
 	ZIndexBehavior: EnumZIndexBehavior
 	function GetGuiObjectsAtPosition(self, x: number, y: number): { Instance }
-	@deprecated function GetLayoutNodeTree(self): { [string]: any }
+	@[deprecated {reason = "This method should not be used for new work."}] function GetLayoutNodeTree(self): { [string]: any }
 end
 
 -- Base class for containers that render `GuiObjects` onto a face of a `BasePart` in the 3D world.
@@ -9801,7 +9801,7 @@ declare extern type AdService extends Instance with
 	function ReturnToPublisherExperience(self, adTeleportMethod: EnumAdTeleportMethod): () -- RobloxScriptSecurity
 	function SetAdGuiInteractivityHandlerInitialized(self): () -- RobloxScriptSecurity
 	-- Show mobile video advertisements.
-	@deprecated function ShowVideoAd(self): ()
+	@[deprecated {reason = "`ShowVideoAd` has been decommissioned and is no longer operational."}] function ShowVideoAd(self): ()
 	function SubmitAdNotification(self, universeId: number, isShowAdSuccessful: boolean, earnedReward: boolean, rewardProductName: string, rewardProductImageAssetId: number): () -- RobloxScriptSecurity
 	-- Stops tracking an instance that was previously registered with `RegisterAdOpportunityAsync`.
 	function UnregisterAdOpportunity(self, instance: Instance): ()
@@ -9877,8 +9877,8 @@ declare extern type Constraint extends Instance with
 	Enabled: boolean
 	-- Toggles the constraint's visibility.
 	Visible: boolean
-	@deprecated function GetDebugAppliedForce(self, bodyId: number): Vector3
-	@deprecated function GetDebugAppliedTorque(self, bodyId: number): Vector3
+	@[deprecated {reason = "This method should not be used in new work."}] function GetDebugAppliedForce(self, bodyId: number): Vector3
+	@[deprecated {reason = "This method should not be used in new work."}] function GetDebugAppliedTorque(self, bodyId: number): Vector3
 end
 
 -- Constraint which applies torque to align two attachments, or to align one attachment with a goal orientation.
@@ -9940,15 +9940,15 @@ declare extern type AnalyticsService extends Instance with
 	-- PlayFab API key. Must be set in order to use `FireEvent`.
 	ApiKey: string -- LocalUserSecurity
 	-- Fires a custom event with a custom event name and data.
-	@deprecated function FireCustomEvent(self, player: Instance, eventCategory: string, customData: any): ()
+	@[deprecated {reason = "This deprecated function is a variant of `AnalyticsService:LogCustomEvent()` which should be used instead."}] function FireCustomEvent(self, player: Instance, eventCategory: string, customData: any): ()
 	-- Report a custom event to PlayFab.
-	@deprecated function FireEvent(self, category: string, value: any): ()
+	@[deprecated {reason = "This function has been deprecated in favor of more descriptive methods, including `AnalyticsService:LogCustomEvent()`, `AnalyticsService:LogEconomyEvent()`, and `AnalyticsService:LogProgressionEvent()`."}] function FireEvent(self, category: string, value: any): ()
 	-- Fire an event used to track player actions pertaining to the in-game
-	@deprecated function FireInGameEconomyEvent(self, player: Instance, itemName: string, economyAction: EnumAnalyticsEconomyAction, itemCategory: string, amount: number, currency: string, location: any, customData: any): ()
+	@[deprecated {reason = "This deprecated function is a variant of `AnalyticsService:LogEconomyEvent()` which should be used instead."}] function FireInGameEconomyEvent(self, player: Instance, itemName: string, economyAction: EnumAnalyticsEconomyAction, itemCategory: string, amount: number, currency: string, location: any, customData: any): ()
 	-- Fire a log event used to track errors and warnings experienced by players.
-	@deprecated function FireLogEvent(self, player: Instance, logLevel: EnumAnalyticsLogLevel, message: string, debugInfo: any, customData: any): ()
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function FireLogEvent(self, player: Instance, logLevel: EnumAnalyticsLogLevel, message: string, debugInfo: any, customData: any): ()
 	-- Fire an event used to track player progression through the game.
-	@deprecated function FirePlayerProgressionEvent(self, player: Instance, category: string, progressionStatus: EnumAnalyticsProgressionStatus, location: any, statistics: any, customData: any): ()
+	@[deprecated {reason = "This deprecated function is a variant of `AnalyticsService:LogProgressionEvent()` which should be used instead."}] function FirePlayerProgressionEvent(self, player: Instance, category: string, progressionStatus: EnumAnalyticsProgressionStatus, location: any, statistics: any, customData: any): ()
 	function GetDurationLoggerTimestamp(self): number
 	-- Logs an event used to track custom metrics of a user in experience.
 	function LogCustomEvent(self, player: Player, eventName: string, value: number?, customFields: { [string]: any }?): ()
@@ -10010,9 +10010,9 @@ end
 declare extern type AnimationClipProvider extends Instance with
 	function GetAnimatedImageClipsChangedSignal(self, content: Content): RBXScriptSignal -- RobloxScriptSecurity
 	-- Returns a `AnimationClip` from a given asset URL.
-	@deprecated function GetAnimationClip(self, assetId: string): AnimationClip -- PluginSecurity
+	@[deprecated {use = "GetAnimationClipAsync", reason = "This function is deprecated and can lead to the game freezing until the animation is loaded. Developers are recommended to use `GetAnimationClipAsync` instead."}] function GetAnimationClip(self, assetId: string): AnimationClip -- PluginSecurity
 	-- Returns a `AnimationClip` from the supplied assetId.
-	@deprecated function GetAnimationClipById(self, assetId: number, useCache: boolean): AnimationClip -- PluginSecurity
+	@[deprecated {use = "GetAnimationClipAsync", reason = "This function is deprecated and can lead to the game freezing until the animation is loaded. Developers are recommended to use `GetAnimationClipAsync` instead."}] function GetAnimationClipById(self, assetId: number, useCache: boolean): AnimationClip -- PluginSecurity
 	function GetAnimationNodeDefinition(self, type: EnumAnimationNodeType): { [string]: any } -- RobloxScriptSecurity
 	function GetAnimationNodeTypes(self): { any } -- RobloxScriptSecurity
 	function GetAnimationValueNodeDefinition(self, type: EnumAnimationValueNodeType): { [string]: any } -- RobloxScriptSecurity
@@ -10029,7 +10029,7 @@ declare extern type AnimationClipProvider extends Instance with
 	-- Returns a `AnimationClip` based on the specified assetId asynchronously.
 	function GetAnimationClipAsync(self, assetId: string): AnimationClip
 	-- This function returns an `InventoryPages` object which can be used to iterate over animations owned by a specific user.
-	@deprecated function GetAnimations(self, userId: User): Instance
+	@[deprecated {use = "GetAnimationsAsync"}] function GetAnimations(self, userId: User): Instance
 	-- This function returns an `InventoryPages` object which can be used to iterate over animations owned by a specific user.
 	function GetAnimationsAsync(self, userId: User): Instance
 	-- Returns a `ClipEvaluator` for the `AnimationClip` at the given content ID, loaded asynchronously.
@@ -10065,9 +10065,9 @@ end
 -- Allows animations to be loaded and applied to a character or model in place of a `Humanoid`.
 declare extern type AnimationController extends Instance with
 	-- Returns an array of all `AnimationTracks` that are currently being played by the `AnimationController`.
-	@deprecated function GetPlayingAnimationTracks(self): { any }
+	@[deprecated {use = "GetPlayingAnimationTracks"}] function GetPlayingAnimationTracks(self): { any }
 	-- Loads an `Animation` onto an `AnimationController`, returning an `AnimationTrack` that can be used for playback.
-	@deprecated function LoadAnimation(self, animation: Animation): AnimationTrack
+	@[deprecated {use = "LoadAnimation", reason = "This function is deprecated in favor of using `Animator:LoadAnimation()` directly (the `Animator` may be created while editing or at runtime)."}] function LoadAnimation(self, animation: Animation): AnimationTrack
 	-- Fires whenever the `AnimationController` begins playing an animation. It returns the `AnimationTrack` playing.
 	read AnimationPlayed: RBXScriptSignal
 end
@@ -10441,8 +10441,8 @@ declare extern type AssetImportService extends Instance with
 	function PickMultipleFilesWithPrompt(self): { any } -- RobloxScriptSecurity
 	function PickTextDocumentFileWithPromptAsync(self): string -- RobloxScriptSecurity
 	function StartSessionWithPathAsync(self, filePath: string): AssetImportSession -- RobloxScriptSecurity
-	@deprecated function UploadAssetFromContentAsync(self, content: string, createAssetRequest: { [string]: any }): ...any -- RobloxScriptSecurity
-	@deprecated function UploadAssetFromPathAsync(self, filepath: string, createAssetRequest: { [string]: any }, progressCallback: ((...any) -> ...any)?): ...any -- RobloxScriptSecurity
+	@[deprecated {use = "UploadVersionedAssetFromContentAsync"}] function UploadAssetFromContentAsync(self, content: string, createAssetRequest: { [string]: any }): ...any -- RobloxScriptSecurity
+	@[deprecated {use = "UploadVersionedAssetFromPathAsync"}] function UploadAssetFromPathAsync(self, filepath: string, createAssetRequest: { [string]: any }, progressCallback: ((...any) -> ...any)?): ...any -- RobloxScriptSecurity
 	function UploadVersionedAssetFromContentAsync(self, content: string, createAssetRequest: { [string]: any }, assetId: number?): ...any -- RobloxScriptSecurity
 	function UploadVersionedAssetFromPathAsync(self, filepath: string, createAssetRequest: { [string]: any }, assetId: number?, progressCallback: ((...any) -> ...any)?): ...any -- RobloxScriptSecurity
 	read SingleFileChanged: RBXScriptSignal -- RobloxScriptSecurity
@@ -10566,7 +10566,7 @@ declare extern type AssetService extends Instance with
 	function CreateTextureAsync(self, content: { [string]: any }): Texture
 	function FetchAssetWithFormat(self, url: string, assetFormat: string, options: { [string]: any }?): { Instance } -- RobloxScriptSecurity
 	-- Returns an array of asset IDs that are contained in a specified package.
-	@deprecated function GetAssetIdsForPackage(self, packageAssetId: number): { any }
+	@[deprecated {use = "GetAssetIdsForPackageAsync", reason = "Use `GetAssetIdsForPackageAsync()` instead."}] function GetAssetIdsForPackage(self, packageAssetId: number): { any }
 	-- Returns an array of asset IDs that are contained in a specified package.
 	function GetAssetIdsForPackageAsync(self, packageAssetId: number): { any }
 	-- Provides relevant metadata about a specific audio source.
@@ -10574,7 +10574,7 @@ declare extern type AssetService extends Instance with
 	-- Returns details of the contents of specified bundle.
 	function GetBundleDetailsAsync(self, bundleId: number): { [string]: any }
 	-- Returns the UserId of the account who created the creationID asset.
-	@deprecated function GetCreatorAssetID(self, creationID: number): number
+	@[deprecated {reason = "This item is deprecated and no longer functions correctly. Do not use it for new work."}] function GetCreatorAssetID(self, creationID: number): number
 	-- Returns a `StandardPages` object which contains the name and `PlaceId` of places within the current experience.
 	function GetGamePlacesAsync(self): Instance
 	function GetLatestVersionUriAsync(self, asset: Content): Content
@@ -10588,7 +10588,7 @@ declare extern type AssetService extends Instance with
 	-- Saves the state of the current place.
 	function SavePlaceAsync(self, requestParameters: { [string]: any }?): ()
 	-- Finds audio assets matching a variety of search criteria.
-	@deprecated function SearchAudio(self, searchParameters: AudioSearchParams): AudioPages
+	@[deprecated {use = "SearchAudioAsync", reason = "Use `SearchAudioAsync()` instead."}] function SearchAudio(self, searchParameters: AudioSearchParams): AudioPages
 	-- Finds audio assets matching a variety of search criteria.
 	function SearchAudioAsync(self, searchParameters: AudioSearchParams): AudioPages
 	read AudioMetadataFailedResponse: RBXScriptSignal -- RobloxScriptSecurity
@@ -10632,7 +10632,7 @@ declare extern type SensorBase extends Instance with
 	-- Determines how the sensor will update its output data.
 	UpdateType: EnumSensorUpdateType
 	-- Recomputes the sensor's output properties immediately.
-	@deprecated function Sense(self): ()
+	@[deprecated {reason = "This method should not be used in new work."}] function Sense(self): ()
 	-- Fires when one of the sensor's output properties changes value.
 	read OnSensorOutputChanged: RBXScriptSignal
 end
@@ -10674,15 +10674,15 @@ declare extern type Attachment extends Instance with
 	-- Direction of the **Y** axis of the attachment relative to the world, represented as a unit `Vector3` with a length of 1.
 	WorldSecondaryAxis: Vector3
 	-- Returns the value of the attachment's `Axis`.
-	@deprecated function GetAxis(self): Vector3
+	@[deprecated {reason = "This method is deprecated and should not be used in new work."}] function GetAxis(self): Vector3
 	-- Returns a list of `Constraints` connected to the attachment.
 	function GetConstraints(self): { Instance }
 	-- Returns the value of the attachment's `SecondaryAxis`.
-	@deprecated function GetSecondaryAxis(self): Vector3
+	@[deprecated {reason = "This method is deprecated and should not be used in new work."}] function GetSecondaryAxis(self): Vector3
 	-- Sets the value of the attachment's `Axis`.
-	@deprecated function SetAxis(self, axis: Vector3): ()
+	@[deprecated {reason = "This method is deprecated and should not be used in new work."}] function SetAxis(self, axis: Vector3): ()
 	-- Sets the value of the attachment's `SecondaryAxis`.
-	@deprecated function SetSecondaryAxis(self, axis: Vector3): ()
+	@[deprecated {reason = "This method is deprecated and should not be used in new work."}] function SetSecondaryAxis(self, axis: Vector3): ()
 end
 
 -- Takes measurements from audio streams that are connected to it via one or more `Wires`.
@@ -11763,55 +11763,55 @@ declare extern type AvatarEditorService extends Instance with
 	function SignalUpdateOutfitPermissionDenied(self): () -- RobloxScriptSecurity
 	function refreshAvatarThumbnails(self, thumbnailTypes: { any }): () -- RobloxScriptSecurity
 	-- Used to apply default clothing to the `HumanoidDescription` if necessary.
-	@deprecated function CheckApplyDefaultClothing(self, humanoidDescription: HumanoidDescription): HumanoidDescription
+	@[deprecated {use = "CheckApplyDefaultClothingAsync"}] function CheckApplyDefaultClothing(self, humanoidDescription: HumanoidDescription): HumanoidDescription
 	-- Used to apply default clothing to the `HumanoidDescription` if necessary.
 	function CheckApplyDefaultClothingAsync(self, humanoidDescription: HumanoidDescription): HumanoidDescription
 	-- Deprecated. Returns a copy of the given `HumanoidDescription` that conforms to the platform Avatar rules.
-	@deprecated function ConformToAvatarRules(self, humanoidDescription: HumanoidDescription): HumanoidDescription
+	@[deprecated {use = "ConformToAvatarRulesAsync"}] function ConformToAvatarRules(self, humanoidDescription: HumanoidDescription): HumanoidDescription
 	-- Returns a copy of the given `HumanoidDescription` that conforms to the platform Avatar rules.
 	function ConformToAvatarRulesAsync(self, humanoidDescription: HumanoidDescription): HumanoidDescription
 	-- Returns the platform Avatar rules for things such as scaling, default shirts and pants, number of wearable assets.
-	@deprecated function GetAvatarRules(self): { [string]: any }
+	@[deprecated {use = "GetAvatarRulesAsync"}] function GetAvatarRules(self): { [string]: any }
 	-- Returns the platform Avatar rules for things such as scaling, default shirts and pants, number of wearable assets.
 	function GetAvatarRulesAsync(self): { [string]: any }
 	-- Gets the item details for a list of items at once.
-	@deprecated function GetBatchItemDetails(self, itemIds: { any }, itemType: EnumAvatarItemType): { any }
+	@[deprecated {use = "GetBatchItemDetailsAsync"}] function GetBatchItemDetails(self, itemIds: { any }, itemType: EnumAvatarItemType): { any }
 	-- Gets the item details for a list of items at once.
 	function GetBatchItemDetailsAsync(self, itemIds: { any }, itemType: EnumAvatarItemType): { any }
 	-- Returns a `CatalogPages` object containing bundles that include the given asset.
 	function GetBundlesByAssetIdAsync(self, assetId: number, limit: number?): CatalogPages
 	-- Returns if the `Players.LocalPlayer` has favorited the given bundle or asset.
-	@deprecated function GetFavorite(self, itemId: number, itemType: EnumAvatarItemType): boolean
+	@[deprecated {use = "GetFavoriteAsync"}] function GetFavorite(self, itemId: number, itemType: EnumAvatarItemType): boolean
 	-- Returns if the `Players.LocalPlayer` has favorited the given bundle or asset.
 	function GetFavoriteAsync(self, itemId: number, itemType: EnumAvatarItemType): boolean
 	-- Returns an array of head shape names that the `Players.LocalPlayer` owns.
 	function GetHeadShapesAsync(self): { any }
 	-- Returns an `InventoryPages` object with information about owned items in the users inventory with the given AvatarAssetTypes.
-	@deprecated function GetInventory(self, assetTypes: { any }): InventoryPages
+	@[deprecated {use = "GetInventoryAsync"}] function GetInventory(self, assetTypes: { any }): InventoryPages
 	-- Returns an `InventoryPages` object with information about owned items in the users inventory with the given AvatarAssetTypes.
 	function GetInventoryAsync(self, assetTypes: { any }): InventoryPages
 	-- Returns the item details for the given item.
-	@deprecated function GetItemDetails(self, itemId: number, itemType: EnumAvatarItemType): { [string]: any }
+	@[deprecated {use = "GetItemDetailsAsync"}] function GetItemDetails(self, itemId: number, itemType: EnumAvatarItemType): { [string]: any }
 	-- Returns the item details for the given item.
 	function GetItemDetailsAsync(self, itemId: number, itemType: EnumAvatarItemType): { [string]: any }
 	-- Returns the outfit details for the given outfit.
-	@deprecated function GetOutfitDetails(self, outfitId: number): { [string]: any }
+	@[deprecated {use = "GetOutfitDetailsAsync"}] function GetOutfitDetails(self, outfitId: number): { [string]: any }
 	-- Returns the outfit details for the given outfit.
 	function GetOutfitDetailsAsync(self, outfitId: number): { [string]: any }
 	-- Returns outfit data for the `Players.LocalPlayer`.
-	@deprecated function GetOutfits(self, outfitSource: EnumOutfitSource?, outfitType: EnumOutfitType?): OutfitPages
+	@[deprecated {use = "GetOutfitsAsync"}] function GetOutfits(self, outfitSource: EnumOutfitSource?, outfitType: EnumOutfitType?): OutfitPages
 	-- Returns outfit data for the `Players.LocalPlayer`.
 	function GetOutfitsAsync(self, outfitSource: EnumOutfitSource?, outfitType: EnumOutfitType?): OutfitPages
 	-- Returns a list of recommended assets based on a given `Enum.AssetType` and asset ID.
-	@deprecated function GetRecommendedAssets(self, assetType: EnumAvatarAssetType, contextAssetId: number?): { any }
+	@[deprecated {use = "GetRecommendedAssetsAsync"}] function GetRecommendedAssets(self, assetType: EnumAvatarAssetType, contextAssetId: number?): { any }
 	-- Returns a list of recommended assets based on a given `Enum.AssetType` and asset ID.
 	function GetRecommendedAssetsAsync(self, assetType: EnumAvatarAssetType, contextAssetId: number?): { any }
 	-- Returns a list of recommended bundles for a given bundle id.
-	@deprecated function GetRecommendedBundles(self, bundleId: number): { any }
+	@[deprecated {use = "GetRecommendedBundlesAsync"}] function GetRecommendedBundles(self, bundleId: number): { any }
 	-- Returns a list of recommended bundles for a given bundle id.
 	function GetRecommendedBundlesAsync(self, bundleId: number): { any }
 	-- Returns a `CatalogPages` object containing the result of the given search.
-	@deprecated function SearchCatalog(self, searchParameters: CatalogSearchParams): CatalogPages
+	@[deprecated {use = "SearchCatalogAsync"}] function SearchCatalog(self, searchParameters: CatalogSearchParams): CatalogPages
 	-- Returns a `CatalogPages` object containing the result of the given search.
 	function SearchCatalogAsync(self, searchParameters: CatalogSearchParams): CatalogPages
 	read OpenAllowInventoryReadAccess: RBXScriptSignal -- RobloxScriptSecurity
@@ -11889,7 +11889,7 @@ end
 -- Provides information on badges and awards them.
 declare extern type BadgeService extends Instance with
 	-- Award a badge to a player given the ID of each.
-	@deprecated function AwardBadge(self, userId: User, badgeId: number): boolean
+	@[deprecated {use = "AwardBadgeAsync", reason = "Use `AwardBadgeAsync()` instead."}] function AwardBadge(self, userId: User, badgeId: number): boolean
 	-- Award a badge to a player given the ID of each.
 	function AwardBadgeAsync(self, userId: User, badgeId: number): boolean
 	-- Checks a list of badge IDs against a `UserId` and returns a list of badge IDs that the player owns.
@@ -11899,11 +11899,11 @@ declare extern type BadgeService extends Instance with
 	-- Checks a list of badge IDs against a `User` and returns, for each badge the player owns, its ID and the date it was awarded.
 	function GetUserBadgesAsync(self, userId: User, badgeIds: { any }): { any }
 	-- Returns whether a given badge is disabled.
-	@deprecated function IsDisabled(self, badgeId: number): boolean
+	@[deprecated {reason = "This function is deprecated. Do not use it for new work. Instead, it can be checked by calling BadgeService:GetBadgeInfoAsync() and checking the IsEnabled field."}] function IsDisabled(self, badgeId: number): boolean
 	-- Determines if a given badge is associated with the current game.
-	@deprecated function IsLegal(self, badgeId: number): boolean
+	@[deprecated {reason = "This function is deprecated and will always return true. Do not use it for new work."}] function IsLegal(self, badgeId: number): boolean
 	-- Checks whether a user has the badge given the `Player.UserId` and the badge ID.
-	@deprecated function UserHasBadge(self, userId: User, badgeId: number): boolean
+	@[deprecated {reason = "This method has been superseded by `BadgeService:UserHasBadgeAsync()` which should be used for new work instead."}] function UserHasBadge(self, userId: User, badgeId: number): boolean
 	-- Checks whether a player has the badge given the `Player.UserId` and the badge ID.
 	function UserHasBadgeAsync(self, userId: User, badgeId: number): boolean
 	read BadgeAwarded: RBXScriptSignal -- RobloxScriptSecurity
@@ -12091,7 +12091,7 @@ declare extern type BasePart extends PVInstance with
 	-- Subscribes to detailed per-frame contact data for the collisions this part is involved in.
 	function BindToCollisionSummaries(self, callback: ((...any) -> ...any)): RBXScriptConnection
 	-- Breaks any surface connection with any adjacent part, including `Weld` and other `JointInstance`.
-	@deprecated function BreakJoints(self): ()
+	@[deprecated {reason = "This method is deprecated. To break specific joints, iterate over the part's connections using `BasePart:GetJoints()` and call `Instance:Destroy()` on the joints you want to remove."}] function BreakJoints(self): ()
 	-- Returns whether the parts can collide with each other.
 	function CanCollideWith(self, part: BasePart): boolean
 	-- Checks whether you can set a part's network ownership.
@@ -12112,7 +12112,7 @@ declare extern type BasePart extends PVInstance with
 	function GetNoCollisionConstraints(self): { Instance }
 	function GetPhysicsCost(self): number -- RobloxScriptSecurity
 	-- OBSOLETE. Returns a CFrame describing where the part is being rendered at.
-	@deprecated function GetRenderCFrame(self): CFrame
+	@[deprecated {reason = "This item is been deprecated since interpolation is now applied to the `CFrame` directly. Do not use it for new work."}] function GetRenderCFrame(self): CFrame
 	-- Returns the base part of an assembly of parts.
 	@deprecated function GetRootPart(self): Instance
 	-- Returns a table of all `BasePart.CanCollide` true parts that intersect with this part.
@@ -12122,7 +12122,7 @@ declare extern type BasePart extends PVInstance with
 	-- Returns true if the object is connected to a part that will hold it in place (eg an `Anchored` part), otherwise returns false.
 	function IsGrounded(self): boolean
 	-- Creates a joint on any side of the object that has a surface ID that can make a joint.
-	@deprecated function MakeJoints(self): ()
+	@[deprecated {reason = "SurfaceType based joining is deprecated, do not use MakeJoints for new projects. `WeldConstraints` and `HingeConstraints` should be used instead."}] function MakeJoints(self): ()
 	-- Changes the size of an object just like using the Studio resize tool.
 	function Resize(self, normalId: EnumNormalId, deltaAmount: number): boolean
 	-- Sets the given player as network owner for this and all connected parts.
@@ -12131,10 +12131,10 @@ declare extern type BasePart extends PVInstance with
 	function SetNetworkOwnershipAuto(self): ()
 	-- Returns the angular acceleration that would result from applying a given torque to this part's assembly, optionally accounting for gyroscopic effects.
 	function TorqueToAngularAcceleration(self, torque: Vector3, angVelocity: Vector3?): Vector3
-	@deprecated function breakJoints(self): ()
-	@deprecated function getMass(self): number
-	@deprecated function makeJoints(self): ()
-	@deprecated function resize(self, normalId: EnumNormalId, deltaAmount: number): boolean
+	@[deprecated {use = "BreakJoints", reason = "This deprecated function is a variant of `BasePart:BreakJoints()` which should be used instead."}] function breakJoints(self): ()
+	@[deprecated {use = "GetMass", reason = "This Camel Case property has been deprecated in favor of its Pascal Case variant, `BasePart:GetMass()`."}] function getMass(self): number
+	@[deprecated {reason = "This deprecated function is a variant of `BasePart:MakeJoints()` which should be used instead."}] function makeJoints(self): ()
+	@[deprecated {use = "Resize", reason = "This deprecated function is a variant of `BasePart:Resize()` which should be used instead."}] function resize(self, normalId: EnumNormalId, deltaAmount: number): boolean
 	-- Creates a new `IntersectOperation` from the overlapping geometry of the part and the other parts in the given array.
 	function IntersectAsync(self, parts: { Instance }, collisionfidelity: EnumCollisionFidelity?, renderFidelity: EnumRenderFidelity?): Instance
 	-- Creates a new `UnionOperation` from the part, minus the geometry occupied by the parts in the given array.
@@ -12467,7 +12467,7 @@ declare extern type BodyPosition extends BodyMover with
 	-- Returns the last force in the object.
 	function GetLastForce(self): Vector3
 	-- Returns the last force in the object.
-	@deprecated function lastForce(self): Vector3
+	@[deprecated {use = "GetLastForce", reason = "This property has been superseded by `BodyPosition:GetLastForce()` which should be used in new work instead,"}] function lastForce(self): Vector3
 	-- Fired when the Parent of the BodyPosition reaches the desired `BodyPosition.Position` (within .1 studs). Once this event fires it will not fire again until `BodyPosition.Position` is updated.
 	read ReachedTarget: RBXScriptSignal
 end
@@ -12768,9 +12768,9 @@ declare extern type Camera extends PVInstance with
 	read ViewportSize: Vector2
 	focus: CFrame
 	-- Returns how much the `Camera` needs to be pushed towards its `Focus` in order to make sure there is no obstructions between the `Focus` and `CFrame`.
-	@deprecated function GetLargestCutoffDistance(self, ignoreList: { Instance }): number
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function GetLargestCutoffDistance(self, ignoreList: { Instance }): number
 	-- Returns the current 'pan' speed of the `Camera`.
-	@deprecated function GetPanSpeed(self): number
+	@[deprecated {reason = "This method has been deprecated and no longer works. It should not be used in new work."}] function GetPanSpeed(self): number
 	-- Returns an array of `BaseParts` that are obscuring the lines of sight between the camera's `CFrame` and the cast points.
 	function GetPartsObscuringTarget(self, castPoints: { any }, ignoreList: { Instance }): { Instance }
 	-- Returns the actual `CFrame`where the `Camera` is being rendered, accounting for any roll applied and the impact of VR devices.
@@ -12778,20 +12778,20 @@ declare extern type Camera extends PVInstance with
 	-- Returns in radians the current roll, or rotation around the camera's Z-axis, applied to the `Camera` using `SetRoll()`.
 	function GetRoll(self): number
 	-- Returns the current tilt speed of the `Camera`.
-	@deprecated function GetTiltSpeed(self): number
+	@[deprecated {reason = "This method has been deprecated and no longer works."}] function GetTiltSpeed(self): number
 	-- Tweens the `Camera` in a linear fashion towards a new `CFrame` and `Focus` over a given duration.
-	@deprecated function Interpolate(self, endPos: CFrame, endFocus: CFrame, duration: number): ()
+	@[deprecated {reason = "This method has been deprecated. Instead use `TweenService` to smoothly animate the `Camera`, see the code snippets below for an example."}] function Interpolate(self, endPos: CFrame, endFocus: CFrame, duration: number): ()
 	-- Pans the `Camera` around the `Focus` in 45 degree increments around the **Y** axis.
-	@deprecated function PanUnits(self, units: number): ()
+	@[deprecated {reason = "This method was used for legacy camera controls and has since been deprecated. Do not use in new work."}] function PanUnits(self, units: number): ()
 	-- Creates a unit `Ray` from a position on the screen (in pixels), at a set depth from the `Camera` orientated in the camera's direction. Accounts for the GUI inset.
 	function ScreenPointToRay(self, x: number, y: number, depth: number?): Ray
 	-- Sets the `Enum.CameraPanMode` to be used by the `Camera` on mobile devices.
-	@deprecated function SetCameraPanMode(self, mode: EnumCameraPanMode?): ()
+	@[deprecated {reason = "This method has been deprecated and should not be used in new work."}] function SetCameraPanMode(self, mode: EnumCameraPanMode?): ()
 	function SetImageServerView(self, modelCoord: CFrame): () -- RobloxScriptSecurity
 	-- Sets the current rotation applied around the camera's Z-axis.
 	function SetRoll(self, rollAngle: number): ()
 	-- Tilts the `Camera` around its `Focus` in 10 degree increments around the camera's **X** axis.
-	@deprecated function TiltUnits(self, units: number): boolean
+	@[deprecated {reason = "This method was used for legacy camera controls and has been deprecated. Do not use in new work."}] function TiltUnits(self, units: number): boolean
 	-- Creates a unit `Ray` from a position on the viewport (in pixels), at a given depth from the `Camera`, orientated in the camera's direction. Does not account for the `CoreUISafeInsets` inset.
 	function ViewportPointToRay(self, x: number, y: number, depth: number?): Ray
 	-- Returns the screen location and depth of a `Vector3` `worldPoint` and whether this point is within the bounds of the screen. Accounts for the GUI inset.
@@ -12870,12 +12870,12 @@ declare extern type GuiObject extends GuiBase2d with
 	-- Determines the order in which a `GuiObject` renders relative to others.
 	ZIndex: number
 	-- Smoothly moves a GUI to a new `UDim2`.
-	@deprecated function TweenPosition(self, endPosition: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean
+	@[deprecated {reason = "This function is deprecated in favor of using `TweenService`, which allows for better customization using an object-oriented and event-based approach. - The `easingDirection`, `easingStyle`, and `time` parameters are handled by a `TweenInfo` - The `override` parameter is no longer relevant; tweens always override previous tweens on the same property. - The `callback` parameter is better suited by the `Tween.Completed` event. The `Enum.PlaybackState` enum passed by that event provides a more detailed description of the tween's completion state."}] function TweenPosition(self, endPosition: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean
 	function TweenPositionInternal(self, endPosition: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean -- RobloxScriptSecurity
 	-- Smoothly resizes a `GuiObject` to a new `UDim2`.
-	@deprecated function TweenSize(self, endSize: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean
+	@[deprecated {reason = "This function is deprecated in favor of using `TweenService`, which allows for better customization using an object-oriented and event-based approach. - The `easingDirection`, `easingStyle`, and `time` parameters are handled by a `TweenInfo` - The `override` parameter is no longer relevant; tweens always override previous tweens on the same property. - The `callback` parameter is better suited by the `Tween.Completed` event. The `Enum.PlaybackState` enum passed by that event provides a more detailed description of the tween's completion state."}] function TweenSize(self, endSize: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean
 	-- Smoothly moves a GUI to a new size and position.
-	@deprecated function TweenSizeAndPosition(self, endSize: UDim2, endPosition: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean
+	@[deprecated {reason = "This function is deprecated in favor of using `TweenService`, which allows for better customization using an object-oriented and event-based approach. - The `easingDirection`, `easingStyle`, and `time` parameters are handled by a `TweenInfo` - The `override` parameter is no longer relevant; tweens always override previous tweens on the same property. - The `callback` parameter is better suited by the `Tween.Completed` event. The `Enum.PlaybackState` enum passed by that event provides a more detailed description of the tween's completion state."}] function TweenSizeAndPosition(self, endSize: UDim2, endPosition: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean
 	function TweenSizeAndPositionInternal(self, endSize: UDim2, endPosition: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean -- RobloxScriptSecurity
 	function TweenSizeInternal(self, endSize: UDim2, easingDirection: EnumEasingDirection?, easingStyle: EnumEasingStyle?, time: number?, override: boolean?, callback: ((...any) -> ...any)?): boolean -- RobloxScriptSecurity
 	-- Fired when a player begins dragging the object.
@@ -13159,7 +13159,7 @@ declare extern type Chat extends Instance with
 	-- Filters a string sent from a player meant for broadcast to no particular target. More restrictive than `Chat:FilterStringAsync()`.
 	function FilterStringForBroadcast(self, stringToFilter: string, playerFrom: Player): string
 	-- Filters a string appropriate to the given player's age settings, so they see what is appropriate to them.
-	@deprecated function FilterStringForPlayerAsync(self, stringToFilter: string, playerToFilterFor: Player): string
+	@[deprecated {use = "FilterStringAsync", reason = "This item has been superseded by `Chat:FilterStringAsync()` and `Chat:FilterStringForBroadcast()` which should be used in all new work"}] function FilterStringForPlayerAsync(self, stringToFilter: string, playerToFilterFor: Player): string
 	read BubbleChatSettingsChanged: RBXScriptSignal -- RobloxScriptSecurity
 	-- Fires when `Chat:Chat()` is called.
 	read Chatted: RBXScriptSignal
@@ -13359,11 +13359,11 @@ declare extern type LocalizationTable extends Instance with
 	-- The locale of source strings.
 	SourceLocaleId: string
 	-- Returns the contents of the `LocalizationTable` serialized as a JSON string.
-	@deprecated function GetContents(self): string
+	@[deprecated {use = "GetEntries", reason = "This item has been superseded by `LocalizationTable:GetEntries()` which should be used in all new work."}] function GetContents(self): string
 	-- Returns an array of dictionaries, where each dictionary represents an entry of localization data.
 	function GetEntries(self): { any }
 	-- Returns a translation based on the specified language and key.
-	@deprecated function GetString(self, targetLocaleId: string, key: string): string
+	@[deprecated {use = "GetTranslator", reason = "This item has been superseded by `LocalizationTable:GetTranslator()` which should be used in all new work."}] function GetString(self, targetLocaleId: string, key: string): string
 	-- Returns a `Translator` for entries in this LocalizationTable, in the specified locale.
 	function GetTranslator(self, localeId: string): Instance
 	-- Removes an entry from the LocalizationTable, using the specified `key`, `source`, and `context` to narrow down the specific entry to be removed.
@@ -13371,15 +13371,15 @@ declare extern type LocalizationTable extends Instance with
 	-- Removes a single language translation from the LocalizationTable, using the provided `key`, `source`, `context`, and `localeId` to narrow down the specific entry to be removed.
 	function RemoveEntryValue(self, key: string, source: string, context: string, localeId: string): ()
 	-- Deprecated in favor of `LocalizationTable:RemoveEntry()`.
-	@deprecated function RemoveKey(self, key: string): ()
+	@[deprecated {use = "RemoveEntry", reason = "This item has been superseded by `LocalizationTable:RemoveEntry()` which should be used in all new work"}] function RemoveKey(self, key: string): ()
 	-- Removes all translations from the LocalizationTable with the specified localeId.
 	function RemoveTargetLocale(self, localeId: string): ()
 	-- Sets the contents of the LocalizationTable, via the legacy JSON format.
-	@deprecated function SetContents(self, contents: string): ()
+	@[deprecated {use = "SetEntries", reason = "This item has been superseded by `LocalizationTable:SetEntries()` which should be used in all new work"}] function SetContents(self, contents: string): ()
 	-- Sets the contents of the LocalizationTable.
 	function SetEntries(self, entries: any): ()
 	-- Sets the translation `text` for the `targetLocaleId` locale on the entry identified by `key`, creating the entry if it doesn't exist.
-	@deprecated function SetEntry(self, key: string, targetLocaleId: string, text: string): ()
+	@[deprecated {use = "SetEntryValue", reason = "This item has been superseded by `LocalizationTable:SetEntries()` which should be used in all new work."}] function SetEntry(self, key: string, targetLocaleId: string, text: string): ()
 	-- Sets the **Context** field of a LocalizationTable entry to `newContext`, using the specified `key`, `source`, and `context` to narrow down the entry that will have this change applied.
 	function SetEntryContext(self, key: string, source: string, context: string, newContext: string): ()
 	-- Sets the **Example** field of a LocalizationTable entry to `example`, using the specified `key`, `source`, and `context` to narrow down the entry that will have this change applied.
@@ -13449,7 +13449,7 @@ declare extern type CollectionService extends Instance with
 	-- Returns an array of all tags in the experience.
 	function GetAllTags(self): { any }
 	-- Returns all instances of a given class which are in the `DataModel`.
-	@deprecated function GetCollection(self, class: string): { Instance }
+	@[deprecated {use = "GetTagged", reason = "This item has been superseded by a `CollectionService` tagging method. The equivalent function using the new method is `CollectionService:GetTagged()` which should be used in new work."}] function GetCollection(self, class: string): { Instance }
 	-- Gets an array of every `Collection` the given instance is currently a member of.
 	function GetCollections(self, instance: Instance): { any }
 	-- Returns a signal that fires when a given tag is added to an instance.
@@ -13621,7 +13621,7 @@ declare extern type ContentProvider extends Instance with
 	-- Returns an array of the asset IDs that currently have a registered encryption key.
 	function ListEncryptedAssets(self): { any }
 	-- Queues an asset to be downloaded by the `ContentProvider`.
-	@deprecated function Preload(self, contentId: string): ()
+	@[deprecated {use = "PreloadAsync", reason = "This item has been superseded by `ContentProvider:PreloadAsync()` which should be used in all new work."}] function Preload(self, contentId: string): ()
 	-- Registers a fallback encryption key used to decrypt any encrypted asset that doesn't have its own key registered.
 	function RegisterDefaultEncryptionKey(self, encryptionKey: string): ()
 	-- Decrypts the provided session key and registers the result as the default encryption key.
@@ -13648,7 +13648,7 @@ declare extern type ContextActionService extends Instance with
 	-- Behaves like `BindAction` but also allows a priority to be assigned to the bound action for overlapping input types (higher before lower).
 	function BindActionAtPriority(self, actionName: string, functionToBind: ((...any) -> ...any), createTouchButton: boolean, priorityLevel: number, ...: any): ()
 	-- Binds _functionToBind_ to input events such as key presses, mouse movement, or controller input.
-	@deprecated function BindActionToInputTypes(self, actionName: string, functionToBind: ((...any) -> ...any), createTouchButton: boolean, ...: any): ()
+	@[deprecated {use = "BindAction", reason = "This item has been superseded by `ContextActionService:BindAction()` which should be used in all new work."}] function BindActionToInputTypes(self, actionName: string, functionToBind: ((...any) -> ...any), createTouchButton: boolean, ...: any): ()
 	-- Bind a `Enum.KeyCode` with a specific `Enum.UserInputType` to trigger `Tool.Activation` and `ClickDetector` events.
 	function BindActivate(self, userInputTypeForActivation: EnumUserInputType, ...: any): ()
 	function BindCoreAction(self, actionName: string, functionToBind: ((...any) -> ...any), createTouchButton: boolean, ...: any): () -- RobloxScriptSecurity
@@ -13723,8 +13723,8 @@ declare extern type Controller extends Instance with
 	function GetButton(self, button: EnumButton): boolean
 	-- Removes the bind on button.
 	function UnbindButton(self, button: EnumButton): ()
-	@deprecated function bindButton(self, button: EnumButton, caption: string): ()
-	@deprecated function getButton(self, button: EnumButton): boolean
+	@[deprecated {use = "BindButton", reason = "This function is a deprecated variant of `Controller:BindButton()` which should be used instead."}] function bindButton(self, button: EnumButton, caption: string): ()
+	@[deprecated {use = "GetButton", reason = "This function is a deprecated variant of `Controller:GetButton()` which should be used instead."}] function getButton(self, button: EnumButton): boolean
 	-- Fired when the pressed state of a bound button is changed. This event can be used in conjunction with `Controller:GetButton()` to see whether a bound button is being pressed down or not.
 	read ButtonChanged: RBXScriptSignal
 end
@@ -13976,8 +13976,8 @@ declare extern type ServiceProvider extends Instance with
 	function FindService(self, className: string): Instance
 	-- Returns the service with the requested class name, creating it if it does not exist.
 	function GetService(self, className: string): Instance
-	@deprecated function getService(self, className: string): Instance
-	@deprecated function service(self, className: string): Instance
+	@[deprecated {use = "GetService", reason = "This deprecated function is a variant of `ServiceProvider:GetService()` which should be used instead."}] function getService(self, className: string): Instance
+	@[deprecated {use = "GetService", reason = "This item has been superseded by `ServiceProvider:GetService()` which should be used in all new work."}] function service(self, className: string): Instance
 	-- Fires when the current place is exited.
 	read Close: RBXScriptSignal
 	read CloseLate: RBXScriptSignal -- LocalUserSecurity
@@ -14049,15 +14049,15 @@ declare extern type DataModel extends ServiceProvider with
 	-- Returns a table containing basic information about the jobs performed by the task scheduler.
 	function GetJobsInfo(self): { any } -- PluginSecurity
 	-- **_[OBSOLETE]:_** This function will always return a blank string.
-	@deprecated function GetMessage(self): string
+	@[deprecated {reason = "This item is deprecated since the system was phased out a very long time ago, and recently the APIs for setting this message were removed."}] function GetMessage(self): string
 	function GetPioneerRootPlaceId(self): number -- RobloxScriptSecurity
 	function GetPioneerSource(self): EnumPioneerSource -- RobloxScriptSecurity
 	function GetPlaySessionId(self): string -- RobloxScriptSecurity
 	-- This method is no longer useful and will always return false.
-	@deprecated function GetRemoteBuildMode(self): boolean
+	@[deprecated {reason = "This item is deprecated. Use `RunService:IsServer()` to see if your code is running on the server."}] function GetRemoteBuildMode(self): boolean
 	function IsContentLoaded(self): boolean -- RobloxScriptSecurity
 	-- Returns whether gear of the given `Enum.GearType` is permitted to be added to `Players'` `StarterGears`.
-	@deprecated function IsGearTypeAllowed(self, gearType: EnumGearType): boolean
+	@[deprecated {reason = "This property is deprecated and is no longer functional. It should not be used."}] function IsGearTypeAllowed(self, gearType: EnumGearType): boolean
 	-- Returns true if the client has finished loading the game for the first time.
 	function IsLoaded(self): boolean
 	function IsPioneerApp(self): boolean -- RobloxScriptSecurity
@@ -14075,7 +14075,7 @@ declare extern type DataModel extends ServiceProvider with
 	function GetObjectsAsync(self, url: string): { Instance } -- RobloxScriptSecurity
 	function InsertObjectsAndJoinIfLegacyAsync(self, url: string): { Instance } -- RobloxScriptSecurity
 	-- Saves the current place.
-	@deprecated function SavePlace(self, saveFilter: EnumSaveFilter?): boolean
+	@[deprecated {reason = "This item is deprecated. Do not use it for new work."}] function SavePlace(self, saveFilter: EnumSaveFilter?): boolean
 	function HttpGetAsync(self, url: string, httpRequestType: EnumHttpRequestType?): string -- RobloxScriptSecurity
 	function HttpPostAsync(self, url: string, data: string, contentType: string?, httpRequestType: EnumHttpRequestType?): string -- RobloxScriptSecurity
 	-- Fires when SetGearSettings is called with a different value for `allowedGenres`.
@@ -14115,7 +14115,7 @@ end
 -- An object that exposes methods to access a single data store.
 declare extern type GlobalDataStore extends Instance with
 	-- Sets a callback function to be executed any time the value associated with a key is changed.
-	@deprecated function OnUpdate(self, key: string, callback: ((...any) -> ...any)): RBXScriptConnection
+	@[deprecated {reason = "This function has been deprecated and should not be used in new work. You can use the `Cross Server Messaging Service` to publish and subscribe to topics to receive near real-time updates, completely replacing the need for this function."}] function OnUpdate(self, key: string, callback: ((...any) -> ...any)): RBXScriptConnection
 	-- Returns the values of multiple keys from the data store in a single request.
 	function BatchGetAsync(self, keys: { any }, options: { [string]: any }?): { [string]: any }
 	-- Returns the value of a key in a specified data store and a `DataStoreKeyInfo` instance.
@@ -14141,7 +14141,7 @@ declare extern type DataStore extends GlobalDataStore with
 	-- Enumerates all versions of a key.
 	function ListVersionsAsync(self, key: string, sortDirection: EnumSortDirection?, minDate: number?, maxDate: number?, pageSize: number?): DataStoreVersionPages
 	-- Permanently deletes the specified version of a key.
-	@deprecated function RemoveVersionAsync(self, key: string, version: string): ()
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function RemoveVersionAsync(self, key: string, version: string): ()
 end
 
 -- Specifies additional parameters for a `GlobalDataStore:GetAsync()` call.
@@ -14259,7 +14259,7 @@ declare extern type Debris extends Instance with
 	-- Schedules a given `Instance` for destruction within the specified lifetime.
 	function AddItem(self, item: Instance, lifetime: number?): ()
 	function SetLegacyMaxItems(self, enabled: boolean): () -- LocalUserSecurity
-	@deprecated function addItem(self, item: Instance, lifetime: number?): ()
+	@[deprecated {reason = "This function is a deprecated variant of `Debris:AddItem()` which should be used instead."}] function addItem(self, item: Instance, lifetime: number?): ()
 end
 
 -- Collection of various developer-facing diagnostics information.
@@ -14973,7 +14973,7 @@ declare extern type EditableMesh extends Object with
 	-- Returns all faces of the mesh.
 	function GetFaces(self): { any }
 	-- Returns a list of faces that use a given attribute ID.
-	@deprecated function GetFacesWithAttribute(self, id: number): { any }
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function GetFacesWithAttribute(self, id: number): { any }
 	-- Returns an array of face IDs that use the given color ID.
 	function GetFacesWithColor(self, colorId: number): { any }
 	-- Returns an array of face IDs that use the given normal ID.
@@ -15021,7 +15021,7 @@ declare extern type EditableMesh extends Object with
 	-- Returns all vertices as a list of vertex IDs.
 	function GetVertices(self): { any }
 	-- Returns a list of vertices that use a given attribute ID.
-	@deprecated function GetVerticesWithAttribute(self, id: number): { any }
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function GetVerticesWithAttribute(self, id: number): { any }
 	-- Returns an array of vertex IDs that use the given color ID.
 	function GetVerticesWithColor(self, colorId: number): { any }
 	-- Returns an array of vertex IDs that use the given normal ID.
@@ -16093,7 +16093,7 @@ declare extern type GuiService extends Instance with
 	function GetEmotesMenuOpen(self): boolean
 	function GetErrorCode(self): EnumConnectionError -- RobloxScriptSecurity
 	function GetErrorDetails(self): { [string]: any } -- RobloxScriptSecurity
-	@deprecated function GetErrorMessage(self): string -- RobloxScriptSecurity
+	@[deprecated {use = "GetUiMessage"}] function GetErrorMessage(self): string -- RobloxScriptSecurity
 	function GetErrorType(self): EnumConnectionError -- RobloxScriptSecurity
 	-- Returns whether or not the `Player.GameplayPaused` notification has been disabled.
 	function GetGameplayPausedNotificationEnabled(self): boolean
@@ -16489,9 +16489,9 @@ declare extern type Humanoid extends Instance with
 	-- Attaches the specified `Accessory` to the humanoid's parent.
 	function AddAccessory(self, accessory: Instance): ()
 	-- Adds a custom status to the Humanoid.
-	@deprecated function AddCustomStatus(self, status: string): boolean
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function AddCustomStatus(self, status: string): boolean
 	-- Adds a BoolValue to the Humanoid's _Status_ object.
-	@deprecated function AddStatus(self, status: EnumStatus?): boolean
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function AddStatus(self, status: EnumStatus?): boolean
 	-- Assembles a tree of `Motor6D` joints by attaching together `Attachment` objects in a humanoid's character.
 	function BuildRigFromAttachments(self): ()
 	-- Sets the `Humanoid` to enter the given `Enum.HumanoidStateType`.
@@ -16514,7 +16514,7 @@ declare extern type Humanoid extends Instance with
 	-- Returns the current intended movement velocity of the Humanoid.
 	function GetMoveVelocity(self): Vector3
 	-- Returns an array of all `AnimationTracks` that are currently being played on the `Humanoid`.
-	@deprecated function GetPlayingAnimationTracks(self): { any }
+	@[deprecated {use = "GetPlayingAnimationTracks"}] function GetPlayingAnimationTracks(self): { any }
 	-- Returns the humanoid's actual physical velocity relative to the surface it is standing on as a `Vector3` in world-space orientation.
 	function GetRelativeVelocityAtFloor(self): Vector3
 	-- Returns the humanoid's current `Enum.HumanoidStateType`.
@@ -16522,13 +16522,13 @@ declare extern type Humanoid extends Instance with
 	-- Returns whether a `Enum.HumanoidStateType` is enabled for the `Humanoid`.
 	function GetStateEnabled(self, state: EnumHumanoidStateType): boolean
 	-- Returns a table of the Humanoid's statuses, and custom statuses.
-	@deprecated function GetStatuses(self): { any }
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function GetStatuses(self): { any }
 	-- Returns boolean based on if custom statuses exist.
-	@deprecated function HasCustomStatus(self, status: string): boolean
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function HasCustomStatus(self, status: string): boolean
 	-- Returns a boolean based on if a status exists.
-	@deprecated function HasStatus(self, status: EnumStatus?): boolean
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function HasStatus(self, status: EnumStatus?): boolean
 	-- Loads an `Animation` onto a `Humanoid`, returning an `AnimationTrack` that can be used for playback.
-	@deprecated function LoadAnimation(self, animation: Animation): AnimationTrack
+	@[deprecated {use = "LoadAnimation", reason = "This function is deprecated in favor of using `Animator:LoadAnimation()` directly (the `Animator` may be created while editing or at runtime)."}] function LoadAnimation(self, animation: Animation): AnimationTrack
 	-- Causes the `Humanoid` to walk in the given direction.
 	function Move(self, moveDirection: Vector3, relativeToCamera: boolean?): ()
 	-- Causes the `Humanoid` to attempt to walk to the given location by setting the `Humanoid.WalkToPoint` and `Humanoid.WalkToPart` properties.
@@ -16536,9 +16536,9 @@ declare extern type Humanoid extends Instance with
 	-- Removes all `Accessory` objects worn by the humanoid's parent.
 	function RemoveAccessories(self): ()
 	-- Removes the defined custom status from the Status model in the Humanoid..
-	@deprecated function RemoveCustomStatus(self, status: string): boolean
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function RemoveCustomStatus(self, status: string): boolean
 	-- Removes the defined status from the Status model in the Humanoid.
-	@deprecated function RemoveStatus(self, status: EnumStatus?): boolean
+	@[deprecated {reason = "This item is deprecated, as it was a part of the unfinished RbxStatus library which would have allowed you to add conditions to a Humanoid. Do not use it for new work."}] function RemoveStatus(self, status: EnumStatus?): boolean
 	-- Dynamically replaces a Humanoid body part with a different part.
 	function ReplaceBodyPartR15(self, bodyPart: EnumBodyPartR15, part: BasePart): boolean
 	function SetClickToWalkEnabled(self, enabled: boolean): () -- RobloxScriptSecurity
@@ -16548,23 +16548,23 @@ declare extern type Humanoid extends Instance with
 	function TakeDamage(self, amount: number): ()
 	-- Unequips any `Tool` currently equipped by the `Humanoid`.
 	function UnequipTools(self): ()
-	@deprecated function loadAnimation(self, animation: Animation): AnimationTrack
-	@deprecated function takeDamage(self, amount: number): ()
+	@[deprecated {use = "LoadAnimation", reason = "This deprecated method is a variant of `Humanoid:LoadAnimation()`. `Animator:LoadAnimation()` should be used instead."}] function loadAnimation(self, animation: Animation): AnimationTrack
+	@[deprecated {use = "TakeDamage", reason = "This deprecated method is a variant of `Humanoid:TakeDamage()`, which should be used instead."}] function takeDamage(self, amount: number): ()
 	function CacheDefaults(self): () -- RobloxScriptSecurity
-	@deprecated function ApplyAvatarRules(self, avatarRules: any): () -- RobloxScriptSecurity
+	@[deprecated {use = "ApplyAvatarRulesAsync"}] function ApplyAvatarRules(self, avatarRules: any): () -- RobloxScriptSecurity
 	-- Applies an `AvatarRules` tree to the character in place of the experience's Avatar Settings.
 	function ApplyAvatarRulesAsync(self, avatarRules: any): ()
 	-- Makes the character's look match that of the passed in `HumanoidDescription`.
-	@deprecated function ApplyDescription(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
+	@[deprecated {use = "ApplyDescriptionAsync", reason = "This method has been superseded by `ApplyDescriptionAsync()`."}] function ApplyDescription(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
 	-- Makes the character's look match that of the passed in `HumanoidDescription`. If `HumanoidDescription.UseAvatarSettings` is true, the Avatar Settings for the experience will also be applied to the character.
 	function ApplyDescriptionAsync(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
 	-- Makes the character's look match that of the passed in `HumanoidDescription`, even after external changes.
-	@deprecated function ApplyDescriptionReset(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
+	@[deprecated {use = "ApplyDescriptionResetAsync", reason = "This method has been superseded by `ApplyDescriptionResetAsync()`."}] function ApplyDescriptionReset(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
 	-- Makes the character's look match that of the passed in `HumanoidDescription`, even after external changes.
 	function ApplyDescriptionResetAsync(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
 	function PlayAvatarEffectAsync(self, assetId: number): { Instance } -- RobloxScriptSecurity
 	-- Plays emotes and returns if was successfully ran.
-	@deprecated function PlayEmote(self, emoteName: string): boolean
+	@[deprecated {use = "PlayEmoteAsync", reason = "This method has been superseded by `PlayEmoteAsync()`."}] function PlayEmote(self, emoteName: string): boolean
 	function PlayEmoteAndGetAnimTrackById(self, emoteId: number): ...any -- RobloxScriptSecurity
 	-- Plays emotes and returns if was successfully ran.
 	function PlayEmoteAsync(self, emoteName: string): boolean
@@ -17160,7 +17160,7 @@ declare extern type InputAction extends Instance with
 	-- Specifies what type of input value the action is expecting.
 	Type: EnumInputActionType
 	-- Updates the `InputAction` to the given state and fires the appropriate signals.
-	@deprecated function Fire(self, state: any): ()
+	@[deprecated {use = "Fire", reason = "Use `InputBinding:Fire()` with a `Scriptable` binding instead."}] function Fire(self, state: any): ()
 	function GetInputBindings(self): { Instance } -- RobloxScriptSecurity
 	function GetPreferredBindingList(self, count: number?): { Instance } -- RobloxScriptSecurity
 	-- Returns the current state of the `InputAction`.
@@ -17288,40 +17288,40 @@ declare extern type InsertService extends Instance with
 	-- Indicates whether ''Free Models'' can be inserted into the game.
 	AllowInsertFreeModels: boolean
 	-- Deprecated. Accepts an asset ID for InsertService approval; calling it has no effect.
-	@deprecated function ApproveAssetId(self, assetId: number): ()
+	@[deprecated {reason = "This item is deprecated. Do not use it for new work."}] function ApproveAssetId(self, assetId: number): ()
 	-- Deprecated. Accepts an asset version ID for InsertService approval; calling it has no effect.
-	@deprecated function ApproveAssetVersionId(self, assetVersionId: number): ()
+	@[deprecated {reason = "This item is deprecated. Do not use it for new work."}] function ApproveAssetVersionId(self, assetVersionId: number): ()
 	function GetLocalFileContents(self, contentId: string): string -- RobloxScriptSecurity
 	-- Inserts `Instance` into `Workspace`.
-	@deprecated function Insert(self, instance: Instance): ()
+	@[deprecated {reason = "This function has been superseded by `InsertService:LoadAsset()` which should be used in all new work."}] function Insert(self, instance: Instance): ()
 	function LoadLocalAsset(self, assetPath: string): Instance -- RobloxScriptSecurity
 	-- Creates a new `MeshPart` with specified fidelity values.
 	function CreateMeshPartAsync(self, meshId: string, collisionFidelity: EnumCollisionFidelity, renderFidelity: EnumRenderFidelity): MeshPart
-	@deprecated function GetBaseCategories(self): { any }
+	@[deprecated {use = "GetBaseSets", reason = "This item is deprecated. Do not use it for new work."}] function GetBaseCategories(self): { any }
 	-- Returns an array of dictionaries, containing information about various Roblox approved sets.
-	@deprecated function GetBaseSets(self): { any }
+	@[deprecated {reason = "[Sets have been removed](https://devforum.roblox.com/t/sunsetting-sets/189402) from Roblox."}] function GetBaseSets(self): { any }
 	-- Returns the most recently uploaded models in the specified category.
-	@deprecated function GetCollection(self, categoryId: number): { any }
+	@[deprecated {reason = "[Sets have been removed](https://devforum.roblox.com/t/sunsetting-sets/189402) from Roblox."}] function GetCollection(self, categoryId: number): { any }
 	-- Retrieves a list of free Decals from the Catalog.
-	@deprecated function GetFreeDecals(self, searchText: string, pageNum: number): { any }
+	@[deprecated {use = "GetFreeDecalsAsync", reason = "Use `GetFreeDecalsAsync()` instead."}] function GetFreeDecals(self, searchText: string, pageNum: number): { any }
 	-- Retrieves a list of free Decals from the Catalog.
 	function GetFreeDecalsAsync(self, searchText: string, pageNum: number): { any }
 	-- Retrieves a list of Free Models from the Catalog.
-	@deprecated function GetFreeModels(self, searchText: string, pageNum: number): { any }
+	@[deprecated {use = "GetFreeModelsAsync", reason = "Use `GetFreeModelsAsync()` instead."}] function GetFreeModels(self, searchText: string, pageNum: number): { any }
 	-- Retrieves a list of Free Models from the Catalog.
 	function GetFreeModelsAsync(self, searchText: string, pageNum: number): { any }
 	-- Returns the latest AssetVersionId of an asset for assets created by the place creator. Can be used in combination with `InsertService:LoadAssetVersion()` to load the latest version of a model, even if it gets updated while the game is running.
 	function GetLatestAssetVersionAsync(self, assetId: number): number
-	@deprecated function GetUserCategories(self, userId: User): { any }
+	@[deprecated {use = "GetUserSets", reason = "This item is deprecated. Do not use it for new work."}] function GetUserCategories(self, userId: User): { any }
 	-- Returns an array of dictionaries, containing information about sets owned by the user.
-	@deprecated function GetUserSets(self, userId: User): { any }
+	@[deprecated {reason = "[Sets have been removed](https://devforum.roblox.com/t/sunsetting-sets/189402) from Roblox."}] function GetUserSets(self, userId: User): { any }
 	-- Returns a `Model` containing the asset.
 	function LoadAsset(self, assetId: number): Instance
 	-- Returns a model inserted into `InsertService` containing the asset with the given assetVersionId.
 	function LoadAssetVersion(self, assetVersionId: number): Instance
 	function LoadAssetWithBytecodeAsync(self, content: Content): Instance -- RobloxScriptSecurity
 	function LoadAssetWithFormat(self, assetId: number, format: string): { Instance } -- RobloxScriptSecurity
-	@deprecated function loadAsset(self, assetId: number): Instance
+	@[deprecated {use = "LoadAsset", reason = "This function is a deprecated variant of `InsertService:LoadAsset()` which should be used instead."}] function loadAsset(self, assetId: number): Instance
 	function LoadPackageAssetAsync(self, url: string): { Instance } -- RobloxScriptSecurity
 end
 
@@ -17487,16 +17487,16 @@ end
 -- Provides functions to load and preview `KeyframeSequence`.
 declare extern type KeyframeSequenceProvider extends Instance with
 	-- Returns a `KeyframeSequence` from a given asset URL.
-	@deprecated function GetKeyframeSequence(self, assetId: string): Instance -- PluginSecurity
+	@[deprecated {use = "GetKeyframeSequenceAsync", reason = "This function is deprecated and can lead to the game freezing until the animation is loaded. Developers are recommended to use `KeyframeSequenceProvider:GetKeyframeSequenceAsync()` instead."}] function GetKeyframeSequence(self, assetId: string): Instance -- PluginSecurity
 	-- Returns a `KeyframeSequence` from the supplied assetId.
-	@deprecated function GetKeyframeSequenceById(self, assetId: number, useCache: boolean): Instance -- PluginSecurity
+	@[deprecated {use = "GetKeyframeSequenceAsync", reason = "This function is deprecated and can lead to the game freezing until the animation is loaded. Developers are recommended to use `KeyframeSequenceProvider:GetKeyframeSequenceAsync()` instead."}] function GetKeyframeSequenceById(self, assetId: number, useCache: boolean): Instance -- PluginSecurity
 	function GetMemStats(self): { [string]: any } -- RobloxScriptSecurity
 	-- Generates a temporary asset ID from a `KeyframeSequence` that can be used for localized testing of an animation. Generates an _active://_ URL.
 	function RegisterActiveKeyframeSequence(self, keyframeSequence: Instance): string
 	-- Generates a temporary asset ID from a `KeyframeSequence` that can be used for localized testing of an animation. Generates a hash.
 	function RegisterKeyframeSequence(self, keyframeSequence: Instance): string
 	-- This function returns an `InventoryPages` object which can be used to iterate over animations owned by a specific user.
-	@deprecated function GetAnimations(self, userId: User): Instance
+	@[deprecated {use = "GetAnimationsAsync"}] function GetAnimations(self, userId: User): Instance
 	-- This function returns an `InventoryPages` object which can be used to iterate over animations owned by a specific user.
 	function GetAnimationsAsync(self, userId: User): Instance
 	-- Returns a KeyframeSequence based on the specified assetId asynchronously.
@@ -17577,8 +17577,8 @@ declare extern type Lighting extends Instance with
 	function GetSunDirection(self): Vector3
 	-- Sets `TimeOfDay` and `ClockTime` to the given number of minutes after midnight.
 	function SetMinutesAfterMidnight(self, minutes: number): ()
-	@deprecated function getMinutesAfterMidnight(self): number
-	@deprecated function setMinutesAfterMidnight(self, minutes: number): ()
+	@[deprecated {use = "GetMinutesAfterMidnight", reason = "This method is a deprecated variant of `Lighting:GetMinutesAfterMidnight()` which should be used instead."}] function getMinutesAfterMidnight(self): number
+	@[deprecated {use = "SetMinutesAfterMidnight", reason = "This method is a deprecated variant of `Lighting:SetMinutesAfterMidnight()` which should be used instead."}] function setMinutesAfterMidnight(self, minutes: number): ()
 	-- This event fires when a `Lighting` property is changed or a `Sky` is added or removed from `Lighting`.
 	read LightingChanged: RBXScriptSignal
 end
@@ -17694,7 +17694,7 @@ declare extern type LocalizationService extends Instance with
 	-- Gets all entries used for automated localization.
 	function GetTableEntries(self, instance: Instance?): { any }
 	-- Returns a `Translator` to be used for translations using the locale data loaded.
-	@deprecated function GetTranslatorForPlayer(self, player: Instance): Instance
+	@[deprecated {use = "GetTranslatorForPlayerAsync", reason = "This function has been deprecated by `LocalizationService:GetTranslatorForPlayerAsync()`, which functions similarly except that it yields until the cloud table has loaded. Please use it in new work instead."}] function GetTranslatorForPlayer(self, player: Instance): Instance
 	function IsLoadingInternalTranslationsSettingChanged(self, newIsLoadingInternalTranslations: boolean): () -- RobloxScriptSecurity
 	function SetRobloxLocaleId(self, locale: string): () -- RobloxScriptSecurity
 	function StartTextScraper(self): () -- RobloxScriptSecurity
@@ -17888,7 +17888,7 @@ declare extern type MarketplaceService extends Instance with
 	function PromptNativePurchaseWithLocalPlayerWithPaymentSessionId(self, productId: string, paymentSessionId: string): () -- RobloxScriptSecurity
 	function PromptNativePurchaseWithPaymentSessionId(self, player: Instance, productId: string, paymentSessionId: string): () -- RobloxScriptSecurity
 	-- Prompts a user to purchase Roblox Premium.
-	@deprecated function PromptPremiumPurchase(self, player: Instance): ()
+	@[deprecated {use = "PromptRobloxSubscriptionPurchase", reason = "This method has been superseded by `PromptRobloxSubscriptionPurchase()`."}] function PromptPremiumPurchase(self, player: Instance): ()
 	-- Prompts a user to purchase a developer product with the given `productId`.
 	function PromptProductPurchase(self, player: Instance, productId: number, equipIfPurchased: boolean?, currencyType: EnumCurrencyType?): ()
 	-- Prompts a user to purchase an item with the given `assetId`. Does not work for USD Creator Store purchases.
@@ -17927,7 +17927,7 @@ declare extern type MarketplaceService extends Instance with
 	function GetDeveloperProductsAsync(self): Instance
 	function GetPassOwnershipAsync(self, user: Player, gamePassId: number): { [string]: any }
 	-- Returns the product information of an asset using its asset ID.
-	@deprecated function GetProductInfo(self, assetId: number, infoType: EnumInfoType?): { [string]: any }
+	@[deprecated {use = "GetProductInfoAsync", reason = "This method has been superseded by `GetProductInfoAsync()`."}] function GetProductInfo(self, assetId: number, infoType: EnumInfoType?): { [string]: any }
 	-- Returns the product information of an asset using its asset ID.
 	function GetProductInfoAsync(self, assetId: number, infoType: EnumInfoType?): { [string]: any }
 	-- Returns the subscription details for the given user for the Roblox Subscription ecosystem.
@@ -17954,11 +17954,11 @@ declare extern type MarketplaceService extends Instance with
 	function PerformSubscriptionPurchaseV3Async(self, productType: string, productId: string, paymentProvider: string, paymentSessionId: string, referrerId: number?): () -- RobloxScriptSecurity
 	function PerformSubscriptionPurchaseWithRobuxAsync(self, subscriptionId: string, priceInRobux: number): () -- RobloxScriptSecurity
 	-- Returns whether the given user has the given asset.
-	@deprecated function PlayerOwnsAsset(self, player: Instance, assetId: number): boolean
+	@[deprecated {use = "PlayerOwnsAssetAsync", reason = "This method has been superseded by `PlayerOwnsAssetAsync()`."}] function PlayerOwnsAsset(self, player: Instance, assetId: number): boolean
 	-- Returns whether the given user has the given asset.
 	function PlayerOwnsAssetAsync(self, player: Instance, assetId: number): boolean
 	-- Returns whether the given player owns the given bundle.
-	@deprecated function PlayerOwnsBundle(self, player: Player, bundleId: number): boolean
+	@[deprecated {use = "PlayerOwnsBundleAsync", reason = "This method has been superseded by `PlayerOwnsBundleAsync()`."}] function PlayerOwnsBundle(self, player: Player, bundleId: number): boolean
 	-- Returns whether the given player owns the given bundle.
 	function PlayerOwnsBundleAsync(self, player: Player, bundleId: number): boolean
 	-- Initiates a Robux transfer from the sender to another user.
@@ -18583,20 +18583,20 @@ end
 -- Deprecated Open Cloud API surface for in-experience cloud operations such as user notifications.
 declare extern type OpenCloudApiV1 extends Instance with
 	-- Creates and returns an `OpenCloudModel` container for a registered model type name.
-	@deprecated function CreateModel(self, name: string): any
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function CreateModel(self, name: string): any
 	-- Deprecated method that attempted to send a user notification via Open Cloud; always errors.
-	@deprecated function CreateUserNotificationAsync(self, user: string, userNotification: any): any
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function CreateUserNotificationAsync(self, user: string, userNotification: any): any
 end
 
 -- Deprecated. Do not use for new work; prefer `HttpService` for in-experience HTTP requests.
 declare extern type OpenCloudService extends Instance with
 	-- Returns an `OpenCloudApiV1` object. Always raises an error.
-	@deprecated function GetApiV1(self): OpenCloudApiV1
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function GetApiV1(self): OpenCloudApiV1
 	function RegisterOpenCloud(self, version: string, methodName: string, method: ((...any) -> ...any)): () -- RobloxScriptSecurity
 	function RegistrationComplete(self): () -- RobloxScriptSecurity
 	function HttpRequestAsync(self, options: { [string]: any }): { [string]: any } -- RobloxScriptSecurity
 	-- Deprecated. Dispatches a named Open Cloud call and returns its result.
-	@deprecated function InvokeAsync(self, version: string, methodName: string, arguments: { [string]: any }, headers: { [string]: any }?): { [string]: any }
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function InvokeAsync(self, version: string, methodName: string, arguments: { [string]: any }, headers: { [string]: any }?): { [string]: any }
 end
 
 declare extern type OperationGraph extends Instance with
@@ -18878,7 +18878,7 @@ declare extern type Path extends Instance with
 	-- The `Enum.PathStatus` of the generated `Path`.
 	read Status: EnumPathStatus
 	-- Returns a table of `Path` instances.
-	@deprecated function GetPointCoordinates(self): { any }
+	@[deprecated {use = "GetWaypoints", reason = "This item has been superseded by `GetWaypoints()` which should be used in all new work instead."}] function GetPointCoordinates(self): { any }
 	-- Returns an array of points in the path.
 	function GetWaypoints(self): { any }
 	-- Checks if a path is blocked starting at a specific waypoint.
@@ -18983,9 +18983,9 @@ declare extern type PathfindingService extends Instance with
 	-- Creates a `Path` object based on the given agent parameters.
 	function CreatePath(self, agentParameters: { [string]: any }?): Path
 	-- Computes and returns a `Path` between two `Vector3s`. If the given MaxDistance is greater than 512, an error will be thrown. (MaxDistance is too large).
-	@deprecated function ComputeRawPathAsync(self, start: Vector3, finish: Vector3, maxDistance: number): Path
+	@[deprecated {use = "FindPathAsync", reason = "This item has been superseded by `PathfindingService:FindPathAsync()` which should be used in all new work instead."}] function ComputeRawPathAsync(self, start: Vector3, finish: Vector3, maxDistance: number): Path
 	-- Computes and returns a smooth `Path` between two `Vector3s`.
-	@deprecated function ComputeSmoothPathAsync(self, start: Vector3, finish: Vector3, maxDistance: number): Path
+	@[deprecated {use = "FindPathAsync", reason = "This item has been superseded by `PathfindingService:FindPathAsync()` which should be used in all new work instead."}] function ComputeSmoothPathAsync(self, start: Vector3, finish: Vector3, maxDistance: number): Path
 	-- Finds a `Path` between the two provided points.
 	function FindPathAsync(self, start: Vector3, finish: Vector3): Path
 end
@@ -19026,19 +19026,19 @@ end
 -- Service that provides methods for creating and managing collision groups, which control whether sets of `BaseParts` collide with each other.
 declare extern type PhysicsService extends Instance with
 	-- Returns whether the part is in the collision group.
-	@deprecated function CollisionGroupContainsPart(self, name: string, part: BasePart): boolean
+	@[deprecated {reason = "This method has been deprecated. It's recommended that you query a part's collision group through its `CollisionGroup` property."}] function CollisionGroupContainsPart(self, name: string, part: BasePart): boolean
 	-- Sets the collision status between two groups.
 	function CollisionGroupSetCollidable(self, name1: string, name2: string, collidable: boolean): ()
 	-- Returns whether the two groups will collide.
 	function CollisionGroupsAreCollidable(self, name1: string, name2: string): boolean
 	-- Creates a new collision group with the given name, and returns the ID of the created group.
-	@deprecated function CreateCollisionGroup(self, name: string): number
+	@[deprecated {use = "RegisterCollisionGroup", reason = "This method has been superseded by `RegisterCollisionGroup()` which should be used for all new work."}] function CreateCollisionGroup(self, name: string): number
 	-- Returns the ID of the collision group with the specified name.
-	@deprecated function GetCollisionGroupId(self, name: string): number
+	@[deprecated {reason = "This method has been deprecated. It's recommended that you query collision groups by **name** through a part's `CollisionGroup` property."}] function GetCollisionGroupId(self, name: string): number
 	-- Returns the name of the group with the corresponding ID.
-	@deprecated function GetCollisionGroupName(self, name: number): string
+	@[deprecated {reason = "This method has been deprecated. It's recommended that you query collision groups by **name** through a part's `CollisionGroup` property."}] function GetCollisionGroupName(self, name: number): string
 	-- Returns a table with info on all of the place's collision groups.
-	@deprecated function GetCollisionGroups(self): { any }
+	@[deprecated {use = "GetRegisteredCollisionGroups", reason = "This method has been superseded by `GetRegisteredCollisionGroups()` which should be used for all new work."}] function GetCollisionGroups(self): { any }
 	-- Returns the maximum number of collision groups.
 	function GetMaxCollisionGroups(self): number
 	-- Returns a table with info on all of the place's collision groups.
@@ -19050,11 +19050,11 @@ declare extern type PhysicsService extends Instance with
 	-- Registers a new collision group with the given name.
 	function RegisterCollisionGroup(self, name: string): ()
 	-- Removes the collision group with the given name.
-	@deprecated function RemoveCollisionGroup(self, name: string): ()
+	@[deprecated {use = "UnregisterCollisionGroup", reason = "This method has been superseded by `UnregisterCollisionGroup()` which should be used for all new work."}] function RemoveCollisionGroup(self, name: string): ()
 	-- Renames specified collision group.
 	function RenameCollisionGroup(self, from: string, to: string): ()
 	-- Sets the collision group of a part.
-	@deprecated function SetPartCollisionGroup(self, part: BasePart, name: string): ()
+	@[deprecated {reason = "This method has been deprecated. It's recommended that you set a part's collision group by **name** through its `CollisionGroup` property."}] function SetPartCollisionGroup(self, part: BasePart, name: string): ()
 	-- Unregisters the collision group for the given name.
 	function UnregisterCollisionGroup(self, name: string): ()
 end
@@ -19367,16 +19367,16 @@ declare extern type Player extends Instance with
 	-- Forcibly disconnect a player from the experience, optionally providing a message.
 	function Kick(self, message: string?): ()
 	-- Returns a boolean value that was previously saved to the player with `Player:SaveBoolean()` with the same key.
-	@deprecated function LoadBoolean(self, key: string): boolean
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function LoadBoolean(self, key: string): boolean
 	-- Places the given instance either in the player's character, head, or StarterGear based on the instance's class.
-	@deprecated function LoadCharacterAppearance(self, assetInstance: Instance): ()
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function LoadCharacterAppearance(self, assetInstance: Instance): ()
 	@deprecated function LoadData(self): () -- LocalUserSecurity
 	-- Returns an instance that was previously saved to the player with `Player:SaveInstance()` with the same key.
-	@deprecated function LoadInstance(self, key: string): Instance
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function LoadInstance(self, key: string): Instance
 	-- Returns a number value that was previously saved to the player.
-	@deprecated function LoadNumber(self, key: string): number
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function LoadNumber(self, key: string): number
 	-- Returns a string value that was previously saved to the player.
-	@deprecated function LoadString(self, key: string): string
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function LoadString(self, key: string): string
 	-- Causes the player's character to walk in the given direction until stopped, or interrupted by the player (by using their controls).
 	function Move(self, walkDirection: Vector3, relativeToCamera: boolean?): ()
 	function NotifyAgeCheckPassed(self): () -- RobloxScriptSecurity
@@ -19392,14 +19392,14 @@ declare extern type Player extends Instance with
 	function RequestTool(self, instance: Instance): () -- RobloxScriptSecurity
 	function RevokeFriendship(self, player: Player): () -- RobloxScriptSecurity
 	-- Used to save a boolean value that can be loaded again at a later time using `Player:LoadBoolean()`.
-	@deprecated function SaveBoolean(self, key: string, value: boolean): ()
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function SaveBoolean(self, key: string, value: boolean): ()
 	@deprecated function SaveData(self): () -- LocalUserSecurity
 	-- Saves an instance which can be loaded again at a later time.
-	@deprecated function SaveInstance(self, key: string, value: Instance): ()
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function SaveInstance(self, key: string, value: Instance): ()
 	-- Saves a number value that can be loaded again at a later time using.
-	@deprecated function SaveNumber(self, key: string, value: number): ()
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function SaveNumber(self, key: string, value: number): ()
 	-- Saves a string value that can be loaded again at a later time.
-	@deprecated function SaveString(self, key: string, value: string): ()
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function SaveString(self, key: string, value: string): ()
 	-- Sets the `AccountAge` of the player.
 	function SetAccountAge(self, accountAge: number): () -- PluginSecurity
 	function SetBlockListInitialized(self): () -- RobloxScriptSecurity
@@ -19413,60 +19413,60 @@ declare extern type Player extends Instance with
 	function SetSuperSafeChat(self, value: boolean): () -- PluginSecurity
 	function UnpinStreamingForInstance(self, instance: Instance, depth: number): () -- RobloxScriptSecurity
 	function UpdatePlayerBlocked(self, userId: number, blocked: boolean): () -- RobloxScriptSecurity
-	@deprecated function loadBoolean(self, key: string): boolean
-	@deprecated function loadInstance(self, key: string): Instance
-	@deprecated function loadNumber(self, key: string): number
-	@deprecated function loadString(self, key: string): string
-	@deprecated function saveBoolean(self, key: string, value: boolean): ()
-	@deprecated function saveInstance(self, key: string, value: Instance): ()
-	@deprecated function saveNumber(self, key: string, value: number): ()
-	@deprecated function saveString(self, key: string, value: string): ()
+	@[deprecated {use = "LoadBoolean", reason = "This deprecated function is a variant of `Player:LoadBoolean()` which has also been deprecated. Neither function should be used in new work."}] function loadBoolean(self, key: string): boolean
+	@[deprecated {use = "LoadInstance", reason = "This deprecated function is a variant of `Player:LoadInstance()` which has also been deprecated. Neither function should be used in new work."}] function loadInstance(self, key: string): Instance
+	@[deprecated {use = "LoadNumber", reason = "This deprecated function is a variant of `Player:LoadNumber()` which has also been deprecated. Neither function should be used in new work."}] function loadNumber(self, key: string): number
+	@[deprecated {use = "LoadString", reason = "This function is a deprecated variant of `Player:LoadString()` which has also been deprecated. Neither function should be used in new work."}] function loadString(self, key: string): string
+	@[deprecated {use = "SaveBoolean", reason = "This function is a deprecated variant of `Player:SaveBoolean()` which has also been deprecated. Neither function should be used in new work."}] function saveBoolean(self, key: string, value: boolean): ()
+	@[deprecated {use = "SaveInstance", reason = "This function is a deprecated variant of `Player:SaveInstance()` which has also been deprecated. Neither function should be used in new work."}] function saveInstance(self, key: string, value: Instance): ()
+	@[deprecated {use = "SaveNumber", reason = "This function is a deprecated variant of `Player:SaveNumber()` which has also been deprecated. Neither function should be used in new work."}] function saveNumber(self, key: string, value: number): ()
+	@[deprecated {use = "SaveString", reason = "This function is a deprecated variant of `Player:SaveString()` which has also been deprecated. Neither function should be used in new work."}] function saveString(self, key: string, value: string): ()
 	function GetCanManageAsync(self): boolean -- RobloxScriptSecurity
 	-- Returns an array of friends in the same server.
 	function GetFriendsInServerAsync(self): { any }
 	-- Returns a dictionary of friends in the universe (all of the places in the same experience).
 	function GetFriendsInUniverseAsync(self): { any }
 	-- Returns a dictionary of online friends.
-	@deprecated function GetFriendsOnline(self, maxFriends: number?): { any }
+	@[deprecated {use = "GetFriendsOnlineAsync", reason = "This method has been superseded by `GetFriendsOnlineAsync()`."}] function GetFriendsOnline(self, maxFriends: number?): { any }
 	-- Returns a dictionary of online friends.
 	function GetFriendsOnlineAsync(self, maxFriends: number?): { any }
 	-- Returns the user IDs of friends who have previously joined this experience.
 	function GetFriendsWhoPlayedAsync(self): { any }
 	-- Returns the player's rank in the group as an integer.
-	@deprecated function GetRankInGroup(self, groupId: number): number
+	@[deprecated {use = "GetRankInGroupAsync", reason = "This method has been superseded by `GetRankInGroupAsync()`."}] function GetRankInGroup(self, groupId: number): number
 	-- Returns the player's rank in the group as an integer.
-	@deprecated function GetRankInGroupAsync(self, groupId: number): number
+	@[deprecated {reason = "This method returns only the rank value of the member's highest public role. Use `GroupService:GetRolesInGroupAsync()` instead, which returns all public roles."}] function GetRankInGroupAsync(self, groupId: number): number
 	-- Returns the player's role in the group as a string, or `Guest` if the player isn't part of the group.
-	@deprecated function GetRoleInGroup(self, groupId: number): string
+	@[deprecated {use = "GetRoleInGroupAsync", reason = "This method has been superseded by `GetRoleInGroup()`."}] function GetRoleInGroup(self, groupId: number): string
 	-- Returns the player's role in the group as a string, or `Guest` if the player isn't part of the group.
-	@deprecated function GetRoleInGroupAsync(self, groupId: number): string
+	@[deprecated {reason = "This method returns only the member's highest public role. Use `GroupService:GetRolesInGroupAsync()` instead, which returns all public roles."}] function GetRoleInGroupAsync(self, groupId: number): string
 	-- Returns whether a player is friends with the specified user.
-	@deprecated function IsBestFriendsWith(self, userId: User): boolean
+	@[deprecated {reason = "This function is obsolete because the \"best friends\" feature was removed. Use `Player:IsFriendsWithAsync()` instead."}] function IsBestFriendsWith(self, userId: User): boolean
 	-- Checks whether a player is a friend of the user with the given
-	@deprecated function IsFriendsWith(self, userId: User): boolean
+	@[deprecated {use = "IsFriendsWithAsync", reason = "This method has been superseded by the `Player:IsFriendsWithAsync()` method which should be used for new work."}] function IsFriendsWith(self, userId: User): boolean
 	-- Checks whether a player is a friend of the user with the given `Player.UserId`.
 	function IsFriendsWithAsync(self, userId: User): boolean
 	-- Checks whether a player is a member of a group with the given ID.
-	@deprecated function IsInGroup(self, groupId: number): boolean
+	@[deprecated {use = "IsInGroupAsync", reason = "This method has been superseded by `IsInGroupAsync()`."}] function IsInGroup(self, groupId: number): boolean
 	-- Checks whether a player is a member of a group with the given ID.
 	function IsInGroupAsync(self, groupId: number): boolean
 	-- Creates a new character for the player, removing the old one. Also clears the player's `Backpack` and `PlayerGui`.
-	@deprecated function LoadCharacter(self): ()
+	@[deprecated {use = "LoadCharacterAsync", reason = "This method has been superseded by `LoadCharacterAsync()`."}] function LoadCharacter(self): ()
 	-- Creates a new character for the player, removing the old one. Also clears the player's `Backpack` and `PlayerGui`.
 	function LoadCharacterAsync(self): ()
 	function LoadCharacterBlocking(self): () -- LocalUserSecurity
 	-- Spawns the player's character with an `AvatarRules` tree applied in place of the experience's Avatar Settings.
 	function LoadCharacterWithAvatarRulesAsync(self, avatarRules: any): ()
 	-- Spawns a player character with everything equipped in the passed in `HumanoidDescription`.
-	@deprecated function LoadCharacterWithHumanoidDescription(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
+	@[deprecated {use = "LoadCharacterWithHumanoidDescriptionAsync", reason = "This method has been superseded by `LoadCharacterWithHumanoidDescriptionAsync()`."}] function LoadCharacterWithHumanoidDescription(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
 	-- Spawns a player character with everything equipped in the passed in `HumanoidDescription`.
 	function LoadCharacterWithHumanoidDescriptionAsync(self, humanoidDescription: HumanoidDescription, assetTypeVerification: EnumAssetTypeVerification?): ()
 	-- Requests that the server stream to the player around the specified location.
 	function RequestStreamAroundAsync(self, position: Vector3, timeOut: number?): ()
 	-- Used to pause the script until the player's data is available to manipulate, or until a certain amount of time has elapsed without fetching the player's data.
-	@deprecated function WaitForDataReady(self): boolean
-	@deprecated function isFriendsWith(self, userId: User): boolean
-	@deprecated function waitForDataReady(self): boolean
+	@[deprecated {reason = "This item is deprecated, as it may have been used for a now obsolete data persistence method. Please save and load player data using `DataStoreService` for new work."}] function WaitForDataReady(self): boolean
+	@[deprecated {use = "IsFriendsWith", reason = "This method has been superseded by the `Player:IsFriendsWithAsync()` method which should be used for new work."}] function isFriendsWith(self, userId: User): boolean
+	@[deprecated {use = "WaitForDataReady", reason = "This function is a deprecated variant of `Player:WaitForDataReady()` which has also been deprecated. Neither function should be used in new work."}] function waitForDataReady(self): boolean
 	read BlockListChanged: RBXScriptSignal -- RobloxScriptSecurity
 	-- Fires when a player's character spawns or respawns.
 	read CharacterAdded: RBXScriptSignal
@@ -19621,34 +19621,34 @@ declare extern type Players extends Instance with
 	-- Makes the local player chat the given message, which will only be viewable by users on the same team.
 	function TeamChat(self, message: string): () -- PluginSecurity
 	function WhisperChat(self, message: string, player: Instance): () -- LocalUserSecurity
-	@deprecated function getPlayers(self): { Instance }
-	@deprecated function playerFromCharacter(self, character: Model): Player
+	@[deprecated {use = "GetPlayers", reason = "This function is a deprecated variant of `Players:GetPlayers()` which should be used instead."}] function getPlayers(self): { Instance }
+	@[deprecated {use = "GetPlayerFromCharacter", reason = "This function is a deprecated variant of `Players:GetPlayerFromCharacter()` which should be used in new work."}] function playerFromCharacter(self, character: Model): Player
 	-- Returns a list of players in an experience.
-	@deprecated function players(self): { Instance }
+	@[deprecated {use = "GetPlayers", reason = "This item has been superseded by `Players:GetPlayers()` which should be used in all new work."}] function players(self): { Instance }
 	-- Bans users from your experience, with options to specify duration, reason, whether the ban applies to the entire universe or just the current place, and more. This method is enabled and disabled by the `Players.BanningEnabled` property, which you can toggle in Studio.
 	function BanAsync(self, config: { [string]: any }): ()
 	-- Returns a character `Model` equipped with everything specified in the passed in `HumanoidDescription`.
-	@deprecated function CreateHumanoidModelFromDescription(self, description: HumanoidDescription, rigType: EnumHumanoidRigType, assetTypeVerification: EnumAssetTypeVerification?): Model
+	@[deprecated {use = "CreateHumanoidModelFromDescriptionAsync", reason = "This method has been superseded by `CreateHumanoidModelFromDescriptionAsync()`."}] function CreateHumanoidModelFromDescription(self, description: HumanoidDescription, rigType: EnumHumanoidRigType, assetTypeVerification: EnumAssetTypeVerification?): Model
 	-- Returns a character `Model` equipped with everything specified in the passed in `HumanoidDescription`. If `HumanoidDescription.UseAvatarSettings` is set to true, Avatar Settings in the experience will be applied to the returned model.
 	function CreateHumanoidModelFromDescriptionAsync(self, description: HumanoidDescription, rigType: EnumHumanoidRigType, assetTypeVerification: EnumAssetTypeVerification?): Model
 	-- Returns a character Model set-up with everything equipped to match the avatar of the user specified by the passed in userId.
-	@deprecated function CreateHumanoidModelFromUserId(self, userId: User): Model
+	@[deprecated {use = "CreateHumanoidModelFromUserIdAsync", reason = "This method has been superseded by `CreateHumanoidModelFromUserIdAsync()`."}] function CreateHumanoidModelFromUserId(self, userId: User): Model
 	-- Returns a character Model set-up with everything equipped to match the avatar of the user specified by the passed in userId.
 	function CreateHumanoidModelFromUserIdAsync(self, userId: User): Model
 	-- Retrieves the ban and unban history of any user within the experience's universe. This method is enabled and disabled by the `Players.BanningEnabled` property, which you can toggle in Studio.
 	function GetBanHistoryAsync(self, userId: User): BanHistoryPages
 	-- Returns a `Model` containing the assets which the player is wearing, excluding gear.
-	@deprecated function GetCharacterAppearanceAsync(self, userId: User): Model
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function GetCharacterAppearanceAsync(self, userId: User): Model
 	-- Returns information about the character appearance of a given user.
 	function GetCharacterAppearanceInfoAsync(self, userId: User): { [string]: any }
 	-- Returns a `FriendPages` object which contains information for all of the given player's friends.
 	function GetFriendsAsync(self, userId: User): FriendPages
 	-- Returns the HumanoidDescription for a specified outfit, which will be set with the parts/colors/Animations etc of the outfit.
-	@deprecated function GetHumanoidDescriptionFromOutfitId(self, outfitId: number): HumanoidDescription
+	@[deprecated {use = "GetHumanoidDescriptionFromOutfitIdAsync", reason = "This method has been superseded by `GetHumanoidDescriptionFromOutfitIdAsync()`."}] function GetHumanoidDescriptionFromOutfitId(self, outfitId: number): HumanoidDescription
 	-- Returns the HumanoidDescription for a specified outfit, which will be set with the parts/colors/Animations etc of the outfit.
 	function GetHumanoidDescriptionFromOutfitIdAsync(self, outfitId: number): HumanoidDescription
 	-- Returns a HumanoidDescription which specifies everything equipped for the avatar of the user specified by the passed in userId.
-	@deprecated function GetHumanoidDescriptionFromUserId(self, userId: User): HumanoidDescription
+	@[deprecated {use = "GetHumanoidDescriptionFromUserIdAsync", reason = "This method has been superseded by `GetHumanoidDescriptionFromUserIdAsync()`."}] function GetHumanoidDescriptionFromUserId(self, userId: User): HumanoidDescription
 	-- Returns a HumanoidDescription which specifies everything equipped for the avatar of the user specified by the passed in userId.
 	function GetHumanoidDescriptionFromUserIdAsync(self, userId: User): HumanoidDescription
 	-- Sends a query to the Roblox website for the username of an account with a given `UserId`.
@@ -19730,7 +19730,7 @@ declare extern type Plugin extends Instance with
 	function OnInvokeSuspendOverride(self, key: string, callback: ((...any) -> ...any)): Instance -- RobloxScriptSecurity
 	function OnSetItem(self, key: string, callback: ((...any) -> ...any)): Instance -- RobloxScriptSecurity
 	-- Used to open the given script instance in an editor window, in Roblox studio, at the given line. If no line is given as an argument it will default to 1.
-	@deprecated function OpenScript(self, script: LuaSourceContainer, lineNumber: number?): () -- PluginSecurity
+	@[deprecated {reason = "This function is deprecated and should not be used in new work. Use `ScriptEditorService:OpenScriptDocumentAsync()` instead."}] function OpenScript(self, script: LuaSourceContainer, lineNumber: number?): () -- PluginSecurity
 	-- Opens the context help window to the wiki page that `url` links to.
 	function OpenWikiPage(self, url: string): () -- PluginSecurity
 	function PauseSound(self, sound: Instance): () -- RobloxScriptSecurity
@@ -19753,16 +19753,16 @@ declare extern type Plugin extends Instance with
 	-- Unions the given parts and returns the resulting `UnionOperation`.
 	function Union(self, objects: { Instance }): Instance -- PluginSecurity
 	-- Creates a `DockWidgetPluginGui` given a `DockWidgetPluginGuiInfo`.
-	@deprecated function CreateDockWidgetPluginGui(self, pluginGuiId: string, dockWidgetPluginGuiInfo: DockWidgetPluginGuiInfo): DockWidgetPluginGui -- PluginSecurity
+	@[deprecated {use = "CreateDockWidgetPluginGuiAsync", reason = "This method has been superseded by `CreateDockWidgetPluginGuiAsync()`."}] function CreateDockWidgetPluginGui(self, pluginGuiId: string, dockWidgetPluginGuiInfo: DockWidgetPluginGuiInfo): DockWidgetPluginGui -- PluginSecurity
 	-- Creates a `DockWidgetPluginGui` given a `DockWidgetPluginGuiInfo`.
 	function CreateDockWidgetPluginGuiAsync(self, pluginGuiId: string, dockWidgetPluginGuiInfo: DockWidgetPluginGuiInfo): DockWidgetPluginGui -- PluginSecurity
 	function CreateQWidgetPluginGui(self, pluginGuiId: string, pluginGuiOptions: { [string]: any }): QWidgetPluginGui -- RobloxScriptSecurity
 	-- Prompts the user to open a `.fbx` animation file that can be loaded onto the `rigModel`, then proceeds to insert the animation as a `KeyframeSequence` in the `Workspace`.
-	@deprecated function ImportFbxAnimation(self, rigModel: Instance, isR15: boolean?): Instance -- PluginSecurity
+	@[deprecated {use = "ImportFbxAnimationAsync"}] function ImportFbxAnimation(self, rigModel: Instance, isR15: boolean?): Instance -- PluginSecurity
 	-- Prompts the user to open a `.fbx` animation file that can be loaded onto the `rigModel`, then proceeds to insert the animation as a `KeyframeSequence` in the `Workspace`.
 	function ImportFbxAnimationAsync(self, rigModel: Instance, isR15: boolean?): Instance -- PluginSecurity
 	-- Prompts the user to open a `.fbx` file, uploads the individual components of the model as meshes, and generates a character rig for use in animation, which is loaded into the `Workspace`.
-	@deprecated function ImportFbxRig(self, isR15: boolean?): Instance -- PluginSecurity
+	@[deprecated {use = "ImportFbxRigAsync", reason = "This method has been superseded by `ImportFbxRigAsync()`."}] function ImportFbxRig(self, isR15: boolean?): Instance -- PluginSecurity
 	-- Prompts the user to open a `.fbx` file, uploads the individual components of the model as meshes, and generates a character rig for use in animation, which is loaded into the `Workspace`.
 	function ImportFbxRigAsync(self, isR15: boolean?): Instance -- PluginSecurity
 	-- Opens a window in Roblox Studio that prompts the user to select an existing `Enum.AssetType.Animation` asset. The `assetType` parameter must be `Animation`; other values are not supported and cause an error.
@@ -19770,7 +19770,7 @@ declare extern type Plugin extends Instance with
 	-- Opens a window in Roblox Studio that prompts the user to select an existing `Enum.AssetType.Animation` asset. The `assetType` parameter must be `Animation`; other values are not supported and cause an error.
 	function PromptForExistingAssetIdAsync(self, assetType: string): number -- PluginSecurity
 	-- Prompts the user to save their current selection with the specified file name.
-	@deprecated function PromptSaveSelection(self, suggestedFileName: string?): boolean -- PluginSecurity
+	@[deprecated {use = "PromptSaveSelectionAsync", reason = "This method has been superseded by `PromptSaveSelectionAsync()`."}] function PromptSaveSelection(self, suggestedFileName: string?): boolean -- PluginSecurity
 	-- Prompts the user to save their current selection with the specified file name.
 	function PromptSaveSelectionAsync(self, suggestedFileName: string?): boolean -- PluginSecurity
 	-- Fired when the plugin is deactivated.
@@ -19863,7 +19863,7 @@ end
 -- A deprecated singleton that was previously required to create plugins.
 declare extern type PluginManager extends Instance with
 	-- Creates a new `Plugin` object and returns it.
-	@deprecated function CreatePlugin(self): Instance -- PluginSecurity
+	@[deprecated {reason = "The steps to create a plugin have changed. To learn more, see `Plugin`."}] function CreatePlugin(self): Instance -- PluginSecurity
 	-- Exports the place to an `.obj` file that is saved to the path chosen by the user in a file save dialogue.
 	function ExportPlace(self, filePath: string?): () -- PluginSecurity
 	-- Exports the current `Selection` to an `.obj` file that is saved to the path chosen by the user in a file save dialogue.
@@ -19873,7 +19873,7 @@ end
 -- The singleton object returned by the global `PluginManager()` function, exposing a small set of legacy Studio plugin utilities.
 declare extern type PluginManagerInterface extends Instance with
 	-- Deprecated. Creates and returns a new `Plugin`; use `Plugin` instead.
-	@deprecated function CreatePlugin(self): Instance -- PluginSecurity
+	@[deprecated {reason = "The steps to create a plugin have changed. To learn more, see `Plugin`."}] function CreatePlugin(self): Instance -- PluginSecurity
 	-- Exports the entire place to an `.obj` file saved to a path chosen by the user in a file save dialog.
 	function ExportPlace(self, filePath: string?): () -- PluginSecurity
 	-- Exports the current `Selection` to an `.obj` file saved to a path chosen by the user in a file save dialog.
@@ -19946,13 +19946,13 @@ end
 -- This service controls the points award system used to showcase a player's achievements and participation throughout Roblox.
 declare extern type PointsService extends Instance with
 	-- Returns the number of points the current game has available to award to players.
-	@deprecated function GetAwardablePoints(self): number
+	@[deprecated {reason = "This function was once part of the `PointService` class used to control an ancient achievement system since removed and deprecated. It should not be used in new work."}] function GetAwardablePoints(self): number
 	-- Attempts to award the user with the specified `Player.UserId` the specified number of points.
-	@deprecated function AwardPoints(self, userId: number, amount: number): ...any
+	@[deprecated {reason = "This function was once part of the `PointService` class used to control an ancient achievement system since removed and deprecated. It should not be used in new work."}] function AwardPoints(self, userId: number, amount: number): ...any
 	-- Returns the total number of points a player has in the current game.
-	@deprecated function GetGamePointBalance(self, userId: number): number
+	@[deprecated {reason = "This function was once part of the `PointService` class used to control an ancient achievement system since removed and deprecated. It should not be used in new work."}] function GetGamePointBalance(self, userId: number): number
 	-- Returns the total number of points the given player has across all games.
-	@deprecated function GetPointBalance(self, userId: number): number
+	@[deprecated {reason = "This function was once part of the `PointService` class used to control an ancient achievement system since removed and deprecated. It should not be used in new work."}] function GetPointBalance(self, userId: number): number
 	-- Fires when points have been successfully awarded to a player, while also passing along the updated balance of points the player has in the current game and all games.
 	read PointsAwarded: RBXScriptSignal
 end
@@ -20554,7 +20554,7 @@ declare extern type RocketPropulsion extends BodyMover with
 	function Abort(self): ()
 	-- Causes the assembly to start moving toward its `Target`.
 	function Fire(self): ()
-	@deprecated function fire(self): ()
+	@[deprecated {use = "Fire", reason = "This function is a deprecated variant of `RocketPropulsion:Fire()` which should be used instead."}] function fire(self): ()
 	-- Fires when the assembly comes within `TargetRadius` of the `Target`.
 	read ReachedTarget: RBXScriptSignal
 end
@@ -20717,7 +20717,7 @@ declare extern type RunService extends Instance with
 	-- Pauses the experience's simulation if it is running, suspending physics and scripts.
 	function Pause(self): () -- PluginSecurity
 	-- Resets the current game to a waypoint set when `RunService:Run()` was called.
-	@deprecated function Reset(self): () -- PluginSecurity
+	@[deprecated {reason = "This item is deprecated and should not be used in new work."}] function Reset(self): () -- PluginSecurity
 	-- Runs the game's simulation, running physics and scripts.
 	function Run(self): () -- PluginSecurity
 	function Set3dRenderingEnabled(self, enable: boolean): () -- RobloxScriptSecurity
@@ -21459,7 +21459,7 @@ declare extern type SocialService extends Instance with
 	function GetUpcomingExperienceEventsAsync(self): { any }
 	-- Prompts the player to submit feedback or a player support ticket about the current experience.
 	function PromptFeedbackSubmissionAsync(self, options: { [string]: any }?): ()
-	@deprecated function PromptLinkSharing(self, player: Player, options: { [string]: any }?): ...any
+	@[deprecated {use = "PromptLinkSharingAsync", reason = "Use `PromptLinkSharingAsync()` instead."}] function PromptLinkSharing(self, player: Player, options: { [string]: any }?): ...any
 	-- Generates an expiring share link and prompts the given `Player` with the platform share sheet.
 	function PromptLinkSharingAsync(self, player: Player, options: { [string]: any }?): ...any
 	function PromptRateExperienceAsync(self): EnumExperienceRatingResult
@@ -21559,9 +21559,9 @@ declare extern type Sound extends Instance with
 	function Resume(self): ()
 	-- Stops the `Sound`.
 	function Stop(self): ()
-	@deprecated function pause(self): ()
-	@deprecated function play(self): ()
-	@deprecated function stop(self): ()
+	@[deprecated {use = "Pause", reason = "This deprecated function is a variant of `Sound:Pause()` which should be used instead."}] function pause(self): ()
+	@[deprecated {use = "Play", reason = "This deprecated function is a variant of `Sound:Play()` which should be used instead."}] function play(self): ()
+	@[deprecated {use = "Stop", reason = "This deprecated function is a variant of `Sound:Stop()` which should be used instead."}] function stop(self): ()
 	-- Fires whenever the `Sound` loops.
 	read DidLoop: RBXScriptSignal
 	-- Fires when the `Sound` has completed playback and stopped.
@@ -22609,11 +22609,11 @@ declare extern type StudioService extends Instance with
 	function UninstallPlugin(self, assetId: number): () -- RobloxScriptSecurity
 	function UpdatePluginManagement(self): () -- RobloxScriptSecurity
 	-- Prompts the current Studio user to select one file to add as a `File`.
-	@deprecated function PromptImportFile(self, fileTypeFilter: { any }?): Instance -- PluginSecurity
+	@[deprecated {use = "PromptImportFileAsync"}] function PromptImportFile(self, fileTypeFilter: { any }?): Instance -- PluginSecurity
 	-- Prompts the current Studio user to select one file to add as a `File`.
 	function PromptImportFileAsync(self, fileTypeFilter: { any }?): Instance -- PluginSecurity
 	-- Prompts the current Studio user to select files to add as `Files`.
-	@deprecated function PromptImportFiles(self, fileTypeFilter: { any }?): { Instance } -- PluginSecurity
+	@[deprecated {use = "PromptImportFilesAsync"}] function PromptImportFiles(self, fileTypeFilter: { any }?): { Instance } -- PluginSecurity
 	-- Prompts the current Studio user to select files to add as `Files`.
 	function PromptImportFilesAsync(self, fileTypeFilter: { any }?): { Instance } -- PluginSecurity
 	function TryInstallPlugin(self, assetId: number, assetVersionId: number): () -- RobloxScriptSecurity
@@ -22926,7 +22926,7 @@ declare extern type Teams extends Instance with
 	-- Returns a table containing the game's `Team` objects. Will only return `Team` objects that are parented to the `Teams` service.
 	function GetTeams(self): { Instance }
 	-- Evens the number of people on each team. This function does not work correctly and should not be used.
-	@deprecated function RebalanceTeams(self): ()
+	@[deprecated {reason = "This function has been deprecated and no longer functions correctly. It should not be used. Developers should instead implement their own team sorting systems."}] function RebalanceTeams(self): ()
 end
 
 declare extern type TelemetryService extends Instance with
@@ -22988,11 +22988,11 @@ declare extern type TeleportService extends Instance with
 	function TeleportReconnect(self): () -- RobloxScriptSecurity
 	function TeleportSwitchServer(self, gameIdsToExclude: { any }?): () -- RobloxScriptSecurity
 	-- Teleports a `Player` to the server instance associated with the given _placeId_ and _instanceId_.
-	@deprecated function TeleportToPlaceInstance(self, placeId: number, instanceId: string, player: Instance?, spawnName: string?, teleportData: any, customLoadingScreen: Instance?): ()
+	@[deprecated {use = "TeleportAsync", reason = "Use `TeleportAsync()` instead. For a migration guide, see [Teleport between places](../../../projects/teleport.md#migrate-to-secure-teleports)."}] function TeleportToPlaceInstance(self, placeId: number, instanceId: string, player: Instance?, spawnName: string?, teleportData: any, customLoadingScreen: Instance?): ()
 	-- Teleport a group of `Players` to a reserved server created using `TeleportService:ReserveServerAsync()`.
-	@deprecated function TeleportToPrivateServer(self, placeId: number, reservedServerAccessCode: string, players: { Instance }, spawnName: string?, teleportData: any, customLoadingScreen: Instance?): ()
+	@[deprecated {use = "TeleportAsync", reason = "Use `TeleportAsync()` with `TeleportOptions.ReservedServerId` instead. Generate a GUID with `HttpService:GenerateGUID()` and pass it as `TeleportOptions.ReservedServerId`."}] function TeleportToPrivateServer(self, placeId: number, reservedServerAccessCode: string, players: { Instance }, spawnName: string?, teleportData: any, customLoadingScreen: Instance?): ()
 	-- A variant of `TeleportService:Teleport()` that causes the `Player` to spawn at a `SpawnLocation` of the given name at the destination place.
-	@deprecated function TeleportToSpawnByName(self, placeId: number, spawnName: string, player: Instance?, teleportData: any, customLoadingScreen: Instance?): ()
+	@[deprecated {use = "TeleportAsync", reason = "Use `TeleportAsync()` instead. For a migration guide, see [Teleport between places](../../../projects/teleport.md#migrate-to-secure-teleports)."}] function TeleportToSpawnByName(self, placeId: number, spawnName: string, player: Instance?, teleportData: any, customLoadingScreen: Instance?): ()
 	function TeleportTrustedBackForth(self, goForth: boolean): () -- RobloxScriptSecurity
 	function TeleportTrustedBackHistory(self, placeId: number): () -- RobloxScriptSecurity
 	function TeleportedPlacesBackHistory(self): { any } -- RobloxScriptSecurity
@@ -23002,13 +23002,13 @@ declare extern type TeleportService extends Instance with
 	-- Prompts a `Player` with information about the specified experience. The player can choose to teleport to the target experience through the prompt.
 	function PromptExperienceDetailsAsync(self, player: Player, universeId: number): EnumPromptExperienceDetailsResult
 	-- Returns an access code that can be used to teleport players to a reserved server, along with the `DataModel.PrivateServerId` for it.
-	@deprecated function ReserveServer(self, placeId: number): ...any
+	@[deprecated {use = "TeleportAsync", reason = "Use `TeleportAsync()` with `TeleportOptions.ReservedServerId` instead. Generate a GUID with `HttpService:GenerateGUID()` and pass it as `TeleportOptions.ReservedServerId`."}] function ReserveServer(self, placeId: number): ...any
 	-- Returns an access code that can be used to teleport players to a reserved server, along with the `DataModel.PrivateServerId` for it.
-	@deprecated function ReserveServerAsync(self, placeId: number): ...any
+	@[deprecated {use = "TeleportAsync", reason = "Use `TeleportAsync()` with `TeleportOptions.ReservedServerId` instead. Generate a GUID with `HttpService:GenerateGUID()` and pass it as `TeleportOptions.ReservedServerId`."}] function ReserveServerAsync(self, placeId: number): ...any
 	-- The all-encompassing method to teleport a player or group of players from one server to another.
 	function TeleportAsync(self, placeId: number, players: { Instance }, teleportOptions: Instance?): Instance
 	-- Teleports a group of `Players` to the same server of the place with the given `PlaceId`, returning the `JobId` of the server instance they were teleported to.
-	@deprecated function TeleportPartyAsync(self, placeId: number, players: { Instance }, teleportData: any, customLoadingScreen: Instance?): string
+	@[deprecated {use = "TeleportAsync", reason = "Use `TeleportAsync()` instead. For a migration guide, see [Teleport between places](../../../projects/teleport.md#migrate-to-secure-teleports)."}] function TeleportPartyAsync(self, placeId: number, players: { Instance }, teleportData: any, customLoadingScreen: Instance?): string
 	function UnblockAsync(self): ...any -- RobloxScriptSecurity
 	-- Fires when the `LocalPlayer` enters the place following a teleport.
 	read LocalPlayerArrivedFromTeleport: RBXScriptSignal
@@ -23048,9 +23048,9 @@ declare extern type Terrain extends BasePart with
 	-- Sets how many times `Terrain` water waves will move up and down per minute.
 	WaterWaveSpeed: number
 	-- Obsolete function which no longer does anything.
-	@deprecated function AutowedgeCell(self, x: number, y: number, z: number): boolean
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function AutowedgeCell(self, x: number, y: number, z: number): boolean
 	-- Obsolete function which no longer does anything.
-	@deprecated function AutowedgeCells(self, region: Region3int16): ()
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function AutowedgeCells(self, region: Region3int16): ()
 	function CanSmoothVoxelsBeUpgraded(self): boolean -- RobloxScriptSecurity
 	-- Returns the world position of the center of the terrain cell.
 	function CellCenterToWorld(self, x: number, y: number, z: number): Vector3
@@ -23060,7 +23060,7 @@ declare extern type Terrain extends BasePart with
 	function Clear(self): ()
 	function ClearVoxelsAsync_beta(self, region: Region3, channelIds: { any }): ()
 	-- Transforms the legacy terrain engine into the new terrain engine.
-	@deprecated function ConvertToSmooth(self): () -- PluginSecurity
+	@[deprecated {reason = "Since all places now automatically use the new terrain engine, this method is obsolete."}] function ConvertToSmooth(self): () -- PluginSecurity
 	-- Stores a chunk of terrain into a `TerrainRegion` object so it can be loaded back later.
 	function CopyRegion(self, region: Region3int16): TerrainRegion
 	-- Returns the number of non-empty cells in the terrain.
@@ -23083,14 +23083,14 @@ declare extern type Terrain extends BasePart with
 	function FillWedgeSlot(self, cframe: CFrame, size: Vector3, solidMaterialIndex: number): () -- RobloxScriptSecurity
 	function GenerateWaterFlowMap(self, generateFoam: boolean): () -- RobloxScriptSecurity
 	-- Returns the closest cell material from the legacy terrain engine that matches the smooth terrain voxel specified.
-	@deprecated function GetCell(self, x: number, y: number, z: number): ...any
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function GetCell(self, x: number, y: number, z: number): ...any
 	-- Returns current terrain material color for specified terrain material.
 	function GetMaterialColor(self, material: EnumMaterial): Color3
 	-- Returns the base material, `MaterialVariant`, and color configured for a material slot.
 	function GetMaterialSlot(self, slotIndex: number): ...any
 	function GetTerrainWireframe(self, cframe: CFrame, size: Vector3): { any } -- RobloxScriptSecurity
 	-- Returns `true` if the cell is a water cell.
-	@deprecated function GetWaterCell(self, x: number, y: number, z: number): ...any
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function GetWaterCell(self, x: number, y: number, z: number): ...any
 	function IsMaterialSlotInvalid(self, slotIndex: number): boolean -- RobloxScriptSecurity
 	function IterateVoxelsAsync_beta(self, region: Region3, resolution: number, channelIds: { any }): TerrainIterateOperation
 	function ModifyVoxelsAsync_beta(self, region: Region3, resolution: number, channelIds: { any }): TerrainModifyOperation
@@ -23110,9 +23110,9 @@ declare extern type Terrain extends BasePart with
 	function ResetMaterialSlot(self, slotIndex: number): ()
 	function ResetWaterFlowMap(self): () -- RobloxScriptSecurity
 	-- Sets the occupancy and material of a specific terrain voxel.
-	@deprecated function SetCell(self, x: number, y: number, z: number, material: EnumCellMaterial, block: EnumCellBlock, orientation: EnumCellOrientation): ()
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function SetCell(self, x: number, y: number, z: number, material: EnumCellMaterial, block: EnumCellBlock, orientation: EnumCellOrientation): ()
 	-- Sets the occupancy and material of all terrain voxels in a specific region.
-	@deprecated function SetCells(self, region: Region3int16, material: EnumCellMaterial, block: EnumCellBlock, orientation: EnumCellOrientation): ()
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function SetCells(self, region: Region3int16, material: EnumCellMaterial, block: EnumCellBlock, orientation: EnumCellOrientation): ()
 	-- Sets current terrain material color for specified terrain material.
 	function SetMaterialColor(self, material: EnumMaterial, value: Color3): ()
 	function SetMaterialInTransform(self, cframe: CFrame, size: Vector3, targetMaterial: EnumMaterial): () -- RobloxScriptSecurity
@@ -23121,7 +23121,7 @@ declare extern type Terrain extends BasePart with
 	-- Configures a material slot with a base material, an optional `MaterialVariant`, and a color.
 	function SetMaterialSlot(self, slotIndex: number, baseMaterial: EnumMaterial, materialVariant: string, color: Color3): ()
 	-- Sets the specified terrain voxel's material to water and sets its occupancy to `1`.
-	@deprecated function SetWaterCell(self, x: number, y: number, z: number, force: EnumWaterForce, direction: EnumWaterDirection): ()
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function SetWaterCell(self, x: number, y: number, z: number, force: EnumWaterForce, direction: EnumWaterDirection): ()
 	function SmoothRegion(self, region: Region3, resolution: number, strength: number): ...any -- RobloxScriptSecurity
 	function SmoothRegionMaterialSlots(self, region: Region3, resolution: number, strength: number): ...any -- RobloxScriptSecurity
 	-- Returns the grid cell location that contains the position point.
@@ -23195,7 +23195,7 @@ declare extern type TerrainRegion extends Instance with
 	function ApplyTransform(self, rotation: CFrame, size: Vector3): () -- RobloxScriptSecurity
 	function ApplyTransformSubregion(self, rotation: CFrame, size: Vector3, region: Region3int16): TerrainRegion -- RobloxScriptSecurity
 	-- Transforms the TerrainRegion so it can be used with smooth terrain.
-	@deprecated function ConvertToSmooth(self): () -- PluginSecurity
+	@[deprecated {reason = "This item is a deprecated function of a legacy `Terrain` engine that has been removed. Do not use it for new work."}] function ConvertToSmooth(self): () -- PluginSecurity
 	function GetRegionWireframe(self): { any } -- RobloxScriptSecurity
 end
 
@@ -23341,7 +23341,7 @@ declare extern type TestService extends Instance with
 	function RegisterSuite(self, suiteName: string, options: { [string]: any }?): TestSuite
 	-- Registers a test so `RunTestsAsync()` can run it.
 	function RegisterTest(self, testName: string, callback: ((...any) -> ...any), options: { [string]: any }?): TestCase
-	@deprecated function RegisterTestLegacy(self, testOptions: { [string]: any }): TestCase
+	@[deprecated {use = "RegisterTest"}] function RegisterTestLegacy(self, testOptions: { [string]: any }): TestCase
 	function Require(self, condition: boolean, description: string, source: Instance?, line: number?): ()
 	function ResetTestControl(self, providerName: string, controlName: string): ()
 	-- Removes every registered test and suite.
@@ -23361,7 +23361,7 @@ declare extern type TestService extends Instance with
 	function CaptureScreenshotAsync(self, artifactName: string?, options: { [string]: any }?): ...any
 	function FetchTestControlsAsync(self, category: string): ...any
 	function RequestValidationAsync(self, module: string, artifactName: string, options: any): ...any
-	@deprecated function Run(self): () -- PluginSecurity
+	@[deprecated {use = "RunAsync"}] function Run(self): () -- PluginSecurity
 	function RunAsync(self): () -- PluginSecurity
 	-- Runs the registered tests one at a time and yields until they finish.
 	function RunTestsAsync(self, filter: { [string]: any }?): TestRunResult
@@ -23707,7 +23707,7 @@ end
 -- Represents the result of a call to `TextService:FilterStringAsync()`, used to distribute a filtered string accordingly.
 declare extern type TextFilterResult extends Instance with
 	-- Returns the text in a properly filtered manner for the specified `Player.UserId`.
-	@deprecated function GetChatForUserAsync(self, toUserId: number): string
+	@[deprecated {reason = "This method is deprecated and returns an empty string. Text filtering pertaining to chat should be done through `TextChatService`, and experiences that do not properly filter player-generated chat text may be subject to moderation."}] function GetChatForUserAsync(self, toUserId: number): string
 	-- Returns the text in a properly filtered manner for all users.
 	function GetNonChatStringForBroadcastAsync(self): string
 	-- Returns the text in a properly filtered manner for the specified `Player.UserId` based on age and other details.
@@ -24300,7 +24300,7 @@ declare extern type UIGridStyleLayout extends UILayout with
 	-- Force re-layout of sibling UI elements.
 	@deprecated function ApplyLayout(self): ()
 	-- Sets the function used to determine the order of elements when SortOrder is set to Custom.
-	@deprecated function SetCustomSortFunction(self, function_: ((...any) -> ...any)?): ()
+	@[deprecated {reason = "This method is deprecated in favor of using other SortOrder means, such as by Name or LayoutOrder."}] function SetCustomSortFunction(self, function_: ((...any) -> ...any)?): ()
 end
 
 -- Positions sibling UI elements by filling rows using the space of the parent UI element.
@@ -24727,7 +24727,7 @@ declare extern type UserInputService extends Instance with
 	-- Returns an array of `KeyCodes` that the gamepad associated with the given `Enum.UserInputType` supports.
 	function GetSupportedGamepadKeyCodes(self, gamepadNum: EnumUserInputType): { any }
 	-- Returns a `CFrame` describing the position and orientation of a specified virtual reality device.
-	@deprecated function GetUserCFrame(self, type: EnumUserCFrame): CFrame
+	@[deprecated {use = "GetUserCFrame", reason = "Use `VRService:GetUserCFrame()` instead."}] function GetUserCFrame(self, type: EnumUserCFrame): CFrame
 	-- Determines whether a particular button is pressed on a gamepad.
 	function IsGamepadButtonDown(self, gamepadNum: EnumUserInputType, gamepadKeyCode: EnumKeyCode): boolean
 	-- Returns whether the given `key` is currently held down.
@@ -25469,17 +25469,17 @@ declare extern type WorldRoot extends Model with
 	-- Returns whether the two groups will collide in this world.
 	function CollisionGroupsAreCollidable(self, name1: string, name2: string): boolean
 	-- Returns the first `BasePart` or `Terrain` cell intersecting with the given `Ray`.
-	@deprecated function FindPartOnRay(self, ray: Ray, ignoreDescendantsInstance: Instance?, terrainCellsAreCubes: boolean?, ignoreWater: boolean?): ...any
+	@[deprecated {use = "Raycast", reason = "This function has been deprecated. Use `WorldRoot:Raycast()` along with `RaycastParams` for new work."}] function FindPartOnRay(self, ray: Ray, ignoreDescendantsInstance: Instance?, terrainCellsAreCubes: boolean?, ignoreWater: boolean?): ...any
 	-- Returns the first `BasePart` or `Terrain` cell intersecting with the given `Ray` that isn't in, nor is a descendant of an object in, the given ignore list.
-	@deprecated function FindPartOnRayWithIgnoreList(self, ray: Ray, ignoreDescendantsTable: { Instance }, terrainCellsAreCubes: boolean?, ignoreWater: boolean?): ...any
+	@[deprecated {use = "Raycast", reason = "This function has been deprecated. Use `WorldRoot:Raycast()` along with `RaycastParams` for new work."}] function FindPartOnRayWithIgnoreList(self, ray: Ray, ignoreDescendantsTable: { Instance }, terrainCellsAreCubes: boolean?, ignoreWater: boolean?): ...any
 	-- Returns the first `BasePart` or `Terrain` cell intersecting with the given `Ray` that is in, or is a descendant of an object in, the given inclusion list.
-	@deprecated function FindPartOnRayWithWhitelist(self, ray: Ray, whitelistDescendantsTable: { Instance }, ignoreWater: boolean?): ...any
+	@[deprecated {use = "Raycast", reason = "This function has been deprecated. Use `WorldRoot:Raycast()` along with `RaycastParams` for new work."}] function FindPartOnRayWithWhitelist(self, ray: Ray, whitelistDescendantsTable: { Instance }, ignoreWater: boolean?): ...any
 	-- Returns an array of `BaseParts` in the given `Region3`.
-	@deprecated function FindPartsInRegion3(self, region: Region3, ignoreDescendantsInstance: Instance?, maxParts: number?): { Instance }
+	@[deprecated {use = "GetPartBoundsInBox", reason = "This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work."}] function FindPartsInRegion3(self, region: Region3, ignoreDescendantsInstance: Instance?, maxParts: number?): { Instance }
 	-- Returns an array of `BaseParts` in the given `Region3` that aren't in, or a descendant of an entry in, the given ignore list.
-	@deprecated function FindPartsInRegion3WithIgnoreList(self, region: Region3, ignoreDescendantsTable: { Instance }, maxParts: number?): { Instance }
+	@[deprecated {use = "GetPartBoundsInBox", reason = "This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work."}] function FindPartsInRegion3WithIgnoreList(self, region: Region3, ignoreDescendantsTable: { Instance }, maxParts: number?): { Instance }
 	-- Returns an array of `BaseParts` in the given `Region3` that are in, or descendant of an entry in, the given inclusion list.
-	@deprecated function FindPartsInRegion3WithWhiteList(self, region: Region3, whitelistDescendantsTable: { Instance }, maxParts: number?): { Instance }
+	@[deprecated {use = "GetPartBoundsInBox", reason = "This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work."}] function FindPartsInRegion3WithWhiteList(self, region: Region3, whitelistDescendantsTable: { Instance }, maxParts: number?): { Instance }
 	function GetAwakeContactNormals(self): { any } -- RobloxScriptSecurity
 	function GetAwakeContactParts(self): { any } -- RobloxScriptSecurity
 	function GetAwakeContactPositions(self): { any } -- RobloxScriptSecurity
@@ -25499,9 +25499,9 @@ declare extern type WorldRoot extends Model with
 	-- Checks if a collision group is registered in this world.
 	function IsCollisionGroupRegistered(self, name: string): boolean
 	-- Returns a bool indicating whether there are no `BaseParts` within the given `Region3`.
-	@deprecated function IsRegion3Empty(self, region: Region3, ignoreDescendentsInstance: Instance?): boolean
+	@[deprecated {use = "GetPartBoundsInBox", reason = "This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work."}] function IsRegion3Empty(self, region: Region3, ignoreDescendentsInstance: Instance?): boolean
 	-- Returns a boolean indicating whether there are no `BaseParts` within the given `Region3`, ignoring any `BaseParts` that are descendants of the objects within the given ignore list.
-	@deprecated function IsRegion3EmptyWithIgnoreList(self, region: Region3, ignoreDescendentsTable: { Instance }): boolean
+	@[deprecated {use = "GetPartBoundsInBox", reason = "This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work."}] function IsRegion3EmptyWithIgnoreList(self, region: Region3, ignoreDescendentsTable: { Instance }): boolean
 	-- Casts a ray using an origin, direction, and optional `RaycastParams`, then returns a `RaycastResult` if an eligible object or terrain intersects the ray.
 	function Raycast(self, origin: Vector3, direction: Vector3, raycastParams: RaycastParams?): RaycastResult?
 	function RaycastCachedTerrain(self, id: string, origin: Vector3, direction: Vector3, ignoreWater: boolean): RaycastResult? -- RobloxScriptSecurity
@@ -25518,8 +25518,8 @@ declare extern type WorldRoot extends Model with
 	function StepPhysics(self, dt: number, parts: { Instance }?): () -- PluginSecurity
 	-- Unregisters the collision group for the given name in this world.
 	function UnregisterCollisionGroup(self, name: string): ()
-	@deprecated function findPartOnRay(self, ray: Ray, ignoreDescendantsInstance: Instance?, terrainCellsAreCubes: boolean?, ignoreWater: boolean?): ...any
-	@deprecated function findPartsInRegion3(self, region: Region3, ignoreDescendantsInstance: Instance?, maxParts: number?): { Instance }
+	@[deprecated {use = "Raycast", reason = "This deprecated function is a variant of `WorldRoot:FindPartOnRay()` which should be used instead."}] function findPartOnRay(self, ray: Ray, ignoreDescendantsInstance: Instance?, terrainCellsAreCubes: boolean?, ignoreWater: boolean?): ...any
+	@[deprecated {use = "GetPartBoundsInBox", reason = "This deprecated function is a variant of `WorldRoot:FindPartsInRegion3()` which should be used instead."}] function findPartsInRegion3(self, region: Region3, ignoreDescendantsInstance: Instance?, maxParts: number?): { Instance }
 end
 
 -- `Workspace` houses 3D objects which are rendered to the 3D world. Objects not descending from it will not be rendered or physically interact with the world.
@@ -25581,7 +25581,7 @@ declare extern type Workspace extends WorldRoot with
 	-- Applies Roblox's recommended instance streaming settings to the `Workspace`.
 	function ApplyRecommendedStreamingSettings(self): boolean -- PluginSecurity
 	-- Goes through all `BaseParts` given, breaking any joints connected to these parts.
-	@deprecated function BreakJoints(self, objects: { Instance }): () -- PluginSecurity
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function BreakJoints(self, objects: { Instance }): () -- PluginSecurity
 	function CalculateJumpDistance(self, gravity: number, jumpPower: number, walkSpeed: number): number -- RobloxScriptSecurity
 	function CalculateJumpHeight(self, gravity: number, jumpPower: number): number -- RobloxScriptSecurity
 	function CalculateJumpPower(self, gravity: number, jumpHeight: number): number -- RobloxScriptSecurity
@@ -25597,7 +25597,7 @@ declare extern type Workspace extends WorldRoot with
 	-- Creates joints between the specified `Parts` and any touching parts depending on the parts' surfaces and the specified joint creation mode.
 	function JoinToOutsiders(self, objects: { Instance }, jointType: EnumJointCreationMode): ()
 	-- Goes through all `BaseParts` given. If any part's side has a `Enum.SurfaceType` that can make a joint it will create a joint with any adjacent parts.
-	@deprecated function MakeJoints(self, objects: { Instance }): () -- PluginSecurity
+	@[deprecated {reason = "This method is deprecated. Do not use it for new work."}] function MakeJoints(self, objects: { Instance }): () -- PluginSecurity
 	-- Returns `true` if the game has the PGS Physics solver enabled.
 	function PGSIsEnabled(self): boolean
 	function SetAvatarUnificationMode(self, value: EnumAvatarUnificationMode): () -- RobloxScriptSecurity
@@ -26697,17 +26697,17 @@ declare Vector3int16: {
 }
 
 -- Yields the current thread until the specified amount of time in seconds have elapsed, with throttling.
-declare function wait(delay: number?): (number, number)
+@[deprecated {use = "task.wait", reason = "This method has been superseded by `task.wait()` and should not be used for future work."}] declare function wait(delay: number?): (number, number)
 
 declare Wait: typeof(wait)
 
 -- Schedules a function to be called on the next Heartbeat after the given duration (in seconds) has passed, with throttling.
-declare function delay(delay: number?, callback: () -> ())
+@[deprecated {use = "task.delay", reason = "This method has been superseded by `task.delay()` and should not be used for future work."}] declare function delay(delay: number?, callback: () -> ())
 
 declare Delay: typeof(delay)
 
 -- Returns the amount of time in seconds that the current instance of Roblox has been running for.
-declare function elapsedTime(): number
+@deprecated declare function elapsedTime(): number
 
 declare ElapsedTime: typeof(elapsedTime)
 
@@ -26718,21 +26718,21 @@ declare function tick(): number
 declare function time(): number
 
 -- Returns the current version of Roblox as a string, which includes the generation, version, patch and commit.
-declare function version(): string
+@deprecated declare function version(): string
 
 declare Version: typeof(version)
 
 -- Prints "Current identity is X", where X corresponds to the current thread's security context level.
-declare function printidentity(prefix: string?)
+@deprecated declare function printidentity(prefix: string?)
 
 -- Performs the specified operation of the garbage collector.
-declare function collectgarbage(mode: string): number
+@deprecated declare function collectgarbage(mode: string): number
 
 -- Returns the provided code as a function that can be executed.
 declare function loadstring<A...>(src: string, chunkname: string?): (((A...) -> any)?, string?)
 
 -- Returns the Stats service.
-declare function stats()
+@deprecated declare function stats()
 
 declare Stats: typeof(stats)
 
@@ -26777,7 +26777,7 @@ declare task: {
 declare Enum: Enums
 
 -- Refers to the legacy `DebuggerManager` class which acts as an interface for the Luau debugger feature.
-@deprecated declare function DebuggerManager(): DebuggerManager
+@[deprecated {reason = "The `DebuggerManager` is obsolete and serves little to no use case for developers."}] declare function DebuggerManager(): DebuggerManager
 
 -- Refers to the `PluginManager`, a deprecated singleton that was previously required to create plugins.
 declare function PluginManager(): PluginManager
@@ -26786,7 +26786,7 @@ declare function PluginManager(): PluginManager
 declare function settings(): GlobalSettings
 
 -- Calls a function immediately through the engine scheduler, with throttling.
-@deprecated declare function spawn(callback: ((...any) -> ...any)): ()
+@[deprecated {use = "task.spawn", reason = "This method has been superseded by `task.spawn()` and should not be used for future work."}] declare function spawn(callback: ((...any) -> ...any)): ()
 
 -- Returns the UserSettings object, which is used to read information from the current user's game menu settings.
 declare function UserSettings(): UserSettings

@@ -28,7 +28,6 @@ use ls_types::{
     WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use lsp_server::ErrorCode;
-use luck_token::index_to_offset;
 use serde_json::json;
 
 use crate::common::{Client, document, position_params, references, workspace_uri};
@@ -240,7 +239,7 @@ fn parse_errors_surface_without_config() {
 fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join("luck.json");
-    fs::write(&config_path, "{\n  \"variant\": \"bogus\"\n}\n").expect("write luck.json");
+    fs::write(&config_path, "{\n  \"definitions\": [\"@bogus\"]\n}\n").expect("write luck.json");
     let path = directory.path().join("main.luau");
     fs::write(&path, "local unused = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
@@ -252,8 +251,8 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let config_diags = client.diagnostics(&config_uri, None);
     let [diag] = config_diags.as_slice() else { panic!("one config error: {config_diags:?}") };
     assert_eq!(diag.code, Some(NumberOrString::String("E014".to_owned())));
-    assert!(diag.message.contains("unknown variant `bogus`"), "{}", diag.message);
-    assert_eq!(diag.range, Range::new(Position::new(1, 13), Position::new(1, 20)));
+    assert!(diag.message.contains("`definitions` names `@bogus`"), "{}", diag.message);
+    assert_eq!(diag.range, Range::new(Position::new(1, 18), Position::new(1, 26)));
     let errors = client.shown(MessageType::ERROR);
     assert!(errors.iter().any(|text| text.contains("bogus")), "{errors:?}");
     assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "the defaults lint the file");
@@ -1159,33 +1158,6 @@ print(3)
 }
 
 #[test]
-fn completion_offers_collectgarbage_options_inside_the_string() {
-    let mut client = Client::start();
-    let uri = workspace_uri("gc.luau");
-    let text = "collectgarbage('c')";
-    client.open(&uri, text);
-
-    let utf16_column = index_to_offset(text.find("('").expect("literal") + 2);
-    let response = client
-        .request::<Completion>(CompletionParams {
-            text_document_position: position_params(&uri, 0, utf16_column),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            context: None,
-        })
-        .expect("constant completion should return items");
-    let CompletionResponse::Array(items) = response else {
-        panic!("completion should return an array response");
-    };
-    assert!(items.iter().any(|item| item.label == "collect"));
-    assert!(items.iter().any(|item| item.label == "count"));
-    assert!(
-        !items.iter().any(|item| item.label == "print"),
-        "no identifier completion inside a constant string"
-    );
-}
-
-#[test]
 fn formatting_unparsable_file_warns_and_returns_none() {
     let mut client = Client::start();
     let uri = workspace_uri("unparsable.luau");
@@ -1478,25 +1450,18 @@ fn watched_config_change_reseeds_open_documents_with_extra_globals() {
 }
 
 #[test]
-fn a_std_definition_reaches_lints_and_hover_and_an_edit_to_it_reseeds_them() {
-    let app = r#"
-[globals.app]
-kind = "namespace"
-
-[globals.app.members.net]
-kind = "namespace"
-
-[globals.app.members.net.members.send]
-kind = "function"
-params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
-"#;
+fn a_definition_file_reaches_lints_hover_and_completion_and_an_edit_to_it_reseeds_them() {
+    let app = r#"declare app: { net: { send: (mode: "tcp" | "udp", port: number, timeout: number) -> () } }"#;
     let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("luck.json"), r#"{ "std": ["app.toml"] }"#)
+    fs::write(directory.path().join("luck.json"), r#"{ "definitions": ["types/app.d.luau"] }"#)
         .expect("write luck.json");
-    let std_path = directory.path().join("app.toml");
-    fs::write(&std_path, app).expect("write app.toml");
+    fs::create_dir_all(directory.path().join("types")).expect("mkdir types");
+    let definitions_path = directory.path().join("types/app.d.luau");
+    fs::write(&definitions_path, app).expect("write app.d.luau");
     let path = directory.path().join("main.luau");
-    let text = "app.net.send('hello')\n";
+    let text = "app.net.send('', 1, 2)
+app.net.send('tcp')
+";
     fs::write(&path, text).expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
@@ -1515,10 +1480,23 @@ params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
         panic!("hover should return markup contents");
     };
     assert!(markup.value.contains("app.net.send"), "{}", markup.value);
+    let response = client
+        .request::<Completion>(CompletionParams {
+            text_document_position: position_params(&uri, 0, 14),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: None,
+        })
+        .expect("constant completion should return items");
+    let CompletionResponse::Array(items) = response else {
+        panic!("completion should return an array response");
+    };
+    let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, ["tcp", "udp"], "no identifier completion inside a constant string");
 
-    fs::write(&std_path, app.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
-        .expect("rewrite app.toml");
-    client.file_changed(&std_path, FileChangeType::CHANGED);
+    fs::write(&definitions_path, app.replace(", port: number, timeout: number", ""))
+        .expect("rewrite app.d.luau");
+    client.file_changed(&definitions_path, FileChangeType::CHANGED);
     let reseeded = client.diagnostics(&uri, Some(1));
     assert!(reseeded.iter().all(|diag| diag.message != arity), "{reseeded:?}");
 }

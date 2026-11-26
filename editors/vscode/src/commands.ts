@@ -103,7 +103,7 @@ async function createConfig(): Promise<void> {
 		void vscode.window.showWarningMessage("Luck: luck.json already exists.");
 	} else {
 		const skeleton = {
-			variant: "standalone",
+			definitions: [],
 			lint: {
 				extra_globals: [],
 			},

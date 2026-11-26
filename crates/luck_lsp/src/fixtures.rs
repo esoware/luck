@@ -22,11 +22,20 @@ pub(crate) fn document(text: &str) -> DocumentState {
     untitled(text, Project::defaults(PathBuf::from(".")))
 }
 
-/// [`document`], in a project on Roblox.
+/// [`document`], in a project that loads Roblox's API.
 pub(crate) fn roblox_document(text: &str) -> DocumentState {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join(CONFIG_FILE_NAME);
-    fs::write(&config_path, r#"{ "variant": "roblox" }"#).expect("write luck.json");
+    fs::write(&config_path, r#"{ "definitions": ["@roblox"] }"#).expect("write luck.json");
+    untitled(text, Project::load(&config_path).expect("the config loads"))
+}
+
+/// [`document`], in a project that loads the definition file `definitions`.
+pub(crate) fn defined_document(definitions: &str, text: &str) -> DocumentState {
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("app.d.luau"), definitions).expect("write app.d.luau");
+    let config_path = directory.path().join(CONFIG_FILE_NAME);
+    fs::write(&config_path, r#"{ "definitions": ["app.d.luau"] }"#).expect("write luck.json");
     untitled(text, Project::load(&config_path).expect("the config loads"))
 }
 

@@ -342,7 +342,7 @@ impl Cover<'_> {
 #[cfg(test)]
 mod tests {
     use luck_allocator::Allocator;
-    use luck_stdlib::{Variant, library_for};
+    use luck_stdlib::luau_library;
 
     use super::*;
 
@@ -351,7 +351,7 @@ mod tests {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
-        let stdlib = library_for(Variant::Standalone);
+        let stdlib = luau_library();
         let (semantic, _) = luck_stdlib::analyze(&parse.chunk, parse.counts, stdlib);
         Directives::new(&parse, semantic.semantic().nodes())
     }

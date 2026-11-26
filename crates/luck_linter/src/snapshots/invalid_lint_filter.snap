@@ -2,40 +2,40 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: unknown lint rule `not_a_real_rule`
- --> Standalone:1:16
+ --> Luau:1:16
 1 | -- luck: allow(not_a_real_rule)
   |                ^^^^^^^^^^^^^^^
 2 | local _x = 1
 help: no lint rule has this name
 
 warning: unknown lint rule `E008`
- --> Standalone:1:17
+ --> Luau:1:17
 1 | -- #luck: allow(E008)
   |                 ^^^^
 2 | local _x = 1
 help: no lint rule has this name
 
 warning: expected `start` or `end` after `allow(...)`, found `strat`
- --> Standalone:1:33
+ --> Luau:1:33
 1 | -- luck: allow(unused_variable) strat
   |                                 ^^^^^
 2 | local _x = 1
 
 warning: unknown directive `alow(unused_variable)`, expected `allow`, `deny`, `warn`, `format`, or `ignore`
- --> Standalone:1:10
+ --> Luau:1:10
 1 | -- luck: alow(unused_variable)
   |          ^^^^^^^^^^^^^^^^^^^^^
 2 | -- luck: format offf
 
 warning: expected `off`, `on`, or `ignore` after `format`
- --> Standalone:2:17
+ --> Luau:2:17
 1 | -- luck: alow(unused_variable)
 2 | -- luck: format offf
   |                 ^^^^
 3 | local _x = 1
 
 warning: no `deny(unused_variable) start` for this `end` to close
- --> Standalone:2:15
+ --> Luau:2:15
 1 | local _x = 1
 2 | -- luck: deny(unused_variable) end
   |               ^^^^^^^^^^^^^^^

@@ -156,18 +156,18 @@ mod tests {
     fn rejects_invalid_json5_at_the_place_it_stops() {
         let diag = parse(
             r#"{
-  variant: "standalone" "roblox"
+  dynamic_require: "error" "warn"
 }"#,
         )
         .unwrap_err();
         assert_eq!(diag.code, "E014");
         assert_eq!(diag.message, "invalid config: expected comma");
-        assert_eq!(diag.span, Some(Span::new(26, 34)));
+        assert_eq!(diag.span, Some(Span::new(29, 35)));
     }
 
     #[test]
     fn places_an_unknown_key_on_the_key() {
-        let text = "{\r\n  \"variant\": \"standalone\",\r\n  unknown_key: true\r\n}";
+        let text = "{\r\n  \"dynamic_require\": \"warn\",\r\n  unknown_key: true\r\n}";
         let diag = parse(text).unwrap_err();
         assert!(
             diag.message.starts_with("invalid config: unknown field `unknown_key`"),
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn places_a_bad_value_on_the_value() {
-        let text = "{ \"variant\": 'bogus' }";
+        let text = "{ \"dynamic_require\": 'bogus' }";
         let diag = parse(text).unwrap_err();
         assert!(diag.message.contains("unknown variant `bogus`"), "{diag:?}");
         assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&b"'bogus'"[..]));
@@ -200,7 +200,7 @@ mod tests {
         let config = parse(
             r#"{
             // this is a comment
-            variant: "roblox",
+            dynamic_require: "allow",
             minify: true, // trailing comma
         }"#,
         )
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn counts_no_bracket_in_a_string_or_a_comment() {
         let brackets = "[".repeat(200);
-        let text = format!("{{ // {brackets}\n /* {brackets} */ variant: '{brackets}' }}");
+        let text = format!("{{ // {brackets}\n /* {brackets} */ dynamic_require: '{brackets}' }}");
         let diag = parse(&text).unwrap_err();
         assert!(diag.message.contains("unknown variant"), "{diag:?}");
     }
@@ -258,7 +258,7 @@ mod tests {
   overrides: [{ extends: ['a.json'] }],
   "note": "extends", // 'a.json'
   extends: ['b.json', 'a.json'],
-  "std": ["a.json"],
+  "definitions": ["a.json"],
 }"#;
         let span = entry_span(text, "extends", "a.json");
         let start = text.find("'a.json'],").expect("the entry");

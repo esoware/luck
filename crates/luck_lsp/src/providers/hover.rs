@@ -61,21 +61,12 @@ fn render_entry(path: &[&str], entry: &StdlibEntry<'_>) -> String {
     let full_path = render_path(path, entry);
     match entry {
         StdlibEntry::Function(function) => render_function(&full_path, function),
-        StdlibEntry::Namespace(namespace) => format!(
-            "**`{full_path}`** namespace \u{b7} {} entries\n{}",
-            namespace.members.len(),
-            deprecation_note(namespace.deprecated.as_ref()),
-        ),
-        StdlibEntry::Constant(value) => format!(
-            "```luau\n{full_path}  -- constant\n```\n{}",
-            deprecation_note(value.deprecated.as_ref()),
-        ),
-        StdlibEntry::Property(value) => {
+        StdlibEntry::Namespace(namespace) => {
+            format!("**`{full_path}`** namespace \u{b7} {} entries\n", namespace.members.len())
+        }
+        StdlibEntry::Value(value) => {
             let access = if value.is_read_only { "read-only" } else { "read/write" };
-            format!(
-                "```luau\n{full_path}  -- {access} property\n```\n{}",
-                deprecation_note(value.deprecated.as_ref()),
-            )
+            format!("```luau\n{full_path}  -- {access} property\n```\n")
         }
     }
 }
@@ -100,18 +91,7 @@ fn render_function(full_path: &str, function: &StdlibFunction<'_>) -> String {
         .map(|signature| render_signature(full_path, signature.params))
         .collect::<Vec<_>>()
         .join("\n");
-    let mut tags: Vec<&str> = Vec::new();
-    if function.is_must_use {
-        tags.push("must_use");
-    }
-    if function.is_pure {
-        tags.push("pure");
-    }
-    if !function.is_read_only {
-        tags.push("rebindable");
-    }
-    let tag_line =
-        if tags.is_empty() { String::new() } else { format!("\n_{}_\n", tags.join(" \u{b7} ")) };
+    let tag_line = if function.is_read_only { "" } else { "\n_rebindable_\n" };
     format!(
         "```luau\n{signatures}\n```\n{}{tag_line}",
         deprecation_note(function.deprecated.as_ref())
@@ -119,8 +99,9 @@ fn render_function(full_path: &str, function: &StdlibFunction<'_>) -> String {
 }
 
 fn deprecation_note(deprecated: Option<&StdlibDeprecation<'_>>) -> String {
-    deprecated.map_or_else(String::new, |deprecation| {
-        format!("\n**Deprecated:** {}\n", deprecation.message)
+    deprecated.map_or_else(String::new, |deprecation| match deprecation.advice() {
+        Some(advice) => format!("\n**Deprecated:** {advice}\n"),
+        None => "\n**Deprecated**\n".to_owned(),
     })
 }
 
@@ -134,7 +115,7 @@ fn render_param(param: &StdlibParam<'_>) -> String {
     let StdlibArgKind::Constant(values) = &param.kind else {
         return label;
     };
-    let allowed = constant_preview(values, " | ", |constant| format!("\"{}\"", constant.value));
+    let allowed = constant_preview(values, " | ", |constant| format!("\"{constant}\""));
     format!("{label}: {allowed}")
 }
 

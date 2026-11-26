@@ -63,13 +63,14 @@ pub(crate) fn signature_help(
         return None;
     };
     let name = callee.name();
-    let deprecated_message = function.deprecated.as_ref().map(|deprecation| deprecation.message);
+    let deprecation = function.deprecated.as_ref().map(|deprecation| match deprecation.advice() {
+        Some(advice) => format!("**Deprecated:** {advice}\n"),
+        None => "**Deprecated**\n".to_owned(),
+    });
     let signatures: Vec<SignatureInformation> = function
         .signatures
         .iter()
-        .map(|signature| {
-            build_signature(&name, signature, deprecated_message, function.is_must_use)
-        })
+        .map(|signature| build_signature(&name, signature, deprecation.clone()))
         .collect();
 
     let active_signature = function.signature_index_for_active_param(active_param);
@@ -91,8 +92,7 @@ pub(crate) fn signature_help(
 fn build_signature(
     name: &str,
     signature: &StdlibSignature<'_>,
-    deprecated_message: Option<&str>,
-    is_must_use: bool,
+    deprecation: Option<String>,
 ) -> SignatureInformation {
     let mut label = format!("{name}(");
     let mut params: Vec<ParameterInformation> = Vec::new();
@@ -112,22 +112,11 @@ fn build_signature(
     }
     label.push(')');
 
-    let mut documentation = deprecated_message
-        .map_or_else(String::new, |message| format!("**Deprecated:** {message}\n"));
-    if is_must_use {
-        documentation.push_str("\n_Don't discard the return value._");
-    }
-
     SignatureInformation {
         label,
-        documentation: if documentation.is_empty() {
-            None
-        } else {
-            Some(Documentation::MarkupContent(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: documentation,
-            }))
-        },
+        documentation: deprecation.map(|value| {
+            Documentation::MarkupContent(MarkupContent { kind: MarkupKind::Markdown, value })
+        }),
         parameters: Some(params),
         active_parameter: None,
     }
@@ -135,17 +124,10 @@ fn build_signature(
 
 fn param_documentation(param: &StdlibParam<'_>) -> Option<Documentation> {
     if let StdlibArgKind::Constant(values) = &param.kind {
-        let preview =
-            constant_preview(values, ", ", |constant| format!("`\"{}\"`", constant.value));
+        let preview = constant_preview(values, ", ", |constant| format!("`\"{constant}\"`"));
         return Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
             value: format!("one of: {preview}"),
-        }));
-    }
-    if let Some(deprecation) = &param.deprecated {
-        return Some(Documentation::MarkupContent(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: format!("**Deprecated:** {}", deprecation.message),
         }));
     }
     if !param.is_required {
@@ -212,12 +194,11 @@ string.format('x')";
 
     #[test]
     fn signature_help_finds_a_call_at_stmt_position() {
-        let text = "collectgarbage('collect')";
+        let text = "print('collect')";
         let document = document(text);
-        let help =
-            signature_help(&document, Position::new(0, 16)).expect("statement-position call");
+        let help = signature_help(&document, Position::new(0, 7)).expect("statement-position call");
         assert!(
-            help.signatures.iter().any(|signature| signature.label.starts_with("collectgarbage(")),
+            help.signatures.iter().any(|signature| signature.label.starts_with("print(")),
             "{help:?}"
         );
     }

@@ -1,6 +1,6 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter, RuleId};
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::{SecurityLevel, luau_library, roblox_library};
 
 use crate::common::{enable, lint, lint_bytes};
 
@@ -9,7 +9,7 @@ use crate::common::{enable, lint, lint_bytes};
 fn fixed(source: &str, config: &LintConfig, fixes: FixKind) -> String {
     let allocator = Allocator::new();
     let result = Linter::new(config.clone())
-        .fix(&allocator, source.as_bytes(), library_for(Variant::Standalone), fixes, None)
+        .fix(&allocator, source.as_bytes(), luau_library(), fixes, None)
         .expect("the fixes converge");
     assert!(result.parse.errors.is_empty(), "{:?}", result.parse.errors);
     String::from_utf8(result.parse.source.to_owned()).unwrap()
@@ -22,7 +22,7 @@ local unused = nil
 return 1";
     let config = enable(RuleId::RedundantNilInit);
     let fix_kinds = |fixes: FixKind| -> Vec<(&str, Option<FixKind>)> {
-        lint_bytes(source.as_bytes(), Variant::Standalone, &config, fixes)
+        lint_bytes(source.as_bytes(), luau_library(), &config, fixes)
             .iter()
             .map(|diag| (diag.code, diag.fix.as_ref().map(|built| built.kind)))
             .collect()
@@ -49,7 +49,7 @@ local unused = nil
 return 1";
     let config = enable(RuleId::RedundantNilInit);
     let result = Linter::new(config.clone())
-        .fix(&allocator, source.as_bytes(), library_for(Variant::Standalone), FixKind::Fix, None)
+        .fix(&allocator, source.as_bytes(), luau_library(), FixKind::Fix, None)
         .expect("the fixes converge");
     assert_eq!(
         result.parse.source,
@@ -68,7 +68,7 @@ fn a_fix_copies_bytes_that_are_not_utf8_as_written() {
     let allocator = Allocator::new();
     let source = b"local a = 'caf\xE9'\nlocal b = '\xFF' -- d\xE9j\xE0\nreturn a, b";
     let result = Linter::new(enable(RuleId::MergeAdjacentLocals))
-        .fix(&allocator, source, library_for(Variant::Standalone), FixKind::Fix, None)
+        .fix(&allocator, source, luau_library(), FixKind::Fix, None)
         .expect("the fixes converge");
     assert_eq!(result.parse.source, b"local a, b = 'caf\xE9', '\xFF' -- d\xE9j\xE0\nreturn a, b");
 }
@@ -104,21 +104,19 @@ if (x == 1) then end";
     assert!(fixed.contains("if x == 1 then"), "{fixed}");
 }
 
+/// A definition can't say a replacement behaves the same, so what its `use`
+/// names is only a suggestion.
 #[test]
-fn deprecated_ypcall_fix_switches_to_pcall() {
-    let allocator = Allocator::new();
-    let source = b"local ok = ypcall(print, 1)";
-    let result = Linter::new(LintConfig::default())
-        .fix(&allocator, source, library_for(Variant::Roblox), FixKind::Fix, None)
-        .expect("the fixes converge");
-    assert_eq!(result.parse.source, b"local ok = pcall(print, 1)");
-}
-
-#[test]
-fn deprecated_getn_is_only_suggested_since_length_calls_len() {
-    let source = "return table.getn(t)";
-    assert_eq!(fixed(source, &LintConfig::default(), FixKind::Fix), source);
-    assert_eq!(fixed(source, &LintConfig::default(), FixKind::all()), "return #t");
+fn a_deprecation_s_replacement_is_only_suggested() {
+    let fixed_on_roblox = |fixes: FixKind| {
+        let allocator = Allocator::new();
+        let result = Linter::new(LintConfig::default())
+            .fix(&allocator, b"wait(1)", roblox_library(SecurityLevel::None), fixes, None)
+            .expect("the fixes converge");
+        String::from_utf8(result.parse.source.to_owned()).unwrap()
+    };
+    assert_eq!(fixed_on_roblox(FixKind::Fix), "wait(1)");
+    assert_eq!(fixed_on_roblox(FixKind::all()), "task.wait(1)");
 }
 
 #[test]

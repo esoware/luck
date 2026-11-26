@@ -12,7 +12,7 @@ The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::
 | `minifier` | `luck::minifier` |
 | `formatter` | `luck::formatter` |
 | `semantic` | `luck::semantic`, scoping, compile-time checks, the node table, and `require` sites, in one pass |
-| `stdlib` | `luck::stdlib`, the Luau and Roblox standard libraries, the std definitions that layer a host's library over one, and what a chunk reaches in it, and `semantic` |
+| `stdlib` | `luck::stdlib`, the standard library from Luau definition files, Luau's with Roblox's API or a host's definitions over it, and what a chunk reaches in it, and `semantic` |
 | `linter` | `luck::linter`, and `stdlib` |
 | `type_checker` | `luck::type_checker`, Luau's own type checker, built from Luau's C++, which can't share a binary with another build of Luau, such as `mlua`'s |
 | `resolver` | `luck::resolver`, module resolution and source reading |

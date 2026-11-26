@@ -1,6 +1,6 @@
 use luck_allocator::Allocator;
 use luck_ast::Block;
-use luck_stdlib::{StdlibLibrary, Variant, expand_replace_template, library_for};
+use luck_stdlib::{SecurityLevel, StdlibLibrary, luau_library, roblox_library};
 
 /// `source`'s tree, which must parse cleanly, kept in `allocator` so it
 /// outlives the analysis that borrows it.
@@ -10,20 +10,7 @@ pub(crate) fn parse<'ast>(allocator: &'ast Allocator, source: &'ast str) -> &'as
     allocator.alloc(parsed.chunk)
 }
 
-/// `template` expanded with `args`, which the tests spell as text.
-pub(crate) fn expand(template: &str, args: &[&str]) -> String {
-    let arg_bytes: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
-    String::from_utf8(expand_replace_template(template, &arg_bytes)).expect("text expands to text")
-}
-
-pub(crate) fn standalone() -> &'static StdlibLibrary<'static> {
-    library_for(Variant::Standalone)
-}
-
-pub(crate) fn roblox() -> &'static StdlibLibrary<'static> {
-    library_for(Variant::Roblox)
-}
-
-pub(crate) fn all_libraries() -> [(Variant, &'static StdlibLibrary<'static>); 2] {
-    Variant::ALL.map(|variant| (variant, library_for(variant)))
+/// Luau's library, or Roblox's over it for a script at the default level.
+pub(crate) fn library(has_roblox: bool) -> &'static StdlibLibrary<'static> {
+    if has_roblox { roblox_library(SecurityLevel::None) } else { luau_library() }
 }

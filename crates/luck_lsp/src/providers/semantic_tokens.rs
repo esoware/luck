@@ -585,7 +585,7 @@ const fn stdlib_classify(entry: &StdlibEntry<'_>) -> Classification {
     let token_type = match entry {
         StdlibEntry::Function(_) => TokenType::Function,
         StdlibEntry::Namespace(_) => TokenType::Namespace,
-        StdlibEntry::Constant(_) | StdlibEntry::Property(_) => TokenType::Property,
+        StdlibEntry::Value(_) => TokenType::Property,
     };
     let mut modifiers = MODIFIER_DEFAULT_LIBRARY;
     if entry.deprecation().is_some() {
@@ -858,8 +858,8 @@ print(limit)",
         let document = parse_roblox_document("local m = Enum.Material.Grass");
         let tokens = full_tokens(&document);
         // m, Enum, Material, Grass. The last token is `Grass`; it must be
-        // classified as a stdlib property (defaultLibrary | readonly = 6),
-        // not a plain property.
+        // classified as a stdlib property (defaultLibrary), not a plain
+        // property.
         let grass = tokens.last().expect("tokens present");
         assert_eq!(grass.length, index_to_offset("Grass".len()));
         assert_eq!(grass.token_type, 2, "property: {tokens:?}");
@@ -871,18 +871,18 @@ print(limit)",
     }
 
     #[test]
-    fn deprecated_namespaces_carry_the_deprecated_modifier() {
-        let document = parse_roblox_document("local g = Enum.Genre\n");
+    fn deprecated_functions_carry_the_deprecated_modifier() {
+        let document = parse_document(
+            "local n, f = table.getn, table.insert
+",
+        );
         let tokens = highlights(&document);
-        let genre = tokens.iter().find(|token| token.text == "Genre").expect("Genre");
-        assert_eq!(genre.kind, "namespace", "{tokens:?}");
-        for modifier in ["deprecated", "readonly", "defaultLibrary"] {
-            assert!(genre.modifiers.iter().any(|name| name == modifier), "{modifier}: {tokens:?}");
+        let getn = tokens.iter().find(|token| token.text == "getn").expect("getn");
+        for modifier in ["deprecated", "defaultLibrary"] {
+            assert!(getn.modifiers.iter().any(|name| name == modifier), "{modifier}: {tokens:?}");
         }
-        let live = parse_roblox_document("local m = Enum.Material\n");
-        let live_tokens = highlights(&live);
-        let material = live_tokens.iter().find(|token| token.text == "Material").expect("Material");
-        assert!(!material.modifiers.iter().any(|name| name == "deprecated"), "{live_tokens:?}");
+        let insert = tokens.iter().find(|token| token.text == "insert").expect("insert");
+        assert!(!insert.modifiers.iter().any(|name| name == "deprecated"), "{tokens:?}");
     }
 
     #[test]

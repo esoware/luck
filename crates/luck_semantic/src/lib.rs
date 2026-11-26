@@ -26,8 +26,8 @@
 //! - [`SemanticBuilder::with_requires`] finds every [`RequireSite`], a call
 //!   of the host's `require`.
 //!
-//! Nothing here knows either variant's standard library, which `luck_stdlib`
-//! reads a chunk's semantic against.
+//! Nothing here knows a standard library, which `luck_stdlib` reads a
+//! chunk's semantic against.
 //!
 //! # Usage
 //!

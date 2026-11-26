@@ -2,88 +2,88 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(true)
   | ^^^^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(0)
   | ^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert("always")
   | ^^^^^^^^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert({})
   | ^^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant falsy value always errors
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(false, "unreachable")
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: use `error()` to raise unconditionally
 
 warning: `assert` on a constant falsy value always errors
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(nil)
   | ^^^^^^^^^^^
 help: use `error()` to raise unconditionally
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(1 + 1 == 2)
   | ^^^^^^^^^^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(x or true)
   | ^^^^^^^^^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant falsy value always errors
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert(not 1)
   | ^^^^^^^^^^^^^
 help: use `error()` to raise unconditionally
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert""
   | ^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert{}
   | ^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:1
+ --> Luau:1:1
 1 | assert{ false }
   | ^^^^^^^^^^^^^^^
 tag: unnecessary
 help: remove the `assert` or check a real condition
 
 warning: `assert` on a constant value always passes
- --> Standalone:1:12
+ --> Luau:1:12
 1 | local ok = assert(true)
   |            ^^^^^^^^^^^^
 tag: unnecessary

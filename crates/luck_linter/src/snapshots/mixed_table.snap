@@ -2,19 +2,19 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: table mixes positional and record fields, so iteration with `ipairs` will skip the record fields
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local t = {1, 2, foo = 3}
   |           ^^^^^^^^^^^^^^^
 help: split into separate sequence and record tables, or use explicit `[N] = v` keys
 
 warning: table mixes positional and record fields, so iteration with `ipairs` will skip the record fields
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local t = {foo = 1, 2, 3}
   |           ^^^^^^^^^^^^^^^
 help: split into separate sequence and record tables, or use explicit `[N] = v` keys
 
 warning: table mixes positional and record fields, so iteration with `ipairs` will skip the record fields
- --> Standalone:1:4
+ --> Luau:1:4
 1 | foo{ 1, x = 2 }
   |    ^^^^^^^^^^^^
 help: split into separate sequence and record tables, or use explicit `[N] = v` keys

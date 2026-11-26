@@ -2,14 +2,15 @@
 //!
 //! Loads a `luck.json`, through the files it `extends`, into one validated
 //! [`Project`], which every luck command and the language server ask for its
-//! variant and standard library, each file's linter and format options, and
-//! the build's entries and module resolution.
+//! definitions and standard library, each file's linter and format options,
+//! and the build's entries and module resolution.
 //!
-//! Everything is checked at load: the JSON5 syntax, every key, the variant,
-//! the globs, the lint rule names and options, the keys that can't go
-//! together, such as `security` on a project that isn't Roblox's, and the std
-//! definitions `std` names, which layer over the variant's library. A problem comes back as one E014 [`Diagnostic`] placed
-//! where it is, in the [`FileDiagnostics`] of the file at fault.
+//! Everything is checked at load: the JSON5 syntax, every key, the globs,
+//! the lint rule names and options, the keys that can't go together, such as
+//! `security` on a project that doesn't load `@roblox`, and the definition
+//! files `definitions` names, which layer over Luau's library. A problem
+//! comes back as one E014 [`Diagnostic`] placed where it is, or a definition
+//! file's E008s, in the [`FileDiagnostics`] of the file at fault.
 //!
 //! Each tool derives the `luck.json` shape of its own option types behind its
 //! `serde` feature, which this crate turns on, so `transforms`,
@@ -43,7 +44,7 @@
 //!     None => Project::defaults(directory.to_path_buf()),
 //! };
 //! let file = Path::new("src/main.luau");
-//! let variant = project.variant();
+//! let library = project.stdlib().library();
 //! let linter = project.linter_for(Some(file));
 //! let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 //! ```
@@ -65,5 +66,5 @@ pub use editorconfig::{EDITORCONFIG_FILE_NAME, Editorconfigs};
 pub use filter::{ProjectFilter, located_path};
 pub use glob::glob_set;
 pub use load::{CONFIG_FILE_NAME, find_config};
-pub use project::Project;
+pub use project::{DefinitionSource, Project};
 pub use walk::{WalkEntry, WalkError, WalkRoot, WalkVisitor, WalkedFile, walk_source_files};

@@ -2,14 +2,14 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: duplicate function definition `f`
- --> Standalone:2:10
+ --> Luau:2:10
 1 | function f() end
   |          - first defined here
 2 | function f() end
   |          ^
 
 warning: duplicate function definition `t.m`
- --> Standalone:3:10
+ --> Luau:3:10
 1 | local t = {}
 2 | function t.m() end
   |          --- first defined here
@@ -17,7 +17,7 @@ warning: duplicate function definition `t.m`
   |          ^^^
 
 warning: duplicate function definition `t:m`
- --> Standalone:3:10
+ --> Luau:3:10
 1 | local t = {}
 2 | function t:m() end
   |          --- first defined here
@@ -25,7 +25,7 @@ warning: duplicate function definition `t:m`
   |          ^^^
 
 warning: duplicate function definition `f`
- --> Standalone:3:10
+ --> Luau:3:10
 1 | do
 2 | function f() end
   |          - first defined here
@@ -34,7 +34,7 @@ warning: duplicate function definition `f`
 4 | end
 
 warning: duplicate function definition `f`
- --> Standalone:2:10
+ --> Luau:2:10
 1 | function f() end
   |          - first defined here
 2 | function f() end
@@ -42,7 +42,7 @@ warning: duplicate function definition `f`
 3 | function f() end
 
 warning: duplicate function definition `f`
- --> Standalone:3:10
+ --> Luau:3:10
 1 | function f() end
   |          - first defined here
 2 | function f() end
@@ -50,7 +50,7 @@ warning: duplicate function definition `f`
   |          ^
 
 warning: duplicate function definition `m.f0`
- --> Standalone:3:10
+ --> Luau:3:10
 1 | function m.f0() end
   |          ---- first defined here
 2 | function m.f1() end
@@ -59,7 +59,7 @@ warning: duplicate function definition `m.f0`
 4 | function m.f1() end
 
 warning: duplicate function definition `m.f1`
- --> Standalone:4:10
+ --> Luau:4:10
 1 | function m.f0() end
 2 | function m.f1() end
   |          ---- first defined here

@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: unused `allow` directive
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local a = 1
 2 | -- luck: allow(undefined_variable)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -14,7 +14,7 @@ fix: remove the unused directive
   | print(a)
 
 warning: unused `undefined_variable` in this `allow`
- --> Standalone:1:16
+ --> Luau:1:16
 1 | -- luck: allow(undefined_variable, setting_global)
   |                ^^^^^^^^^^^^^^^^^^
 2 | x = 1
@@ -25,7 +25,7 @@ fix: remove `undefined_variable` from the directive
   | x = 1
 
 warning: unused `allow` directive
- --> Standalone:1:13
+ --> Luau:1:13
 1 | local a = 1 -- luck: allow(undefined_variable)
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 2 | print(a)
@@ -36,7 +36,7 @@ fix: remove the unused directive
   | print(a)
 
 warning: unused `allow` directive
- --> Standalone:1:9
+ --> Luau:1:9
 1 | print(1)--[[ luck: allow(undefined_variable) ]]print(2)
   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 tag: unnecessary
@@ -45,7 +45,7 @@ fix: remove the unused directive
   | print(1) print(2)
 
 warning: unused `allow` directive
- --> Standalone:1:10
+ --> Luau:1:10
 1 | print(1) --[[ luck: allow(undefined_variable) ]] print(2)
   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 tag: unnecessary
@@ -54,7 +54,7 @@ fix: remove the unused directive
   | print(1) print(2)
 
 warning: unused `allow` directive
- --> Standalone:1:1
+ --> Luau:1:1
 1 | -- luck: allow(undefined_variable) start
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 2 | local a = 1
@@ -66,7 +66,7 @@ fix: remove the unused directive
   | print(a)
 
 warning: unused `allow` directive
- --> Standalone:1:1
+ --> Luau:1:1
 1 | -- luck: allow(*)
   | ^^^^^^^^^^^^^^^^^
 2 | local a = 1

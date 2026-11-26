@@ -2,37 +2,37 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: unknown comment directive `foobar`
- --> Standalone:1:4
+ --> Luau:1:4
 1 | --!foobar
   |    ^^^^^^
 2 | local _x = 1
 
 warning: unknown comment directive `strcit`, did you mean `strict`?
- --> Standalone:1:4
+ --> Luau:1:4
 1 | --!strcit
   |    ^^^^^^
 2 | local _x = 1
 
 warning: comment directive after the first statement has no effect
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local _x = 1
 2 | --!strict
   | ^^^^^^^^^
 
 warning: comment directive after the first statement has no effect
- --> Standalone:2:1
+ --> Luau:2:1
 1 | return 1
 2 | --!strict
   | ^^^^^^^^^
 
 warning: type checking mode directive has extra symbols at the end of the line
- --> Standalone:1:11
+ --> Luau:1:11
 1 | --!strict yes
   |           ^^^
 2 | local _x = 1
 
 warning: type checking mode is already set by an earlier directive
- --> Standalone:2:4
+ --> Luau:2:4
 1 | --!strict
   |    ------ first set here
 2 | --!nocheck
@@ -40,19 +40,19 @@ warning: type checking mode is already set by an earlier directive
 3 | local _x = 1
 
 warning: `optimize` directive requires an optimization level
- --> Standalone:1:4
+ --> Luau:1:4
 1 | --!optimize
   |    ^^^^^^^^
 2 | local _x = 1
 
 warning: unknown optimization level `3`, expected `0`, `1`, or `2`
- --> Standalone:1:13
+ --> Luau:1:13
 1 | --!optimize 3
   |             ^
 2 | local _x = 1
 
 warning: `native` directive has extra symbols at the end of the line
- --> Standalone:1:11
+ --> Luau:1:11
 1 | --!native on
   |           ^^
 2 | local _x = 1

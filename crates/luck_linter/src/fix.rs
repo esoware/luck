@@ -260,7 +260,7 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 #[cfg(test)]
 mod tests {
     use luck_diagnostics::Severity;
-    use luck_stdlib::{Variant, library_for};
+    use luck_stdlib::luau_library;
 
     use super::*;
     use crate::config::{LintConfig, RuleLevel};
@@ -299,7 +299,7 @@ mod tests {
 
     fn fixed_within(source: &str, linter: &Linter, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
-        let stdlib = library_for(Variant::Standalone);
+        let stdlib = luau_library();
         linter
             .fix_within(&allocator, source.as_bytes(), stdlib, FixKind::Fix, None, budget)
             .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())

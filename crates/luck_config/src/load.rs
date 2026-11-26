@@ -3,10 +3,9 @@ use std::{fs, io};
 
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
-use luck_stdlib::StdlibDefinition;
 use rustc_hash::FxHashMap;
 
-use crate::config::LuckConfig;
+use crate::config::{DefinitionsEntry, LuckConfig};
 use crate::parse::{entry_span, parse};
 
 pub const CONFIG_FILE_NAME: &str = "luck.json";
@@ -85,11 +84,26 @@ impl ExtendsWalk {
         let error_on = |key: &str, name: &str, problem: &str| {
             in_file(path, Diagnostic::e014(Some(entry_span(&text, key, name)), problem))
         };
-        for std_path in config.std.iter_mut().flatten() {
-            let named = std_path.to_string_lossy().into_owned();
-            *std_path = FileSystemOs.canonicalize(&directory.join(&*std_path)).map_err(|e| {
-                error_on("std", &named, &format!("`std` names `{named}`, which can't be read: {e}"))
-            })?;
+        for entry in config.definitions.iter_mut().flatten() {
+            match entry {
+                DefinitionsEntry::BuiltIn(name) if name == "roblox" => {}
+                DefinitionsEntry::BuiltIn(name) => {
+                    let named = format!("@{name}");
+                    let problem = format!(
+                        "`definitions` names `{named}`, but `@roblox` is the one definition set \
+                         built into luck"
+                    );
+                    return Err(error_on("definitions", &named, &problem));
+                }
+                DefinitionsEntry::File(file) => {
+                    let named = file.to_string_lossy().into_owned();
+                    *file = FileSystemOs.canonicalize(&directory.join(&*file)).map_err(|e| {
+                        let problem =
+                            format!("`definitions` names `{named}`, which can't be read: {e}");
+                        error_on("definitions", &named, &problem)
+                    })?;
+                }
+            }
         }
         let own_boundary = if config.root == Some(true) {
             Some(
@@ -149,15 +163,8 @@ impl ExtendsWalk {
     }
 }
 
-/// The std definition at `path`, which names a file the `std` of a config
-/// resolved.
-pub(crate) fn read_std_definition(path: &Path) -> Result<StdlibDefinition, FileDiagnostics> {
-    let text = fs::read_to_string(path).map_err(|e| unreadable(path, &e))?;
-    StdlibDefinition::parse(&text).map_err(|diag| in_file(path, diag))
-}
-
 /// E010 in the file at `path`, which can't be read.
-fn unreadable(path: &Path, e: &io::Error) -> FileDiagnostics {
+pub(crate) fn unreadable(path: &Path, e: &io::Error) -> FileDiagnostics {
     in_file(path, Diagnostic::e010(&display(path), e))
 }
 
@@ -175,7 +182,7 @@ pub(crate) fn in_file(path: &Path, diag: Diagnostic) -> FileDiagnostics {
 
 #[cfg(test)]
 mod tests {
-    use luck_stdlib::Variant;
+    use luck_stdlib::SecurityLevel;
     use luck_token::Span;
 
     use super::*;
@@ -192,7 +199,7 @@ mod tests {
     #[test]
     fn rejects_a_circular_extends_chain_where_it_closes() {
         let project = project_with(&[
-            ("a.json", r#"{ "extends": ["b.json"], "variant": "standalone" }"#),
+            ("a.json", r#"{ "extends": ["b.json"], "minify": false }"#),
             ("b.json", r#"{ "extends": ["a.json"] }"#),
         ]);
         let error = load(&project.path().join("a.json")).unwrap_err();
@@ -206,7 +213,7 @@ mod tests {
     #[test]
     fn root_config_extends_a_file_inside_its_directory() {
         let project = project_with(&[
-            ("luck.json", r#"{ "root": true, "extends": ["base.json"], "variant": "standalone" }"#),
+            ("luck.json", r#"{ "root": true, "extends": ["base.json"], "minify": false }"#),
             ("base.json", r#"{ "lint": { "extra_globals": ["a"] } }"#),
         ]);
         let loaded = load(&project.path().join("luck.json")).expect("within-boundary extends");
@@ -217,7 +224,7 @@ mod tests {
     #[test]
     fn rejects_a_root_config_extending_outside_its_directory() {
         let project = project_with(&[
-            ("outside.json", r#"{ "variant": "roblox" }"#),
+            ("outside.json", r#"{ "minify": true }"#),
             ("project/luck.json", r#"{ "root": true, "extends": ["../outside.json"] }"#),
         ]);
         let error = load(&project.path().join("project/luck.json")).unwrap_err();
@@ -252,11 +259,11 @@ mod tests {
     #[test]
     fn non_root_config_extends_a_file_in_a_parent_directory() {
         let project = project_with(&[
-            ("shared.json", r#"{ "variant": "roblox" }"#),
+            ("shared.json", r#"{ "definitions": ["@roblox"], "security": "PluginSecurity" }"#),
             ("project/luck.json", r#"{ "extends": ["../shared.json"] }"#),
         ]);
         let loaded = load(&project.path().join("project/luck.json")).expect("loads");
-        assert_eq!(loaded.config.variant, Some(Variant::Roblox));
+        assert_eq!(loaded.config.security, Some(SecurityLevel::PluginSecurity));
     }
 
     #[test]
@@ -288,11 +295,12 @@ mod tests {
     }
 
     #[test]
-    fn a_std_error_is_placed_on_its_entry_and_not_on_another_key_s() {
-        let text = r#"{ "exclude": ["globals.toml"], "std": ["globals.toml"] }"#;
+    fn a_definitions_error_is_placed_on_its_entry_and_not_on_another_key_s() {
+        let text = r#"{ "exclude": ["globals.d.luau"], "definitions": ["globals.d.luau"] }"#;
         let project = project_with(&[("luck.json", text)]);
         let error = load(&project.path().join("luck.json")).unwrap_err();
-        assert!(error.diags[0].message.contains("`std` names `globals.toml`"), "{error:?}");
-        assert_eq!(error.diags[0].span, Some(last_span(text, "\"globals.toml\"")));
+        let message = &error.diags[0].message;
+        assert!(message.contains("`definitions` names `globals.d.luau`"), "{error:?}");
+        assert_eq!(error.diags[0].span, Some(last_span(text, "\"globals.d.luau\"")));
     }
 }

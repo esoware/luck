@@ -2,178 +2,52 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `table.getn` is deprecated
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local n = table.getn(t)
   |           ^^^^^^^^^^^^^
 tag: deprecated
-help: use the '#' length operator instead
-suggestion: replace deprecated `table.getn` with `#t`
-  | local n = #t
+help: use `#t` instead
 
 warning: `table.foreach` is deprecated
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.foreach(t, print)
   | ^^^^^^^^^^^^^^^^^^^^^^^
 tag: deprecated
-help: use a 'for' loop with 'pairs()' instead
+help: use `for` loop instead
 
 warning: `table.foreachi` is deprecated
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.foreachi(t, print)
   | ^^^^^^^^^^^^^^^^^^^^^^^^
 tag: deprecated
-help: use a 'for' loop with 'ipairs()' instead
-
-warning: `table.getn` is deprecated
- --> Standalone:1:11
-1 | local n = table.getn(f(--[[why]] t))
-  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
-suggestion: replace deprecated `table.getn` with `#(f(--[[why]] t))`
-  | local n = #(f(--[[why]] t))
-
-warning: `table.getn` is deprecated
- --> Standalone:1:11
-1 | local r = table.getn(a or b)
-  |           ^^^^^^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
-suggestion: replace deprecated `table.getn` with `#(a or b)`
-  | local r = #(a or b)
-
-warning: `table.getn` is deprecated
- --> Standalone:1:11
-1 | local r = table.getn(t) ^ 2
-  |           ^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
-suggestion: replace deprecated `table.getn` with `(#t)`
-  | local r = (#t) ^ 2
-
-warning: `table.getn` is deprecated
- --> Standalone:2:1
-1 | local a = 1
-2 | table.getn(t)
-  | ^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
-
-warning: `table.getn` is deprecated
- --> Standalone:1:11
-1 | local r = table.getn(t).x
-  |           ^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
-suggestion: replace deprecated `table.getn` with `(#t)`
-  | local r = (#t).x
-
-warning: `table.getn` is deprecated
- --> Standalone:1:11
-1 | local r = table.getn(t) .. 'x'
-  |           ^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
-suggestion: replace deprecated `table.getn` with `#t`
-  | local r = #t .. 'x'
-
-warning: `table.getn` is deprecated
- --> Standalone:1:11
-1 | local r = table.getn(t --[[why]])
-  |           ^^^^^^^^^^^^^^^^^^^^^^^
-tag: deprecated
-help: use the '#' length operator instead
+help: use `for` loop instead
 
 warning: `wait` is deprecated
  --> Roblox:1:1
 1 | wait(1)
   | ^^^^^^^
 tag: deprecated
-help: use task.wait
-suggestion: replace deprecated `wait` with `task.wait(1)`
+help: This method has been superseded by `task.wait()` and should not be used for future work.
+suggestion: replace deprecated `wait` with `task.wait`
   | task.wait(1)
-
-warning: `ypcall` is deprecated
- --> Roblox:1:1
-1 | ypcall(f)
-  | ^^^^^^^^^
-tag: deprecated
-help: pcall has supported yielding since 2014; use it directly
-fix: replace deprecated `ypcall` with `pcall(f)`
-  | pcall(f)
-
-warning: `ypcall` is deprecated
- --> Roblox:1:12
-1 | local ok = ypcall(f, 1, 2)
-  |            ^^^^^^^^^^^^^^^
-tag: deprecated
-help: pcall has supported yielding since 2014; use it directly
-fix: replace deprecated `ypcall` with `pcall(f, 1, 2)`
-  | local ok = pcall(f, 1, 2)
 
 warning: `delay` is deprecated
  --> Roblox:1:1
 1 | delay(1, f, 'x')
   | ^^^^^^^^^^^^^^^^
 tag: deprecated
-help: use task.delay
-suggestion: replace deprecated `delay` with `task.delay(1, f, 'x')`
+help: This method has been superseded by `task.delay()` and should not be used for future work.
+suggestion: replace deprecated `delay` with `task.delay`
   | task.delay(1, f, 'x')
 
-warning: `ypcall` is deprecated
- --> Roblox:1:12
-1 | local ok = ypcall(g(--[[why]] f))
-  |            ^^^^^^^^^^^^^^^^^^^^^^
+warning: `spawn` is deprecated
+ --> Roblox:1:16
+1 | local thread = spawn(f)
+  |                ^^^^^^^^
 tag: deprecated
-help: pcall has supported yielding since 2014; use it directly
-fix: replace deprecated `ypcall` with `pcall(g(--[[why]] f))`
-  | local ok = pcall(g(--[[why]] f))
-
-warning: `stats` is deprecated
- --> Roblox:1:11
-1 | local s = stats()
-  |           ^^^^^^^
-tag: deprecated
-help: use game:GetService("Stats") instead
-fix: replace deprecated `stats` with `game:GetService("Stats")`
-  | local s = game:GetService("Stats")
-
-warning: `collectgarbage` is deprecated
- --> Roblox:1:11
-1 | local n = collectgarbage('count')
-  |           ^^^^^^^^^^^^^^^^^^^^^^^
-tag: deprecated
-help: deprecated on Roblox; use gcinfo() instead
-suggestion: replace deprecated `collectgarbage` with `gcinfo()`
-  | local n = gcinfo()
-
-warning: `PointsService` is a deprecated argument of `game:GetService`
- --> Roblox:1:27
-1 | local p = game:GetService('PointsService')
-  |                           ^^^^^^^^^^^^^^^
-tag: deprecated
-help: deprecated Roblox service
-
-warning: `PointsService` is a deprecated argument of `game:GetService`
- --> Roblox:1:26
-1 | local p = game:GetService'PointsService'
-  |                          ^^^^^^^^^^^^^^^
-tag: deprecated
-help: deprecated Roblox service
-
-warning: argument 2 of `Instance.new` is deprecated
- --> Roblox:1:32
-1 | local p = Instance.new('Part', workspace)
-  |                                ^^^^^^^^^
-tag: deprecated
-help: performance: set Parent after configuring the instance instead of passing it here
-
-warning: `Enum.AlignType.Parallel` is deprecated
- --> Roblox:1:26
-1 | local a = Enum.AlignType.Parallel
-  |                          ^^^^^^^^
-tag: deprecated
-help: deprecated Roblox enum item
+help: This method has been superseded by `task.spawn()` and should not be used for future work.
+suggestion: replace deprecated `spawn` with `task.spawn`
+  | local thread = task.spawn(f)
 
 warning: `wait` is deprecated
  --> Roblox:2:1
@@ -181,4 +55,56 @@ warning: `wait` is deprecated
 2 | wait(1)
   | ^^^^^^^
 tag: deprecated
-help: use task.wait
+help: This method has been superseded by `task.wait()` and should not be used for future work.
+
+warning: `ypcall` is deprecated
+ --> Roblox:1:1
+1 | ypcall(f)
+  | ^^^^^^^^^
+tag: deprecated
+
+warning: `stats` is deprecated
+ --> Roblox:1:11
+1 | local s = stats()
+  |           ^^^^^^^
+tag: deprecated
+
+warning: `collectgarbage` is deprecated
+ --> Roblox:1:11
+1 | local n = collectgarbage('count')
+  |           ^^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+
+warning: `script:children` is deprecated
+ --> Roblox:1:18
+1 | local children = script:children()
+  |                  ^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: This item has been superseded by `Instance:GetChildren()` which should be used in all new work.
+suggestion: replace deprecated `script:children` with `GetChildren`
+  | local children = script:GetChildren()
+
+warning: `workspace:findFirstChild` is deprecated
+ --> Roblox:1:15
+1 | local child = workspace:findFirstChild('x')
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: This deprecated function is a variant of `Instance:FindFirstChild()` which should be used instead.
+suggestion: replace deprecated `workspace:findFirstChild` with `FindFirstChild`
+  | local child = workspace:FindFirstChild('x')
+
+warning: `begin` is deprecated
+ --> Luau:1:1
+1 | begin()
+  | ^^^^^^^
+tag: deprecated
+help: begin was renamed
+suggestion: replace deprecated `begin` with `app.start`
+  | app.start()
+
+warning: `launch` is deprecated
+ --> Luau:1:1
+1 | launch()
+  | ^^^^^^^^
+tag: deprecated
+help: use `the start function` instead

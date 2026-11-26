@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use flate2::read::GzDecoder;
 use luck_allocator::Allocator;
-use luck_stdlib::{SecurityLevel, Variant, definitions_for};
+use luck_stdlib::{SecurityLevel, roblox_definitions};
 use luck_type_checker::{CancellationToken, Checker, Config, Host};
 use saphyr::{LoadableYamlNode as _, SafelyIndex as _, Yaml};
 use serde_json::Value;
@@ -20,6 +20,12 @@ use tar::Archive;
 
 const DUMP_URL: &str =
     "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json";
+
+/// The dump with what the plain one leaves out, of which only each deprecated
+/// member's `PreferredDescriptorName` is read, since the rest holds classes
+/// Roblox hasn't released.
+const FULL_DUMP_URL: &str =
+    "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json";
 
 const LUAU_TYPES_URL: &str =
     "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/LuauTypes.d.luau";
@@ -117,8 +123,13 @@ fn member_name(name: &str) -> &str {
 /// reference written as the docs show it, or `None` when it has none or
 /// holds a character ASCII can't spell.
 fn summary(node: &Yaml<'static>) -> Option<String> {
+    rendered(node, "summary")
+}
+
+/// A node's text under `key` on one line, as [`summary`] gives its summary.
+fn rendered(node: &Yaml<'static>, key: &str) -> Option<String> {
     let mut joined = String::new();
-    for word in text(node, "summary").split_whitespace() {
+    for word in text(node, key).split_whitespace() {
         if !joined.is_empty() {
             joined.push(' ');
         }
@@ -143,6 +154,43 @@ fn summary(node: &Yaml<'static>) -> Option<String> {
         .collect::<Vec<_>>()
         .join("`");
     Some(rendered)
+}
+
+/// The attribute of a deprecated function, with what to use instead, and the
+/// docs' deprecation message, when its `node` has one, as the reason.
+fn deprecated_attribute(replacement: Option<&str>, node: Option<&Yaml<'static>>) -> String {
+    let mut args: Vec<String> = Vec::new();
+    if let Some(replacement) = replacement {
+        args.push(format!("use = \"{replacement}\""));
+    }
+    if let Some(reason) = node.and_then(|node| rendered(node, "deprecation_message")) {
+        args.push(format!("reason = \"{}\"", reason.replace('\\', "\\\\").replace('"', "\\\"")));
+    }
+    if args.is_empty() {
+        "@deprecated ".to_owned()
+    } else {
+        format!("@[deprecated {{{}}}] ", args.join(", "))
+    }
+}
+
+/// The global or library function a node's deprecation message names, when
+/// it names one function, as `task.wait` for `Library.task.wait()`.
+fn docs_replacement(node: &Yaml<'static>) -> Option<String> {
+    let mut functions =
+        text(node, "deprecation_message").split('`').skip(1).step_by(2).filter_map(|code| {
+            let called = code.strip_suffix("()")?;
+            ["Library.", "Global.LuaGlobals.", "Global.RobloxGlobals."]
+                .iter()
+                .find_map(|kind| called.strip_prefix(kind))
+        });
+    let only = functions.next()?;
+    functions.next().is_none().then(|| only.to_owned())
+}
+
+/// What a docs function deprecates itself with, if anything.
+fn docs_deprecation(function: &Yaml<'static>) -> Option<String> {
+    has_tag(function, "Deprecated")
+        .then(|| deprecated_attribute(docs_replacement(function).as_deref(), Some(function)))
 }
 
 /// The text the docs show for `code`, which links to the reference when it
@@ -383,7 +431,7 @@ impl Names {
                     name: name.to_owned(),
                     summary: summary(function),
                     overloads: vec![signature],
-                    is_deprecated: has_tag(function, "Deprecated"),
+                    deprecated: docs_deprecation(function),
                 }),
             }
         }
@@ -397,7 +445,7 @@ impl Names {
                 name: member_name(text(property, "name")).to_owned(),
                 summary: summary(property),
                 overloads: vec![self.docs(text(property, "type"))],
-                is_deprecated: false,
+                deprecated: None,
             })
             .collect()
     }
@@ -409,14 +457,14 @@ struct Field {
     summary: Option<String>,
     /// Its type, or for a function, the type of each overload.
     overloads: Vec<String>,
-    is_deprecated: bool,
+    /// The attribute a deprecated function starts with.
+    deprecated: Option<String>,
 }
 
 impl Field {
     fn ty(&self) -> String {
         match self.overloads.as_slice() {
-            [only] if self.is_deprecated => format!("@deprecated {only}"),
-            [only] => only.clone(),
+            [only] => format!("{}{only}", self.deprecated.as_deref().unwrap_or_default()),
             many => many.iter().map(|ty| format!("({ty})")).collect::<Vec<_>>().join("\n\t\t& "),
         }
     }
@@ -452,8 +500,9 @@ fn dump_tags(node: &Value) -> Vec<&str> {
 }
 
 /// `member`'s line in its class, with the comment that names the levels it
-/// needs, or `None` when no script can reach it.
-fn member_line(names: &Names, member: &Value) -> Option<String> {
+/// needs, or `None` when no script can reach it. A function starts with
+/// `deprecated`.
+fn member_line(names: &Names, member: &Value, deprecated: &str) -> Option<String> {
     let tags = dump_tags(member);
     if tags.contains(&"NotScriptable") {
         return None;
@@ -496,7 +545,6 @@ fn member_line(names: &Names, member: &Value) -> Option<String> {
             levels.extend((access > 0).then(|| LEVELS[access].to_owned()));
             match kind {
                 "Function" => {
-                    let deprecated = if tags.contains(&"Deprecated") { "@deprecated " } else { "" };
                     format!(
                         "{deprecated}function {name}{}: {}",
                         param_list(&names.dump_params(member), true, false),
@@ -516,6 +564,20 @@ fn member_line(names: &Names, member: &Value) -> Option<String> {
         None => panic!("a member without a MemberType"),
     };
     Some(if levels.is_empty() { line } else { format!("{line} -- {}", levels.join(", ")) })
+}
+
+/// Whether `member` is a method of `class`, or of a class it extends, in the
+/// dump.
+fn is_method_of(classes: &BTreeMap<&str, &Value>, class: &str, member: &str) -> bool {
+    let mut current = classes.get(class);
+    while let Some(found) = current {
+        let members = found["Members"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if let Some(declared) = members.iter().find(|declared| declared["Name"] == member) {
+            return declared["MemberType"] == "Function";
+        }
+        current = found["Superclass"].as_str().and_then(|superclass| classes.get(superclass));
+    }
+    false
 }
 
 /// Each declaration of the `RobloxGlobals` section of `LuauTypes.d.luau`, the
@@ -590,6 +652,20 @@ fn missing_from_luau(candidates: &[String]) -> BTreeSet<String> {
 #[ignore = "rewrites roblox.luau from the live API dump, LuauTypes.d.luau, and Creator Documentation; run with --ignored"]
 fn regenerate_roblox_definitions() {
     let dump: Value = serde_json::from_slice(&fetch(DUMP_URL)).expect("the API dump is JSON");
+    let full_dump: Value =
+        serde_json::from_slice(&fetch(FULL_DUMP_URL)).expect("the full API dump is JSON");
+    let mut preferred: BTreeMap<(String, String), String> = BTreeMap::new();
+    for class in full_dump["Classes"].as_array().expect("Classes") {
+        for member in class["Members"].as_array().expect("Members") {
+            for tag in member["Tags"].as_array().map(Vec::as_slice).unwrap_or_default() {
+                if let Some(name) = tag["PreferredDescriptorName"].as_str() {
+                    let class_name = class["Name"].as_str().expect("a class Name").to_owned();
+                    let member_name = member["Name"].as_str().expect("a member's Name").to_owned();
+                    preferred.insert((class_name, member_name), name.to_owned());
+                }
+            }
+        }
+    }
     let luau_types = String::from_utf8(fetch(LUAU_TYPES_URL)).expect("LuauTypes.d.luau is UTF-8");
     let docs = fetch_docs();
     let docs_page = |kind: &str, name: &str| docs.get(&format!("{kind}/{name}"));
@@ -636,7 +712,7 @@ fn regenerate_roblox_definitions() {
         }
         for method in list(page, "methods") {
             write_summary(&mut out, "\t", summary(method).as_deref());
-            let deprecated = if has_tag(method, "Deprecated") { "@deprecated " } else { "" };
+            let deprecated = docs_deprecation(method).unwrap_or_default();
             writeln!(
                 out,
                 "\t{deprecated}function {}{}: {}",
@@ -667,7 +743,7 @@ fn regenerate_roblox_definitions() {
                         name: item.to_owned(),
                         summary: item_summaries.get(item).cloned(),
                         overloads: vec![format!("Enum{enum_name}")],
-                        is_deprecated: false,
+                        deprecated: None,
                     })
                     .collect();
                 write_summary(&mut out, "\t", enum_page.and_then(summary).as_deref());
@@ -735,6 +811,12 @@ fn regenerate_roblox_definitions() {
                 }
             }
         }
+        let methods: BTreeMap<&str, &Yaml<'static>> = class_page
+            .map(|page| list(page, "methods"))
+            .unwrap_or_default()
+            .iter()
+            .map(|method| (member_name(text(method, "name")), method))
+            .collect();
         write_summary(&mut out, "", class_page.and_then(summary).as_deref());
         let extends = class["Superclass"]
             .as_str()
@@ -743,8 +825,21 @@ fn regenerate_roblox_definitions() {
             .unwrap_or_default();
         writeln!(out, "declare extern type {name}{extends} with").expect("write to a string");
         for member in class["Members"].as_array().expect("Members") {
-            let Some(line) = member_line(&names, member) else { continue };
             let member_name = member["Name"].as_str().expect("a member's Name");
+            // What to use instead is the preferred member when it's a method
+            // this class has, which a call can name in its place.
+            let deprecated = if dump_tags(member).contains(&"Deprecated") {
+                let replacement = preferred
+                    .get(&(name.to_owned(), member_name.to_owned()))
+                    .filter(|replacement| is_method_of(&classes, name, replacement));
+                deprecated_attribute(
+                    replacement.map(String::as_str),
+                    methods.get(member_name).copied(),
+                )
+            } else {
+                String::new()
+            };
+            let Some(line) = member_line(&names, member, &deprecated) else { continue };
             write_summary(&mut out, "\t", summaries.get(member_name).map(String::as_str));
             writeln!(out, "\t{line}").expect("write to a string");
         }
@@ -805,6 +900,11 @@ fn regenerate_roblox_definitions() {
         global_summaries
             .extend(summary(page).map(|page_summary| ((*name).to_owned(), page_summary)));
     }
+    let global_functions: BTreeMap<&str, &Yaml<'static>> = globals
+        .iter()
+        .flat_map(|page| list(page, "functions"))
+        .map(|function| (text(function, "name"), function))
+        .collect();
     let studio = studio_globals(&luau_types);
     for (name, declaration) in &studio {
         write_summary(&mut out, "", global_summaries.get(name).map(String::as_str));
@@ -822,7 +922,14 @@ fn regenerate_roblox_definitions() {
                 let field_summary = global_summaries.get(&format!("{name}.{field_name}"));
                 write_summary(&mut out, indent, field_summary.map(String::as_str));
             }
-            writeln!(out, "{line}").expect("write to a string");
+            // A function the docs deprecate, which Studio's declarations
+            // don't mark.
+            let deprecated = global_functions
+                .get(name.as_str())
+                .filter(|_| line.starts_with("declare function "))
+                .and_then(|function| docs_deprecation(function))
+                .unwrap_or_default();
+            writeln!(out, "{deprecated}{line}").expect("write to a string");
         }
         out.push('\n');
     }
@@ -843,7 +950,7 @@ fn regenerate_roblox_definitions() {
                 continue;
             }
             write_summary(&mut out, "", summary(function).as_deref());
-            let deprecated = if has_tag(function, "Deprecated") { "@deprecated " } else { "" };
+            let deprecated = docs_deprecation(function).unwrap_or_default();
             writeln!(
                 out,
                 "{deprecated}declare function {name}{}: {}\n",
@@ -876,18 +983,8 @@ fn regenerate_roblox_definitions() {
 fn every_level() -> Vec<(SecurityLevel, String)> {
     SecurityLevel::ALL
         .iter()
-        .map(|&level| {
-            let text = definitions_for(Variant::Roblox, level).expect("Roblox has definitions");
-            (level, text.into_owned())
-        })
+        .map(|&level| (level, roblox_definitions(level).into_owned()))
         .collect()
-}
-
-#[test]
-fn standalone_luau_has_no_definitions_beyond_luaus_own() {
-    for level in SecurityLevel::ALL {
-        assert!(definitions_for(Variant::Standalone, level).is_none(), "{level:?}");
-    }
 }
 
 #[test]

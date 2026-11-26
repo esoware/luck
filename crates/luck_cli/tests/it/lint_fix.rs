@@ -12,11 +12,11 @@ fn make_read_only(path: &Path) {
     fs::set_permissions(path, permissions).expect("set read-only");
 }
 
-/// A directory whose `luck.json` names the Roblox variant, where `stats()`, which a fix
-/// grows into `game:GetService("Stats")`, is deprecated.
+/// A directory whose `luck.json` loads Roblox's API, where `wait()`, which a
+/// suggestion grows into `task.wait()`, is deprecated.
 fn roblox_directory() -> TempDir {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "luck.json", r#"{"variant":"roblox"}"#);
+    write_file(directory.path(), "luck.json", r#"{"definitions":["@roblox"]}"#);
     directory
 }
 
@@ -25,10 +25,10 @@ fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
     let directory = roblox_directory();
 
     let output = luck_in(directory.path())
-        .args(["lint", "--fix", "--format", "json", "--stdin-filepath", "buffer.luau"])
+        .args(["lint", "--fix-suggestions", "--format", "json", "--stdin-filepath", "buffer.luau"])
         .write_stdin(
             "\
-local s = stats()
+local s = wait()
 return s, missingglobal",
         )
         .output()
@@ -37,7 +37,7 @@ return s, missingglobal",
     assert_eq!(
         stdout_text(&output),
         "\
-local s = game:GetService(\"Stats\")
+local s = task.wait()
 return s, missingglobal",
         "`--fix` over stdin writes the fixed source to stdout, and nothing else may follow it"
     );
@@ -52,17 +52,17 @@ fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
     let directory = roblox_directory();
 
     luck_in(directory.path())
-        .args(["lint", "--fix", "--stdin-filepath", "buffer.luau"])
+        .args(["lint", "--fix-suggestions", "--stdin-filepath", "buffer.luau"])
         .write_stdin(
             "\
-local s = stats()
+local s = wait()
 return s, missingglobal",
         )
         .assert()
         .code(1)
         .stdout(
             "\
-local s = game:GetService(\"Stats\")
+local s = task.wait()
 return s, missingglobal",
         )
         .stderr(predicate::str::contains("buffer.luau:2:11"));

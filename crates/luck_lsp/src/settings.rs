@@ -93,8 +93,8 @@ struct Lookups {
     /// watched change has to touch to matter.
     config_names: FxHashSet<OsString>,
     /// Each config file a reported load error is in. While there's one, any
-    /// JSON file a broken chain might extend, and any TOML file it might name
-    /// as a std definition, matters.
+    /// JSON file a broken chain might extend, and any Luau file it might name
+    /// as a definition file, matters.
     broken: Vec<PathBuf>,
 }
 
@@ -235,9 +235,9 @@ impl SettingsCache {
             || name == EDITORCONFIG_FILE_NAME
             || lookups.config_names.contains(name)
             || (!lookups.broken.is_empty()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension == "json" || extension == "toml"))
+                && path.extension().is_some_and(|extension| {
+                    ["json", "luau", "lua"].iter().any(|known| extension == *known)
+                }))
     }
 
     /// Forgets every lookup, every `.editorconfig` read, and every resolver,
@@ -280,8 +280,6 @@ mod tests {
     use std::fs;
     use std::ptr;
 
-    use luck_stdlib::Variant;
-
     use super::*;
 
     #[test]
@@ -291,12 +289,12 @@ mod tests {
         let cache = SettingsCache::default();
         let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
-        assert_eq!(project.project().variant(), Variant::Standalone);
+        assert!(!project.project().stdlib().library().has_roblox);
         if find_config(directory.path()).is_none() {
             assert_eq!(project.project().root(), directory.path());
         }
         let (untitled, _) = cache.project_for(None, None);
-        assert_eq!(untitled.project().variant(), Variant::Standalone);
+        assert!(!untitled.project().stdlib().library().has_roblox);
         assert!(Arc::ptr_eq(&untitled, &cache.project_for(None, None).0));
     }
 
@@ -304,30 +302,30 @@ mod tests {
     fn cache_keeps_projects_until_cleared() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{ "variant": "roblox" }"#).expect("write luck.json");
+        fs::write(&config_path, r#"{ "definitions": ["@roblox"] }"#).expect("write luck.json");
         fs::create_dir_all(directory.path().join("sub")).expect("mkdir sub");
         let first = directory.path().join("first.luau");
         let nested = directory.path().join("sub/nested.luau");
         let cache = SettingsCache::default();
 
         let (project, _) = cache.project_for(Some(&first), None);
-        assert_eq!(project.project().variant(), Variant::Roblox);
+        assert!(project.project().stdlib().library().has_roblox);
         assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested), None).0));
 
-        fs::write(&config_path, r#"{ "variant": "standalone" }"#).expect("rewrite luck.json");
+        fs::write(&config_path, "{}").expect("rewrite luck.json");
         let (cached, _) = cache.project_for(Some(&first), None);
-        assert_eq!(cached.project().variant(), Variant::Roblox);
+        assert!(cached.project().stdlib().library().has_roblox);
         let generation = cache.generation();
         cache.clear();
         assert_ne!(cache.generation(), generation, "a clear starts a new generation");
         let (reloaded, _) = cache.project_for(Some(&first), None);
-        assert_eq!(reloaded.project().variant(), Variant::Standalone);
+        assert!(!reloaded.project().stdlib().library().has_roblox);
     }
 
     #[test]
     fn a_broken_config_is_reported_once_and_its_files_take_the_defaults() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("luck.json"), r#"{ "variant": "bogus" }"#)
+        fs::write(directory.path().join("luck.json"), r#"{ "definitions": ["@bogus"] }"#)
             .expect("write luck.json");
         let file = directory.path().join("a.luau");
         let cache = SettingsCache::default();
@@ -336,7 +334,7 @@ mod tests {
         let error = first_error.expect("the error comes with the first lookup");
         assert_eq!(error.file.diags[0].code, "E014");
         assert_eq!(error.generation, cache.generation());
-        assert_eq!(project.project().variant(), Variant::Standalone);
+        assert!(!project.project().stdlib().library().has_roblox);
         assert!(cache.project_for(Some(&file), None).1.is_none(), "reported once");
 
         assert!(cache.is_settings_file(&directory.path().join("other.json")));

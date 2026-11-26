@@ -79,14 +79,13 @@ ast:
 schema:
   cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
-# Regenerate luck_stdlib's static stdlib catalog after a stdlib_data file changes
+# Regenerate luck_stdlib's luau.luau from Luau's built-in definitions and its live library reference, after `just luau`
 stdlib:
-  cargo test -p luck_stdlib regenerate_stdlib_catalog -- --ignored
+  cargo test -p luck_stdlib regenerate_luau_definitions -- --ignored
 
-# Regenerate roblox_api.toml, roblox_enums.toml, and roblox.luau from the live Roblox API dump, LuauTypes.d.luau, and Creator Documentation, then the stdlib catalog
+# Regenerate luck_stdlib's roblox.luau from the live Roblox API dump, LuauTypes.d.luau, and Creator Documentation
 roblox-api:
-  cargo test -p luck_stdlib regenerate_roblox -- --ignored
-  just stdlib
+  cargo test -p luck_stdlib regenerate_roblox_definitions -- --ignored
 
 # Regenerate the committed minsize.snap after the minifier or the benchmark files change
 minsize:
@@ -96,7 +95,7 @@ minsize:
 allocs *args:
   cargo run -p luck_allocs --profile allocs -- {{args}}
 
-# Move the Luau submodule that luck_type_checker builds to a release tag, such as `just luau 0.749`
+# Move the Luau submodule that luck_type_checker builds to a release tag, such as `just luau 0.749`, then run `just stdlib`
 luau tag:
   git -C crates/luck_type_checker/luau fetch --depth 1 origin tag {{tag}}
   git -C crates/luck_type_checker/luau checkout {{tag}}

@@ -502,7 +502,7 @@
           {
             "id": "configure",
             "title": "Create a config file",
-            "description": "Configure the Luau variant, formatter style, and lint rules in `luck.json`.\n[Create Config](command:luck.createConfig)",
+            "description": "Configure the definitions your Luau runs with, such as Roblox's API, formatter style, and lint rules in `luck.json`.\n[Create Config](command:luck.createConfig)",
             "completionEvents": [
               "onCommand:luck.createConfig"
             ]

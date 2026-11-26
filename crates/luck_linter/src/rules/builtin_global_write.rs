@@ -43,11 +43,11 @@ impl Rule for BuiltinGlobalWrite {
     }
 }
 
-/// Whether the global `reference` names is a builtin no code should write.
+/// Whether the global `reference` names is a builtin no code should write,
+/// which every global the library declares is.
 ///
 /// Names in the config's extra globals belong to the user, even when they
-/// collide with a stdlib name. Globals the stdlib model marks writable
-/// (`_G`, Roblox's `shared`) exist to be set.
+/// collide with a stdlib name.
 fn is_overwritable_builtin(semantic: &SemanticAnalysis<'_>, reference: &Reference) -> bool {
     semantic.is_read_only_global(semantic.scoping().name(reference.name))
         && !semantic.is_extra_global(reference.name)
@@ -87,15 +87,13 @@ fn writes_namespace_member<'path>(
     let Some(reference) = tree.reference_of(root).map(|id| tree.reference(id)) else {
         return false;
     };
-    // Writing through a writable base (`_G.x = 1`, Roblox's
-    // `shared.score = 1`) is intended.
     if !is_overwritable_builtin(semantic, reference) || !tree.is_host_global(reference) {
         return false;
     }
     let Some(StdlibEntry::Namespace(namespace)) = semantic.stdlib().lookup(path) else {
         return false;
     };
-    // So is a leaf the model marks writable.
+    // So is a field a definition doesn't declare `read`, as Luau types it.
     leaf.and_then(|name| namespace.members.get(name)).is_none_or(StdlibEntry::is_read_only)
 }
 
@@ -180,6 +178,9 @@ function table.foo() end",
         ),
         ("_G.foo = 1", None, None),
         ("print(table.concat({}))", None, None),
+        // A library's fields are writable unless declared `read`.
+        ("table.insert = function() end", None, None),
+        ("do math.pi = 3 end", None, None),
         // `setting_global` covers globals that aren't builtins.
         ("my_module_state = 5", None, None),
         (
@@ -206,11 +207,8 @@ function table.foo() end",
         ("function print() end", None, None),
         ("function table.foo() end", None, None),
         ("function string:shout() end", None, None),
-        ("table.insert = function() end", None, None),
         (r#"string["format"] = 1"#, None, None),
-        ("do math.pi = 3 end", None, None),
-        ("math.pi += 1", None, None),
-        ("math.huge = 1", None, None),
+        ("_G = {}", None, None),
         (
             "\
 table = {}
@@ -226,10 +224,17 @@ table.insert = 1",
         "script.Parent.Visible = false",
     ];
 
+    const DEFINITIONS: &str = "declare app: { read version: string, name: string }";
+
+    const DEFINITIONS_PASS: &[&str] = &["app.name = 'x'"];
+
+    const DEFINITIONS_FAIL: &[&str] = &["app.version = '2'", "app = {}"];
+
     #[test]
     fn test() {
         Tester::new(RuleId::BuiltinGlobalWrite, PASS, FAIL)
             .with_roblox(ROBLOX_PASS, &[])
+            .with_definitions(DEFINITIONS, DEFINITIONS_PASS, DEFINITIONS_FAIL)
             .test_and_snapshot();
     }
 }

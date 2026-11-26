@@ -2,74 +2,74 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / 0
   |           ^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: modulo by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x % 0
   |           ^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: floor division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x // 0
   |           ^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / 0.0
   |           ^^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / -0
   |           ^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / -0.0
   |           ^^^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / (1 - 1)
   |           ^^^^^^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / (0 * 5)
   |           ^^^^^^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / 0x0
   |           ^^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local x = 1
 2 | x /= 0
   | ^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: division by zero
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local r = x / 0b0
   |           ^^^^^^^
 help: guard with an `if divisor ~= 0 then` check or use a nonzero constant
 
 warning: modulo by zero
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local x = 1
 2 | x %= 0_0
   | ^^^^^^^^

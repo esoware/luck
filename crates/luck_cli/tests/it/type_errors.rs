@@ -106,7 +106,7 @@ fn check_reports_a_syntax_error_once() {
 /// project.
 fn roblox_type_errors(main: &str) -> String {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "luck.json", r#"{ "variant": "roblox" }"#);
+    write_file(directory.path(), "luck.json", r#"{ "definitions": ["@roblox"] }"#);
     write_file(directory.path(), "main.luau", main);
     stderr_text(&run(directory.path(), &["check", "main.luau"]))
 }
@@ -189,13 +189,13 @@ return material, key
 fn check_gives_a_roblox_project_the_api_of_its_security_level() {
     const DEBUG_ID: &str = "--!strict\nreturn game:GetDebugId()\n";
     let script = TempDir::new().unwrap();
-    write_file(script.path(), "luck.json", r#"{ "variant": "roblox" }"#);
+    write_file(script.path(), "luck.json", r#"{ "definitions": ["@roblox"] }"#);
     write_file(script.path(), "main.luau", DEBUG_ID);
     let plugin = TempDir::new().unwrap();
     write_file(
         plugin.path(),
         "luck.json",
-        r#"{ "variant": "roblox", "security": "PluginSecurity" }"#,
+        r#"{ "definitions": ["@roblox"], "security": "PluginSecurity" }"#,
     );
     write_file(plugin.path(), "main.luau", DEBUG_ID);
 
@@ -207,4 +207,51 @@ fn check_gives_a_roblox_project_the_api_of_its_security_level() {
     assert!(stderr.contains("[E015]"), "{stderr}");
     assert!(stderr.contains("Key 'GetDebugId' not found in external type 'DataModel'"), "{stderr}");
     assert_eq!(at_plugin.status.code(), Some(0), "{}", stderr_text(&at_plugin));
+}
+
+/// A project's definition files load after Roblox's, so one can name a
+/// Roblox class, and checking `.` leaves the definition file among the
+/// sources out of the modules it checks.
+#[test]
+fn check_loads_a_project_s_definition_files_after_roblox_s() {
+    let directory = TempDir::new().unwrap();
+    write_file(
+        directory.path(),
+        "luck.json",
+        r#"{ "definitions": ["@roblox", "types/app.d.luau"] }"#,
+    );
+    write_file(
+        directory.path(),
+        "types/app.d.luau",
+        "declare function spawnPart(name: string): Part\n",
+    );
+    let main = "\
+--!strict
+local anchored: number = spawnPart(\"floor\").Anchored
+return anchored
+";
+    write_file(directory.path(), "main.luau", main);
+
+    let output = run(directory.path(), &["check", "."]);
+
+    let stderr = stderr_text(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
+    assert!(stderr.contains("Expected this to be 'number', but got 'boolean'"), "{stderr}");
+    assert!(stderr.contains("main.luau:2:26"), "{stderr}");
+}
+
+#[test]
+fn check_reports_luau_s_errors_in_a_definition_file_at_it() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "luck.json", r#"{ "definitions": ["app.d.luau"] }"#);
+    write_file(directory.path(), "app.d.luau", "declare function greet(name: Missing): string\n");
+    write_file(directory.path(), "main.luau", "return 1\n");
+
+    let output = run(directory.path(), &["check", "main.luau"]);
+
+    let stderr = stderr_text(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("[E015]"), "{stderr}");
+    assert!(stderr.contains("app.d.luau:1:30"), "{stderr}");
 }

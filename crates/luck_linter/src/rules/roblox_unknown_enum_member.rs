@@ -23,7 +23,7 @@ impl Rule for RobloxUnknownEnumMember {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        host.semantic.variant().is_roblox()
+        host.semantic.stdlib().has_roblox
     }
 
     fn run<'ast>(&self, node: &AstNode<'ast>, context: &LintContext<'_, 'ast>) {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::io::Write as _;
 use std::mem;
@@ -6,10 +7,11 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use luck_allocator::Allocator;
+use luck_config::DefinitionSource;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
 use luck_semantic::SemanticBuilder;
-use luck_stdlib::{SecurityLevel, Variant, definitions_for};
+use luck_stdlib::{SecurityLevel, roblox_definitions};
 use luck_token::{LineIndex, Span, index_to_offset, offset_to_index};
 use luck_type_checker::{CancellationToken, CheckError, Checker, Config, Host};
 use rustc_hash::FxHashMap;
@@ -83,13 +85,17 @@ struct TypeErrors<'files> {
     luaurcs: Vec<FileDiagnostics>,
 }
 
+/// The security level and definitions of a project, which decide what its
+/// files are checked with.
+type Definitions<'files> = (SecurityLevel, &'files [DefinitionSource]);
+
 /// What Luau's type checker finds in `files`, from checking together, on
-/// `threads` threads, the files of the projects with one variant and
-/// security level, which need one set of definitions.
+/// `threads` threads, the files of the projects with one security level and
+/// one list of definitions, which need one checker.
 fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErrors<'_>, Exit> {
-    let mut groups: Vec<((Variant, SecurityLevel), Vec<&ProjectFile>)> = Vec::new();
+    let mut groups: Vec<(Definitions<'_>, Vec<&ProjectFile>)> = Vec::new();
     for file in files {
-        let settings = (file.project.variant(), file.project.security());
+        let settings = (file.project.security(), file.project.definitions());
         match groups.iter_mut().find(|(group_settings, _)| *group_settings == settings) {
             Some((_, group)) => group.push(file),
             None => groups.push((settings, vec![file])),
@@ -97,8 +103,17 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
     }
 
     let mut type_errors = TypeErrors { by_path: FxHashMap::default(), luaurcs: Vec::new() };
-    for ((variant, security), group) in groups {
+    for ((security, definitions), group) in groups {
         let host = FileHost::new()?;
+        let names_and_texts: Vec<(String, Cow<'_, str>)> = definitions
+            .iter()
+            .map(|source| match source {
+                DefinitionSource::Roblox => ("@roblox".to_owned(), roblox_definitions(security)),
+                DefinitionSource::File { path, text } => {
+                    (host.module_name(path), Cow::Borrowed(text.as_str()))
+                }
+            })
+            .collect();
         let modules: Vec<(&Path, String)> = group
             .into_iter()
             .filter_map(|file| {
@@ -108,11 +123,13 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
             .collect();
         let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
         let mut checker = Checker::new(host);
-        if let Some(definitions) = definitions_for(variant, security) {
-            if let Err(diags) = checker.load_definitions("@roblox", &definitions) {
-                print_document("@roblox", definitions.as_bytes(), &diags);
+        for (name, text) in &names_and_texts {
+            if let Err(diags) = checker.load_definitions(name, text) {
+                print_document(name, text.as_bytes(), &diags);
                 return Err(Exit::Failure);
             }
+        }
+        if definitions.contains(&DefinitionSource::Roblox) {
             // What Roblox Studio types past its definitions: the class a
             // string names, and the `Enum.Material` its definitions call
             // `EnumMaterial`.

@@ -4,9 +4,8 @@ use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder, Symbo
 
 use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
-use crate::variant::Variant;
 
-/// A chunk's [`Semantic`], read against the stdlib of one variant.
+/// A chunk's [`Semantic`], read against a standard library.
 #[derive(Debug)]
 pub struct SemanticAnalysis<'ast> {
     semantic: Semantic<'ast>,
@@ -30,8 +29,8 @@ struct HostGlobal {
 ///
 /// The semantic holds every part: the checker's errors, the node table,
 /// which the shapes read, and the `require` sites. Its tables are sized from
-/// `counts`, the parse's or the default. It's the same whether or not the
-/// variant is Roblox, which only adds the Roblox runtime's stdlib.
+/// `counts`, the parse's or the default. It's the same whatever library it's
+/// read against.
 pub fn analyze<'ast>(
     chunk: &'ast Block<'ast>,
     counts: TreeCounts,
@@ -69,10 +68,6 @@ impl<'ast> SemanticAnalysis<'ast> {
         self.stdlib
     }
 
-    pub const fn variant(&self) -> Variant {
-        self.stdlib.variant
-    }
-
     /// Marks `names` as globals the host defines beyond the stdlib, such as
     /// `app`, from the `extra_globals` config. Only the chunk's own names
     /// are kept, since no other name can reach a query.
@@ -87,8 +82,8 @@ impl<'ast> SemanticAnalysis<'ast> {
         }
     }
 
-    /// Whether `name` is recognized as a global: a stdlib entry for this
-    /// variant or an extra global.
+    /// Whether `name` is recognized as a global: a stdlib entry or an extra
+    /// global.
     pub fn is_known_global(&self, name: &str) -> bool {
         match self.scoping().name_id(name) {
             Some(id) => self.is_known_global_name(id),

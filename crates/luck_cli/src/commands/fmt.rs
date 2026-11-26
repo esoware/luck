@@ -358,7 +358,7 @@ mod tests {
         // `.editorconfig` defaults: two-space indentation here.
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{"variant":"standalone"}"#).expect("write luck.json");
+        fs::write(&config_path, r#"{"minify":false}"#).expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
             "\
@@ -397,11 +397,8 @@ end
         // `.editorconfig` value: four-space indentation wins over two.
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(
-            &config_path,
-            r#"{"variant":"standalone","format":{"indent_style":"spaces","indent_width":4}}"#,
-        )
-        .expect("write luck.json");
+        fs::write(&config_path, r#"{"format":{"indent_style":"spaces","indent_width":4}}"#)
+            .expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
             "\

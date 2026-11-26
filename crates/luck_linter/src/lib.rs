@@ -14,12 +14,12 @@
 //! ```
 //! use luck_allocator::Allocator;
 //! use luck_linter::{FixKind, LintConfig, Linter};
-//! use luck_stdlib::{library_for, Variant};
+//! use luck_stdlib::luau_library;
 //!
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());
 //! let parse = luck_parser::parse(&allocator, b"print(1)");
-//! let diags = linter.run(&parse, library_for(Variant::Standalone), FixKind::empty(), None);
+//! let diags = linter.run(&parse, luau_library(), FixKind::empty(), None);
 //! assert!(diags.is_empty());
 //! ```
 

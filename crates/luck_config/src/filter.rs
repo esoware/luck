@@ -19,7 +19,8 @@ pub fn located_path(path: &Path) -> PathBuf {
 }
 
 /// Decides whether a file belongs to the project from `include` and `exclude`
-/// globs, matched relative to the config directory. Exclude wins.
+/// globs, matched relative to the config directory. Exclude wins, and a
+/// definition file the project names is never one of its source files.
 #[derive(Debug, Clone)]
 pub struct ProjectFilter {
     /// Canonical, as the paths matched against it are.
@@ -30,6 +31,8 @@ pub struct ProjectFilter {
     /// The directory part of each exclude ending in `/**` or `/**/*`, every
     /// descendant of which that exclude covers.
     excluded_trees: GlobSet,
+    /// The canonical path of each file `definitions` names.
+    definitions: Vec<PathBuf>,
 }
 
 impl ProjectFilter {
@@ -40,6 +43,7 @@ impl ProjectFilter {
             include: None,
             exclude: GlobSet::empty(),
             excluded_trees: GlobSet::empty(),
+            definitions: Vec::new(),
         }
     }
 
@@ -47,6 +51,7 @@ impl ProjectFilter {
         root: &Path,
         include: Option<&[Glob]>,
         exclude: &[Glob],
+        definitions: &[PathBuf],
     ) -> Result<Self, String> {
         let excluded_trees: Vec<String> = exclude
             .iter()
@@ -66,6 +71,7 @@ impl ProjectFilter {
             exclude: compiled(exclude)?,
             // A directory part that doesn't compile alone only costs the pruning.
             excluded_trees: glob_set(&excluded_trees).unwrap_or_default(),
+            definitions: definitions.to_vec(),
         })
     }
 
@@ -94,13 +100,18 @@ impl ProjectFilter {
             .include
             .as_ref()
             .map_or_else(|| is_source_file(path), |include| include.is_match_candidate(&candidate));
-        is_taken && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
+        is_taken
+            && (self.exclude.is_empty() || !self.exclude.is_match_candidate(&candidate))
+            && !self.definitions.iter().any(|definitions| definitions == path)
     }
 
-    /// Whether an `exclude` glob matches `path`, whatever `include` says. A
-    /// file named on the command line is held to this alone.
+    /// Whether an `exclude` glob matches `path`, or it's a definition file,
+    /// whatever `include` says. A file named on the command line is held to
+    /// this alone.
     pub fn is_excluded(&self, path: &Path) -> bool {
-        !self.exclude.is_empty() && self.exclude.is_match(self.relative(&located_path(path)))
+        let located = located_path(path);
+        (!self.exclude.is_empty() && self.exclude.is_match(self.relative(&located)))
+            || self.definitions.contains(&located)
     }
 
     /// `located`, a path under canonical directories, as the globs see it,
@@ -129,7 +140,7 @@ mod tests {
 
     fn filter(include: Option<&[&str]>, exclude: &[&str]) -> ProjectFilter {
         let include_globs = include.map(globs);
-        ProjectFilter::new(Path::new("/proj"), include_globs.as_deref(), &globs(exclude))
+        ProjectFilter::new(Path::new("/proj"), include_globs.as_deref(), &globs(exclude), &[])
             .expect("valid globs")
     }
 

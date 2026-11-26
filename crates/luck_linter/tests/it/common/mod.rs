@@ -1,23 +1,23 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::{StdlibLibrary, luau_library};
 
 /// `source`'s messages against Luau's standard library, with no fixes.
 pub(crate) fn lint(source: &str, config: &LintConfig) -> Vec<Message> {
-    lint_bytes(source.as_bytes(), Variant::Standalone, config, FixKind::empty())
+    lint_bytes(source.as_bytes(), luau_library(), config, FixKind::empty())
 }
 
-/// `source`'s messages against `variant`'s standard library, with the fixes
-/// of the kinds `fixes` holds.
+/// `source`'s messages against `library`, with the fixes of the kinds
+/// `fixes` holds.
 pub(crate) fn lint_bytes(
     source: &[u8],
-    variant: Variant,
+    library: &'static StdlibLibrary<'static>,
     config: &LintConfig,
     fixes: FixKind,
 ) -> Vec<Message> {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source);
-    Linter::new(config.clone()).run(&parse, library_for(variant), fixes, None)
+    Linter::new(config.clone()).run(&parse, library, fixes, None)
 }
 
 pub(crate) fn with_level(rule: RuleId, level: RuleLevel) -> LintConfig {

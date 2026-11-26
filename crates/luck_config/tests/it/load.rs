@@ -11,7 +11,7 @@ use crate::common::{finishes_within, in_directory, load_error, project_with};
 #[test]
 fn root_config_rejects_an_escape_through_a_transitive_extends() {
     let project = project_with(&[
-        ("outside.json", r#"{ "variant": "roblox" }"#),
+        ("outside.json", r#"{ "definitions": ["@roblox"] }"#),
         ("project/base.json", r#"{ "extends": ["../outside.json"] }"#),
         ("project/luck.json", r#"{ "root": true, "extends": ["base.json"] }"#),
     ]);
@@ -82,8 +82,7 @@ fn long_extends_chain_does_not_overflow_the_stack() {
 
 #[test]
 fn find_config_walks_above_a_relative_start_directory() {
-    let project =
-        project_with(&[("luck.json", r#"{ "variant": "standalone" }"#), ("sub/keep.luau", "")]);
+    let project = project_with(&[("luck.json", r#"{ "minify": true }"#), ("sub/keep.luau", "")]);
     let found = in_directory(&project.path().join("sub"), || find_config(Path::new(".")))
         .expect("discovery from `.` must find the `luck.json` in its parent");
     assert_eq!(

@@ -560,7 +560,7 @@ mod tests {
 
     use clap::Parser as _;
     use clap::error::ErrorKind;
-    use luck_stdlib::{Variant, library_for};
+    use luck_stdlib::luau_library;
 
     use super::*;
     use crate::cli::Cli;
@@ -589,8 +589,8 @@ mod tests {
         project.linter_for(None).config().clone()
     }
 
-    fn lint_source(source: &str, variant: Variant, linter: &Linter) -> Vec<Message> {
-        linted(linter, &Allocator::new(), source.as_bytes(), library_for(variant), None)
+    fn lint_source(source: &str, library: &StdlibLibrary<'_>, linter: &Linter) -> Vec<Message> {
+        linted(linter, &Allocator::new(), source.as_bytes(), library, None)
     }
 
     #[test]
@@ -681,9 +681,8 @@ mod tests {
 
     #[test]
     fn lint_config_honors_luck_json_rules() {
-        let (_directory, config_arg) = project_with_config(
-            r#"{"variant":"standalone","lint":{"rules":{"empty_block":"error"}}}"#,
-        );
+        let (_directory, config_arg) =
+            project_with_config(r#"{"lint":{"rules":{"empty_block":"error"}}}"#);
 
         let lint_config = resolved_lint_config(&lint_args(&["-c", &config_arg]));
         assert_eq!(lint_config.rules.level(RuleId::EmptyBlock), Some(RuleLevel::Error));
@@ -692,7 +691,7 @@ mod tests {
     #[test]
     fn lint_cli_levels_win_over_config() {
         let (_directory, config_arg) = project_with_config(
-            r#"{"variant":"standalone","lint":{"categories":{"style":"off"},"rules":{"empty_block":"error"}}}"#,
+            r#"{"lint":{"categories":{"style":"off"},"rules":{"empty_block":"error"}}}"#,
         );
 
         let lint_config = resolved_lint_config(&lint_args(&[
@@ -709,7 +708,7 @@ mod tests {
 
     #[test]
     fn lint_level_flags_set_a_category_to_their_own_level() {
-        let (_directory, config_arg) = project_with_config(r#"{"variant":"standalone"}"#);
+        let (_directory, config_arg) = project_with_config(r#"{"minify":false}"#);
 
         for (flag, level) in
             [("-A", RuleLevel::Off), ("-W", RuleLevel::Warn), ("-D", RuleLevel::Error)]
@@ -721,7 +720,7 @@ mod tests {
 
     #[test]
     fn lint_level_flags_apply_in_command_line_order() {
-        let (_directory, config_arg) = project_with_config(r#"{"variant":"standalone"}"#);
+        let (_directory, config_arg) = project_with_config(r#"{"minify":false}"#);
         let level_after = |flags: &[&str]| {
             let command_line: Vec<&str> =
                 ["-c", config_arg.as_str()].iter().chain(flags).copied().collect();
@@ -758,7 +757,7 @@ mod tests {
         let source = "\
 local unused = 1
 print(undefined_var)";
-        let diags = lint_source(source, Variant::Standalone, &Linter::new(LintConfig::default()));
+        let diags = lint_source(source, luau_library(), &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
         let file = SourceFile { label: "a.luau", text: Some(source.as_bytes()) };
         let lines_when = |verbosity: Verbosity| {
@@ -777,7 +776,7 @@ print(undefined_var)";
     #[test]
     fn a_silent_run_renders_nothing() {
         let linter = Linter::new(LintConfig::default());
-        let diags = lint_source("print(undefined_var)", Variant::Standalone, &linter);
+        let diags = lint_source("print(undefined_var)", luau_library(), &linter);
         assert!(!diags.is_empty(), "{diags:?}");
         let file = SourceFile { label: "a.luau", text: Some(b"print(undefined_var)") };
         let shown = diags.into_iter().map(|message| message.diagnostic);
@@ -804,23 +803,23 @@ print(undefined_var)";
 
     #[test]
     fn lint_roblox_does_not_flag_game_global() {
-        // With `"variant":"roblox"`, a file using `game` must lint clean.
-        let (directory, config_arg) = project_with_config(r#"{"variant":"roblox"}"#);
+        // With `@roblox` loaded, a file using `game` must lint clean.
+        let (directory, config_arg) = project_with_config(r#"{"definitions":["@roblox"]}"#);
 
         let args = lint_args(&["-c", &config_arg]);
         let project = working_project(args.config.as_deref()).expect("config resolves");
         let linter = project.linter_for(Some(&directory.path().join("main.luau")));
-        let variant = project.variant();
-        assert_eq!(variant, Variant::Roblox);
+        let library = project.stdlib().library();
+        assert!(library.has_roblox);
 
-        let diags = lint_source("print(game)", variant, &linter);
+        let diags = lint_source("print(game)", library, &linter);
         assert!(
             diags.iter().all(|diag| diag.code != "undefined_variable"),
             "roblox global `game` should not be undefined"
         );
 
         // Standalone Luau (the default) does flag it; that contrast is the point.
-        let standalone_diags = lint_source("print(game)", Variant::Standalone, &linter);
+        let standalone_diags = lint_source("print(game)", luau_library(), &linter);
         assert!(standalone_diags.iter().any(|diag| diag.code == "undefined_variable"));
     }
 }

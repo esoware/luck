@@ -127,13 +127,12 @@ mod tests {
     use std::thread;
 
     use luck_linter::LintConfig;
-    use luck_stdlib::Variant;
 
     use super::*;
 
     fn analyzed(text: &str, spare: &Arc<SpareArena>) -> Analyzed {
         let linter = Linter::new(LintConfig::default());
-        let stdlib = Stdlib::new(Variant::Standalone);
+        let stdlib = Stdlib::luau();
         Analyzed::new(Arc::from(text), stdlib, &linter, Arena::from_spare(spare))
     }
 

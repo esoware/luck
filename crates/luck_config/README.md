@@ -8,12 +8,12 @@ Loads a `luck.json` into one validated project, which every luck command and the
 
 Each tool defines the type of its own section, so `transforms`, `dynamic_require`, `format`, and `lint` deserialize straight into `TransformConfig`, `DynamicRequire`, `FormatConfig`, and `LintConfig`, through the `serde` features this crate turns on, and `variant` and `security` into `Variant` and `SecurityLevel`. The linter checks its rule names as its section deserializes.
 
-`std` names std definition files, each relative to the config that names it, as `extends` does, and listed after the ones of the files it extends. `Project::load` reads each as a `luck_stdlib::StdlibDefinition` and layers them, in order, over the variant's library, so a std file with a problem is reported in it, and a project's files include its std files, which the language server watches.
+`definitions` lists what the project's files run with over Luau's standard library, in order, the entries of the files it extends first: `@roblox` for Roblox's API at the `security` level, another `@name` being an E014, and any other entry a definition file, relative to the config that names it, as `extends` does. `Project::load` layers each over Luau's library, so a definition file that doesn't parse is reported in it, as E008s, and keeps what each entry loads, a file's text among it, which `definitions` gives `luck check` to load in the same order. A project's files include its definition files, which the language server watches, and none of its source files is one, so `lint`, `fmt`, and `check` never read one as code.
 
-A project gives every file one variant and standard library, and each file the rest of its settings:
+A project gives every file one standard library, and each file the rest of its settings:
 
-- `variant` gives the `Variant` the `variant` key names, standalone Luau or Roblox, which every `.luau` and `.lua` file runs on, and `stdlib` its standard library with the `std` definitions layered over it, which the linter and the language server read.
-- `security` gives the `SecurityLevel` a Roblox project's `security` key names, `None` unless it names one, which decides the part of Roblox's API `luck check` gives its files.
+- `stdlib` gives Luau's standard library with what `definitions` loads layered over it, which the linter and the language server read, and `definitions` each entry's `DefinitionSource`, Roblox's API or a definition file's path and text.
+- `security` gives the `SecurityLevel` the `security` key names, `None` unless it names one, which decides the part of Roblox's API the files reach, and which a project that doesn't load `@roblox` can't set.
 - `linter_for` gives the `luck_linter::Linter` of the `lint` section with the `overrides` the file's path matches layered over it, in order, as oxlint's `overrides` do. The section compiles once at load, and each set of overrides with `lint` settings compiles once, for the first file that matches it, so every file it covers shares that linter. `overlay_lint` layers command-line flags over every file's, overrides included.
 - `format_options` layers the defaults, then `.editorconfig`, then the `format` section, then the matching `overrides`.
 - `filter` holds `include` and `exclude`, and `bundle_options` resolves modules from the project's root.
@@ -38,7 +38,7 @@ let project = match find_config(directory) {
     None => Project::defaults(directory.to_path_buf()),
 };
 let file = Path::new("src/main.luau");
-let variant = project.variant();
+let library = project.stdlib().library();
 let linter = project.linter_for(Some(file));
 let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 ```

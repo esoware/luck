@@ -8,7 +8,7 @@ use luck_bundler::DynamicRequire;
 use luck_formatter::FormatConfig;
 use luck_linter::LintConfig;
 use luck_minifier::TransformConfig;
-use luck_stdlib::{SecurityLevel, Variant};
+use luck_stdlib::SecurityLevel;
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 
@@ -60,25 +60,20 @@ pub(crate) struct OverrideConfig {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LuckConfig {
-    /// Where every `.luau` and `.lua` file runs (default `standalone`):
-    /// `"standalone"` for standalone Luau, or `"roblox"` for Roblox, whose globals,
-    /// services, and enums join Luau's standard library.
-    pub variant: Option<Variant>,
-    /// The security level a Roblox project's files run at (default `None`),
-    /// which decides the part of Roblox's API `luck check` gives them:
+    /// The definitions every `.luau` and `.lua` file runs with over Luau's
+    /// standard library, in order: `"@roblox"` for Roblox's API, at the
+    /// `security` level, and any other entry a Luau definition file,
+    /// relative to this file's directory, whose `declare` statements say what
+    /// a host gives a script, as they do for Luau's type checker. A name a
+    /// later one declares replaces the one before it.
+    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
+    pub definitions: Option<Vec<DefinitionsEntry>>,
+    /// The security level the files of a project that loads `"@roblox"` run
+    /// at (default `None`), which decides the part of Roblox's API they reach:
     /// `"None"` for a `Script` or `LocalScript`, `"LocalUserSecurity"`,
     /// `"PluginSecurity"` for a plugin or Studio's command bar, or
-    /// `"RobloxScriptSecurity"` for a `CoreScript`. Only a `"roblox"` project
-    /// takes it.
+    /// `"RobloxScriptSecurity"` for a `CoreScript`.
     pub security: Option<SecurityLevel>,
-    /// Std definition files, relative to this file's directory, that layer a
-    /// host's globals, fields, and functions over the variant's standard
-    /// library, in order. Each is TOML in the format of luck's own
-    /// `stdlib_data`, which
-    /// <https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>
-    /// describes.
-    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
-    pub std: Option<Vec<PathBuf>>,
     /// Keeps the `extends` chain inside this file's directory.
     pub root: Option<bool>,
     /// Configs this one builds on, relative to its directory. A later one
@@ -123,19 +118,36 @@ pub(crate) struct LuckConfig {
     pub overrides: Option<Vec<OverrideConfig>>,
 }
 
+/// An entry of `definitions`: a definition set built into luck, by its name
+/// after `@`, or a definition file's path, which loading makes canonical.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(from = "String")]
+pub(crate) enum DefinitionsEntry {
+    BuiltIn(String),
+    File(PathBuf),
+}
+
+impl From<String> for DefinitionsEntry {
+    fn from(entry: String) -> Self {
+        match entry.strip_prefix('@') {
+            Some(name) => Self::BuiltIn(name.to_owned()),
+            None => Self::File(PathBuf::from(entry)),
+        }
+    }
+}
+
 impl LuckConfig {
     /// `self` layered on `base`, as a file is on the files it `extends`.
     ///
-    /// `format` and `lint` merge field by field. `std`, `include`, `exclude`,
+    /// `format` and `lint` merge field by field. `definitions`, `include`, `exclude`,
     /// and `overrides` list `base`'s items and then `self`'s, without an item
     /// that comes again later. Every other key, `entries`, `profiles`, and
     /// `transforms` among them, comes whole from `self` when set there and
     /// from `base` otherwise.
     pub(crate) fn merge_onto(self, base: Self) -> Self {
         Self {
-            variant: self.variant.or(base.variant),
             security: self.security.or(base.security),
-            std: merge_with(self.std, base.std, layer),
+            definitions: merge_with(self.definitions, base.definitions, layer),
             root: self.root.or(base.root),
             extends: None,
             include: merge_with(self.include, base.include, layer),
@@ -272,24 +284,22 @@ mod tests {
     }
 
     #[test]
-    fn schema_names_every_variant_the_config_takes() {
-        let schema = serde_json::to_value(schemars::schema_for!(LuckConfig)).expect("schema");
-        let variants = serde_json::to_string(&schema["$defs"]["Variant"]).expect("JSON");
-        for name in ["standalone", "roblox"] {
-            assert!(variants.contains(&format!("\"{name}\"")), "{name}: {variants}");
-        }
-    }
-
-    #[test]
-    fn parses_variant_and_build_keys() {
+    fn parses_definitions_and_build_keys() {
         let config = parsed(
             r#"{
-            "variant": "roblox",
+            "definitions": ["@roblox", "types/app.d.luau", "@lune"],
             "entry": "src/main.luau",
             "output_dir": "dist"
         }"#,
         );
-        assert_eq!(config.variant, Some(Variant::Roblox));
+        assert_eq!(
+            config.definitions,
+            Some(vec![
+                DefinitionsEntry::BuiltIn("roblox".to_owned()),
+                DefinitionsEntry::File(PathBuf::from("types/app.d.luau")),
+                DefinitionsEntry::BuiltIn("lune".to_owned()),
+            ])
+        );
         assert_eq!(config.entry.as_deref(), Some("src/main.luau"));
         assert_eq!(config.output_dir.as_deref(), Some("dist"));
     }
@@ -367,7 +377,7 @@ mod tests {
     #[test]
     fn merge_onto_layers_lists_and_keeps_unset_base_keys() {
         let base = parsed(
-            r#"{ "variant": "roblox", "include": ["a/**", "b/**"],
+            r#"{ "security": "PluginSecurity", "include": ["a/**", "b/**"],
             "lint": { "extra_globals": ["a"], "rules": { "shadowing": "off" } } }"#,
         );
         let child = parsed(
@@ -375,7 +385,7 @@ mod tests {
             "lint": { "extra_globals": ["b"], "rules": { "empty_block": "error" } } }"#,
         );
         let merged = child.merge_onto(base);
-        assert_eq!(merged.variant, Some(Variant::Roblox));
+        assert_eq!(merged.security, Some(SecurityLevel::PluginSecurity));
         let include: Vec<&str> = merged.include.iter().flatten().map(Glob::pattern).collect();
         assert_eq!(include, ["b/**", "c/**", "a/**"]);
         let lint = merged.lint.unwrap();

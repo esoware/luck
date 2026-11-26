@@ -25,9 +25,9 @@
 //! - `formatter` - Prettier-style formatter (feature `formatter`)
 //! - `semantic` - Scoping, compile-time checks, the node table, and `require`
 //!   sites, in one pass (feature `semantic`)
-//! - `stdlib` - `Variant`, the Luau and Roblox standard libraries, the std
-//!   definitions that layer a host's library over one, and what a chunk
-//!   reaches in it (feature `stdlib`, enables `semantic`)
+//! - `stdlib` - The standard library from Luau definition files, Luau's with
+//!   Roblox's API or a host's definitions over it, and what a chunk reaches
+//!   in it (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `stdlib`)
 //! - `type_checker` - Luau's own type checker, its C++ Analysis library
@@ -112,7 +112,7 @@
 //! # }
 //! ```
 //!
-//! Lint, with feature `linter`, against a variant's standard library. A
+//! Lint, with feature `linter`, against a standard library. A
 //! `linter::Linter` compiles its settings once and lints parse after parse,
 //! and its `fix` applies the fixes of the kinds asked for until none is left,
 //! returning the fixed source's parse and diagnostics:
@@ -121,17 +121,16 @@
 //! # #[cfg(feature = "linter")] {
 //! use luck::allocator::Allocator;
 //! use luck::linter::{FixKind, LintConfig, Linter};
-//! use luck::stdlib::Variant;
 //!
 //! let allocator = Allocator::new();
 //! let linter = Linter::new(LintConfig::default());
-//! let stdlib = luck::stdlib::library_for(Variant::Standalone);
+//! let stdlib = luck::stdlib::luau_library();
 //! let parse = luck::parser::parse(&allocator, b"print(undefined_name)");
 //! let diags = linter.run(&parse, stdlib, FixKind::empty(), None);
 //! assert_eq!(diags[0].code, "undefined_variable");
 //!
-//! let fixed = linter.fix(&allocator, b"return table.getn(t)", stdlib, FixKind::all(), None);
-//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"return #t"[..]));
+//! let fixed = linter.fix(&allocator, b"local unused = 1", stdlib, FixKind::all(), None);
+//! assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"local _unused = 1"[..]));
 //! # }
 //! ```
 //!

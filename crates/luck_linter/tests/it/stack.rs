@@ -1,6 +1,6 @@
 use luck_allocator::Allocator;
 use luck_linter::{FixKind, LintConfig, Linter};
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::{SecurityLevel, luau_library, roblox_library};
 use luck_testgen::{deep_and_long_sources, on_the_smallest_stack};
 
 fn every_rule() -> LintConfig {
@@ -22,10 +22,10 @@ fn every_rule() -> LintConfig {
 fn linting_and_fixing_fit_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source| {
         let linter = Linter::new(every_rule());
-        for variant in Variant::ALL {
+        for library in [luau_library(), roblox_library(SecurityLevel::None)] {
             let allocator = Allocator::new();
             let fixed = linter
-                .fix(&allocator, source.as_bytes(), library_for(variant), FixKind::all(), None)
+                .fix(&allocator, source.as_bytes(), library, FixKind::all(), None)
                 .expect("the fixes converge");
             assert!(fixed.parse.errors.is_empty(), "{:?}", fixed.parse.errors.first());
         }

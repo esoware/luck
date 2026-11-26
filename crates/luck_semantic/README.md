@@ -12,7 +12,7 @@ Every name in the tree finds what it declares or refers to by its `NameIndex`, w
 - `with_nodes` builds `AstNodes`, every node of the tree that has an `AstKind`, in source preorder, with its id, its parent, and the scope it's in, and the set of the node types it holds, as `oxc_semantic`'s does. Symbols, references, and scopes point into it by `NodeId`, which every build numbers the same way whether or not it builds the table.
 - `with_requires` finds every `RequireSite`, a call of the host's `require`, by its name or through the global table as `_G.require`, with its module path when it's a string literal.
 
-Nothing here knows a variant's standard library. `luck_stdlib` reads a chunk's semantic against one.
+Nothing here knows a standard library. `luck_stdlib` reads a chunk's semantic against one.
 
 ## Usage
 

@@ -130,50 +130,50 @@ fn invalid_config_unknown_key_exits_usage() {
 /// an error would deadlock on the stdio locks the main thread holds there.
 ///
 /// The timeout turns that hang into a failure.
-fn write_bad_variant_project(directory: &Path) {
-    write_file(directory, "luck.json", "{ \"variant\": \"bogus\" }\n");
+fn write_bad_definitions_project(directory: &Path) {
+    write_file(directory, "luck.json", "{ \"definitions\": [\"@bogus\"] }\n");
     for name in ["a.luau", "b.luau", "c.luau", "d.luau"] {
         write_file(directory, name, "return 1\n");
     }
 }
 
 #[test]
-fn fmt_bad_variant_with_multiple_files_exits_usage() {
+fn fmt_bad_definitions_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_bad_variant_project(directory.path());
+    write_bad_definitions_project(directory.path());
 
     luck_in(directory.path())
         .args(["fmt", "--check"])
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unknown variant `bogus`"));
+        .stderr(predicate::str::contains("`definitions` names `@bogus`"));
 }
 
 #[test]
-fn lint_bad_variant_with_multiple_files_exits_usage() {
+fn lint_bad_definitions_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_bad_variant_project(directory.path());
+    write_bad_definitions_project(directory.path());
 
     luck_in(directory.path())
         .arg("lint")
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unknown variant `bogus`"));
+        .stderr(predicate::str::contains("`definitions` names `@bogus`"));
 }
 
 #[test]
-fn check_bad_variant_with_multiple_files_exits_usage() {
+fn check_bad_definitions_with_multiple_files_exits_usage() {
     let directory = TempDir::new().unwrap();
-    write_bad_variant_project(directory.path());
+    write_bad_definitions_project(directory.path());
 
     luck_in(directory.path())
         .arg("check")
         .timeout(Duration::from_secs(60))
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("unknown variant `bogus`"));
+        .stderr(predicate::str::contains("`definitions` names `@bogus`"));
 }
 
 /// An empty `entries` list is a config error, not a panic or a silent exit 0.
