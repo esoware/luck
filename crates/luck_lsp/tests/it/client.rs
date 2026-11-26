@@ -420,6 +420,41 @@ alert(\"hi\", \"eight\")
     assert!(codes(&closed).contains(&"undefined_variable"), "{closed:?}");
 }
 
+/// A listed definition file that doesn't parse as the project loads leaves
+/// the rest of the project loaded, and its declarations arrive once its open
+/// document parses.
+#[test]
+fn a_listed_definition_file_that_does_not_parse_adds_nothing_until_it_does() {
+    let client =
+        Client::start_given(json!({ "definitions": ["@roblox", "app.d.luau"] }), &folder());
+    let definitions = uri("app.d.luau");
+    client.open(&definitions, "declare function alert(message: string, seconds: number: ()\n");
+    let main = uri("1");
+    client.open(
+        &main,
+        "\
+--!strict
+alert(game.Name, \"eight\")
+",
+    );
+    let mut client = client;
+    let broken = client.diagnostics(&definitions, Some(1));
+    assert!(!broken.is_empty(), "the syntax error is on the file");
+    assert!(codes(&broken).iter().all(|code| *code == "E008"), "{broken:?}");
+    let unloaded =
+        wait_for(&mut client, &main, "Unknown global 'alert'; consider assigning to it first");
+    let lint = Some(NumberOrString::String("undefined_variable".to_owned()));
+    let undefined: Vec<Position> =
+        unloaded.iter().filter(|diag| diag.code == lint).map(|diag| diag.range.start).collect();
+    assert_eq!(undefined, [Position::new(1, 0)], "`alert` alone, as `@roblox` loads: {unloaded:?}");
+
+    client.replace_all(&definitions, 2, DEFINITIONS);
+
+    assert_eq!(client.diagnostics(&definitions, Some(2)), []);
+    let loaded = wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
+    assert_eq!(codes(&loaded), ["E015"], "{loaded:?}");
+}
+
 /// A global an open definition file declares, and its pushed file doesn't,
 /// is known to the lints exactly while the checker knows it.
 #[test]
@@ -481,7 +516,9 @@ fn a_deleted_definition_file_that_does_not_parse_has_its_problems_cleared() {
     client.push(&[(&broken, Some("declare function make(: ()\n"))]);
     client.open(&uri("1"), "make()\n");
     let mut client = client;
-    assert_eq!(codes(&client.diagnostics(&broken, None)), ["E008"]);
+    let published = client.diagnostics(&broken, None);
+    assert!(!published.is_empty(), "the syntax errors are on the file");
+    assert!(codes(&published).iter().all(|code| *code == "E008"), "{published:?}");
 
     client.push(&[(&broken, None)]);
 

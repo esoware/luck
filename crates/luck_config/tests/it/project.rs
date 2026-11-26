@@ -320,15 +320,23 @@ fn a_definitions_file_that_cannot_be_read_is_reported_on_its_name() {
 }
 
 #[test]
-fn a_definitions_file_that_does_not_parse_is_reported_in_it() {
-    let directory = project_with(&[
-        ("app.d.luau", "declare function greet(name: string: string"),
-        ("luck.json", r#"{ "definitions": ["app.d.luau"] }"#),
+fn a_definitions_file_that_does_not_parse_adds_nothing_to_its_project() {
+    let broken = "declare function greet(name: string: string";
+    let (directory, project) = loaded(&[
+        ("app.d.luau", broken),
+        (
+            "luck.json",
+            r#"{ "definitions": ["@roblox", "app.d.luau"], "lint": { "extra_globals": ["it"] } }"#,
+        ),
     ]);
-    let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("app.d.luau"), "{path:?}");
-    assert_eq!(diag.code, "E008");
-    assert!(diag.span.is_some(), "{diag:?}");
+    let path = FileSystemOs.canonicalize(&directory.path().join("app.d.luau")).expect("exists");
+    let file = DefinitionSource::File { path: path.clone(), text: broken.to_owned() };
+    assert_eq!(project.definitions(), [DefinitionSource::Roblox, file]);
+    assert!(project.files().contains(&path), "{:?}", project.files());
+    let library = project.stdlib().library();
+    assert!(library.has_roblox);
+    assert!(library.lookup(["greet"]).is_none());
+    assert_eq!(project.linter_for(None).config().extra_globals, ["it"]);
 }
 
 #[test]
@@ -379,19 +387,6 @@ fn a_given_config_extends_nothing() {
     };
     assert!(diag.message.starts_with("invalid config: `extends` names `base.json`"), "{diag:?}");
     assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""base.json""#[..]));
-}
-
-#[test]
-fn a_given_config_s_definition_file_that_does_not_parse_is_reported_in_it() {
-    let directory = project_with(&[("app.d.luau", "declare function greet(name: string: string")]);
-    let text = r#"{ "definitions": ["app.d.luau"] }"#;
-    let Err(ConfigError::File(error)) =
-        Project::from_config(text, directory.path().to_path_buf(), FileSystemOs)
-    else {
-        panic!("the config doesn't load");
-    };
-    assert!(error.path.ends_with("app.d.luau"), "{error:?}");
-    assert_eq!(error.diags[0].code, "E008");
 }
 
 #[test]

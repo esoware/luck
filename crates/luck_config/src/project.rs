@@ -71,9 +71,10 @@ impl Project {
     /// # Errors
     ///
     /// Returns E010 when `config_path` or a definition file it names can't
-    /// be read, E014 when it or a file it extends isn't valid, and E008 where
-    /// a definition file doesn't parse, each in the file at fault and placed
-    /// where the problem is.
+    /// be read, and E014 when it or a file it extends isn't valid, each in
+    /// the file at fault and placed where the problem is. A definition file
+    /// that doesn't parse is no error of the project, which leaves it out of
+    /// [`Self::stdlib`].
     pub fn load(
         config_path: &Path,
         file_system: impl FileSystem + 'static,
@@ -94,8 +95,8 @@ impl Project {
     /// # Errors
     ///
     /// Returns [`ConfigError::Given`], the E014 a `luck.json` with the same
-    /// text would report, placed in `config`, or else the E010 or E008s of a
-    /// definition file it names, in that file.
+    /// text would report, placed in `config`, or else the E010 of a
+    /// definition file it names that can't be read, in that file.
     pub fn from_config(
         config: &str,
         root: PathBuf,
@@ -184,9 +185,9 @@ impl Project {
                 }
                 DefinitionsEntry::File(path) => {
                     let text = read_text(&*file_system, &path)?;
-                    stdlib = stdlib
-                        .layer(&text)
-                        .map_err(|diags| FileDiagnostics { path: path.clone(), diags })?;
+                    if let Ok(layered) = stdlib.layer(&text) {
+                        stdlib = layered;
+                    }
                     files.push(path.clone());
                     DefinitionSource::File { path, text }
                 }
@@ -266,7 +267,7 @@ impl Project {
     }
 
     /// Luau's standard library with what `definitions` loads layered over
-    /// it, in order.
+    /// it, in order, but for a definition file that doesn't parse.
     pub const fn stdlib(&self) -> &Stdlib {
         &self.stdlib
     }

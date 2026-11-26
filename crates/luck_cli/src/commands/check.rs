@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 
 use crate::exit::{Exit, fail_with_diags};
 use crate::project::{ProjectFile, current_directory, project_files};
-use crate::reporter::{DefaultReporter, Reporter as _, SourceFile, print_document, print_files};
+use crate::reporter::{DefaultReporter, Reporter as _, SourceFile, print_files};
 use crate::thread_pool::for_each_outcome_in_order;
 use crate::verbosity::Verbosity;
 
@@ -49,8 +49,8 @@ impl CheckArgs {
         )?;
         let type_errors = type_errors(&files, threads)?;
 
-        let mut has_errors = !type_errors.configs.is_empty();
-        print_files(&type_errors.configs);
+        let mut has_errors = !type_errors.elsewhere.is_empty();
+        print_files(&type_errors.elsewhere);
         for_each_outcome_in_order(
             &files,
             |file, allocator| {
@@ -80,10 +80,12 @@ impl CheckArgs {
 
 /// What Luau's type checker found.
 struct TypeErrors<'files> {
-    /// By file, for each file with any.
+    /// By file, for each file with any, a definition file's from loading it.
     by_path: FxHashMap<&'files Path, Vec<Diagnostic>>,
-    /// The E014 of each `.luaurc` and `.config.luau` Luau couldn't read.
-    configs: Vec<FileDiagnostics>,
+    /// In files the run doesn't check: the errors of each definition file
+    /// Luau couldn't load, and the E014 of each `.luaurc` and `.config.luau`
+    /// it couldn't read.
+    elsewhere: Vec<FileDiagnostics>,
 }
 
 /// The security level and definitions of a project, which decide what its
@@ -93,7 +95,8 @@ type Definitions<'files> = (SecurityLevel, &'files [DefinitionSource]);
 /// What Luau's type checker finds in `files`, from checking together, on
 /// `threads` threads, the files of the projects with one security level and
 /// one list of definitions, which need one checker. A definition file is no
-/// module, so only loading it checks it.
+/// module, so only loading it checks it, and one Luau can't load adds
+/// nothing.
 fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErrors<'_>, Exit> {
     let mut groups: Vec<(Definitions<'_>, Vec<&ProjectFile>)> = Vec::new();
     for file in files {
@@ -105,7 +108,7 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
     }
 
     let host = FileHost::new()?;
-    let mut by_path = FxHashMap::default();
+    let (mut by_path, mut elsewhere) = (FxHashMap::default(), Vec::new());
     for ((security, definitions), group) in groups {
         let names_and_texts: Vec<(String, Cow<'_, str>)> = definitions
             .iter()
@@ -116,20 +119,23 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
                 }
             })
             .collect();
-        let modules: Vec<(&Path, String)> = group
+        let (definition_files, modules): (Vec<_>, Vec<_>) = group
             .into_iter()
-            .filter(|file| !is_definition_file(&file.path))
             .filter_map(|file| {
                 let canonical = FileSystemOs.canonicalize(&file.path).ok()?;
                 Some((file.path.as_path(), host.module_name(&canonical)))
             })
-            .collect();
+            .partition(|(path, _)| is_definition_file(path));
         let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
         let mut checker = Checker::new(&host);
         for (name, text) in &names_and_texts {
             if let Err(diags) = checker.load_definitions(name, text) {
-                print_document(name, text.as_bytes(), &diags);
-                return Err(Exit::Failure);
+                match definition_files.iter().find(|(_, checked)| checked == name) {
+                    Some((path, _)) => {
+                        by_path.insert(*path, diags);
+                    }
+                    None => elsewhere.push(FileDiagnostics { path: PathBuf::from(name), diags }),
+                }
             }
         }
         if definitions.contains(&DefinitionSource::Roblox) {
@@ -158,7 +164,8 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
                 .map(|((path, _), diags)| (path, diags)),
         );
     }
-    Ok(TypeErrors { by_path, configs: host.config_errors.into_inner() })
+    elsewhere.extend(host.config_errors.into_inner());
+    Ok(TypeErrors { by_path, elsewhere })
 }
 
 /// The file system as Luau's type checker reads it, with `require` resolved as
@@ -263,7 +270,8 @@ fn config_error_span(error: &str, text: &str) -> Option<Span> {
 }
 
 /// `file`'s syntax and compile errors, or else `type_errors`, rendered, or
-/// `None` when it has neither. A definition file has syntax errors alone.
+/// `None` when it has neither. A definition file has no compile errors, and
+/// its type errors are what Luau found as it loaded it.
 fn check_file(
     allocator: &Allocator,
     file: &ProjectFile,
@@ -283,6 +291,7 @@ fn check_file(
 
     if is_definition_file(file_path) {
         let errors = luck_parser::parse_definitions(allocator, &source).errors;
+        let errors = if errors.is_empty() { type_errors.to_vec() } else { errors };
         return (!errors.is_empty()).then(|| render(&label, &source, &errors));
     }
     let result = luck_parser::parse(allocator, &source);

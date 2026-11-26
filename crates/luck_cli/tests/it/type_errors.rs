@@ -255,17 +255,45 @@ return anchored
     assert!(stderr.contains("main.luau:2:26"), "{stderr}");
 }
 
+/// The checker loads the project's other definitions without it, and checks
+/// every module.
 #[test]
 fn check_reports_luau_s_errors_in_a_definition_file_at_it() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "luck.json", r#"{ "definitions": ["app.d.luau"] }"#);
     write_file(directory.path(), "app.d.luau", "declare function greet(name: Missing): string\n");
-    write_file(directory.path(), "main.luau", "return 1\n");
+    write_file(directory.path(), "main.luau", MISMATCH);
 
     let output = run(directory.path(), &["check", "main.luau"]);
 
     let stderr = stderr_text(&output);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("[E015]"), "{stderr}");
+    assert_eq!(stderr.matches("[E015]").count(), 2, "{stderr}");
     assert!(stderr.contains("app.d.luau:1:30"), "{stderr}");
+    assert!(stderr.contains("main.luau:2:23"), "{stderr}");
+}
+
+/// Reported once, by luck's parser where `check` reads the file and by
+/// Luau's otherwise, while the project's other definitions load.
+#[test]
+fn check_reports_a_definition_file_that_does_not_parse_and_checks_the_rest() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "luck.json", r#"{ "definitions": ["@roblox", "app.d.luau"] }"#);
+    write_file(directory.path(), "app.d.luau", "declare function greet(name: string: string\n");
+    let main = "\
+--!strict
+local anchored: number = Instance.new(\"Part\").Anchored
+return anchored
+";
+    write_file(directory.path(), "main.luau", main);
+
+    for path in [".", "main.luau"] {
+        let output = run(directory.path(), &["check", path]);
+
+        let stderr = stderr_text(&output);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert_eq!(stderr.matches("[E008]").count(), 1, "{stderr}");
+        assert!(stderr.contains("app.d.luau:1:"), "{stderr}");
+        assert!(stderr.contains("Expected this to be 'number', but got 'boolean'"), "{stderr}");
+    }
 }

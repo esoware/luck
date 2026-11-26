@@ -12,9 +12,10 @@
 //! the lint rule names and options, the keys that can't go together, such as
 //! `security` on a project that doesn't load `@roblox`, and the definition
 //! files `definitions` names, each a `.d.luau` file, which layer over Luau's
-//! library. A problem comes back as one E014 [`Diagnostic`] placed where it
-//! is, or a definition file's E008s, in the [`FileDiagnostics`] of the file
-//! at fault, or for a config no file holds, as a [`ConfigError`].
+//! library, but for one that doesn't parse, which adds nothing. A problem
+//! comes back as one E014 [`Diagnostic`] placed where it is, in the
+//! [`FileDiagnostics`] of the file at fault, or for a config no file holds,
+//! as a [`ConfigError`].
 //!
 //! Each tool derives the `luck.json` shape of its own option types behind its
 //! `serde` feature, which this crate turns on, so `transforms`,

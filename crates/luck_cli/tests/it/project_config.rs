@@ -241,16 +241,20 @@ print(game)
         .stderr(predicate::str::contains("`app.net.send` requires at least 3 argument(s)"));
 }
 
+/// The project loads without it, so its other files lint under the rest of
+/// the config.
 #[test]
 fn a_definition_file_that_does_not_parse_is_reported_where() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{ "definitions": ["app.d.luau"] }"#);
+    write_file(project.path(), "luck.json", r#"{ "definitions": ["@roblox", "app.d.luau"] }"#);
     write_file(project.path(), "app.d.luau", "declare function greet(name: string: string\n");
-    write_file(project.path(), "a.luau", "print(1)\n");
+    write_file(project.path(), "a.luau", "print(game, greet)\n");
     luck_in(project.path())
         .arg("lint")
         .assert()
-        .code(2)
+        .code(1)
         .stderr(predicate::str::contains("E008"))
-        .stderr(predicate::str::contains("app.d.luau:1:"));
+        .stderr(predicate::str::contains("app.d.luau:1:"))
+        .stderr(predicate::str::contains("undefined variable `greet`"))
+        .stderr(predicate::str::contains("undefined variable `game`").not());
 }
