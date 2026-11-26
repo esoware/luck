@@ -1,15 +1,15 @@
-use std::ops;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{ops, ptr};
 
 use ls_types::{DocumentSymbol, Position, Range, TextDocumentContentChangeEvent};
 use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
 use luck_resolver::{Resolution, ResolveError};
 use luck_semantic::{AstNodes, Scoping};
-use luck_stdlib::SemanticAnalysis;
+use luck_stdlib::{SemanticAnalysis, Stdlib};
 use luck_token::{Span, Token};
 
 use crate::analyzed::{Analyzed, Arena};
@@ -109,13 +109,33 @@ impl Document {
 
     pub(crate) fn state(&self, session: &Session) -> &DocumentState {
         self.state.get_or_init(|| {
+            let settings = self.settings.resolve(session);
             DocumentState::new(
                 Arc::clone(&self.text),
-                Arc::clone(self.settings.resolve(session)),
+                Arc::clone(settings),
                 Arc::clone(self.line_index(session.encoding())),
                 Arena::from_spare(session.spare_arena()),
+                session
+                    .type_checks()
+                    .stdlib(settings.project.project(), session.settings().generation()),
             )
         })
+    }
+
+    /// This version, analyzed again unless it was analyzed against the
+    /// library its project's documents are analyzed against now.
+    pub(crate) fn with_current_library(self: Arc<Self>, session: &Session) -> Arc<Self> {
+        let state = self.state(session);
+        let project = state.settings().project.project();
+        let stdlib = session.type_checks().stdlib(project, session.settings().generation());
+        if ptr::eq(state.semantic().stdlib(), stdlib.library()) {
+            return self;
+        }
+        Arc::new(Self::with_settings(
+            self.version,
+            Arc::clone(&self.text),
+            Arc::clone(&self.settings),
+        ))
     }
 
     /// This version's lints, which publishing, code actions, and fix-all
@@ -187,8 +207,8 @@ impl DocumentState {
         settings: Arc<DocumentSettings>,
         line_index: Arc<LineIndex>,
         arena: Arena,
+        stdlib: Stdlib,
     ) -> Self {
-        let stdlib = settings.project.project().stdlib().clone();
         let analyzed =
             Analyzed::new(text, settings.is_definitions, stdlib, &settings.linter, arena);
         Self {

@@ -64,7 +64,9 @@ pub(crate) enum Task {
     /// A message for the user, such as why formatting failed.
     Notify(Notification),
     /// One version's diagnostics, unless a change since started another
-    /// publish of every open document's.
+    /// publish of every open document's. A version analyzed again, against
+    /// the library its project's documents are analyzed against now, takes
+    /// the place of the one the main loop holds.
     Publish { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic>, generation: u64 },
     /// Why a `luck.json` doesn't load, unless the settings were reloaded
     /// since the lookup read it.
@@ -303,10 +305,13 @@ impl Server {
             }
             Task::Notify(notification) => self.send(notification),
             Task::Publish { uri, document, diags, generation } => {
-                let is_current =
-                    self.documents.get(&uri).is_some_and(|current| Arc::ptr_eq(current, &document));
+                let is_current = self
+                    .documents
+                    .get(&uri)
+                    .is_some_and(|current| Arc::ptr_eq(current.text(), document.text()));
                 if is_current && generation == self.generation && !self.is_shutting_down {
-                    self.publish(uri, diags, Some(document.version()));
+                    self.publish(uri.clone(), diags, Some(document.version()));
+                    self.documents.insert(uri, document);
                 }
             }
             Task::ConfigError { generation, notifications } => {
@@ -363,6 +368,7 @@ impl Server {
                 if cancellation.is_cancelled() {
                     return;
                 }
+                let document = document.with_current_library(&session);
                 let diags = {
                     let Some(lints) = document.lints(&session) else {
                         continue;
@@ -468,7 +474,9 @@ impl Server {
         let text: Arc<str> = Arc::from(item.text);
         let is_created = self.open_in_client(&item.uri, Some(Arc::clone(&text)));
         self.replace(item.uri, Arc::new(Document::new(item.version, text, path.clone())));
-        match path.filter(|created| is_created && is_module(created)) {
+        match path.filter(|created| {
+            is_created && (is_module(created) || self.session.settings().is_settings_file(created))
+        }) {
             Some(created) => self.files_changed(&[(created, FileChangeType::CREATED)]),
             None => self.republish(),
         }
@@ -526,7 +534,7 @@ impl Server {
             self.republish();
             return;
         };
-        if is_deleted && is_module(&path) {
+        if is_deleted && (is_module(&path) || self.session.settings().is_settings_file(&path)) {
             self.files_changed(&[(path, FileChangeType::DELETED)]);
         } else {
             // What the files hold may not be what the document last held,

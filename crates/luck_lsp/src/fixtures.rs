@@ -65,6 +65,7 @@ fn document_with(
     linter: Arc<Linter>,
     path: Option<PathBuf>,
 ) -> DocumentState {
+    let stdlib = project.stdlib().clone();
     let settings = DocumentSettings {
         path,
         project: Arc::new(LoadedProject::new(project, Files::Disk)),
@@ -78,5 +79,6 @@ fn document_with(
         Arc::new(settings),
         Arc::new(LineIndex::new(text, PositionEncoding::Utf16)),
         Arena::from_spare(&Arc::default()),
+        stdlib,
     )
 }

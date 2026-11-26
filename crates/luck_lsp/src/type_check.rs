@@ -17,10 +17,12 @@
 //! A definition file is no module, so it's never checked as one. A checker
 //! loads each one its project lists as its open document holds it, if it has
 //! one, and Luau can't unload a definition, so once that text changes, the
-//! generation's job loads a new checker in place of the old one, which every
-//! other job reads until the new one is ready, and stops between definition
-//! files once the next generation starts. What Luau finds wrong with a
-//! definition file as it loads it is published on it, open or not.
+//! generation's job loads a new checker in place of the old one, and layers
+//! the same texts over Luau's library for the documents of its projects to be
+//! analyzed against, which every other job reads the old ones of until the
+//! new ones are ready, and stops between definition files once the next
+//! generation starts. What Luau finds wrong with a definition file as it
+//! loads it is published on it, open or not.
 
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
@@ -35,7 +37,7 @@ use lsp_server::Notification;
 use luck_config::{DefinitionSource, Project};
 use luck_diagnostics::Diagnostic;
 use luck_resolver::{FileSystem as _, ResolverGeneric, to_slash_lossy};
-use luck_stdlib::{SecurityLevel, luau_definitions, roblox_definitions};
+use luck_stdlib::{SecurityLevel, Stdlib, luau_definitions, roblox_definitions};
 use luck_type_checker::{
     CancellationToken, CheckError, Checker, Completion, Config, Declaration, Description, Host,
     SavedConfig, luau_config_aliases,
@@ -89,6 +91,15 @@ impl TypeChecks {
         check
     }
 
+    /// The library the documents of `project`, which the settings of
+    /// `generation` gave, are analyzed against: the one its checker's
+    /// definitions layer over Luau's, or the project's while they're the
+    /// texts the project read.
+    pub(crate) fn stdlib(&self, project: &Project, generation: u64) -> Stdlib {
+        let edited = self.of(project, generation).stdlib.lock().clone();
+        edited.unwrap_or_else(|| project.stdlib().clone())
+    }
+
     /// Makes every checker read the module at `path`, as the client spells
     /// it, again, or every module, after a change that can change how they
     /// resolve.
@@ -135,6 +146,10 @@ pub(crate) struct TypeCheck {
     /// What Luau found wrong with each definition file the checker in
     /// `loaded` couldn't load.
     rejected: Mutex<Vec<(PathBuf, Vec<Diagnostic>)>>,
+    /// Luau's library with each definition layered over it as the checker in
+    /// `loaded` loaded it, leaving out a file that doesn't parse, or `None`
+    /// while those are the texts the project read.
+    stdlib: Mutex<Option<Stdlib>>,
 }
 
 /// A checker and the definitions it loaded.
@@ -171,6 +186,7 @@ impl TypeCheck {
             loading: Mutex::default(),
             changed: Mutex::default(),
             rejected: Mutex::default(),
+            stdlib: Mutex::default(),
         }
     }
 
@@ -179,10 +195,11 @@ impl TypeCheck {
     }
 
     /// Loads a checker with the project's definitions, each open one as
-    /// `open` holds it, in place of the one loaded, which every other job
-    /// reads meanwhile, unless that one loaded the same, or returns `None`
-    /// once `cancellation` is cancelled. It publishes on each definition file
-    /// why it doesn't load, and shows it, or clears that once it loads.
+    /// `open` holds it, and the library they layer, in place of the ones
+    /// loaded, which every other job reads meanwhile, unless those loaded the
+    /// same, or returns `None` once `cancellation` is cancelled. It publishes
+    /// on each definition file why it doesn't load, and shows it, or clears
+    /// that once it loads.
     fn reload(
         &self,
         session: &Session,
@@ -212,6 +229,11 @@ impl TypeCheck {
         let mut packages = vec![luau];
         let mut rejected = Vec::new();
         let mut notifications = Vec::new();
+        let is_edited = self.definitions.iter().any(|source| match source {
+            DefinitionSource::Roblox => false,
+            DefinitionSource::File { path, text } => definition_text(open, path, text) != text,
+        });
+        let mut stdlib = is_edited.then(Stdlib::luau);
         for source in &self.definitions {
             if cancellation.is_cancelled() {
                 return None;
@@ -228,6 +250,10 @@ impl TypeCheck {
                     Cow::Owned(definition_text(open, path, text).to_owned()),
                 ),
             };
+            stdlib = stdlib.map(|below| match source {
+                DefinitionSource::Roblox => below.with_roblox(self.security),
+                DefinitionSource::File { .. } => below.layer(package.text()).unwrap_or(below),
+            });
             if let Err(diags) = checker.load_definitions(package.name(), package.text()) {
                 // An open definition file loads again with each edit, so its
                 // problems show only on it, not in a message for each edit.
@@ -277,6 +303,7 @@ impl TypeCheck {
                 return None;
             }
             *loaded = Some(Loaded { checker, packages });
+            *self.stdlib.lock() = stdlib;
         }
         let loads_now: Vec<PathBuf> = {
             let mut kept = self.rejected.lock();

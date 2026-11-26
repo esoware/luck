@@ -68,6 +68,17 @@ fn codes(diags: &[Diagnostic]) -> Vec<&str> {
         .collect()
 }
 
+/// The next diagnostics published for `uri` with one whose message is
+/// `message`.
+fn wait_for(client: &mut Client, uri: &Uri, message: &str) -> Vec<Diagnostic> {
+    loop {
+        let published = client.next_published(uri);
+        if published.diagnostics.iter().any(|diag| diag.message == message) {
+            return published.diagnostics;
+        }
+    }
+}
+
 fn definition(client: &mut Client, uri: &Uri, line: u32, utf16_column: u32) -> Location {
     let found = client
         .request::<GotoDefinition>(GotoDefinitionParams {
@@ -336,15 +347,6 @@ return count
 /// declares, and closing it goes back to the file pushed under it.
 #[test]
 fn an_open_definition_file_s_changes_reach_the_checks() {
-    fn wait_for(client: &mut Client, uri: &Uri, message: &str) {
-        loop {
-            let published = client.next_published(uri);
-            if published.diagnostics.iter().any(|diag| diag.message == message) {
-                return;
-            }
-        }
-    }
-
     let client = Client::start_given(json!({ "definitions": ["app.d.luau"] }), &folder());
     let definitions = uri("app.d.luau");
     client.push(&[(&definitions, Some(DEFINITIONS))]);
@@ -378,6 +380,84 @@ alert(\"hi\", \"eight\")
     });
     assert_eq!(client.next_published(&definitions).diagnostics, []);
     wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
+}
+
+/// A definition file the config lists that the client never pushed is there
+/// while it's open, so the project loads it once it opens, as it would one
+/// open before the project loaded, and is gone once it closes.
+#[test]
+fn a_listed_definition_file_that_opens_after_the_project_loaded_reaches_the_checks() {
+    let client = Client::start_given(json!({ "definitions": ["app.d.luau"] }), &folder());
+    let main = uri("1");
+    client.open(
+        &main,
+        "\
+--!strict
+alert(\"hi\", \"eight\")
+",
+    );
+    let mut client = client;
+    let missing = "Unknown global 'alert'; consider assigning to it first";
+    let unloaded = wait_for(&mut client, &main, missing);
+    assert!(codes(&unloaded).contains(&"undefined_variable"), "{unloaded:?}");
+
+    let definitions = uri("app.d.luau");
+    client.open(&definitions, DEFINITIONS);
+    let loaded = wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
+    assert_eq!(codes(&loaded), ["E015"], "{loaded:?}");
+
+    client.replace_all(
+        &definitions,
+        2,
+        &DEFINITIONS.replace("seconds: number", "seconds: boolean"),
+    );
+    wait_for(&mut client, &main, "Expected this to be 'boolean', but got 'string'");
+
+    client.notify::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+        text_document: document(&definitions),
+    });
+    let closed = wait_for(&mut client, &main, missing);
+    assert!(codes(&closed).contains(&"undefined_variable"), "{closed:?}");
+}
+
+/// A global an open definition file declares, and its pushed file doesn't,
+/// is known to the lints exactly while the checker knows it.
+#[test]
+fn an_open_definition_file_s_globals_reach_the_lints_with_the_types() {
+    fn wait_until_known(client: &mut Client, uri: &Uri, is_known: bool) {
+        loop {
+            let diags = client.next_published(uri).diagnostics;
+            let is_linted = codes(&diags).contains(&"undefined_variable");
+            let is_typed =
+                diags.iter().any(|diag| diag.message.starts_with("Unknown global 'notify'"));
+            assert_eq!(is_linted, is_typed, "the lints and the types disagree: {diags:?}");
+            if is_linted != is_known {
+                return;
+            }
+        }
+    }
+
+    let client = Client::start_given(json!({ "definitions": ["app.d.luau"] }), &folder());
+    let definitions = uri("app.d.luau");
+    client.push(&[(&definitions, Some(DEFINITIONS))]);
+    let main = uri("1");
+    client.open(
+        &main,
+        "\
+--!strict
+notify(\"hi\")
+",
+    );
+    client.open(&definitions, DEFINITIONS);
+    let mut client = client;
+    wait_until_known(&mut client, &main, false);
+
+    let declared = format!("{DEFINITIONS}declare function notify(message: string): ()\n");
+    client.replace_all(&definitions, 2, &declared);
+    wait_until_known(&mut client, &main, true);
+
+    client.replace_all(&definitions, 3, DEFINITIONS);
+    wait_until_known(&mut client, &main, false);
 }
 
 #[test]
