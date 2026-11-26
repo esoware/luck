@@ -97,6 +97,8 @@ unsafe extern "C" {
         source: LuckStr,
         errors: LuckErrors,
     );
+    fn luck_checker_return_named_type(checker: *mut c_void, owner: LuckStr, member: LuckStr);
+    fn luck_checker_bind_type_namespace(checker: *mut c_void, space: LuckStr, supertype: LuckStr);
     fn luck_checker_mark_dirty(checker: *mut c_void, module: LuckStr);
     fn luck_checker_check(
         checker: *mut c_void,
@@ -181,6 +183,28 @@ impl<H: Host> RawChecker<H> {
             );
         }
         errors
+    }
+
+    pub(crate) fn return_named_type(&mut self, owner: &str, member: &str) {
+        // SAFETY: the names outlive the call, which copies them.
+        unsafe {
+            luck_checker_return_named_type(
+                self.checker,
+                LuckStr::new(owner.as_bytes()),
+                LuckStr::new(member.as_bytes()),
+            );
+        }
+    }
+
+    pub(crate) fn bind_type_namespace(&mut self, namespace: &str, supertype: &str) {
+        // SAFETY: the names outlive the call, which copies them.
+        unsafe {
+            luck_checker_bind_type_namespace(
+                self.checker,
+                LuckStr::new(namespace.as_bytes()),
+                LuckStr::new(supertype.as_bytes()),
+            );
+        }
     }
 
     pub(crate) fn mark_dirty(&mut self, module: &str) {

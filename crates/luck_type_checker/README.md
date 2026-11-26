@@ -18,6 +18,7 @@ Luau's C++ includes its VM and compiler, so a binary can't link this crate and a
 
 - `Checker::new(host)` starts from Luau's built-in definitions, and `builtin_definitions()` gives their text.
 - `load_definitions(name, source)` loads a definition file from text, as Luau's `loadDefinitionFile` does, or returns its errors and loads none of it.
+- `return_named_type(owner, member)` and `bind_type_namespace(namespace, supertype)` type what a definition file can't, through Analysis's own magic functions and scopes, for a host such as Roblox Studio that gives them: a call of `member` of the global table or extern type `owner` with a string literal returns the extern type it names, when that extends the type `member` returns, and reports any other name as an unknown type, and each extern type that extends `supertype` and whose name is `namespace` and more is a type of the namespace, by the rest of its name. A checker applies neither unless asked.
 - `check(modules, threads, cancellation)` returns each module's diagnostics in order, or `CheckError::Cancelled`, or the internal compiler error Luau threw.
 - `invalidate(module)` marks a module and every module that requires it to be checked again, and `host_mut()` reaches the host to change what it holds.
 

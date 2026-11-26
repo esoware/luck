@@ -92,6 +92,31 @@ impl<H: Host> Checker<H> {
         Err(sorted(errors.into_iter().map(|error| diagnostic(error, Some(&lines))).collect()))
     }
 
+    /// Makes a call of `member`, a function in the table the global `owner`
+    /// holds, or else a method of the extern type `owner`, whose first
+    /// argument is a string literal, return the global extern type the string
+    /// names when that extends the extern type `member` returns, or else
+    /// report the name as an unknown type, as Roblox Studio types
+    /// `Instance.new("Part")` as a `Part`. Any other argument keeps the type
+    /// `member` returns. It does nothing when `owner` has no such member or
+    /// the member returns no extern type.
+    ///
+    /// It applies to the modules checked after, as definitions do.
+    pub fn return_named_type(&mut self, owner: &str, member: &str) {
+        self.raw.return_named_type(owner, member);
+    }
+
+    /// Moves each extern type that extends `supertype`, and whose name is
+    /// `namespace` and more, under the type namespace `namespace`, by the
+    /// rest of its name, which is what Luau names it after, as Roblox Studio
+    /// binds `Enum.Material`. So `EnumMaterial`, which a definition file can
+    /// name, is `Enum.Material`.
+    ///
+    /// It applies to the modules checked after, as definitions do.
+    pub fn bind_type_namespace(&mut self, namespace: &str, supertype: &str) {
+        self.raw.bind_type_namespace(namespace, supertype);
+    }
+
     /// Marks `module`, and every module that requires it, to be checked
     /// again, such as after its source changes.
     pub fn invalidate(&mut self, module: &str) {

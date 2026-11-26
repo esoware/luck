@@ -108,11 +108,18 @@ fn type_errors(files: &[ProjectFile], threads: NonZero<usize>) -> Result<TypeErr
             .collect();
         let names: Vec<&str> = modules.iter().map(|(_, name)| name.as_str()).collect();
         let mut checker = Checker::new(host);
-        if let Some(definitions) = definitions_for(variant, security)
-            && let Err(diags) = checker.load_definitions("@roblox", &definitions)
-        {
-            print_document("@roblox", definitions.as_bytes(), &diags);
-            return Err(Exit::Failure);
+        if let Some(definitions) = definitions_for(variant, security) {
+            if let Err(diags) = checker.load_definitions("@roblox", &definitions) {
+                print_document("@roblox", definitions.as_bytes(), &diags);
+                return Err(Exit::Failure);
+            }
+            // What Roblox Studio types past its definitions: the class a
+            // string names, and the `Enum.Material` its definitions call
+            // `EnumMaterial`.
+            checker.return_named_type("Instance", "new");
+            checker.return_named_type("ServiceProvider", "GetService");
+            checker.return_named_type("ServiceProvider", "FindService");
+            checker.bind_type_namespace("Enum", "EnumItem");
         }
         let diags = match checker.check(&names, threads, &CancellationToken::new()) {
             Ok(diags) => diags,

@@ -8,12 +8,16 @@
 #include "Luau/Common.h"
 #include "Luau/Config.h"
 #include "Luau/ConfigResolver.h"
+#include "Luau/ConstraintSolver.h"
 #include "Luau/Error.h"
 #include "Luau/ExperimentalFlags.h"
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
+#include "Luau/Scope.h"
+#include "Luau/Type.h"
 #include "Luau/TypeArena.h"
 #include "Luau/TypeCheckLimits.h"
+#include "Luau/TypePack.h"
 
 #include <cstdint>
 #include <cstring>
@@ -21,8 +25,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+
+LUAU_FASTFLAG(LuauCyclicRequireTypeInference)
 
 extern "C"
 {
@@ -186,6 +193,58 @@ void push(
     errors.push(errors.context, &error);
 }
 
+// Gives a call whose first argument is a string literal the global extern
+// type that string names, when it extends the extern type the function
+// returns, or else reports the name as an unknown type, as Roblox Studio
+// types `Instance.new`. It runs on the worker threads, so it only reads the
+// global scope and types, which checks never change.
+struct NamedTypeMagic final : Luau::MagicFunction
+{
+    NamedTypeMagic(const Luau::Scope* scope, const Luau::ExternType* returned)
+        : scope(scope)
+        , returned(returned)
+    {
+    }
+
+    std::optional<Luau::WithPredicate<Luau::TypePackId>> handleOldSolver(
+        Luau::TypeChecker&,
+        const Luau::ScopePtr&,
+        const Luau::AstExprCall&,
+        Luau::WithPredicate<Luau::TypePackId>
+    ) override
+    {
+        return std::nullopt;
+    }
+
+    bool infer(const Luau::MagicFunctionCallContext& context) override
+    {
+        if (context.callSite->args.size == 0)
+            return false;
+        Luau::AstExpr* argument = context.callSite->args.data[0];
+        const Luau::AstExprConstantString* literal = argument->as<Luau::AstExprConstantString>();
+        if (!literal)
+            return false;
+        std::string name(literal->value.data, literal->value.size);
+        auto named = scope->exportedTypeBindings.find(name);
+        const Luau::ExternType* type =
+            named == scope->exportedTypeBindings.end() ? nullptr : Luau::get<Luau::ExternType>(Luau::follow(named->second.type));
+        if (!type || !Luau::isSubclass(type, returned))
+        {
+            Luau::UnknownSymbol unknown{std::move(name), Luau::UnknownSymbol::Type};
+            if (FFlag::LuauCyclicRequireTypeInference)
+                context.solver->reportError(std::move(unknown), argument->location, *context.constraint->moduleName);
+            else
+                context.solver->DEPRECATED_reportError(std::move(unknown), argument->location);
+            return false;
+        }
+        Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(context.solver->arena->addTypePack({named->second.type}));
+        return true;
+    }
+
+    const Luau::Scope* scope;
+    const Luau::ExternType* returned;
+};
+
 void pushTypeError(Checker& checker, LuckErrors errors, size_t module, const Luau::TypeError& error)
 {
     bool isSyntaxError = Luau::get_if<Luau::SyntaxError>(&error.data) != nullptr;
@@ -246,6 +305,69 @@ void luck_checker_load_definitions(void* raw, LuckStr name, LuckStr source, Luck
         push(errors, 0, false, packageName, error.location, error.message);
     }
     Luau::freeze(frontend.globals.globalTypes);
+}
+
+void luck_checker_return_named_type(void* raw, LuckStr owner, LuckStr member) noexcept
+{
+    Luau::GlobalTypes& globals = static_cast<Checker*>(raw)->frontend.globals;
+    std::string ownerName(owner.data, owner.len);
+    Luau::TableType::Props* props = nullptr;
+    if (std::optional<Luau::Binding> global = Luau::tryGetGlobalBinding(globals, ownerName))
+    {
+        if (Luau::TableType* table = Luau::getMutable<Luau::TableType>(Luau::follow(global->typeId)))
+            props = &table->props;
+    }
+    else if (auto type = globals.globalScope->exportedTypeBindings.find(ownerName); type != globals.globalScope->exportedTypeBindings.end())
+    {
+        if (Luau::ExternType* externType = Luau::getMutable<Luau::ExternType>(Luau::follow(type->second.type)))
+            props = &externType->props;
+    }
+    if (!props)
+        return;
+    auto prop = props->find(std::string(member.data, member.len));
+    if (prop == props->end() || !prop->second.readTy)
+        return;
+    Luau::TypeId function = Luau::follow(*prop->second.readTy);
+    const Luau::FunctionType* signature = Luau::get<Luau::FunctionType>(function);
+    if (!signature)
+        return;
+    std::optional<Luau::TypeId> returnType = Luau::first(signature->retTypes);
+    const Luau::ExternType* returned = returnType ? Luau::get<Luau::ExternType>(Luau::follow(*returnType)) : nullptr;
+    if (!returned)
+        return;
+
+    Luau::unfreeze(globals.globalTypes);
+    Luau::attachMagicFunction(function, std::make_shared<NamedTypeMagic>(globals.globalScope.get(), returned));
+    Luau::freeze(globals.globalTypes);
+}
+
+void luck_checker_bind_type_namespace(void* raw, LuckStr space, LuckStr supertype) noexcept
+{
+    Luau::GlobalTypes& globals = static_cast<Checker*>(raw)->frontend.globals;
+    Luau::Scope& scope = *globals.globalScope;
+    std::string prefix(space.data, space.len);
+    auto super = scope.exportedTypeBindings.find(std::string(supertype.data, supertype.len));
+    if (super == scope.exportedTypeBindings.end())
+        return;
+    Luau::TypeId superType = Luau::follow(super->second.type);
+
+    std::unordered_map<Luau::Name, Luau::TypeFun>& bound = scope.importedTypeBindings[prefix];
+    Luau::unfreeze(globals.globalTypes);
+    for (auto it = scope.exportedTypeBindings.begin(); it != scope.exportedTypeBindings.end();)
+    {
+        Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(Luau::follow(it->second.type));
+        if (type && type->parent && Luau::follow(*type->parent) == superType && it->first.size() > prefix.size() &&
+            it->first.compare(0, prefix.size(), prefix) == 0)
+        {
+            std::string rest = it->first.substr(prefix.size());
+            type->name = prefix + "." + rest;
+            bound.emplace(std::move(rest), it->second);
+            it = scope.exportedTypeBindings.erase(it);
+        }
+        else
+            ++it;
+    }
+    Luau::freeze(globals.globalTypes);
 }
 
 void luck_checker_mark_dirty(void* checker, LuckStr module) noexcept

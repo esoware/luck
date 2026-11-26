@@ -102,25 +102,86 @@ fn check_reports_a_syntax_error_once() {
     assert_eq!(stderr.matches("[E008]").count(), 1, "{stderr}");
 }
 
-#[test]
-fn check_types_a_roblox_project_with_robloxs_api() {
+/// The E015s `luck check` reports for `main`, a strict file of a Roblox
+/// project.
+fn roblox_type_errors(main: &str) -> String {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "luck.json", r#"{ "variant": "roblox" }"#);
-    let main = "\
---!strict
-local camera: Camera = workspace.CurrentCamera
-local name: number = camera.Name
-return name
-";
     write_file(directory.path(), "main.luau", main);
+    stderr_text(&run(directory.path(), &["check", "main.luau"]))
+}
 
-    let output = run(directory.path(), &["check", "main.luau"]);
+#[test]
+fn check_types_instance_new_as_the_class_it_names() {
+    let stderr = roblox_type_errors(
+        "\
+--!strict
+local part: Part = Instance.new(\"Part\")
+local anchored: number = part.Anchored
+return anchored
+",
+    );
 
-    let stderr = stderr_text(&output);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
-    assert!(stderr.contains("Expected this to be 'number', but got 'string'"), "{stderr}");
-    assert!(stderr.contains("main.luau:3:22"), "{stderr}");
+    assert!(stderr.contains("Expected this to be 'number', but got 'boolean'"), "{stderr}");
+    assert!(stderr.contains("main.luau:3:26"), "{stderr}");
+}
+
+#[test]
+fn check_types_get_service_as_the_service_it_names() {
+    let stderr = roblox_type_errors(
+        "\
+--!strict
+local players: Players = game:GetService(\"Players\")
+local count: string = #players:GetPlayers()
+return count
+",
+    );
+
+    assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
+    assert!(stderr.contains("Expected this to be 'string', but got 'number'"), "{stderr}");
+}
+
+#[test]
+fn check_reports_a_class_name_roblox_has_no_class_for() {
+    let stderr = roblox_type_errors("--!strict\nreturn Instance.new(\"Parts\")\n");
+
+    assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
+    assert!(stderr.contains("Unknown type 'Parts'"), "{stderr}");
+}
+
+#[test]
+fn check_takes_a_class_name_that_isnt_a_literal() {
+    let stderr = roblox_type_errors(
+        "\
+--!strict
+local function make(className: string): Instance
+    return Instance.new(className)
+end
+return make
+",
+    );
+
+    assert!(!stderr.contains("[E015]"), "{stderr}");
+}
+
+#[test]
+fn check_takes_enum_types_in_annotations() {
+    let stderr = roblox_type_errors(
+        "\
+--!strict
+local material: Enum.Material = Enum.Material.Plastic
+local key: Enum.KeyCode = Enum.Material.Wood
+return material, key
+",
+    );
+
+    assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
+    assert!(
+        stderr.contains("Expected this to be\n\t'Enum.KeyCode'\nbut got\n\t'Enum.Material'"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("main.luau:3:27"), "{stderr}");
 }
 
 /// `GetDebugId` needs `PluginSecurity`, so a script at `None` can't reach it.

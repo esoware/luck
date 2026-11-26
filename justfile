@@ -83,7 +83,7 @@ schema:
 stdlib:
   cargo test -p luck_stdlib regenerate_stdlib_catalog -- --ignored
 
-# Regenerate roblox_api.toml, roblox_enums.toml, and roblox.luau from the live Roblox API dump and Creator Documentation, then the stdlib catalog
+# Regenerate roblox_api.toml, roblox_enums.toml, and roblox.luau from the live Roblox API dump, LuauTypes.d.luau, and Creator Documentation, then the stdlib catalog
 roblox-api:
   cargo test -p luck_stdlib regenerate_roblox -- --ignored
   just stdlib

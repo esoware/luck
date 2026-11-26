@@ -1,6 +1,7 @@
 //! The ignored `regenerate_roblox_definitions` test, which writes
-//! `roblox.luau` from the live API dump and Roblox's Creator Documentation,
-//! and offline checks of the committed file at each security level.
+//! `roblox.luau` from the live API dump, `LuauTypes.d.luau`, and Roblox's
+//! Creator Documentation, and offline checks of the committed file at each
+//! security level.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -20,6 +21,9 @@ use tar::Archive;
 const DUMP_URL: &str =
     "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json";
 
+const LUAU_TYPES_URL: &str =
+    "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/LuauTypes.d.luau";
+
 const DOCS_URL: &str = "https://codeload.github.com/Roblox/creator-docs/tar.gz/refs/heads/main";
 
 /// The levels a script can run at, weakest first, as the dump names them.
@@ -29,11 +33,18 @@ const LEVELS: [&str; 4] = ["None", "LocalUserSecurity", "PluginSecurity", "Roblo
 
 const HEADER: &str = "\
 -- Roblox's engine API as a Luau definition file, which `just roblox-api`
--- generates from Roblox's API dump, as
--- https://github.com/MaximumADHD/Roblox-Client-Tracker mirrors it, and from
--- the Roblox Creator Documentation, https://github.com/Roblox/creator-docs.
--- The summaries, datatypes, globals, and libraries are adapted from the
--- documentation, (c) Roblox Corporation, under CC BY 4.0,
+-- generates from Roblox's API dump and LuauTypes.d.luau, as
+-- https://github.com/MaximumADHD/Roblox-Client-Tracker extracts them from
+-- Roblox Studio, and from the Roblox Creator Documentation,
+-- https://github.com/Roblox/creator-docs.
+--
+-- The globals LuauTypes.d.luau's RobloxGlobals section declares, the ones
+-- Studio gives a script, are its declarations, but for a global it types
+-- `any` that the documentation types as a class, which Studio's reflection
+-- types. Its other sections, such as TestEZ's and BehaviorScript's, aren't
+-- in a script's environment, and are left out. The summaries, datatypes, and
+-- other globals and libraries are adapted from the documentation,
+-- (c) Roblox Corporation, under CC BY 4.0,
 -- https://creativecommons.org/licenses/by/4.0/, as LICENSE-creator-docs beside
 -- this file holds it.
 --
@@ -507,6 +518,39 @@ fn member_line(names: &Names, member: &Value) -> Option<String> {
     Some(if levels.is_empty() { line } else { format!("{line} -- {}", levels.join(", ")) })
 }
 
+/// Each declaration of the `RobloxGlobals` section of `LuauTypes.d.luau`, the
+/// globals Roblox Studio gives a script, with the name it declares. A
+/// `declare class`, which Luau now reads as a global named `class`, becomes
+/// the `declare extern type` it means.
+fn studio_globals(luau_types: &str) -> Vec<(String, String)> {
+    let (_, section) = luau_types
+        .split_once("-- SECTION BEGIN: RobloxGlobals\n")
+        .expect("LuauTypes.d.luau has a RobloxGlobals section");
+    let (section, _) = section.split_once("-- SECTION END: RobloxGlobals").expect("it ends");
+    let mut declarations: Vec<(String, String)> = Vec::new();
+    for line in section.lines().filter(|line| !line.trim().is_empty()) {
+        let line = match line.strip_prefix("declare class ") {
+            Some(header) => format!("declare extern type {header} with"),
+            None => line.to_owned(),
+        };
+        if let Some(declared) = line.strip_prefix("declare ") {
+            let declared = declared
+                .strip_prefix("function ")
+                .or_else(|| declared.strip_prefix("extern type "))
+                .unwrap_or(declared);
+            let name = declared
+                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .next()
+                .unwrap_or_default();
+            declarations.push((name.to_owned(), String::new()));
+        }
+        let (_, text) = declarations.last_mut().expect("a declaration starts the section");
+        text.push_str(&line);
+        text.push('\n');
+    }
+    declarations
+}
+
 /// Which of `candidates`, each a global or a field of one, as `debug.info`,
 /// Luau's built-in definitions don't declare.
 fn missing_from_luau(candidates: &[String]) -> BTreeSet<String> {
@@ -543,9 +587,10 @@ fn missing_from_luau(candidates: &[String]) -> BTreeSet<String> {
 }
 
 #[test]
-#[ignore = "rewrites roblox.luau from the live API dump and Creator Documentation; run with --ignored"]
+#[ignore = "rewrites roblox.luau from the live API dump, LuauTypes.d.luau, and Creator Documentation; run with --ignored"]
 fn regenerate_roblox_definitions() {
     let dump: Value = serde_json::from_slice(&fetch(DUMP_URL)).expect("the API dump is JSON");
+    let luau_types = String::from_utf8(fetch(LUAU_TYPES_URL)).expect("LuauTypes.d.luau is UTF-8");
     let docs = fetch_docs();
     let docs_page = |kind: &str, name: &str| docs.get(&format!("{kind}/{name}"));
 
@@ -741,9 +786,51 @@ fn regenerate_roblox_definitions() {
     }
     let missing = missing_from_luau(&candidates);
 
+    let mut global_summaries: BTreeMap<String, String> = BTreeMap::new();
+    let mut global_classes: BTreeMap<&str, &str> = BTreeMap::new();
+    for page in globals.iter().copied().chain(libraries.iter().map(|(_, page)| *page)) {
+        for kind in ["properties", "functions"] {
+            for item in list(page, kind) {
+                if let Some(item_summary) = summary(item) {
+                    global_summaries.insert(text(item, "name").to_owned(), item_summary);
+                }
+                let ty = text(item, "type");
+                if classes.contains_key(ty) {
+                    global_classes.insert(text(item, "name"), ty);
+                }
+            }
+        }
+    }
+    for (name, page) in &libraries {
+        global_summaries
+            .extend(summary(page).map(|page_summary| ((*name).to_owned(), page_summary)));
+    }
+    let studio = studio_globals(&luau_types);
+    for (name, declaration) in &studio {
+        write_summary(&mut out, "", global_summaries.get(name).map(String::as_str));
+        if let Some(class) = global_classes.get(name.as_str())
+            && *declaration == format!("declare {name}: any\n")
+        {
+            writeln!(out, "declare {name}: {class}\n").expect("write to a string");
+            continue;
+        }
+        for line in declaration.lines() {
+            let field = line.trim_start();
+            let indent = &line[..line.len() - field.len()];
+            let field_name = field.split(':').next().unwrap_or_default();
+            if !indent.is_empty() {
+                let field_summary = global_summaries.get(&format!("{name}.{field_name}"));
+                write_summary(&mut out, indent, field_summary.map(String::as_str));
+            }
+            writeln!(out, "{line}").expect("write to a string");
+        }
+        out.push('\n');
+    }
+    let from_studio: BTreeSet<&str> = studio.iter().map(|(name, _)| name.as_str()).collect();
+
     for page in globals {
         for property in names.docs_properties(page, "properties") {
-            if !missing.contains(&property.name) {
+            if !missing.contains(&property.name) || from_studio.contains(property.name.as_str()) {
                 continue;
             }
             write_summary(&mut out, "", property.summary.as_deref());
@@ -752,7 +839,7 @@ fn regenerate_roblox_definitions() {
         }
         for function in list(page, "functions") {
             let name = text(function, "name");
-            if !missing.contains(name) {
+            if !missing.contains(name) || from_studio.contains(name) {
                 continue;
             }
             write_summary(&mut out, "", summary(function).as_deref());
@@ -766,7 +853,7 @@ fn regenerate_roblox_definitions() {
             .expect("write to a string");
         }
     }
-    for (name, page) in &libraries {
+    for (name, page) in libraries.iter().filter(|(name, _)| !from_studio.contains(name)) {
         let mut fields = names.docs_properties(page, "properties");
         fields.extend(names.docs_functions(page, "functions", None));
         if missing.contains(*name) {

@@ -10,7 +10,9 @@
 //! config, which Luau's own parser reads. So it works with nothing on disk. It
 //! starts with Luau's built-in definitions, which [`builtin_definitions`]
 //! gives as text, loads more from text with
-//! [`Checker::load_definitions`], and keeps each module it checks until
+//! [`Checker::load_definitions`], types what a definition file can't when
+//! asked, with [`Checker::return_named_type`] and
+//! [`Checker::bind_type_namespace`], and keeps each module it checks until
 //! [`Checker::invalidate`] marks it changed. [`Checker::check`] checks many
 //! modules on worker threads it starts and joins, through Analysis's own
 //! queue, and a [`CancellationToken`] stops it from another thread. Each

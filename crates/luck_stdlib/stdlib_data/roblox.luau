@@ -1,9 +1,16 @@
 -- Roblox's engine API as a Luau definition file, which `just roblox-api`
--- generates from Roblox's API dump, as
--- https://github.com/MaximumADHD/Roblox-Client-Tracker mirrors it, and from
--- the Roblox Creator Documentation, https://github.com/Roblox/creator-docs.
--- The summaries, datatypes, globals, and libraries are adapted from the
--- documentation, (c) Roblox Corporation, under CC BY 4.0,
+-- generates from Roblox's API dump and LuauTypes.d.luau, as
+-- https://github.com/MaximumADHD/Roblox-Client-Tracker extracts them from
+-- Roblox Studio, and from the Roblox Creator Documentation,
+-- https://github.com/Roblox/creator-docs.
+--
+-- The globals LuauTypes.d.luau's RobloxGlobals section declares, the ones
+-- Studio gives a script, are its declarations, but for a global it types
+-- `any` that the documentation types as a class, which Studio's reflection
+-- types. Its other sections, such as TestEZ's and BehaviorScript's, aren't
+-- in a script's environment, and are left out. The summaries, datatypes, and
+-- other globals and libraries are adapted from the documentation,
+-- (c) Roblox Corporation, under CC BY 4.0,
 -- https://creativecommons.org/licenses/by/4.0/, as LICENSE-creator-docs beside
 -- this file holds it.
 --
@@ -26689,47 +26696,20 @@ declare Vector3int16: {
 	new: (x: number, y: number, z: number) -> Vector3int16,
 }
 
--- Contains all Enum objects.
-declare Enum: Enums
+-- Yields the current thread until the specified amount of time in seconds have elapsed, with throttling.
+declare function wait(delay: number?): (number, number)
 
--- Refers to the DataModel singleton, the root instance of a place's hierarchy.
-declare game: DataModel
-
--- Refers to a Plugin singleton when the code is run in the context of a Studio plugin.
-declare plugin: Plugin
-
--- A table shared between all code running at the same execution context level.
-declare shared: { any }
-
--- A reference to the LuaSourceContainer object (Script, LocalScript, or ModuleScript) that is executing this code.
-declare script: LuaSourceContainer
-
--- A reference to the Workspace service, which contains all of the physical components of a place.
-declare workspace: Workspace
+declare Wait: typeof(wait)
 
 -- Schedules a function to be called on the next Heartbeat after the given duration (in seconds) has passed, with throttling.
-@deprecated declare function delay(delayTime: number, callback: ((...any) -> ...any)): ()
+declare function delay(delay: number?, callback: () -> ())
 
--- Refers to the legacy `DebuggerManager` class which acts as an interface for the Luau debugger feature.
-@deprecated declare function DebuggerManager(): DebuggerManager
+declare Delay: typeof(delay)
 
 -- Returns the amount of time in seconds that the current instance of Roblox has been running for.
-@deprecated declare function elapsedTime(): number
+declare function elapsedTime(): number
 
--- Refers to the `PluginManager`, a deprecated singleton that was previously required to create plugins.
-declare function PluginManager(): PluginManager
-
--- Prints "Current identity is X", where X corresponds to the current thread's security context level.
-@deprecated declare function printidentity(prefix: string?): ()
-
--- Returns the `GlobalSettings` object, which can be used to access settings objects that configure Roblox Studio's behavior.
-declare function settings(): GlobalSettings
-
--- Calls a function immediately through the engine scheduler, with throttling.
-@deprecated declare function spawn(callback: ((...any) -> ...any)): ()
-
--- Returns the Stats service.
-@deprecated declare function stats(): Stats
+declare ElapsedTime: typeof(elapsedTime)
 
 -- Returns the amount of time in seconds since the Unix epoch according to this device's time.
 declare function tick(): number
@@ -26737,26 +26717,85 @@ declare function tick(): number
 -- Returns the amount of time in seconds that has elapsed since the current game instance started running.
 declare function time(): number
 
+-- Returns the current version of Roblox as a string, which includes the generation, version, patch and commit.
+declare function version(): string
+
+declare Version: typeof(version)
+
+-- Prints "Current identity is X", where X corresponds to the current thread's security context level.
+declare function printidentity(prefix: string?)
+
+-- Performs the specified operation of the garbage collector.
+declare function collectgarbage(mode: string): number
+
+-- Returns the provided code as a function that can be executed.
+declare function loadstring<A...>(src: string, chunkname: string?): (((A...) -> any)?, string?)
+
+-- Returns the Stats service.
+declare function stats()
+
+declare Stats: typeof(stats)
+
+-- A reference to the LuaSourceContainer object (Script, LocalScript, or ModuleScript) that is executing this code.
+declare script: LuaSourceContainer
+
+-- Refers to a Plugin singleton when the code is run in the context of a Studio plugin.
+declare plugin: Plugin
+
+-- Refers to the DataModel singleton, the root instance of a place's hierarchy.
+declare game: DataModel
+
+declare Game: any
+
+-- A reference to the Workspace service, which contains all of the physical components of a place.
+declare workspace: Workspace
+
+declare Workspace: any
+
+-- A table shared between all code running at the same execution context level.
+declare shared: any
+
+-- Allows for functions and threads to be coordinated with the engine's scheduler.
+declare task: {
+    -- Causes the following code to be run in serial.
+    synchronize: () -> (),
+    -- Causes the following code to be run in parallel.
+    desynchronize: () -> (),
+    -- Calls/resumes a function/coroutine at the end of the current resumption cycle.
+    defer: <A..., R...>(threadOrFunction: thread | (A...) -> R..., A...) -> thread,
+    -- Calls/resumes a function/coroutine immediately through the engine's scheduler.
+    spawn: <A..., R...>(threadOrFunction: thread | (A...) -> R..., A...) -> thread,
+    -- Schedules a function/coroutine to be called/resumed on the next Heartbeat after the given duration (in seconds) has passed, without throttling.
+    delay: <A..., R...>(duration: number?, threadOrFunction: thread | (A...) -> R..., A...) -> thread,
+    -- Yields the current thread without throttling.
+    wait: (duration: number?) -> number,
+    -- Cancels a thread, preventing it from being resumed.
+    cancel: (thread: thread) -> (),
+}
+
+-- Contains all Enum objects.
+declare Enum: Enums
+
+-- Refers to the legacy `DebuggerManager` class which acts as an interface for the Luau debugger feature.
+@deprecated declare function DebuggerManager(): DebuggerManager
+
+-- Refers to the `PluginManager`, a deprecated singleton that was previously required to create plugins.
+declare function PluginManager(): PluginManager
+
+-- Returns the `GlobalSettings` object, which can be used to access settings objects that configure Roblox Studio's behavior.
+declare function settings(): GlobalSettings
+
+-- Calls a function immediately through the engine scheduler, with throttling.
+@deprecated declare function spawn(callback: ((...any) -> ...any)): ()
+
 -- Returns the UserSettings object, which is used to read information from the current user's game menu settings.
 declare function UserSettings(): UserSettings
-
--- Returns the current version of Roblox as a string, which includes the generation, version, patch and commit.
-@deprecated declare function version(): string
-
--- Yields the current thread until the specified amount of time in seconds have elapsed, with throttling.
-@deprecated declare function wait(seconds: number?): (number, number)
 
 -- Behaves similarly to print, except with more distinct formatting (yellow); intended for messages which describe potential problems.
 declare function warn(...: any): ()
 
 -- Legacy function to work around an old task scheduling limitation of `pcall()`.
 @deprecated declare function ypcall(f: ((...any) -> ...any), ...: any): (boolean, any)
-
--- Performs the specified operation of the garbage collector.
-@deprecated declare function collectgarbage(operation: string): any
-
--- Returns the provided code as a function that can be executed.
-declare function loadstring(contents: string, chunkname: string): any
 
 declare buffer: typeof(buffer) & {
 	-- Reads two 32-bit floating-point values from the buffer into a vector.
@@ -26782,24 +26821,6 @@ declare debug: typeof(debug) & {
 	resetmemorycategory: () -> (),
 	-- Displays a table of native code size of individual functions and scripts.
 	dumpcodesize: () -> (),
-}
-
--- Allows for functions and threads to be coordinated with the engine's scheduler.
-declare task: {
-	-- Calls/resumes a function/coroutine immediately through the engine's scheduler.
-	spawn: (functionOrThread: ((...any) -> ...any) | thread, ...any) -> thread,
-	-- Calls/resumes a function/coroutine at the end of the current resumption cycle.
-	defer: (functionOrThread: ((...any) -> ...any) | thread, ...any) -> thread,
-	-- Schedules a function/coroutine to be called/resumed on the next Heartbeat after the given duration (in seconds) has passed, without throttling.
-	delay: (duration: number, functionOrThread: ((...any) -> ...any) | thread, ...any) -> thread,
-	-- Causes the following code to be run in parallel.
-	desynchronize: () -> (),
-	-- Causes the following code to be run in serial.
-	synchronize: () -> (),
-	-- Yields the current thread without throttling.
-	wait: (duration: number?) -> number,
-	-- Cancels a thread, preventing it from being resumed.
-	cancel: (thread: thread) -> (),
 }
 
 declare utf8: typeof(utf8) & {
