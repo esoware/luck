@@ -7,6 +7,7 @@ mod common;
 mod ast_types_bitset;
 mod checker;
 mod counts;
+mod definitions;
 mod nodes;
 mod requires;
 mod scoping;

@@ -1,8 +1,9 @@
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, ConditionalBinding, DoBlock, Expression,
-    FunctionAttribute, FunctionBody, FunctionDecl, GenericFor, IfStatement, LocalAssignment,
-    LocalAssignmentKind, LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement,
-    TypeDeclaration, TypeDeclarationValue, TypedName, WhileLoop,
+    Assignment, Block, CompoundAssignment, ConditionalBinding, DeclaredExternType,
+    DeclaredFunction, DoBlock, Expression, ExternTypeMember, FunctionAttribute, FunctionBody,
+    FunctionDecl, GenericFor, GenericTypeList, IfStatement, LocalAssignment, LocalAssignmentKind,
+    LocalFunction, LocalFunctionKind, NumericFor, RepeatLoop, Slot, Statement, Type,
+    TypeDeclaration, TypeDeclarationValue, TypedName, VarArgParam, WhileLoop,
 };
 use luck_token::CompoundOp;
 
@@ -43,8 +44,61 @@ impl Printer {
             Statement::Continue(_) => self.piece("continue"),
             Statement::CompoundAssignment(compound) => self.print_compound_assignment(compound),
             Statement::TypeDeclaration(declaration) => self.print_type_declaration(declaration),
+            Statement::DeclaredGlobal(global) => {
+                self.piece("declare");
+                self.name(global.name.text.as_str());
+                self.piece(":");
+                self.print_type(&global.ty);
+            }
+            Statement::DeclaredFunction(function) => {
+                self.print_declared_function(function, "declare function");
+            }
+            Statement::DeclaredExternType(extern_type) => {
+                self.print_declared_extern_type(extern_type);
+            }
             Statement::Error(_) => {}
         }
+    }
+
+    /// The attributes, then `keywords`, or the chain an attributed `declare`
+    /// opens and `function`, then the name and the signature.
+    fn print_declared_function(&mut self, function: &DeclaredFunction<'_>, keywords: &str) {
+        if !function.attributes.is_empty() {
+            self.print_function_attributes(&function.attributes);
+        }
+        if let Some(chain) = &function.declare_chain {
+            self.print_suffixed(chain);
+            self.piece("function");
+        } else {
+            self.piece(keywords);
+        }
+        self.name(function.name.text.as_str());
+        self.print_signature(
+            function.generics.as_deref(),
+            &function.params,
+            function.vararg.as_deref(),
+            function.return_type.as_deref(),
+        );
+    }
+
+    /// The members print one after another, as Luau reads them.
+    fn print_declared_extern_type(&mut self, extern_type: &DeclaredExternType<'_>) {
+        self.piece("declare extern type");
+        self.name(extern_type.name.text.as_str());
+        if let Some(supertype) = &extern_type.supertype {
+            self.piece("extends");
+            self.name(supertype.text.as_str());
+        }
+        self.piece("with");
+        for member in &extern_type.members {
+            match member {
+                ExternTypeMember::Field(field) => self.print_type_field(field),
+                ExternTypeMember::Method(method) => {
+                    self.print_declared_function(method, "function");
+                }
+            }
+        }
+        self.piece("end");
     }
 
     fn print_assignment(&mut self, assignment: &Assignment<'_>) {
@@ -251,13 +305,30 @@ impl Printer {
     }
 
     pub(super) fn print_function_body(&mut self, body: &FunctionBody<'_>) {
-        if let Some(generics) = &body.generics {
+        self.print_signature(
+            body.generics.as_deref(),
+            &body.params,
+            body.vararg.as_deref(),
+            body.return_type.as_deref(),
+        );
+        self.print_block(&body.block);
+        self.piece("end");
+    }
+
+    fn print_signature(
+        &mut self,
+        generics: Option<&GenericTypeList<'_>>,
+        params: &[TypedName<'_>],
+        vararg: Option<&VarArgParam<'_>>,
+        return_type: Option<&Type<'_>>,
+    ) {
+        if let Some(generics) = generics {
             self.print_generic_type_list(generics);
         }
         self.piece("(");
-        self.list(&body.params, Self::print_typed_name);
-        if let Some(vararg) = &body.vararg {
-            if !body.params.is_empty() {
+        self.list(params, Self::print_typed_name);
+        if let Some(vararg) = vararg {
+            if !params.is_empty() {
                 self.piece(",");
             }
             self.piece("...");
@@ -267,12 +338,10 @@ impl Printer {
             }
         }
         self.piece(")");
-        if let Some(return_type) = &body.return_type {
+        if let Some(return_type) = return_type {
             self.piece(":");
             self.print_type(return_type);
         }
-        self.print_block(&body.block);
-        self.piece("end");
     }
 }
 
@@ -294,11 +363,13 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::LocalAssignment(_)
         | Statement::Return(_)
         | Statement::CompoundAssignment(_)
+        | Statement::DeclaredGlobal(_)
         // Prints nothing, so whatever it follows ends the output.
         | Statement::Error(_) => true,
         Statement::TypeDeclaration(declaration) => {
             matches!(declaration.value, TypeDeclarationValue::Alias(_))
         }
+        Statement::DeclaredFunction(function) => function.return_type.is_some(),
         Statement::DoBlock(_)
         | Statement::WhileLoop(_)
         | Statement::IfStatement(_)
@@ -307,6 +378,7 @@ fn is_open(stmt: &Statement<'_>) -> bool {
         | Statement::FunctionDecl(_)
         | Statement::LocalFunction(_)
         | Statement::Break(_)
-        | Statement::Continue(_) => false,
+        | Statement::Continue(_)
+        | Statement::DeclaredExternType(_) => false,
     }
 }

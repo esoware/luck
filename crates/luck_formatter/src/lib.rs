@@ -6,9 +6,11 @@
 //! with no source text. It prints each literal as the tree spells it,
 //! unchecked, or spells one built in code from its value, and returns an
 //! error only for a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
-//! [`format()`] parses source text first, and [`format_parsed`] and
-//! [`format_range`] take an existing parse, one that kept its tokens. The
-//! parse gets them blank-line preservation, `-- luck: format off` regions, the
+//! [`format()`] parses source text first, as code, and [`format_parsed`]
+//! and [`format_range`] take an existing parse, one that kept its tokens,
+//! such as a definition file's from
+//! `luck_parser::parse_definitions_with_tokens`. The parse gets them
+//! blank-line preservation, `-- luck: format off` regions, the
 //! parentheses the source grouped an expression in, and comments, each placed
 //! at the nearest node boundary, where its tokens say what lies between two
 //! nodes, so the formatter never lexes the source again.

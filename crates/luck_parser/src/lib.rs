@@ -13,6 +13,10 @@
 //! A source is bytes, as Luau reads it, so a string or a comment may hold
 //! any byte.
 //!
+//! A source is code unless the caller reads it with [`parse_definitions`] as
+//! a definition file, which also takes Luau's `declare` statements, as
+//! Luau's parser does with `allowDeclarationSyntax`.
+//!
 //! The tree keeps the parentheses that change what they hold, and the parse
 //! records every other pair in its [`Groupings`], as it keeps comments beside
 //! the tree. A node spans the tokens it was read from, so one around an
@@ -35,4 +39,4 @@ mod parser;
 
 pub use groupings::Groupings;
 pub use parse_result::ParseResult;
-pub use parser::{parse, parse_with_tokens};
+pub use parser::{parse, parse_definitions, parse_definitions_with_tokens, parse_with_tokens};

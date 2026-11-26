@@ -1,0 +1,108 @@
+-- From Luau's own built-in definitions, Analysis/src/EmbeddedBuiltinDefinitions.cpp.
+
+@checked declare function require(target: any): any
+
+@checked declare function getfenv(target: any): { [string]: any }
+
+declare _G: any
+declare _VERSION: string
+
+declare function gcinfo(): number
+
+declare function print<T...>(...: T...)
+
+declare function type<T>(value: T): string
+declare function typeof<T>(value: T): string
+
+-- `assert` has a magic function attached that will give more detailed type information
+declare function assert<T>(value: T, errorMessage: string?): T
+declare function error<T>(message: T, level: number?): never
+
+declare function rawget<K, V>(tab: {[K]: V}, k: K): V?
+declare function rawset<K, V>(tab: {[K]: V}, k: K, v: V): {[K]: V}
+declare function rawlen<K, V>(obj: {[K]: V} | string): number
+
+declare function setfenv<T..., R...>(target: number | (T...) -> R..., env: {[string]: any}): ((T...) -> R...)?
+
+declare function ipairs<V>(tab: {V}): (({V}, number) -> (number?, V), {V}, number)
+
+declare function pcall<A..., R...>(f: (A...) -> R..., ...: A...): (boolean, R...)
+
+-- `select` has a magic function attached to provide more detailed type information
+declare function select<A...>(i: string | number, ...: A...): ...any
+
+-- Cannot use `typeof` here because it will produce a polytype when we expect a monotype.
+declare function unpack<V>(tab: {V}, i: number?, j: number?): ...V
+
+declare bit32: {
+    band: @checked (...number) -> number,
+    btest: @checked (number, ...number) -> boolean,
+    rrotate: @checked (x: number, disp: number) -> number,
+    extract: @checked (n: number, field: number, width: number?) -> number,
+}
+
+declare math: {
+    frexp: @checked (n: number) -> (number, number),
+    log: @checked (n: number, base: number?) -> number,
+
+    min: @checked (number, ...number) -> number,
+
+    pi: number,
+    huge: number,
+
+    randomseed: @checked (seed: number) -> (),
+    random: @checked (number?, number?) -> number,
+}
+
+type DateTypeArg = {
+    year: number,
+    month: number,
+    day: number,
+    hour: number?,
+    isdst: boolean?,
+}
+
+declare os: {
+    time: (time: DateTypeArg?) -> number,
+    date: ((formatString: "*t" | "!*t", time: number?) -> DateTypeArg) & ((formatString: string?, time: number?) -> string),
+    clock: () -> number,
+}
+
+declare coroutine: {
+    create: <A..., R...>(f: (A...) -> R...) -> thread,
+    status: @checked (co: thread) -> "dead" | "running" | "normal" | "suspended",
+    wrap: <A..., R...>(f: (A...) -> R...) -> ((A...) -> R...),
+}
+
+declare table: {
+    insert: (<V>(t: {V}, value: V) -> ()) & (<V>(t: {V}, pos: number, value: V) -> ()),
+    pack: <V>(...V) -> { n: number, [number]: V },
+    sort: <V>(t: {V}, comp: ((V, V) -> boolean)?) -> (),
+}
+
+--- Buffer API
+declare buffer: {
+    create: @checked (size: number) -> buffer,
+    readi8: @checked (b: buffer, offset: number) -> number,
+    writestring: @checked (b: buffer, offset: number, value: string, count: number?) -> (),
+}
+
+-- While vector would have been better represented as a built-in primitive type, type solver extern type handling covers most of the properties
+declare extern type vector with
+    read x: number
+    read y: number
+    read z: number
+end
+
+declare vector: {
+    create: @checked (x: number, y: number, z: number?) -> vector,
+    max: @checked (vector, ...vector) -> vector,
+
+    zero: vector,
+    one: vector,
+}
+
+declare class: {
+    isinstance: @checked (o: unknown, c: class) -> boolean,
+    classof: @checked (o: unknown) -> class?
+}

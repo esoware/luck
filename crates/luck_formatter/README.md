@@ -19,7 +19,7 @@ It writes the parentheses precedence needs. Of those in the source, it keeps the
 ## Usage
 
 - `format(allocator, source, &options)` parses and formats, returning a `FormatResult` with the output and any parse errors. The source and the output are bytes, as Luau reads them, so a comment or a string that isn't UTF-8 keeps its bytes, and the output is UTF-8 whenever the source is.
-- `format_parsed` formats a parse the caller holds, made with `luck_parser::parse_with_tokens`, which keeps the tokens the formatter reads, and `format_range` formats only the statements a byte range overlaps and copies the rest.
+- `format_parsed` formats a parse the caller holds, made with `luck_parser::parse_with_tokens`, which keeps the tokens the formatter reads, or with `luck_parser::parse_definitions_with_tokens` for a definition file, and `format_range` formats only the statements a byte range overlaps and copies the rest.
 - `format_chunk(allocator, &chunk, comments, &options)` formats a tree with no source, such as one built with `luck_ast::Synth`, with `Comments::synthetic`, which places each `SyntheticComment` at the statement or block it's anchored to, or `Comments::none`, and spells each literal that has no spelling from its value. It fails only on a tree nested past `luck_ast::MAX_NESTING_DEPTH`.
 
 ```rust

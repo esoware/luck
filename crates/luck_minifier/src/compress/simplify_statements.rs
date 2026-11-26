@@ -21,7 +21,10 @@ const fn is_scoped_declaration(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::LocalAssignment(_)
         | Statement::LocalFunction(_)
-        | Statement::TypeDeclaration(_) => true,
+        | Statement::TypeDeclaration(_)
+        | Statement::DeclaredGlobal(_)
+        | Statement::DeclaredFunction(_)
+        | Statement::DeclaredExternType(_) => true,
         Statement::Assignment(_)
         | Statement::FunctionCall(_)
         | Statement::DoBlock(_)

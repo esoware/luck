@@ -329,6 +329,15 @@ impl<'ast> Comments<'ast> {
         tokens.iter().find(|token| token.kind == closer).map_or(from, |token| token.span.start)
     }
 
+    /// Where the first token at or after `from` is, which is `from` in a tree
+    /// built in code.
+    pub(crate) fn next_token_offset(&self, from: u32) -> u32 {
+        let Some(parsed) = self.parsed() else {
+            return from;
+        };
+        parsed.tokens_from(from).first().map_or(from, |token| token.span.start)
+    }
+
     /// The line breaks in `start..end` that part two tokens outside every
     /// comment, where text that goes out as written can take the printer's
     /// indent. One a long string or a long comment holds, or one a `\`

@@ -7,7 +7,7 @@ gen_full.luau:
   sys peak growth: 139466 # 139.47 kB
   arena allocs: 73382
   arena reallocs: 0
-  arena size: 2616648 # 2.62 MB
+  arena size: 2629472 # 2.63 MB
 
 idiomatic.luau:
   file size: 2124 # 2.12 kB

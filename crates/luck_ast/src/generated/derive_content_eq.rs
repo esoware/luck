@@ -3,17 +3,54 @@
 
 use crate::{
     Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, ContentEq,
-    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
-    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
-    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
-    IfExpression, IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType,
-    LocalAssignment, LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name,
-    NamedType, NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
+    DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
+    FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
+    GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
+    InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
+    LocalAssignmentKind, LocalFunction, LocalFunctionKind, MethodCall, Name, NamedType,
+    NumberLiteral, NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType,
     RepeatLoop, ReturnStatement, Statement, StringLiteral, Suffix, SuffixedExpression,
     TableConstructor, TableType, Type, TypeArgs, TypeCast, TypeDeclaration, TypeDeclarationValue,
     TypeField, TypeFieldAccess, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var,
     VarArgParam, VariadicType, WhileLoop,
 };
+
+impl ContentEq for DeclaredGlobal<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name) && ContentEq::content_eq(&self.ty, &other.ty)
+    }
+}
+
+impl ContentEq for DeclaredFunction<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.attributes, &other.attributes)
+            && ContentEq::content_eq(&self.declare_chain, &other.declare_chain)
+            && ContentEq::content_eq(&self.name, &other.name)
+            && ContentEq::content_eq(&self.generics, &other.generics)
+            && ContentEq::content_eq(&self.params, &other.params)
+            && ContentEq::content_eq(&self.vararg, &other.vararg)
+            && ContentEq::content_eq(&self.return_type, &other.return_type)
+    }
+}
+
+impl ContentEq for DeclaredExternType<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name)
+            && ContentEq::content_eq(&self.supertype, &other.supertype)
+            && ContentEq::content_eq(&self.members, &other.members)
+    }
+}
+
+impl ContentEq for ExternTypeMember<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Field(lhs), Self::Field(rhs)) => ContentEq::content_eq(lhs, rhs),
+            (Self::Method(lhs), Self::Method(rhs)) => ContentEq::content_eq(lhs, rhs),
+            (Self::Field(_) | Self::Method(_), _) => false,
+        }
+    }
+}
 
 impl ContentEq for Expression<'_> {
     fn content_eq(&self, other: &Self) -> bool {
@@ -310,6 +347,15 @@ impl ContentEq for Statement<'_> {
             (Self::TypeDeclaration(lhs), Self::TypeDeclaration(rhs)) => {
                 ContentEq::content_eq(lhs, rhs)
             }
+            (Self::DeclaredGlobal(lhs), Self::DeclaredGlobal(rhs)) => {
+                ContentEq::content_eq(lhs, rhs)
+            }
+            (Self::DeclaredFunction(lhs), Self::DeclaredFunction(rhs)) => {
+                ContentEq::content_eq(lhs, rhs)
+            }
+            (Self::DeclaredExternType(lhs), Self::DeclaredExternType(rhs)) => {
+                ContentEq::content_eq(lhs, rhs)
+            }
             (
                 Self::Assignment(_)
                 | Self::FunctionCall(_)
@@ -327,6 +373,9 @@ impl ContentEq for Statement<'_> {
                 | Self::Continue(_)
                 | Self::CompoundAssignment(_)
                 | Self::TypeDeclaration(_)
+                | Self::DeclaredGlobal(_)
+                | Self::DeclaredFunction(_)
+                | Self::DeclaredExternType(_)
                 | Self::Error(_),
                 _,
             ) => false,
@@ -604,7 +653,8 @@ impl ContentEq for TypeFieldAccess {
 
 impl ContentEq for FunctionType<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.generics, &other.generics)
+        ContentEq::content_eq(&self.attributes, &other.attributes)
+            && ContentEq::content_eq(&self.generics, &other.generics)
             && ContentEq::content_eq(&self.params, &other.params)
             && ContentEq::content_eq(&self.return_type, &other.return_type)
     }
@@ -637,7 +687,8 @@ impl ContentEq for IntersectionType<'_> {
 
 impl ContentEq for ParenthesizedType<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.ty, &other.ty)
+        ContentEq::content_eq(&self.attributes, &other.attributes)
+            && ContentEq::content_eq(&self.ty, &other.ty)
     }
 }
 

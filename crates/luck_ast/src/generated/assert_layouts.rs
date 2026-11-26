@@ -4,8 +4,9 @@
 use luck_allocator::{List, ThinBytes, ThinStr};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
-    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
+    DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
     GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
     InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
@@ -17,7 +18,15 @@ use crate::{
     VarArgParam, VariadicType, WhileLoop,
 };
 
-const LAYOUTS: [(&str, usize, usize); 73] = [
+const LAYOUTS: [(&str, usize, usize); 77] = [
+    ("DeclaredGlobal", size_of::<DeclaredGlobal<'_>>(), align_of::<DeclaredGlobal<'_>>()),
+    ("DeclaredFunction", size_of::<DeclaredFunction<'_>>(), align_of::<DeclaredFunction<'_>>()),
+    (
+        "DeclaredExternType",
+        size_of::<DeclaredExternType<'_>>(),
+        align_of::<DeclaredExternType<'_>>(),
+    ),
+    ("ExternTypeMember", size_of::<ExternTypeMember<'_>>(), align_of::<ExternTypeMember<'_>>()),
     ("Expression", size_of::<Expression<'_>>(), align_of::<Expression<'_>>()),
     ("Var", size_of::<Var<'_>>(), align_of::<Var<'_>>()),
     (
@@ -111,6 +120,7 @@ const LAYOUTS: [(&str, usize, usize); 73] = [
     ("GenericPackType", size_of::<GenericPackType<'_>>(), align_of::<GenericPackType<'_>>()),
     ("GenericTypeList", size_of::<GenericTypeList<'_>>(), align_of::<GenericTypeList<'_>>()),
     ("GenericTypeParam", size_of::<GenericTypeParam<'_>>(), align_of::<GenericTypeParam<'_>>()),
+    ("Option<Name>", size_of::<Option<Name<'_>>>(), align_of::<Option<Name<'_>>>()),
     (
         "Option<List<Expression>>",
         size_of::<Option<List<'_, Expression<'_>>>>(),
@@ -124,7 +134,6 @@ const LAYOUTS: [(&str, usize, usize); 73] = [
         size_of::<Option<Expression<'_>>>(),
         align_of::<Option<Expression<'_>>>(),
     ),
-    ("Option<Name>", size_of::<Option<Name<'_>>>(), align_of::<Option<Name<'_>>>()),
     ("Option<TypeArgs>", size_of::<Option<TypeArgs<'_>>>(), align_of::<Option<TypeArgs<'_>>>()),
     (
         "Option<TypeFieldAccess>",

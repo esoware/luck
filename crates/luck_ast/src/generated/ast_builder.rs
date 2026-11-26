@@ -5,8 +5,9 @@ use luck_allocator::{Allocator, Box, List, ThinBytes, ThinStr};
 use luck_token::{BinOp, CompoundOp, Span, UnOp};
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
-    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
+    DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
     GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, IfExpression, IfStatement,
     InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
@@ -17,6 +18,110 @@ use crate::{
     TypeField, TypePack, TypedName, TypeofType, UnaryOp, UnionType, Var, VarArgParam, VariadicType,
     WhileLoop,
 };
+
+impl<'ast> DeclaredGlobal<'ast> {
+    #[inline]
+    pub const fn new(span: Span, name: Name<'ast>, ty: Type<'ast>) -> Self {
+        Self { span, name, ty }
+    }
+
+    #[inline]
+    pub fn boxed(
+        span: Span,
+        name: Name<'ast>,
+        ty: Type<'ast>,
+        allocator: &'ast Allocator,
+    ) -> Box<'ast, Self> {
+        Box::new_in(Self::new(span, name, ty), allocator)
+    }
+}
+
+impl<'ast> DeclaredFunction<'ast> {
+    #[inline]
+    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
+    pub const fn new(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
+        name: Name<'ast>,
+        generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+        params: List<'ast, TypedName<'ast>>,
+        vararg: Option<Box<'ast, VarArgParam<'ast>>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
+    ) -> Self {
+        Self { span, attributes, declare_chain, name, generics, params, vararg, return_type }
+    }
+
+    #[inline]
+    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
+    pub fn boxed(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
+        name: Name<'ast>,
+        generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+        params: List<'ast, TypedName<'ast>>,
+        vararg: Option<Box<'ast, VarArgParam<'ast>>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
+        allocator: &'ast Allocator,
+    ) -> Box<'ast, Self> {
+        Box::new_in(
+            Self::new(span, attributes, declare_chain, name, generics, params, vararg, return_type),
+            allocator,
+        )
+    }
+}
+
+impl<'ast> DeclaredExternType<'ast> {
+    #[inline]
+    pub const fn new(
+        span: Span,
+        name: Name<'ast>,
+        supertype: Option<Name<'ast>>,
+        members: List<'ast, ExternTypeMember<'ast>>,
+    ) -> Self {
+        Self { span, name, supertype, members }
+    }
+
+    #[inline]
+    pub fn boxed(
+        span: Span,
+        name: Name<'ast>,
+        supertype: Option<Name<'ast>>,
+        members: List<'ast, ExternTypeMember<'ast>>,
+        allocator: &'ast Allocator,
+    ) -> Box<'ast, Self> {
+        Box::new_in(Self::new(span, name, supertype, members), allocator)
+    }
+}
+
+impl<'ast> ExternTypeMember<'ast> {
+    #[inline]
+    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
+    pub fn new_method(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
+        name: Name<'ast>,
+        generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+        params: List<'ast, TypedName<'ast>>,
+        vararg: Option<Box<'ast, VarArgParam<'ast>>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
+        allocator: &'ast Allocator,
+    ) -> Self {
+        Self::Method(DeclaredFunction::boxed(
+            span,
+            attributes,
+            declare_chain,
+            name,
+            generics,
+            params,
+            vararg,
+            return_type,
+            allocator,
+        ))
+    }
+}
 
 impl<'ast> Expression<'ast> {
     #[inline]
@@ -731,6 +836,55 @@ impl<'ast> Statement<'ast> {
             allocator,
         ))
     }
+
+    #[inline]
+    pub fn new_declared_global(
+        span: Span,
+        name: Name<'ast>,
+        ty: Type<'ast>,
+        allocator: &'ast Allocator,
+    ) -> Self {
+        Self::DeclaredGlobal(DeclaredGlobal::boxed(span, name, ty, allocator))
+    }
+
+    #[inline]
+    #[expect(clippy::too_many_arguments, reason = "a node takes each of its fields")]
+    pub fn new_declared_function(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        declare_chain: Option<Box<'ast, SuffixedExpression<'ast>>>,
+        name: Name<'ast>,
+        generics: Option<Box<'ast, GenericTypeList<'ast>>>,
+        params: List<'ast, TypedName<'ast>>,
+        vararg: Option<Box<'ast, VarArgParam<'ast>>>,
+        return_type: Option<Box<'ast, Type<'ast>>>,
+        allocator: &'ast Allocator,
+    ) -> Self {
+        Self::DeclaredFunction(DeclaredFunction::boxed(
+            span,
+            attributes,
+            declare_chain,
+            name,
+            generics,
+            params,
+            vararg,
+            return_type,
+            allocator,
+        ))
+    }
+
+    #[inline]
+    pub fn new_declared_extern_type(
+        span: Span,
+        name: Name<'ast>,
+        supertype: Option<Name<'ast>>,
+        members: List<'ast, ExternTypeMember<'ast>>,
+        allocator: &'ast Allocator,
+    ) -> Self {
+        Self::DeclaredExternType(DeclaredExternType::boxed(
+            span, name, supertype, members, allocator,
+        ))
+    }
 }
 
 impl<'ast> Assignment<'ast> {
@@ -1140,12 +1294,20 @@ impl<'ast> Type<'ast> {
     #[inline]
     pub fn new_function(
         span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
         params: List<'ast, FunctionTypeParam<'ast>>,
         return_type: Self,
         allocator: &'ast Allocator,
     ) -> Self {
-        Self::Function(FunctionType::boxed(span, generics, params, return_type, allocator))
+        Self::Function(FunctionType::boxed(
+            span,
+            attributes,
+            generics,
+            params,
+            return_type,
+            allocator,
+        ))
     }
 
     #[inline]
@@ -1179,8 +1341,13 @@ impl<'ast> Type<'ast> {
     }
 
     #[inline]
-    pub fn new_parenthesized(span: Span, ty: Self, allocator: &'ast Allocator) -> Self {
-        Self::Parenthesized(ParenthesizedType::boxed(span, ty, allocator))
+    pub fn new_parenthesized(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        ty: Self,
+        allocator: &'ast Allocator,
+    ) -> Self {
+        Self::Parenthesized(ParenthesizedType::boxed(span, attributes, ty, allocator))
     }
 
     #[inline]
@@ -1289,22 +1456,24 @@ impl<'ast> FunctionType<'ast> {
     #[inline]
     pub const fn new(
         span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
         params: List<'ast, FunctionTypeParam<'ast>>,
         return_type: Type<'ast>,
     ) -> Self {
-        Self { span, generics, params, return_type }
+        Self { span, attributes, generics, params, return_type }
     }
 
     #[inline]
     pub fn boxed(
         span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
         generics: Option<Box<'ast, GenericTypeList<'ast>>>,
         params: List<'ast, FunctionTypeParam<'ast>>,
         return_type: Type<'ast>,
         allocator: &'ast Allocator,
     ) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, generics, params, return_type), allocator)
+        Box::new_in(Self::new(span, attributes, generics, params, return_type), allocator)
     }
 }
 
@@ -1372,13 +1541,22 @@ impl<'ast> IntersectionType<'ast> {
 
 impl<'ast> ParenthesizedType<'ast> {
     #[inline]
-    pub const fn new(span: Span, ty: Type<'ast>) -> Self {
-        Self { span, ty }
+    pub const fn new(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        ty: Type<'ast>,
+    ) -> Self {
+        Self { span, attributes, ty }
     }
 
     #[inline]
-    pub fn boxed(span: Span, ty: Type<'ast>, allocator: &'ast Allocator) -> Box<'ast, Self> {
-        Box::new_in(Self::new(span, ty), allocator)
+    pub fn boxed(
+        span: Span,
+        attributes: List<'ast, FunctionAttribute<'ast>>,
+        ty: Type<'ast>,
+        allocator: &'ast Allocator,
+    ) -> Box<'ast, Self> {
+        Box::new_in(Self::new(span, attributes, ty), allocator)
     }
 }
 

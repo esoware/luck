@@ -1,3 +1,5 @@
+use luck_allocator::List;
+
 use crate::expr::Expression;
 use crate::synth::Synth;
 use crate::types::{
@@ -120,7 +122,7 @@ impl<'ast> Synth<'ast> {
     }
 
     pub fn ty_parenthesized(&self, inner: Type<'ast>) -> Type<'ast> {
-        Type::new_parenthesized(self.next_span(), inner, self.allocator)
+        Type::new_parenthesized(self.next_span(), List::new(), inner, self.allocator)
     }
 
     pub fn ty_table_array(&self, element: Type<'ast>) -> Type<'ast> {
@@ -212,6 +214,7 @@ impl<'ast> Synth<'ast> {
         }));
         Type::new_function(
             span,
+            List::new(),
             generics.map(|list| self.boxed(list)),
             typed,
             return_type,

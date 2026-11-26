@@ -4,9 +4,9 @@
 use std::fmt::Write as _;
 
 use luck_formatter::FormatOptions;
-use luck_testgen::source_fixtures;
+use luck_testgen::{definition_fixtures, source_fixtures};
 
-use crate::common::formatted_with;
+use crate::common::{Parse, formatted_as};
 
 const LINE_WIDTHS: [u16; 5] = [1, 40, 80, 100, 120];
 
@@ -15,12 +15,20 @@ fn every_fixture_formats_as_its_snapshot() {
     let fixtures: Vec<_> =
         source_fixtures().into_iter().filter(|fixture| !fixture.is_error).collect();
     assert!(!fixtures.is_empty(), "no fixture outside `errors/`");
+    let definitions = definition_fixtures();
+    assert!(!definitions.is_empty(), "no definition fixture");
+    let code: Parse = luck_parser::parse_with_tokens;
+    let definition_file: Parse = luck_parser::parse_definitions_with_tokens;
+    let parses = fixtures
+        .into_iter()
+        .map(|fixture| (fixture, code))
+        .chain(definitions.into_iter().map(|fixture| (fixture, definition_file)));
 
-    for fixture in fixtures {
+    for (fixture, parse) in parses {
         let mut layouts: Vec<(Vec<String>, String)> = Vec::new();
         for line_width in LINE_WIDTHS {
             let options = FormatOptions { line_width, ..FormatOptions::default() };
-            let formatted = formatted_with(fixture.source.as_bytes(), &options);
+            let formatted = formatted_as(parse, fixture.source.as_bytes(), &options);
             let output = String::from_utf8(formatted).expect("a fixture formats as UTF-8");
             if let Some((widths, _)) = layouts.iter_mut().find(|(_, layout)| *layout == output) {
                 widths.push(line_width.to_string());

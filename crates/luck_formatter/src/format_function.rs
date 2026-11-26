@@ -1,8 +1,8 @@
 use std::iter;
 
 use luck_ast::{
-    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GetSpan as _, Slot, TypedName,
-    VarArgParam,
+    Expression, FunctionArgs, FunctionAttribute, FunctionBody, GenericTypeList, GetSpan as _, Slot,
+    Type, TypedName, VarArgParam,
 };
 use luck_token::{Span, TokenKind};
 
@@ -25,19 +25,13 @@ fn is_block_arg(arg: &Expression<'_>) -> bool {
 
 impl<'ast> Formatter<'ast> {
     pub(crate) fn write_function_body(&mut self, body: &FunctionBody<'ast>) {
-        // `<T, U...>` generic list before the parameter parens.
-        if let Some(generics) = &body.generics {
-            self.write_generic_type_list(generics);
-        }
-
-        self.write_param_list(body);
-
-        // `: T` return annotation after `)`.
-        if let Some(return_type) = &body.return_type {
-            self.token(":");
-            self.space();
-            self.write_type(return_type);
-        }
+        self.write_signature(
+            body.generics.as_deref(),
+            body.span.start,
+            &body.params,
+            body.vararg.as_deref(),
+            body.return_type.as_deref(),
+        );
 
         if self.has_printable_content(&body.block) {
             self.indent(|f| {
@@ -51,8 +45,36 @@ impl<'ast> Formatter<'ast> {
         self.token("end");
     }
 
-    fn write_param_list(&mut self, body: &FunctionBody<'ast>) {
-        // The body owns the `(`, so the definition-side
+    /// A function's generics, parameters, and return type, which are all
+    /// a function declared without a body has after its name. Its `(` is
+    /// the first at or after `start`, unless generics come first.
+    pub(crate) fn write_signature(
+        &mut self,
+        generics: Option<&GenericTypeList<'ast>>,
+        start: u32,
+        params: &[TypedName<'ast>],
+        vararg: Option<&VarArgParam<'ast>>,
+        return_type: Option<&Type<'ast>>,
+    ) {
+        if let Some(generics) = generics {
+            self.write_generic_type_list(generics);
+        }
+        let open = generics.map_or(start, |generics| generics.span.end);
+        self.write_param_list(open, params, vararg);
+        if let Some(return_type) = return_type {
+            self.token(":");
+            self.space();
+            self.write_type(return_type);
+        }
+    }
+
+    fn write_param_list(
+        &mut self,
+        open: u32,
+        params: &[TypedName<'ast>],
+        vararg: Option<&VarArgParam<'ast>>,
+    ) {
+        // The signature owns the `(`, so the definition-side
         // `space_after_function_names` space goes here instead of in every
         // caller.
         if matches!(
@@ -63,12 +85,9 @@ impl<'ast> Formatter<'ast> {
         }
 
         // The tree keeps no span for the parentheses.
-        let open = body.generics.as_ref().map_or(body.span.start, |generics| generics.span.end);
-        let last_end = body
-            .vararg
-            .as_ref()
+        let last_end = vararg
             .map(|vararg| vararg.span.end)
-            .or_else(|| body.params.last().map(|param| param.span().end));
+            .or_else(|| params.last().map(|param| param.span().end));
         let closer = self.closer_offset(last_end.unwrap_or(open), TokenKind::RightParen);
         if last_end.is_none() {
             self.write_dangling_list(("(", ")"), closer, LineMode::Soft);
@@ -79,7 +98,7 @@ impl<'ast> Formatter<'ast> {
             grouped.token("(");
             grouped.indent(|f| {
                 f.soft_line();
-                for (i, param) in body.params.iter().enumerate() {
+                for (i, param) in params.iter().enumerate() {
                     if i > 0 {
                         f.token(",");
                         f.soft_line_or_space();
@@ -88,8 +107,8 @@ impl<'ast> Formatter<'ast> {
                 }
                 // The vararg comes last. Unlike a table, a broken parameter
                 // list gets no trailing comma, since the grammar allows none.
-                if let Some(vararg) = &body.vararg {
-                    if !body.params.is_empty() {
+                if let Some(vararg) = vararg {
+                    if !params.is_empty() {
                         f.token(",");
                         f.soft_line_or_space();
                     }
@@ -131,8 +150,18 @@ impl<'ast> Formatter<'ast> {
         );
     }
 
-    /// Arguments only exist on the bracketed form.
+    /// Arguments only exist on the bracketed form, which spans to their end.
+    /// The comments between them and the `,` or `]` after them print inside
+    /// its parentheses, since one printed after its `]` would lead what
+    /// follows on the next format.
     pub(crate) fn write_function_attribute(&mut self, attribute: &FunctionAttribute<'ast>) {
+        let closer = if attribute.args.is_some()
+            && self.comments().has_pending_before(self.enclosing_end())
+        {
+            self.comments().next_token_offset(attribute.span.end)
+        } else {
+            attribute.span.end
+        };
         self.node(
             |_| attribute.span,
             |f| {
@@ -144,7 +173,7 @@ impl<'ast> Formatter<'ast> {
                 f.token("[");
                 f.name(attribute.name);
                 if args.is_empty() {
-                    f.write_dangling_list(("(", ")"), attribute.span.end, LineMode::Soft);
+                    f.write_dangling_list(("(", ")"), closer, LineMode::Soft);
                 } else {
                     f.token("(");
                     for (i, arg) in args.iter().enumerate() {
@@ -154,7 +183,7 @@ impl<'ast> Formatter<'ast> {
                         }
                         f.write_expr(arg);
                     }
-                    f.write_closing_comments(attribute.span.end);
+                    f.write_closing_comments(closer);
                     f.token(")");
                 }
                 f.token("]");

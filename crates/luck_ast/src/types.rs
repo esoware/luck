@@ -8,6 +8,7 @@ use luck_ast_macros::Ast;
 use luck_token::Span;
 
 use crate::expr::Expression;
+use crate::function::FunctionAttribute;
 use crate::leaf::{Name, StringLiteral};
 
 /// Two words, like [`Expression`].
@@ -108,6 +109,10 @@ impl TypeFieldAccess {
 #[visit(level)]
 pub struct FunctionType<'ast> {
     pub span: Span,
+    /// The `@checked` and the like before it, which Luau takes only in the
+    /// type of a definition file's `declare name: T`, at its top or in a
+    /// table type's named field there.
+    pub attributes: List<'ast, FunctionAttribute<'ast>>,
     pub generics: Option<Box<'ast, GenericTypeList<'ast>>>,
     pub params: List<'ast, FunctionTypeParam<'ast>>,
     pub return_type: Type<'ast>,
@@ -154,6 +159,10 @@ pub struct IntersectionType<'ast> {
 #[visit(level)]
 pub struct ParenthesizedType<'ast> {
     pub span: Span,
+    /// The attributes Luau reads before a lone `(T)` where a function type
+    /// may take them, as [`FunctionType::attributes`] says, and then drops,
+    /// since `T` is no function type. The printers keep them.
+    pub attributes: List<'ast, FunctionAttribute<'ast>>,
     pub ty: Type<'ast>,
 }
 

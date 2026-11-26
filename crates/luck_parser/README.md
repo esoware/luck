@@ -14,6 +14,7 @@ An error doesn't stop the parse. The parser recovers and reports every error in 
 
 - `parse(allocator, source)` returns a `ParseResult`: the source, the `chunk`, the `Block` at the root of the tree, the comments, the `Groupings`, the errors, the lenient escapes the lexer noted, the nesting depth, and the `TreeCounts`.
 - `parse_with_tokens` also keeps every token it read in the result's `tokens`, which `parse` leaves empty, so a host that needs both, such as the formatter or the language server, lexes the source once.
+- `parse_definitions` and `parse_definitions_with_tokens` read a definition file, as Luau's `Frontend::loadDefinitionFile` does with `allowDeclarationSyntax`, and the caller decides which sources are one. A statement there may also be `declare name: T`, `declare function`, or `declare extern type`, and a function type in a declared type may take attributes. Elsewhere `declare` is an ordinary name, as it is there when the token after it continues a name, as in `declare = 1`.
 
 A `break`, a `continue`, or a `return` is a statement like any other, and a `;` is no node. A statement the grammar takes only at the end of its block but that has others after it is an error, and stays where it was written.
 

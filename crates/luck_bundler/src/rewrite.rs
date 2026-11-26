@@ -197,6 +197,9 @@ impl<'ast> ModuleRewriter<'_, 'ast> {
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
+            | Statement::DeclaredGlobal(_)
+            | Statement::DeclaredFunction(_)
+            | Statement::DeclaredExternType(_)
             | Statement::Error(_)) => other,
         }
     }

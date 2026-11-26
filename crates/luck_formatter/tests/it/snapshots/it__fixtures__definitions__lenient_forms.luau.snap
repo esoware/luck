@@ -1,0 +1,105 @@
+---
+source: crates/luck_formatter/tests/it/fixtures.rs
+expression: snapshot
+input_file: tests/fixtures/definitions/lenient_forms.luau
+---
+-- line_width = 1
+-- What Luau's parser reads in a definition file and then drops: the attributes
+-- before a lone parenthesized type, and the expression an attributed `declare`
+-- opens.
+
+declare grouped: @checked (number)
+declare optional: @checked (string)?
+declare alternatives:
+	@checked (number)
+	| string
+declare joined:
+	@native (() -> ())
+	& (() -> number)
+declare widened:
+	@checked () -> ()
+	| number
+declare nested: {
+	a: @checked (number),
+	b: {
+		c: @deprecated ((boolean)),
+	},
+}
+
+@checked
+declare.field function chained(
+	x: number
+): number
+@checked
+declare:method() function called()
+@native
+declare(
+	1
+)[2](
+	"three"
+)({
+	four = 4,
+}) function argued(
+	...: any
+)
+@deprecated
+declare<<
+	number
+>> function instantiated()
+
+-- line_width = 40
+-- What Luau's parser reads in a definition file and then drops: the attributes
+-- before a lone parenthesized type, and the expression an attributed `declare`
+-- opens.
+
+declare grouped: @checked (number)
+declare optional: @checked (string)?
+declare alternatives:
+	@checked (number)
+	| string
+declare joined:
+	@native (() -> ())
+	& (() -> number)
+declare widened:
+	@checked () -> ()
+	| number
+declare nested: {
+	a: @checked (number),
+	b: { c: @deprecated ((boolean)) },
+}
+
+@checked
+declare.field function chained(
+	x: number
+): number
+@checked
+declare:method() function called()
+@native
+declare(1)[2]("three")({
+	four = 4,
+}) function argued(...: any)
+@deprecated
+declare<<
+	number
+>> function instantiated()
+
+-- line_width = 80, 100, 120
+-- What Luau's parser reads in a definition file and then drops: the attributes
+-- before a lone parenthesized type, and the expression an attributed `declare`
+-- opens.
+
+declare grouped: @checked (number)
+declare optional: @checked (string)?
+declare alternatives: @checked (number) | string
+declare joined: @native (() -> ()) & (() -> number)
+declare widened: @checked () -> () | number
+declare nested: { a: @checked (number), b: { c: @deprecated ((boolean)) } }
+
+@checked
+declare.field function chained(x: number): number
+@checked
+declare:method() function called()
+@native
+declare(1)[2]("three")({ four = 4 }) function argued(...: any)
+@deprecated
+declare<<number>> function instantiated()

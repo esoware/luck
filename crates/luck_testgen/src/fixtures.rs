@@ -43,12 +43,31 @@ pub fn fixture_files() -> Vec<PathBuf> {
     files
 }
 
-/// Every `.luau` and `.lua` file in the shared fixture tree, in path order.
+/// Every `.luau` and `.lua` file in the shared fixture tree, in path order,
+/// but the definition files [`definition_fixtures`] gives.
 ///
 /// # Panics
 ///
 /// Panics as [`fixture_files`] does, or when a file isn't readable as UTF-8.
 pub fn source_fixtures() -> Vec<SourceFixture> {
+    luau_fixtures().into_iter().filter(|fixture| !is_definition_file(fixture)).collect()
+}
+
+/// Every `.luau` file under the shared fixture tree's `definitions/`, in path
+/// order, each a definition file, which parses only as one.
+///
+/// # Panics
+///
+/// Panics as [`source_fixtures`] does.
+pub fn definition_fixtures() -> Vec<SourceFixture> {
+    luau_fixtures().into_iter().filter(is_definition_file).collect()
+}
+
+fn is_definition_file(fixture: &SourceFixture) -> bool {
+    fixture.relative_path.starts_with("definitions")
+}
+
+fn luau_fixtures() -> Vec<SourceFixture> {
     let root = root();
     fixture_files()
         .into_iter()

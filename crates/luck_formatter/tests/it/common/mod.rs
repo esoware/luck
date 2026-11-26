@@ -2,7 +2,12 @@ use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{SpanCounter, Synth};
-use luck_formatter::{FormatOptions, FormatResult, format, format_range};
+use luck_formatter::{FormatOptions, FormatResult, format_parsed, format_range};
+use luck_parser::ParseResult;
+
+/// A parse that keeps its tokens, of code, as
+/// `luck_parser::parse_with_tokens`, or of a definition file.
+pub(crate) type Parse = for<'ast> fn(&'ast Allocator, &'ast [u8]) -> ParseResult<'ast>;
 
 /// An arena and a span counter for building trees in code.
 #[derive(Default)]
@@ -24,13 +29,18 @@ impl Fixture {
 /// `input` formatted, after checking that it parses, that the output formats
 /// to itself, and that the output re-parses clean.
 pub(crate) fn formatted_with(input: &[u8], options: &FormatOptions) -> Vec<u8> {
+    formatted_as(luck_parser::parse_with_tokens, input, options)
+}
+
+/// [`formatted_with`], for a source `parse` reads.
+pub(crate) fn formatted_as(parse: Parse, input: &[u8], options: &FormatOptions) -> Vec<u8> {
     let allocator = Allocator::new();
-    let result = format(&allocator, input, options);
+    let result = format_parsed(&allocator, &parse(&allocator, input), options);
     assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-    let second_pass = format(&allocator, &result.output, options);
-    assert_eq!(second_pass.output, result.output, "not idempotent");
-    let reparsed = luck_parser::parse(&allocator, &result.output);
+    let reparsed = parse(&allocator, &result.output);
     assert!(reparsed.errors.is_empty(), "formatted output has parse errors: {:?}", reparsed.errors);
+    let second_pass = format_parsed(&allocator, &reparsed, options);
+    assert_eq!(second_pass.output, result.output, "not idempotent");
     result.output
 }
 

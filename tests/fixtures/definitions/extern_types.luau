@@ -1,0 +1,57 @@
+--[[
+    Extern types as a host such as Roblox declares them, with the forms
+    Luau's parser takes in a definition file.
+]]
+
+export type ConnectionState = "connected" | "disconnected"
+
+type Callback<T...> = (T...) -> ()
+
+declare extern type Instance with
+    -- The name scripts see.
+    Name: string
+    read ClassName: string
+    write Archivable: boolean
+    read: number
+    ["Parent Name"]: string
+    [string]: any
+
+    function GetChildren(self): { Instance }
+    @checked function FindFirstChild(self, name: string, recursive: boolean?): Instance?
+    @[deprecated {use = "Destroy", reason = "Remove is a no-op"}] function Remove(self)
+    @deprecated @native function Clone(self): Instance
+
+    -- A repeated name is an overload.
+    function IsA(self, className: string): boolean
+    function IsA(self, className: "Part"): true
+end
+
+declare extern type Part extends Instance with
+    Size: vector
+    Touched: Signal
+    function GetConnectedParts(self, ...: boolean): ...Part
+    function Resize(self, normalId: number, deltaAmount: number): (boolean, string)
+end
+
+declare extern type Signal with
+    function Connect(self, callback: Callback<...any>): ConnectionState
+end
+
+declare extern type Empty with end
+
+declare game: Instance
+declare workspace: Instance & { Gravity: number }
+declare function wait(seconds: number?): (number, number)
+@native @checked declare function spawn<T...>(callback: Callback<T...>, ...: T...): thread
+@[deprecated {reason = "use task.delay"}] declare function delay(seconds: number, callback: () -> ())
+
+declare shared: { [string]: any }
+declare settings: {
+    read Physics: { AllowSleep: boolean },
+    nested: { inner: @deprecated (x: number) -> number },
+    generic: @checked <T>(value: T) -> T,
+}
+
+local declare = "an ordinary local"
+declare = declare .. "!"
+print(declare)

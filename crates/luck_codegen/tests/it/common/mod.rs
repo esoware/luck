@@ -1,7 +1,11 @@
 use luck_allocator::Allocator;
 use luck_ast::Block;
 use luck_codegen::LiteralSpelling;
+use luck_parser::ParseResult;
 use luck_testgen::tree_shape;
+
+/// A parse of code, as `luck_parser::parse`, or of a definition file.
+pub(crate) type Parse = for<'ast> fn(&'ast Allocator, &'ast [u8]) -> ParseResult<'ast>;
 
 pub(crate) fn assert_compacts_to(source: &str, expected: &str) {
     assert_spells(source, expected, LiteralSpelling::AsWritten);
@@ -22,10 +26,15 @@ pub(crate) fn assert_spells(source: &str, expected: &str, spelling: LiteralSpell
 /// Output that parses to a different tree can still compact to itself, so
 /// the second check alone would miss it.
 pub(crate) fn assert_reprints(chunk: &Block<'_>) {
+    assert_reprints_as(chunk, luck_parser::parse);
+}
+
+/// [`assert_reprints`], reading the output back with `parse`.
+pub(crate) fn assert_reprints_as(chunk: &Block<'_>, parse: Parse) {
     for spelling in [LiteralSpelling::AsWritten, LiteralSpelling::Shortest] {
         let output = luck_codegen::compact(chunk, spelling);
         let allocator = Allocator::new();
-        let reparsed = luck_parser::parse(&allocator, &output);
+        let reparsed = parse(&allocator, &output);
         let text = String::from_utf8_lossy(&output);
         assert!(
             reparsed.errors.is_empty(),

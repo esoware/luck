@@ -67,6 +67,7 @@ mod binary_run;
 mod chain;
 mod content_eq;
 mod counts;
+mod definition;
 mod depth;
 mod expr;
 #[cfg(test)]
@@ -85,6 +86,7 @@ mod types;
 pub use chain::{Call, ChainHead, DottedPath};
 pub use content_eq::ContentEq;
 pub use counts::TreeCounts;
+pub use definition::{DeclaredExternType, DeclaredFunction, DeclaredGlobal, ExternTypeMember};
 pub use depth::{
     MAX_NESTING_DEPTH, MIN_STACK_BYTES, block_nesting_depth, expr_nesting_depth,
     spans_past_nesting_cap, type_nesting_depth,

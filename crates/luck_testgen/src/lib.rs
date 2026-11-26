@@ -9,7 +9,8 @@
 //!   past [`luck_ast::MAX_NESTING_DEPTH`], and [`on_the_smallest_stack`] and
 //!   [`with_the_smallest_stack`] run a stage on the stack luck asks of its
 //!   threads.
-//! - [`source_fixtures`] and [`fixture_files`] walk the shared fixture tree.
+//! - [`source_fixtures`], [`definition_fixtures`], and [`fixture_files`]
+//!   walk the shared fixture tree.
 //! - [`tree_shape`](fn@tree_shape) checks that a printer kept a tree's
 //!   meaning, by comparing the tree with the parse of what it printed.
 
@@ -20,7 +21,7 @@ mod runtime_safe;
 mod stack;
 mod tree_shape;
 
-pub use fixtures::{SourceFixture, fixture_files, source_fixtures};
+pub use fixtures::{SourceFixture, definition_fixtures, fixture_files, source_fixtures};
 pub use full_grammar::generate_full_grammar;
 pub use runtime_safe::generate_runtime_safe;
 pub use stack::{

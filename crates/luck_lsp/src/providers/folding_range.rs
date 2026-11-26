@@ -45,7 +45,8 @@ impl<'ast> Visit<'ast> for Folder<'_> {
             | Statement::RepeatLoop(_)
             | Statement::IfStatement(_)
             | Statement::NumericFor(_)
-            | Statement::GenericFor(_) => self.push(stmt.span()),
+            | Statement::GenericFor(_)
+            | Statement::DeclaredExternType(_) => self.push(stmt.span()),
             Statement::Assignment(_)
             | Statement::FunctionCall(_)
             | Statement::FunctionDecl(_)
@@ -56,6 +57,8 @@ impl<'ast> Visit<'ast> for Folder<'_> {
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
+            | Statement::DeclaredGlobal(_)
+            | Statement::DeclaredFunction(_)
             | Statement::Error(_) => {}
         }
         self.walk_stmt(stmt);

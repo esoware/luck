@@ -4,6 +4,7 @@
 
 mod common;
 
+mod definitions;
 mod depth;
 mod errors;
 mod exprs;
