@@ -158,6 +158,15 @@ impl Diagnostic {
         Self::error("E014", span, format!("invalid config: {problem}"))
     }
 
+    /// A type error Luau's type checker found, in its own words, at `span`
+    /// when it has a place in the file.
+    pub fn e015<Message>(span: Option<Span>, message: Message) -> Self
+    where
+        Message: Into<Cow<'static, str>>,
+    {
+        Self::error("E015", span, message)
+    }
+
     pub fn w001(span: Span, module_name: &str, first_span: Span) -> Self {
         Self::warning("W001", Some(span), format!("module `{module_name}` required multiple times"))
             .with_label(first_span, "first required here")

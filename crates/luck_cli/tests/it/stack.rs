@@ -196,7 +196,6 @@ fn bundle_at_the_nesting_cap_reads_back() {
         &["bundle", "main.luau", "-o", "bundle.luau"][..],
         &["bundle", "main.luau", "--minify", "-o", "minified.luau"],
         &["lint", "bundle.luau", "minified.luau"],
-        &["check", "bundle.luau", "minified.luau"],
         &["fmt", "bundle.luau", "minified.luau"],
     ] {
         let output = run(directory.path(), args);
@@ -208,6 +207,14 @@ fn bundle_at_the_nesting_cap_reads_back() {
             stderr_text(&output)
         );
     }
+
+    // Luau's own parser, which the type checker runs, stops past 1,000 of its
+    // levels, fewer than these tables take.
+    let output = run(directory.path(), &["check", "bundle.luau", "minified.luau"]);
+    let stderr = stderr_text(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("[E008]").count(), 2, "{stderr}");
+    assert!(stderr.contains("Exceeded allowed recursion depth"), "{stderr}");
 }
 
 #[test]

@@ -36,11 +36,13 @@ luck_simd            = { version = "0.6.0", path = "crates/luck_simd" }
 luck_stdlib          = { version = "0.6.0", path = "crates/luck_stdlib" }
 luck_testgen         = { path = "crates/luck_testgen" }
 luck_token           = { version = "0.6.0", path = "crates/luck_token" }
+luck_type_checker    = { version = "0.6.0", path = "crates/luck_type_checker" }
 luck_value           = { version = "0.6.0", path = "crates/luck_value" }
 
 ariadne               = "0.6"
 assert_cmd            = "2"
 bitflags              = "2"
+cc                    = { version = "1", features = ["parallel"] }
 clap                  = { version = "4", features = ["derive"] }
 criterion2            = { version = "3", default-features = false }
 crossbeam-channel     = "0.5"

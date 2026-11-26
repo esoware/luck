@@ -16,3 +16,4 @@ mod output_paths;
 mod path_selection;
 mod project_config;
 mod stack;
+mod type_errors;

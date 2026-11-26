@@ -39,7 +39,7 @@ pub(crate) enum Command {
     /// Format Luau source files.
     Fmt(fmt::FmtArgs),
 
-    /// Check Luau source files for syntax and compile errors.
+    /// Check Luau source files for syntax, compile, and type errors.
     Check(check::CheckArgs),
 
     /// Run the language server (LSP) over stdio, or TCP with --socket.
@@ -62,7 +62,7 @@ impl Command {
             Self::Graph(args) => args.run(verbosity),
             Self::Lint(args) => args.run(verbosity),
             Self::Fmt(args) => args.run(verbosity),
-            Self::Check(args) => args.run(verbosity),
+            Self::Check(args) => args.run(verbosity, threads),
             Self::Lsp(args) => args.run(threads),
         }
     }

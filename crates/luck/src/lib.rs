@@ -30,6 +30,8 @@
 //!   reaches in it (feature `stdlib`, enables `semantic`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `stdlib`)
+//! - `type_checker` - Luau's own type checker, its C++ Analysis library
+//!   (feature `type_checker`)
 //! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
 //!   enables the stages it configures)
 //!
@@ -192,5 +194,7 @@ pub use luck_semantic as semantic;
 #[cfg(feature = "stdlib")]
 pub use luck_stdlib as stdlib;
 pub use luck_token as token;
+#[cfg(feature = "type_checker")]
+pub use luck_type_checker as type_checker;
 
 pub use version::VERSION;

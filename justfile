@@ -10,8 +10,9 @@ alias r := ready
 alias t := test
 alias f := fmt
 
-# Install the extension's packages, cargo-nextest, cargo-insta, cargo-deny, cargo-shear, and zizmor
+# Fetch the Luau submodule, and install the extension's packages, cargo-nextest, cargo-insta, cargo-deny, cargo-shear, and zizmor
 init:
+  git submodule update --init
   npm ci --prefix editors/vscode
   cargo install --locked cargo-nextest@0.9.151 cargo-insta@1.49.0 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.32.0
 
@@ -94,6 +95,11 @@ minsize:
 # Rewrite the committed allocs_*.yaml snapshots after a stage changes, or with `rules`, write the gitignored per-rule linter report
 allocs *args:
   cargo run -p luck_allocs --profile allocs -- {{args}}
+
+# Move the Luau submodule that luck_type_checker builds to a release tag, such as `just luau 0.749`
+luau tag:
+  git -C crates/luck_type_checker/luau fetch --depth 1 origin tag {{tag}}
+  git -C crates/luck_type_checker/luau checkout {{tag}}
 
 # Run Luau's official conformance tests through every stage and the reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose name holds it
 conformance *args:

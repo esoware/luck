@@ -2,7 +2,7 @@
 
 ## Setup
 
-You need [rustup](https://rustup.rs), which installs the Rust version `rust-toolchain.toml` pins, [just](https://github.com/casey/just), Node.js for the VS Code extension, and a C++ compiler, which `luck_conformance` builds the reference Luau interpreter with. Then run `just init` once to install the extension's packages and the cargo tools the checks use.
+You need [rustup](https://rustup.rs), which installs the Rust version `rust-toolchain.toml` pins, [just](https://github.com/casey/just), Node.js for the VS Code extension, and a C++17 compiler, which `luck_type_checker` builds Luau's type checker with and `luck_conformance` the reference Luau interpreter. Then run `just init` once to fetch the Luau submodule and install the extension's packages and the cargo tools the checks use. `just luau` moves the submodule to another Luau release.
 
 ## Checking a change
 

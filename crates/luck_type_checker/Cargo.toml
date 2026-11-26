@@ -1,0 +1,52 @@
+[package]
+name                   = "luck_type_checker"
+version.workspace      = true
+authors.workspace      = true
+categories.workspace   = true
+description            = "Luau's own type checker, its Analysis library, for the luck toolchain"
+edition.workspace      = true
+homepage.workspace     = true
+keywords.workspace     = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+# crates.io caps a package at 10 MB, so it holds only the Luau sources the build compiles, and Luau's licenses.
+include = [
+  "/build.rs",
+  "/README.md",
+  "/src",
+  "/luau/LICENSE.txt",
+  "/luau/lua_LICENSE.txt",
+  "/luau/Analysis/include",
+  "/luau/Analysis/src",
+  "/luau/Ast/include",
+  "/luau/Ast/src",
+  "/luau/Bytecode/include",
+  "/luau/Bytecode/src",
+  "/luau/Common/include",
+  "/luau/Common/src",
+  "/luau/Compiler/include",
+  "/luau/Compiler/src",
+  "/luau/Config/include",
+  "/luau/Config/src",
+  "/luau/VM/include",
+  "/luau/VM/src",
+]
+
+[lints]
+workspace = true
+
+[dependencies]
+luck_ast         = { workspace = true }
+luck_diagnostics = { workspace = true }
+luck_token       = { workspace = true }
+
+crossbeam-channel = { workspace = true }
+rustc-hash        = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+
+[dev-dependencies]
+luck_allocator = { workspace = true }
+luck_parser    = { workspace = true }

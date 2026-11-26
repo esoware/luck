@@ -17,7 +17,7 @@ cargo install luck_cli
 | `luck graph <entry>` | Prints an entry's dependency graph, as JSON or DOT |
 | `luck lint [paths]` | Lints files, and with `--fix` applies the fixes until none is left, or with `--fix-suggestions` the suggestions too |
 | `luck fmt [paths]` | Formats files, or with `--check` lists the ones that would change |
-| `luck check [paths]` | Reports syntax and compile errors |
+| `luck check [paths]` | Reports syntax and compile errors, and the type errors Luau's own type checker finds |
 | `luck lsp` | Runs the language server over stdio, or over TCP with `--socket` |
 
 `luck <command> --help` lists each command's flags.
@@ -25,6 +25,8 @@ cargo install luck_cli
 ## How it works
 
 Every command runs on a thread with `luck_ast::MIN_STACK_BYTES` of stack, and reads each `luck.json` once, as a `luck_config::Project`. `lint`, `fmt`, and `check` give each file the nearest `luck.json` above it, or the one `-c` names, and work through the files in parallel on rayon's pool, each file in an arena from a pool, printing each file's results in input order. `build` takes the `luck.json` above the working directory. `bundle`, `minify`, and `graph` take the one above their input, and `bundle` and `graph` name each module by its path from its root, as `build` does. `build`, `bundle`, and `graph` read modules on rayon's pool too, each into its thread's arena, and `build --watch` resets those arenas before each rebuild, keeping their memory. The pool is built once, before any of those commands starts, with the stack every stage needs and as many threads as `--threads` gives, one per CPU core by default, and `lsp` starts as many workers of its own. A command-line flag wins over the config, its `overrides` included.
+
+`check` first type-checks every file a standalone project governs together, with `luck_type_checker` on as many threads as `--threads` gives, each module named by its canonical path from the working directory, each `require` resolved as `build` resolves it, and each `.luaurc` up the tree read for its mode, reporting one Luau can't read once, as an E014 at that file, then reports a file's type errors where it has no syntax or compile error. A Roblox project's files aren't type-checked until there are definitions of Roblox's API.
 
 `lint --timings` prints how long each rule took over the run to stderr, slowest first, with its share of every rule's time and how many times the linter called it, as oxlint's `--debug timings` does.
 

@@ -931,6 +931,7 @@ dependencies = [
  "luck_stdlib",
  "luck_testgen",
  "luck_token",
+ "luck_type_checker",
  "mimalloc-safe",
  "notify-debouncer-mini",
  "predicates",
@@ -1110,6 +1111,7 @@ dependencies = [
  "luck_semantic",
  "luck_stdlib",
  "luck_token",
+ "luck_type_checker",
 ]
 
 [[package]]
@@ -1208,6 +1210,20 @@ name = "luck_token"
 version = "0.6.0"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "luck_type_checker"
+version = "0.6.0"
+dependencies = [
+ "cc",
+ "crossbeam-channel",
+ "luck_allocator",
+ "luck_ast",
+ "luck_diagnostics",
+ "luck_parser",
+ "luck_token",
+ "rustc-hash",
 ]
 
 [[package]]
