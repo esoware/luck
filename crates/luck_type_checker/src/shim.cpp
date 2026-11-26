@@ -4,6 +4,8 @@
 // process, as running out of memory does in Rust.
 
 #include "Luau/Ast.h"
+#include "Luau/AstQuery.h"
+#include "Luau/Autocomplete.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/Config.h"
@@ -14,6 +16,7 @@
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
 #include "Luau/Scope.h"
+#include "Luau/ToString.h"
 #include "Luau/Type.h"
 #include "Luau/TypeArena.h"
 #include "Luau/TypeCheckLimits.h"
@@ -71,6 +74,48 @@ struct LuckExecutor
 {
     void* context;
     void (*submit)(void* context, void* task);
+};
+
+struct LuckLocation
+{
+    uint32_t begin_line;
+    uint32_t begin_column;
+    uint32_t end_line;
+    uint32_t end_column;
+};
+
+struct LuckDocs
+{
+    bool has_symbol;
+    LuckStr symbol;
+    bool has_definition;
+    LuckStr module;
+    LuckLocation location;
+};
+
+struct LuckDescribed
+{
+    void* context;
+    void (*describe)(void* context, LuckLocation location, LuckStr type, const LuckDocs* docs);
+    void (*signature)(void* context, LuckStr label, const uint32_t* params, size_t count);
+};
+
+struct LuckEntry
+{
+    LuckStr name;
+    uint8_t kind;
+    bool has_type;
+    LuckStr type;
+    bool is_deprecated;
+    bool has_insert_text;
+    LuckStr insert_text;
+    LuckDocs docs;
+};
+
+struct LuckEntries
+{
+    void* context;
+    void (*push)(void* context, const LuckEntry* entry);
 };
 
 enum : uint8_t
@@ -252,6 +297,147 @@ void pushTypeError(Checker& checker, LuckErrors errors, size_t module, const Lua
     push(errors, module, isSyntaxError, error.moduleName, error.location, message);
 }
 
+LuckLocation location(const Luau::Location& from)
+{
+    return {from.begin.line, from.begin.column, from.end.line, from.end.column};
+}
+
+// Types as Luau prints them, with the names of a function's parameters.
+Luau::ToStringOptions typeOptions()
+{
+    Luau::ToStringOptions options;
+    options.functionTypeArguments = true;
+    return options;
+}
+
+// What Analysis records of the declaration a name refers to, which outlives
+// the LuckDocs it lends.
+struct Docs
+{
+    std::optional<std::string> symbol;
+    std::optional<std::string> module;
+    Luau::Location declaration;
+
+    LuckDocs raw() const
+    {
+        LuckDocs docs{symbol.has_value(), {}, module.has_value(), {}, location(declaration)};
+        if (symbol)
+            docs.symbol = str(*symbol);
+        if (module)
+            docs.module = str(*module);
+        return docs;
+    }
+
+    void addProperty(const Luau::Property& property, Luau::TypeId declaring)
+    {
+        if (!symbol && property.documentationSymbol)
+            symbol = property.documentationSymbol;
+        std::optional<Luau::Location> at = property.location ? property.location : property.typeLocation;
+        std::optional<Luau::ModuleName> name = Luau::getDefinitionModuleName(declaring);
+        if (at && name)
+        {
+            module = std::move(name);
+            declaration = *at;
+        }
+    }
+};
+
+// The property `name` of `owner`, from a table, an extern type or a type it
+// extends, a part of an intersection, or a string's metatable, with the type
+// that declares it.
+const Luau::Property* findProperty(Luau::TypeId owner, const std::string& name, Luau::TypeId& declaring)
+{
+    owner = Luau::follow(owner);
+    if (const Luau::TableType* table = Luau::get<Luau::TableType>(owner))
+    {
+        auto property = table->props.find(name);
+        if (property == table->props.end())
+            return nullptr;
+        declaring = owner;
+        return &property->second;
+    }
+    if (Luau::get<Luau::ExternType>(owner))
+    {
+        for (std::optional<Luau::TypeId> current = owner; current;)
+        {
+            const Luau::ExternType* externType = Luau::get<Luau::ExternType>(Luau::follow(*current));
+            if (!externType)
+                return nullptr;
+            if (auto property = externType->props.find(name); property != externType->props.end())
+            {
+                declaring = Luau::follow(*current);
+                return &property->second;
+            }
+            current = externType->parent;
+        }
+        return nullptr;
+    }
+    if (const Luau::IntersectionType* intersection = Luau::get<Luau::IntersectionType>(owner))
+    {
+        for (Luau::TypeId part : intersection->parts)
+            if (const Luau::Property* property = findProperty(part, name, declaring))
+                return property;
+        return nullptr;
+    }
+    const Luau::PrimitiveType* primitive = Luau::get<Luau::PrimitiveType>(owner);
+    const Luau::TableType* metatable =
+        primitive && primitive->metatable ? Luau::get<Luau::TableType>(Luau::follow(*primitive->metatable)) : nullptr;
+    if (!metatable)
+        return nullptr;
+    auto index = metatable->props.find("__index");
+    if (index == metatable->props.end() || !index->second.readTy)
+        return nullptr;
+    return findProperty(*index->second.readTy, name, declaring);
+}
+
+// Each overload of `type` as Luau prints a function named "", with where in
+// that text each parameter is, leaving out `self` for a method call.
+void pushSignatures(Luau::TypeId type, bool isMethodCall, LuckDescribed out)
+{
+    type = Luau::follow(type);
+    std::vector<Luau::TypeId> overloads{type};
+    if (const Luau::IntersectionType* intersection = Luau::get<Luau::IntersectionType>(type))
+        overloads = intersection->parts;
+    for (Luau::TypeId overload : overloads)
+    {
+        const Luau::FunctionType* function = Luau::get<Luau::FunctionType>(Luau::follow(overload));
+        if (!function)
+            continue;
+        Luau::ToStringOptions options = typeOptions();
+        options.hideFunctionSelfArgument = isMethodCall;
+        std::string label = Luau::toStringNamedFunction("", *function, options);
+
+        // toStringNamedFunction prints each parameter in turn as these do.
+        std::vector<std::string> texts;
+        Luau::TypePackIterator param = Luau::begin(function->argTypes);
+        for (size_t index = 0; param != Luau::end(function->argTypes); ++param, ++index)
+        {
+            if (index == 0 && function->hasSelf && isMethodCall)
+                continue;
+            bool isNamed = index < function->argNames.size() && function->argNames[index];
+            texts.push_back((isNamed ? function->argNames[index]->name : "_") + ": " + Luau::toString(*param, options));
+        }
+        if (std::optional<Luau::TypePackId> tail = param.tail())
+        {
+            const Luau::VariadicTypePack* variadic = Luau::get<Luau::VariadicTypePack>(Luau::follow(*tail));
+            if (!variadic || !variadic->hidden)
+                texts.push_back("...: " + (variadic ? Luau::toString(variadic->ty, options) : Luau::toString(*tail, options)));
+        }
+        std::vector<uint32_t> params;
+        size_t from = label.find('(');
+        for (const std::string& text : texts)
+        {
+            from = from == std::string::npos ? from : label.find(text, from);
+            if (from == std::string::npos)
+                break;
+            params.push_back(uint32_t(from));
+            params.push_back(uint32_t(from + text.size()));
+            from += text.size();
+        }
+        out.signature(out.context, str(label), params.data(), params.size() / 2);
+    }
+}
+
 } // namespace
 
 extern "C"
@@ -375,6 +561,136 @@ void luck_checker_mark_dirty(void* checker, LuckStr module) noexcept
     static_cast<Checker*>(checker)->frontend.markDirty(std::string(module.data, module.len));
 }
 
+void luck_checker_retain_type_graphs(void* checker) noexcept
+{
+    static_cast<Checker*>(checker)->frontend.options.retainFullTypeGraphs = true;
+}
+
+// Describes the type reference, local, or expression at a position of a
+// module the checker kept the types of, and each signature of its type.
+bool luck_checker_describe(void* raw, LuckStr moduleName, uint32_t line, uint32_t column, LuckDescribed out) noexcept
+{
+    Luau::Frontend& frontend = static_cast<Checker*>(raw)->frontend;
+    std::string name(moduleName.data, moduleName.len);
+    const Luau::SourceModule* source = frontend.getSourceModule(name);
+    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+    if (!source || !module)
+        return false;
+    Luau::Position position{line, column};
+
+    try
+    {
+        std::optional<Luau::TypeId> type;
+        Luau::Location at;
+        Docs docs;
+        bool isMethodCall = false;
+        std::vector<Luau::AstNode*> ancestry = Luau::findAstAncestryOfPosition(*source, position, /* includeTypes */ true);
+        if (!ancestry.empty() && ancestry.back()->asType())
+        {
+            const Luau::AstTypeReference* reference = ancestry.back()->as<Luau::AstTypeReference>();
+            Luau::ScopePtr scope = Luau::findScopeAtPosition(*module, position);
+            if (!reference || !scope)
+                return false;
+            std::optional<Luau::TypeFun> named = reference->prefix ? scope->lookupImportedType(reference->prefix->value, reference->name.value)
+                                                                   : scope->lookupType(reference->name.value);
+            if (!named)
+                return false;
+            type = named->type;
+            at = reference->location;
+            docs.symbol = Luau::follow(named->type)->documentationSymbol;
+        }
+        else
+        {
+            Luau::ExprOrLocal found = Luau::findExprOrLocalAtPosition(*source, position);
+            if (Luau::AstExpr* expr = found.getExpr())
+            {
+                if (const Luau::TypeId* exprType = module->astTypes.find(expr))
+                    type = *exprType;
+                const Luau::AstExprIndexName* index = expr->as<Luau::AstExprIndexName>();
+                const Luau::TypeId* owner = index ? module->astTypes.find(index->expr) : nullptr;
+                Luau::TypeId declaring = nullptr;
+                if (const Luau::Property* property = owner ? findProperty(*owner, index->index.value, declaring) : nullptr)
+                    docs.addProperty(*property, declaring);
+                isMethodCall = index && index->op == ':';
+            }
+            else if (Luau::AstLocal* local = found.getLocal())
+            {
+                if (Luau::ScopePtr scope = Luau::findScopeAtPosition(*module, position))
+                    type = scope->lookup(local);
+            }
+            if (!type || !found.getLocation())
+                return false;
+            at = *found.getLocation();
+            if (!docs.symbol)
+                docs.symbol = Luau::getDocumentationSymbolAtPosition(*source, *module, position);
+        }
+
+        Luau::ToStringOptions options = typeOptions();
+        std::string text = Luau::toString(*type, options);
+        LuckDocs rawDocs = docs.raw();
+        out.describe(out.context, location(at), str(text), &rawDocs);
+        pushSignatures(*type, isMethodCall, out);
+        return true;
+    }
+    catch (const Luau::InternalCompilerError&)
+    {
+        return false;
+    }
+}
+
+// Luau's autocomplete at a position of a module the checker kept the types
+// of, leaving out what the index there can't reach, such as a property after
+// a colon.
+void luck_checker_autocomplete(void* raw, LuckStr moduleName, uint32_t line, uint32_t column, LuckEntries out) noexcept
+{
+    Luau::Frontend& frontend = static_cast<Checker*>(raw)->frontend;
+    std::string name(moduleName.data, moduleName.len);
+    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+    if (!module)
+        return;
+
+    try
+    {
+        Luau::AutocompleteResult result = Luau::autocomplete(
+            frontend,
+            name,
+            Luau::Position{line, column},
+            [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>)
+            {
+                return std::optional<Luau::AutocompleteEntryMap>{};
+            }
+        );
+        const Luau::AstExprIndexName* index = result.ancestry.empty() ? nullptr : result.ancestry.back()->as<Luau::AstExprIndexName>();
+        const Luau::TypeId* owner = index ? module->astTypes.find(index->expr) : nullptr;
+        Luau::ToStringOptions options = typeOptions();
+        for (const auto& [entryName, entry] : result.entryMap)
+        {
+            if (entry.wrongIndexType)
+                continue;
+            Docs docs;
+            docs.symbol = entry.documentationSymbol;
+            Luau::TypeId declaring = nullptr;
+            if (const Luau::Property* property = owner ? findProperty(*owner, entryName, declaring) : nullptr)
+                docs.addProperty(*property, declaring);
+            std::string type = entry.type ? Luau::toString(*entry.type, options) : std::string();
+            LuckEntry raw{
+                str(entryName),
+                uint8_t(entry.kind),
+                entry.type.has_value(),
+                str(type),
+                entry.deprecated,
+                entry.insertText.has_value(),
+                entry.insertText ? str(*entry.insertText) : LuckStr{},
+                docs.raw(),
+            };
+            out.push(out.context, &raw);
+        }
+    }
+    catch (const Luau::InternalCompilerError&)
+    {
+    }
+}
+
 uint8_t luck_checker_check(
     void* raw,
     const LuckStr* modules,
@@ -440,6 +756,11 @@ void* luck_cancellation_new() noexcept
 void luck_cancellation_cancel(const void* token) noexcept
 {
     (*static_cast<const CancellationToken*>(token))->cancel();
+}
+
+bool luck_cancellation_is_cancelled(const void* token) noexcept
+{
+    return (*static_cast<const CancellationToken*>(token))->requested();
 }
 
 void luck_cancellation_free(void* token) noexcept

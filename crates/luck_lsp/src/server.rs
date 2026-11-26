@@ -35,9 +35,11 @@ use ls_types::{
 use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
 };
+use luck_type_checker::CancellationToken;
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities;
+use crate::definitions;
 use crate::document::{Document, DocumentState};
 use crate::line_index::PositionEncoding;
 use crate::pool::{Pool, Priority};
@@ -47,6 +49,7 @@ use crate::providers::{
     signature_help, syntax_tree, workspace_symbol,
 };
 use crate::session::Session;
+use crate::type_check::{self, Types};
 use crate::workspace::{Walk, WorkspaceView};
 
 /// What a job hands back to the main loop, which sends it on only if it
@@ -57,10 +60,9 @@ pub(crate) enum Task {
     Respond(Response),
     /// A message for the user, such as why formatting failed.
     Notify(Notification),
-    /// One version's diagnostics, unless a newer version or a close
-    /// replaced it, or a change to what its requires resolve to started
-    /// another publish of it.
-    Publish { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic>, resolutions: u64 },
+    /// One version's diagnostics, unless a change since started another
+    /// publish of every open document's.
+    Publish { uri: Uri, document: Arc<Document>, diags: Vec<Diagnostic>, generation: u64 },
     /// Why a `luck.json` doesn't load, unless the settings were reloaded
     /// since the lookup read it.
     ConfigError { generation: u64, notifications: Vec<Notification> },
@@ -93,6 +95,26 @@ impl LspRequest for FixAllWorkspace {
     const METHOD: &'static str = "luck/fixAllWorkspace";
 }
 
+/// LSP 3.18's `workspace/textDocumentContent`, which `ls_types` doesn't
+/// have: the text of a document of a scheme the server registered.
+enum TextDocumentContent {}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TextDocumentContentParams {
+    uri: Uri,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TextDocumentContentResult {
+    text: String,
+}
+
+impl LspRequest for TextDocumentContent {
+    type Params = TextDocumentContentParams;
+    type Result = TextDocumentContentResult;
+    const METHOD: &'static str = "workspace/textDocumentContent";
+}
+
 /// Serves one client over `connection` until it sends `exit`.
 ///
 /// Every job runs on the `threads` threads this starts, each with
@@ -118,8 +140,7 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
         };
     let offered = client.general.as_ref().and_then(|general| general.position_encodings.as_deref());
     let encoding = PositionEncoding::negotiate(offered.unwrap_or_default());
-    let result = serde_json::to_value(capabilities::initialize_result(encoding))
-        .map_err(io::Error::other)?;
+    let result = capabilities::initialize_result(encoding).map_err(io::Error::other)?;
     connection.initialize_finish(id, result).map_err(io::Error::other)?;
 
     let Connection { sender, receiver } = connection;
@@ -131,7 +152,8 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
         pending: BTreeMap::new(),
         documents: BTreeMap::new(),
         workspace_folders: Vec::new(),
-        resolutions: 0,
+        generation: 0,
+        checks: CancellationToken::new(),
         is_shutting_down: false,
     };
     server.set_workspace_folders(
@@ -164,9 +186,12 @@ struct Server {
     documents: BTreeMap<Uri, Arc<Document>>,
     /// The client's, which the workspace walks.
     workspace_folders: Vec<Uri>,
-    /// Bumped by each change to what a require can resolve to, which starts
-    /// a new publish of every open document's diagnostics.
-    resolutions: u64,
+    /// Bumped by each change to an open document or to a file one can read,
+    /// which starts a new publish of every open document's diagnostics.
+    generation: u64,
+    /// What stops the type checks of this generation, which the next one
+    /// cancels.
+    checks: CancellationToken,
     is_shutting_down: bool,
 }
 
@@ -196,8 +221,9 @@ impl Server {
                 }
             }
         };
-        let Self { session, pool, documents, .. } = self;
+        let Self { session, pool, documents, checks, .. } = self;
         session.stop();
+        checks.cancel();
         for document in documents.values() {
             document.mark_stale();
         }
@@ -236,10 +262,10 @@ impl Server {
                 }
             }
             Task::Notify(notification) => self.send(notification),
-            Task::Publish { uri, document, diags, resolutions } => {
+            Task::Publish { uri, document, diags, generation } => {
                 let is_current =
                     self.documents.get(&uri).is_some_and(|current| Arc::ptr_eq(current, &document));
-                if is_current && resolutions == self.resolutions && !self.is_shutting_down {
+                if is_current && generation == self.generation && !self.is_shutting_down {
                     self.publish(uri, diags, Some(document.version()));
                 }
             }
@@ -268,31 +294,43 @@ impl Server {
     }
 
     /// Makes `document` what's open at `uri`, which leaves any job still
-    /// linting what it replaces to stop with nothing to publish, and starts
-    /// its diagnostics.
+    /// linting what it replaces to stop with nothing to publish.
     fn replace(&mut self, uri: Uri, document: Arc<Document>) {
-        if let Some(replaced) = self.documents.insert(uri.clone(), Arc::clone(&document)) {
+        if let Some(replaced) = self.documents.insert(uri, document) {
             replaced.mark_stale();
         }
-        self.publish_diagnostics(uri, document);
     }
 
-    /// Publishes the diagnostics of `document`, the version open at `uri`,
-    /// unless it goes stale first.
-    fn publish_diagnostics(&self, uri: Uri, document: Arc<Document>) {
-        let session = Arc::clone(&self.session);
-        let resolutions = self.resolutions;
+    /// Starts a new generation, which stops the type checks of the last, and
+    /// publishes every open document's diagnostics in it, since a change to
+    /// one module can change the types of every module that requires it.
+    fn republish(&mut self) {
+        self.generation += 1;
+        self.checks.cancel();
+        self.checks = CancellationToken::new();
+        let documents = self.open_documents();
+        let (session, generation, cancellation) =
+            (Arc::clone(&self.session), self.generation, self.checks.clone());
         self.pool.spawn(Priority::Background, move || {
-            if document.is_stale() {
+            if session.is_stopping() {
                 return;
             }
-            let diags = {
-                let Some(lints) = document.lints(&session) else {
-                    return;
-                };
-                diagnostics::to_lsp(&uri, document.state(&session), lints)
+            let Some(type_errors) = type_check::type_errors(&session, &documents, &cancellation)
+            else {
+                return;
             };
-            session.send(Task::Publish { uri, document, diags, resolutions });
+            for ((uri, document), errors) in documents.into_iter().zip(type_errors) {
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let diags = {
+                    let Some(lints) = document.lints(&session) else {
+                        continue;
+                    };
+                    diagnostics::to_lsp(&uri, document.state(&session), lints, &errors)
+                };
+                session.send(Task::Publish { uri, document, diags, generation });
+            }
         });
     }
 
@@ -373,6 +411,7 @@ impl Server {
         let item = params.text_document;
         let path = file_path(&item.uri);
         self.replace(item.uri, Arc::new(Document::new(item.version, Arc::from(item.text), path)));
+        self.republish();
     }
 
     fn change(&mut self, params: DidChangeTextDocumentParams) {
@@ -389,6 +428,7 @@ impl Server {
             current.changed(text_document.version, content_changes, self.session.encoding())
         {
             self.replace(text_document.uri, Arc::new(next));
+            self.republish();
             return;
         }
         // A range that doesn't fit means we've already desynced from the
@@ -398,6 +438,7 @@ impl Server {
             desynced.mark_stale();
         }
         self.publish(text_document.uri, Vec::new(), None);
+        self.republish();
     }
 
     fn close(&mut self, params: DidCloseTextDocumentParams) {
@@ -413,11 +454,13 @@ impl Server {
         self.session.spare_arena().clear();
         // LSP has a server clear a closed file's diagnostics.
         self.publish(uri, Vec::new(), None);
+        self.republish();
     }
 
     fn watched_files_changed(&mut self, params: &DidChangeWatchedFilesParams) {
         let (mut is_settings_change, mut is_resolution_change, mut is_file_added_or_removed) =
             (false, false, false);
+        let mut is_module_change = false;
         for change in &params.changes {
             let Some(path) = file_path(&change.uri) else {
                 continue;
@@ -432,7 +475,9 @@ impl Server {
                 || path.file_name().is_some_and(|name| name == ".luaurc");
             is_file_added_or_removed |= is_module_added_or_removed;
             if is_module {
+                self.session.type_checks().changed(Some(&path));
                 self.session.workspace().forget(path);
+                is_module_change = true;
             }
         }
         if is_settings_change {
@@ -445,6 +490,9 @@ impl Server {
         }
         if is_resolution_change {
             self.session.settings().clear_resolvers();
+            self.session.type_checks().changed(None);
+        }
+        if is_resolution_change || is_module_change {
             self.republish();
         }
     }
@@ -457,15 +505,6 @@ impl Server {
         self.set_workspace_folders(folders);
     }
 
-    /// Publishes every open document's diagnostics again, as a change to
-    /// what their requires resolve to needs.
-    fn republish(&mut self) {
-        self.resolutions += 1;
-        for (uri, document) in self.open_documents() {
-            self.publish_diagnostics(uri, document);
-        }
-    }
-
     fn reload_settings(&mut self) {
         // A config still broken reports itself again as documents reload.
         for broken in self.session.settings().clear() {
@@ -474,6 +513,7 @@ impl Server {
             }
         }
         self.session.workspace().clear();
+        self.session.type_checks().clear();
         self.walk_workspace();
         // Every open document gets a new version of the same text under the
         // new settings, whether or not its target or extra globals changed,
@@ -486,6 +526,7 @@ impl Server {
         for (uri, document) in reloaded {
             self.replace(uri, document);
         }
+        self.republish();
     }
 
     fn cancel(&mut self, cancelled: NumberOrString) {
@@ -603,6 +644,42 @@ impl Server {
         });
     }
 
+    /// Answers `request` as [`Self::spawn_on_document`] does, with what
+    /// `answer` gives for the document's types once Luau has checked it with
+    /// the open documents as they stood when the request came, or with
+    /// `null` once a change stops the check.
+    fn spawn_on_types<R, U, A, T>(&mut self, request: Request, uri_of: U, answer: A)
+    where
+        R: LspRequest<Result = Option<T>>,
+        U: FnOnce(&R::Params) -> &Uri,
+        A: FnOnce(&DocumentState, &mut Types<'_>, R::Params) -> Option<T> + Send + 'static,
+        T: 'static,
+    {
+        let Some((id, params)) = self.params::<R>(request) else {
+            return;
+        };
+        let uri = uri_of(&params).clone();
+        let document = self.document(&uri);
+        let documents = self.open_documents();
+        let cancellation = self.checks.clone();
+        self.spawn::<R, _>(id, move |session, _| {
+            let Some(open) = document else {
+                return Ok(None);
+            };
+            let state = open.state(session);
+            let open_modules = type_check::open_modules(session, &documents);
+            let answered = type_check::with_types(
+                session,
+                &uri,
+                state,
+                open_modules,
+                &cancellation,
+                |types| answer(state, types, params),
+            );
+            Ok(answered.flatten())
+        });
+    }
+
     fn handle_request(&mut self, request: Request) {
         if self.is_shutting_down {
             let refusal = "the server is shutting down".to_owned();
@@ -612,6 +689,7 @@ impl Server {
         match request.method.as_str() {
             Shutdown::METHOD => {
                 self.is_shutting_down = true;
+                self.checks.cancel();
                 for document in self.documents.values() {
                     document.mark_stale();
                 }
@@ -629,32 +707,29 @@ impl Server {
                     Ok(formatting::formatting(session, document, Some(params.range)))
                 },
             ),
-            HoverRequest::METHOD => self.spawn_on_document::<HoverRequest, _, _, _>(
+            HoverRequest::METHOD => self.spawn_on_types::<HoverRequest, _, _, _>(
                 request,
                 |params| &params.text_document_position_params.text_document.uri,
-                |_, document, params| {
-                    Ok(hover::hover(document, params.text_document_position_params.position))
+                |document, types, params| {
+                    hover::hover(document, params.text_document_position_params.position, types)
                 },
             ),
-            Completion::METHOD => self.spawn_on_document::<Completion, _, _, _>(
+            Completion::METHOD => self.spawn_on_types::<Completion, _, _, _>(
                 request,
                 |params| &params.text_document_position.text_document.uri,
-                |_, document, params| {
-                    Ok(Some(completion::completion(
-                        document,
-                        params.text_document_position.position,
-                    )))
+                |document, types, params| {
+                    let position = params.text_document_position.position;
+                    Some(completion::completion(document, position, types))
                 },
             ),
-            SignatureHelpRequest::METHOD => self
-                .spawn_on_document::<SignatureHelpRequest, _, _, _>(
-                    request,
-                    |params| &params.text_document_position_params.text_document.uri,
-                    |_, document, params| {
-                        let position = params.text_document_position_params.position;
-                        Ok(signature_help::signature_help(document, position))
-                    },
-                ),
+            SignatureHelpRequest::METHOD => self.spawn_on_types::<SignatureHelpRequest, _, _, _>(
+                request,
+                |params| &params.text_document_position_params.text_document.uri,
+                |document, types, params| {
+                    let position = params.text_document_position_params.position;
+                    signature_help::signature_help(document, position, types)
+                },
+            ),
             DocumentSymbolRequest::METHOD => self
                 .spawn_on_document::<DocumentSymbolRequest, _, _, _>(
                     request,
@@ -703,14 +778,53 @@ impl Server {
                         Ok(Some(document_highlight::document_highlights(document, position)))
                     },
                 ),
-            GotoDefinition::METHOD => self.spawn_on_workspace::<GotoDefinition, _, _, _>(
-                request,
-                |params| &params.text_document_position_params.text_document.uri,
-                |workspace, uri, document, params| {
-                    let position = params.text_document_position_params.position;
-                    Ok(definition::goto(workspace, uri, document, position))
-                },
-            ),
+            GotoDefinition::METHOD => {
+                let Some((id, params)) = self.params::<GotoDefinition>(request) else {
+                    return;
+                };
+                let position = params.text_document_position_params.position;
+                let uri = params.text_document_position_params.text_document.uri;
+                let document = self.document(&uri);
+                let documents = self.open_documents();
+                let cancellation = self.checks.clone();
+                self.spawn::<GotoDefinition, _>(id, move |session, is_cancelled| {
+                    let Some(open) = document else {
+                        return Ok(None);
+                    };
+                    let state = open.state(session);
+                    let workspace = WorkspaceView::new(session, &documents, is_cancelled);
+                    if let Some(found) = definition::goto(&workspace, &uri, state, position) {
+                        return Ok(Some(found));
+                    }
+                    let open_modules = type_check::open_modules(session, &documents);
+                    let declared = type_check::with_types(
+                        session,
+                        &uri,
+                        state,
+                        open_modules,
+                        &cancellation,
+                        |types| definition::declared(state, position, types),
+                    );
+                    Ok(declared.flatten())
+                });
+            }
+            TextDocumentContent::METHOD => {
+                let Some((id, params)) = self.params::<TextDocumentContent>(request) else {
+                    return;
+                };
+                self.spawn::<TextDocumentContent, _>(id, move |_, _| {
+                    let text =
+                        definitions::served_text(&params.uri).ok_or_else(|| ResponseError {
+                            code: ErrorCode::InvalidParams as i32,
+                            message: format!(
+                                "the server serves no document at `{}`",
+                                params.uri.as_str()
+                            ),
+                            data: None,
+                        })?;
+                    Ok(TextDocumentContentResult { text: text.into_owned() })
+                });
+            }
             References::METHOD => self.spawn_on_workspace::<References, _, _, _>(
                 request,
                 |params| &params.text_document_position.text_document.uri,

@@ -81,6 +81,10 @@ impl Document {
         self.version
     }
 
+    pub(crate) const fn text(&self) -> &Arc<str> {
+        &self.text
+    }
+
     /// This version again, under settings found afresh.
     pub(crate) fn reloaded(&self) -> Self {
         Self::new(self.version, Arc::clone(&self.text), self.settings.path.clone())
@@ -204,6 +208,12 @@ impl DocumentState {
         self.analyzed.text()
     }
 
+    /// [`Self::text`], which the type checker reads while the version is
+    /// open.
+    pub(crate) fn shared_text(&self) -> &Arc<str> {
+        self.analyzed.text()
+    }
+
     pub(crate) fn parse(&self) -> &ParseResult<'_> {
         self.analyzed.parse()
     }
@@ -273,6 +283,10 @@ impl DocumentState {
 
     pub(crate) fn range(&self, span: Span) -> Range {
         self.line_index.range(self.text(), span)
+    }
+
+    pub(crate) fn encoding(&self) -> PositionEncoding {
+        self.line_index.encoding()
     }
 
     /// How many of the session's units the text at `span` takes.

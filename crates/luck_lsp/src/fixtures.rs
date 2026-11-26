@@ -30,15 +30,6 @@ pub(crate) fn roblox_document(text: &str) -> DocumentState {
     untitled(text, Project::load(&config_path).expect("the config loads"))
 }
 
-/// [`document`], in a project that loads the definition file `definitions`.
-pub(crate) fn defined_document(definitions: &str, text: &str) -> DocumentState {
-    let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("app.d.luau"), definitions).expect("write app.d.luau");
-    let config_path = directory.path().join(CONFIG_FILE_NAME);
-    fs::write(&config_path, r#"{ "definitions": ["app.d.luau"] }"#).expect("write luck.json");
-    untitled(text, Project::load(&config_path).expect("the config loads"))
-}
-
 /// `text` as the document of the file at `path` under `project`'s settings.
 pub(crate) fn document_at(text: &str, project: Project, path: &Path) -> DocumentState {
     let linter = project.linter_for(Some(path));

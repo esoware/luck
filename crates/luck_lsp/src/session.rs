@@ -16,6 +16,7 @@ use crate::line_index::PositionEncoding;
 use crate::providers::diagnostics;
 use crate::server::Task;
 use crate::settings::{ConfigError, DocumentSettings, LoadedProject, SettingsCache};
+use crate::type_check::TypeChecks;
 use crate::workspace::Workspace;
 
 /// What the main loop shares with every job.
@@ -24,9 +25,12 @@ pub(crate) struct Session {
     encoding: PositionEncoding,
     settings: SettingsCache,
     workspace: Workspace,
+    type_checks: TypeChecks,
     spare_arena: Arc<SpareArena>,
     /// The arenas files read from disk parse in, one at a time per worker.
     allocators: AllocatorPool,
+    /// How many workers the pool has, and each type check starts.
+    threads: NonZero<usize>,
     tasks: Sender<Task>,
     is_stopping: AtomicBool,
 }
@@ -41,8 +45,10 @@ impl Session {
             encoding,
             settings: SettingsCache::default(),
             workspace: Workspace::default(),
+            type_checks: TypeChecks::default(),
             spare_arena: Arc::default(),
             allocators: AllocatorPool::new(threads.get()),
+            threads,
             tasks,
             is_stopping: AtomicBool::new(false),
         }
@@ -58,6 +64,14 @@ impl Session {
 
     pub(crate) const fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    pub(crate) const fn type_checks(&self) -> &TypeChecks {
+        &self.type_checks
+    }
+
+    pub(crate) const fn threads(&self) -> NonZero<usize> {
+        self.threads
     }
 
     pub(crate) const fn spare_arena(&self) -> &Arc<SpareArena> {

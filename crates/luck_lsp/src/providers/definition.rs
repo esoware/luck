@@ -1,12 +1,15 @@
 //! A `require` string goes to its module's file, a member of a module's
 //! table to where that module gives it its value, and a local to its
-//! declaration. A global has no one place that defines it.
+//! declaration. A global, a type, or a member a definition file declares goes
+//! to that declaration, which for Luau's and Roblox's is in a file the server
+//! serves itself.
 
 use ls_types::{GotoDefinitionResponse, Location, Position, Range, Uri};
 
 use crate::document::DocumentState;
-use crate::providers::cursor::local_at;
+use crate::providers::cursor::{local_at, name_at};
 use crate::providers::document_link;
+use crate::type_check::Types;
 use crate::workspace::{Source, WorkspaceView};
 
 pub(crate) fn goto(
@@ -47,4 +50,15 @@ pub(crate) fn goto(
         uri: uri.clone(),
         range: document.range(tree.symbol(symbol_id).definition_span),
     }))
+}
+
+/// Where a definition file declares what the name at `position` refers to.
+pub(crate) fn declared(
+    document: &DocumentState,
+    position: Position,
+    types: &mut Types<'_>,
+) -> Option<GotoDefinitionResponse> {
+    let (_, name) = name_at(document, document.offset(position))?;
+    let description = types.describe(name.span.start)?;
+    types.location(&description.declaration).map(GotoDefinitionResponse::Scalar)
 }

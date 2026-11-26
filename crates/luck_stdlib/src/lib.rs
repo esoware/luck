@@ -17,7 +17,9 @@
 //!
 //! [`roblox_definitions`] gives Roblox's API as the definitions a type
 //! checker loads over Luau's built-in ones, as a script at a
-//! [`SecurityLevel`] reaches it, derived from one committed definition file.
+//! [`SecurityLevel`] reaches it, derived from one committed definition file,
+//! and [`luau_definitions`] the definition file [`luau_library`] is built
+//! from.
 //!
 //! # Usage
 //!
@@ -52,7 +54,7 @@ mod stdlib_model;
 mod translate;
 
 pub use analysis::{SemanticAnalysis, analyze};
-pub use definitions::roblox_definitions;
+pub use definitions::{luau_definitions, roblox_definitions};
 pub use resolve::{ChainCallees, ResolvedCallee};
 pub use security_level::SecurityLevel;
 pub use stdlib::{Stdlib, luau_library, roblox_library};

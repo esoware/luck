@@ -83,6 +83,55 @@ struct LuckExecutor {
     submit: extern "C" fn(context: *mut c_void, task: *mut c_void),
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct LuckLocation {
+    begin_line: u32,
+    begin_column: u32,
+    end_line: u32,
+    end_column: u32,
+}
+
+#[repr(C)]
+struct LuckDocs {
+    has_symbol: bool,
+    symbol: LuckStr,
+    has_definition: bool,
+    module: LuckStr,
+    location: LuckLocation,
+}
+
+#[repr(C)]
+struct LuckDescribed {
+    context: *mut c_void,
+    describe: extern "C" fn(
+        context: *mut c_void,
+        location: LuckLocation,
+        ty: LuckStr,
+        docs: *const LuckDocs,
+    ),
+    signature:
+        extern "C" fn(context: *mut c_void, label: LuckStr, params: *const u32, count: usize),
+}
+
+#[repr(C)]
+struct LuckEntry {
+    name: LuckStr,
+    kind: u8,
+    has_type: bool,
+    ty: LuckStr,
+    is_deprecated: bool,
+    has_insert_text: bool,
+    insert_text: LuckStr,
+    docs: LuckDocs,
+}
+
+#[repr(C)]
+struct LuckEntries {
+    context: *mut c_void,
+    push: extern "C" fn(context: *mut c_void, entry: *const LuckEntry),
+}
+
 const LUCK_CANCELLED: u8 = 1;
 const LUCK_INTERNAL_ERROR: u8 = 2;
 
@@ -100,6 +149,21 @@ unsafe extern "C" {
     fn luck_checker_return_named_type(checker: *mut c_void, owner: LuckStr, member: LuckStr);
     fn luck_checker_bind_type_namespace(checker: *mut c_void, space: LuckStr, supertype: LuckStr);
     fn luck_checker_mark_dirty(checker: *mut c_void, module: LuckStr);
+    fn luck_checker_retain_type_graphs(checker: *mut c_void);
+    fn luck_checker_describe(
+        checker: *mut c_void,
+        module: LuckStr,
+        line: u32,
+        column: u32,
+        out: LuckDescribed,
+    ) -> bool;
+    fn luck_checker_autocomplete(
+        checker: *mut c_void,
+        module: LuckStr,
+        line: u32,
+        column: u32,
+        out: LuckEntries,
+    );
     fn luck_checker_check(
         checker: *mut c_void,
         modules: *const LuckStr,
@@ -111,6 +175,7 @@ unsafe extern "C" {
     fn luck_task_run(task: *mut c_void);
     safe fn luck_cancellation_new() -> *mut c_void;
     fn luck_cancellation_cancel(token: *const c_void);
+    fn luck_cancellation_is_cancelled(token: *const c_void) -> bool;
     fn luck_cancellation_free(token: *mut c_void);
     safe fn luck_builtin_definitions() -> LuckStr;
 }
@@ -132,6 +197,31 @@ pub(crate) enum Outcome {
     Cancelled,
     /// Analysis threw this `InternalCompilerError`.
     InternalError(LuauError),
+}
+
+/// What Analysis records of the declaration a name refers to: Luau's
+/// documentation symbol for it, and the module and location it's declared at.
+pub(crate) struct LuauDocs {
+    pub(crate) symbol: Option<String>,
+    pub(crate) definition: Option<(String, [u32; 4])>,
+}
+
+pub(crate) struct LuauDescription {
+    pub(crate) location: [u32; 4],
+    pub(crate) ty: String,
+    pub(crate) docs: LuauDocs,
+    /// Each label, with the byte range of each parameter in it.
+    pub(crate) signatures: Vec<(String, Vec<[u32; 2]>)>,
+}
+
+pub(crate) struct LuauEntry {
+    pub(crate) name: String,
+    /// Luau's `AutocompleteEntryKind`.
+    pub(crate) kind: u8,
+    pub(crate) ty: Option<String>,
+    pub(crate) is_deprecated: bool,
+    pub(crate) insert_text: Option<String>,
+    pub(crate) docs: LuauDocs,
 }
 
 /// A frontend over the host in a [`Context`] it owns.
@@ -210,6 +300,51 @@ impl<H: Host> RawChecker<H> {
     pub(crate) fn mark_dirty(&mut self, module: &str) {
         // SAFETY: the name outlives the call, which copies it.
         unsafe { luck_checker_mark_dirty(self.checker, LuckStr::new(module.as_bytes())) };
+    }
+
+    pub(crate) fn retain_type_graphs(&mut self) {
+        // SAFETY: the frontend lives as long as `self`.
+        unsafe { luck_checker_retain_type_graphs(self.checker) };
+    }
+
+    /// What's at the zero-based `line` and byte `column` of `module`.
+    pub(crate) fn describe(
+        &mut self,
+        module: &str,
+        line: u32,
+        column: u32,
+    ) -> Option<LuauDescription> {
+        let mut described: Option<LuauDescription> = None;
+        let sink = LuckDescribed {
+            context: (&raw mut described).cast(),
+            describe: push_description,
+            signature: push_signature,
+        };
+        // SAFETY: the name and `described` outlive the call, which copies the
+        // name.
+        unsafe {
+            luck_checker_describe(self.checker, LuckStr::new(module.as_bytes()), line, column, sink)
+        };
+        described
+    }
+
+    /// Luau's autocomplete at the zero-based `line` and byte `column` of
+    /// `module`.
+    pub(crate) fn autocomplete(&mut self, module: &str, line: u32, column: u32) -> Vec<LuauEntry> {
+        let mut entries: Vec<LuauEntry> = Vec::new();
+        let sink = LuckEntries { context: (&raw mut entries).cast(), push: push_entry };
+        // SAFETY: the name and `entries` outlive the call, which copies the
+        // name.
+        unsafe {
+            luck_checker_autocomplete(
+                self.checker,
+                LuckStr::new(module.as_bytes()),
+                line,
+                column,
+                sink,
+            );
+        }
+        entries
     }
 
     /// Checks `modules`, handing each task Analysis splits the work into to
@@ -336,6 +471,11 @@ impl CancellationToken {
         // SAFETY: the token lives as long as `self`.
         unsafe { luck_cancellation_cancel(self.raw.0) };
     }
+
+    pub fn is_cancelled(&self) -> bool {
+        // SAFETY: the token lives as long as `self`.
+        unsafe { luck_cancellation_is_cancelled(self.raw.0) }
+    }
 }
 
 impl Default for CancellationToken {
@@ -433,6 +573,93 @@ extern "C" fn submit_task(context: *mut c_void, task: *mut c_void) {
     if let Some(task) = NonNull::new(task) {
         submit(Task(task));
     }
+}
+
+/// # Safety
+///
+/// `text` is a string the shim passes for the callback it's in.
+unsafe fn owned(text: LuckStr) -> String {
+    // SAFETY: the caller promises it.
+    String::from_utf8_lossy(unsafe { text.bytes() }).into_owned()
+}
+
+/// # Safety
+///
+/// `docs` is the shim's for the callback it's in.
+unsafe fn docs(docs: &LuckDocs) -> LuauDocs {
+    let LuckLocation { begin_line, begin_column, end_line, end_column } = docs.location;
+    LuauDocs {
+        // SAFETY: the caller promises it.
+        symbol: docs.has_symbol.then(|| unsafe { owned(docs.symbol) }),
+        definition: docs.has_definition.then(|| {
+            // SAFETY: as for the symbol.
+            let module = unsafe { owned(docs.module) };
+            (module, [begin_line, begin_column, end_line, end_column])
+        }),
+    }
+}
+
+extern "C" fn push_description(
+    context: *mut c_void,
+    location: LuckLocation,
+    ty: LuckStr,
+    found: *const LuckDocs,
+) {
+    // SAFETY: the context is the `Option` `RawChecker::describe` passes, which
+    // nothing else borrows during the call.
+    let described = unsafe { &mut *context.cast::<Option<LuauDescription>>() };
+    // SAFETY: the shim passes docs it built for this call.
+    let found = unsafe { &*found };
+    let LuckLocation { begin_line, begin_column, end_line, end_column } = location;
+    *described = Some(LuauDescription {
+        location: [begin_line, begin_column, end_line, end_column],
+        // SAFETY: the type is the shim's for this call.
+        ty: unsafe { owned(ty) },
+        // SAFETY: the docs' strings are the shim's for this call.
+        docs: unsafe { docs(found) },
+        signatures: Vec::new(),
+    });
+}
+
+extern "C" fn push_signature(
+    context: *mut c_void,
+    label: LuckStr,
+    offsets: *const u32,
+    count: usize,
+) {
+    // SAFETY: as in `push_description`.
+    let described = unsafe { &mut *context.cast::<Option<LuauDescription>>() };
+    let offsets: &[u32] = if count == 0 {
+        &[]
+    } else {
+        // SAFETY: the shim passes `count` pairs of offsets for this call.
+        unsafe { slice::from_raw_parts(offsets, count * 2) }
+    };
+    if let Some(description) = described {
+        // SAFETY: the label is the shim's for this call.
+        let label = unsafe { owned(label) };
+        description.signatures.push((label, offsets.as_chunks::<2>().0.to_vec()));
+    }
+}
+
+extern "C" fn push_entry(context: *mut c_void, entry: *const LuckEntry) {
+    // SAFETY: the context is the `Vec` `RawChecker::autocomplete` passes,
+    // which nothing else borrows during the call.
+    let entries = unsafe { &mut *context.cast::<Vec<LuauEntry>>() };
+    // SAFETY: the shim passes an entry it built for this call.
+    let entry = unsafe { &*entry };
+    entries.push(LuauEntry {
+        // SAFETY: the entry's strings are the shim's for this call.
+        name: unsafe { owned(entry.name) },
+        kind: entry.kind,
+        // SAFETY: as for the name.
+        ty: entry.has_type.then(|| unsafe { owned(entry.ty) }),
+        is_deprecated: entry.is_deprecated,
+        // SAFETY: as for the name.
+        insert_text: entry.has_insert_text.then(|| unsafe { owned(entry.insert_text) }),
+        // SAFETY: as for the name.
+        docs: unsafe { docs(&entry.docs) },
+    });
 }
 
 extern "C" fn push_error(context: *mut c_void, error: *const LuckError) {

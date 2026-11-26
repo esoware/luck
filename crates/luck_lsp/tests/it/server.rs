@@ -465,7 +465,7 @@ fn a_cancelled_request_gets_exactly_one_answer() {
 }
 
 #[test]
-fn hover_renders_stdlib_signature() {
+fn hover_renders_a_library_function_s_type_and_reference() {
     let mut client = Client::start();
     let uri = workspace_uri("hover.luau");
     // Cursor on `format` in `string.format`.
@@ -481,15 +481,18 @@ fn hover_renders_stdlib_signature() {
         panic!("hover should return markup contents");
     };
     assert!(
-        markup.value.contains("string.format"),
-        "hover markdown should name the stdlib symbol: {}",
+        markup.value.starts_with(
+            "\
+```luau
+@checked (string, ...unknown) -> string
+```"
+        ),
+        "{}",
         markup.value
     );
-    assert!(
-        markup.value.contains("function"),
-        "hover markdown should render the function signature: {}",
-        markup.value
-    );
+    assert!(markup.value.contains("printf-style format string"), "{}", markup.value);
+    let range = hover.range.expect("a range");
+    assert_eq!((range.start.character, range.end.character), (18, 31), "{range:?}");
 }
 
 #[test]
@@ -922,20 +925,6 @@ print(value)
     };
     assert_eq!(location.uri, uri);
     assert_eq!(location.range.start, Position::new(0, 6));
-}
-
-#[test]
-fn goto_definition_returns_none_for_a_global() {
-    let mut client = Client::start();
-    let uri = workspace_uri("definition_global.luau");
-    client.open(&uri, "print(1)\n");
-
-    let response = client.request::<GotoDefinition>(GotoDefinitionParams {
-        text_document_position_params: position_params(&uri, 0, 2),
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    });
-    assert!(response.is_none(), "stdlib globals have no definition site");
 }
 
 #[test]
@@ -1479,7 +1468,8 @@ app.net.send('tcp')
     let HoverContents::Markup(markup) = hover.contents else {
         panic!("hover should return markup contents");
     };
-    assert!(markup.value.contains("app.net.send"), "{}", markup.value);
+    let ty = "(mode: \"tcp\" | \"udp\", port: number, timeout: number) -> ()";
+    assert!(markup.value.contains(ty), "{}", markup.value);
     let response = client
         .request::<Completion>(CompletionParams {
             text_document_position: position_params(&uri, 0, 14),
@@ -1491,7 +1481,8 @@ app.net.send('tcp')
     let CompletionResponse::Array(items) = response else {
         panic!("completion should return an array response");
     };
-    let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+    let mut labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+    labels.sort_unstable();
     assert_eq!(labels, ["tcp", "udp"], "no identifier completion inside a constant string");
 
     fs::write(&definitions_path, app.replace(", port: number, timeout: number", ""))

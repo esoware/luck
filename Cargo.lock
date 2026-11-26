@@ -1081,6 +1081,7 @@ dependencies = [
  "luck_stdlib",
  "luck_testgen",
  "luck_token",
+ "luck_type_checker",
  "memchr",
  "parking_lot",
  "rustc-hash",

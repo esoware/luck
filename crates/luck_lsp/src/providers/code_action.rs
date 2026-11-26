@@ -308,7 +308,7 @@ mod tests {
     fn two_diagnostics_of_one_rule_yield_one_fix_each() {
         let (document, lints) =
             linted("local x = nil local y = nil\n", &config_enabling(RuleId::RedundantNilInit));
-        let diags = diagnostics::to_lsp(&uri(), &document, &lints);
+        let diags = diagnostics::to_lsp(&uri(), &document, &lints, &[]);
         let range = Range::new(Position::new(0, 0), Position::new(0, 27));
         let actions = code_action(&document, &params(range, diags, None), &lints);
         let fix_count = actions
@@ -323,7 +323,7 @@ mod tests {
         // Directives apply only after a clean parse, so a comment can't
         // silence a syntax error.
         let (document, lints) = linted("local x =\n", &config_enabling(RuleId::RedundantNilInit));
-        let diags = diagnostics::to_lsp(&uri(), &document, &lints);
+        let diags = diagnostics::to_lsp(&uri(), &document, &lints, &[]);
         let range = Range::new(Position::new(0, 0), Position::new(1, 0));
         let actions = code_action(&document, &params(range, diags, None), &lints);
         let titles: Vec<&str> =
@@ -443,7 +443,7 @@ local u = second_missing
     #[test]
     fn a_suggestion_is_a_quick_fix_the_client_never_prefers() {
         let (document, lints) = suggestion_and_fix();
-        let diags = diagnostics::to_lsp(&uri(), &document, &lints);
+        let diags = diagnostics::to_lsp(&uri(), &document, &lints, &[]);
         let range = Range::new(Position::new(0, 0), Position::new(0, 18));
         let quick_fixes = Some(vec![CodeActionKind::QUICKFIX]);
         let actions = code_action(&document, &params(range, diags, quick_fixes), &lints);

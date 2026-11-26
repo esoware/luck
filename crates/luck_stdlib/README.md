@@ -58,7 +58,8 @@ The summaries, datatypes, deprecation messages, and the other globals and librar
 
 - `luau_library()` returns Luau's library, and `roblox_library(security)` Luau's with Roblox's API at `security` over it, each a `&'static StdlibLibrary`.
 - `SecurityLevel`: the level a Roblox script runs at. It derives `Deserialize` for the four names Roblox's API dump gives them, which `luck.json` takes, and `JsonSchema` under the `schemars` feature.
-- `roblox_definitions(security)` returns Roblox's API for a script at that level, as the definitions a type checker loads over Luau's built-in ones.
+- `roblox_definitions(security)` returns Roblox's API for a script at that level, as the definitions a type checker loads over Luau's built-in ones, and `luau_definitions()` the text of `stdlib_data/luau.luau`.
+- `SecurityLevel::name()` gives a level's name as Roblox's API dump spells it.
 - `Stdlib::luau()` is Luau's library, `stdlib.with_roblox(security)` it with Roblox's API layered over it, and `stdlib.layer(text)` it with a definition file layered over it, or the file's E008s.
 - `analyze(chunk, counts, library)` returns a `SemanticAnalysis` of a tree, and beside it the semantic checker's errors. `SemanticAnalysis` answers `is_known_global`, `resolve_callee`, and `resolve_stdlib_path`, takes the configured extra globals with `add_extra_globals`, and holds the `Semantic`.
 

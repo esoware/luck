@@ -12,7 +12,9 @@ use ls_types::{
     WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use lsp_server::{Request, RequestId};
+use serde_json::{Value, json};
 
+use crate::definitions;
 use crate::line_index::PositionEncoding;
 use crate::providers::{code_action, semantic_tokens};
 
@@ -20,8 +22,8 @@ use crate::providers::{code_action, semantic_tokens};
 const WATCHER_REGISTRATION: &str = "luck-file-watchers";
 
 /// The answer to `initialize`, with columns in `encoding`.
-pub(crate) fn initialize_result(encoding: PositionEncoding) -> InitializeResult {
-    InitializeResult {
+pub(crate) fn initialize_result(encoding: PositionEncoding) -> serde_json::Result<Value> {
+    let result = InitializeResult {
         capabilities: ServerCapabilities {
             position_encoding: Some(encoding.into()),
             text_document_sync: Some(TextDocumentSyncCapability::Options(
@@ -94,7 +96,13 @@ pub(crate) fn initialize_result(encoding: PositionEncoding) -> InitializeResult 
             version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         }),
         offset_encoding: None,
-    }
+    };
+    let mut result = serde_json::to_value(result)?;
+    // LSP 3.18's, which `ls_types` doesn't have: the scheme of the definition
+    // files the server serves itself.
+    result["capabilities"]["workspace"]["textDocumentContent"] =
+        json!({ "schemes": [definitions::SCHEME] });
+    Ok(result)
 }
 
 /// The request that has the client watch every file whose change can change

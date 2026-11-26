@@ -4,16 +4,20 @@
 //!
 //! Capabilities:
 //! - text document sync (open, change, close)
-//! - lint diagnostics on open and change, backed by [`luck_linter`], and
-//!   each `require` that doesn't resolve, as `luck build` reports it
+//! - lint diagnostics on open and change, backed by [`luck_linter`], each
+//!   `require` that doesn't resolve, as `luck build` reports it, and type
+//!   errors from Luau's own checker, [`luck_type_checker`]
 //! - formatting + range formatting, backed by [`luck_formatter`]
-//! - hover, completion, signature help, go-to-definition, references,
+//! - hover, completion, and signature help from Luau's types, with the
+//!   documentation a definition file has, go-to-definition, references,
 //!   rename, document and workspace symbols, code actions (per-diagnostic
 //!   fixes, `source.fixAll.luck`, and rule-disable comments), semantic
 //!   tokens, document highlights, folding ranges, selection ranges, and
 //!   document links
 //! - definition, references, and rename of a module's members across the
-//!   workspace folders
+//!   workspace folders, and definition into the definition files, Luau's
+//!   and Roblox's as `luck:` documents, served through
+//!   `workspace/textDocumentContent`
 //! - custom requests: `luck/syntaxTree`, `luck/fixAllWorkspace`
 //! - positions in UTF-8, UTF-16, or UTF-32, whichever `positionEncoding`
 //!   settles
@@ -25,6 +29,11 @@
 //! A version an edit or a close replaces stops its lint, and a request the
 //! client cancels before it starts never runs. Each project keeps one
 //! resolver, which the client's file watcher clears.
+//!
+//! Each change starts a generation, which checks every open document
+//! through the checker of its project's definitions, behind a lock, with the
+//! open documents' text in place of their files, and cancels the checks of
+//! the last.
 //!
 //! A request at a position finds the innermost node there in the analysis's
 //! [`luck_semantic::AstNodes`] and walks up through its parents, and a name
@@ -50,6 +59,7 @@
 
 mod analyzed;
 mod capabilities;
+mod definitions;
 mod document;
 #[cfg(test)]
 mod fixtures;
@@ -61,6 +71,7 @@ mod server;
 mod session;
 mod settings;
 mod transport;
+mod type_check;
 mod workspace;
 
 pub use server::serve;

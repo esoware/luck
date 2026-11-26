@@ -21,6 +21,16 @@ impl SecurityLevel {
     pub const ALL: [Self; 4] =
         [Self::None, Self::LocalUserSecurity, Self::PluginSecurity, Self::RobloxScriptSecurity];
 
+    /// As Roblox's API dump names it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::LocalUserSecurity => "LocalUserSecurity",
+            Self::PluginSecurity => "PluginSecurity",
+            Self::RobloxScriptSecurity => "RobloxScriptSecurity",
+        }
+    }
+
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "None" => Some(Self::None),

@@ -35,7 +35,7 @@ Configuration lives in `luck.json`. `lint`, `fmt`, `check`, and the language ser
 - **Formatter.** Prettier-style layout that breaks on line width and handles the full Luau type grammar. `format(format(x)) == format(x)` and the output re-parses, both enforced by tests.
 - **Linter.** 63 rules across correctness, suspicious, style, and performance categories, with inline suppressions and `--fix`.
 - **Type checker.** Luau's own, the C++ Analysis library of the Luau release luck pins, which `luck check` runs over a project's files, with each `require` resolved as the bundler resolves it, and with the definitions the project loads, Roblox's API as a script at the project's security level reaches it among them.
-- **Language server.** Hover, completions, diagnostics, go-to-definition, references, rename, and semantic tokens, with a module's members followed across the workspace, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
+- **Language server.** Luau's own type errors and types in diagnostics, hover, completions, and signature help, with the documentation a definition file has, go-to-definition into definition files, references, rename, and semantic tokens, with a module's members followed across the workspace, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
 
 Every tool is also a library crate (`luck_parser`, `luck_formatter`, `luck_linter`, ...). The `luck` facade crate, published as `luck_lua`, re-exports all of them except the language server, so you can build on the same pieces the CLI uses.
 

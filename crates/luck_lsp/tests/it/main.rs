@@ -4,4 +4,5 @@
 
 mod common;
 mod server;
+mod types;
 mod workspace;

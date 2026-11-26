@@ -17,7 +17,9 @@
 //! modules on worker threads it starts and joins, through Analysis's own
 //! queue, and a [`CancellationToken`] stops it from another thread. Each
 //! error is a `luck_diagnostics::Diagnostic` in Luau's own words, with a span
-//! in the module's bytes.
+//! in the module's bytes. After [`Checker::retain_type_graphs`] it keeps each
+//! module's types, which [`Checker::describe`] and [`Checker::autocomplete`]
+//! read through Analysis's own queries, for an editor.
 //!
 //! Luau's C++ includes its VM and compiler, which run type functions, so this
 //! crate can't share a binary with another build of Luau, such as `mlua`'s.
@@ -51,5 +53,7 @@
 mod checker;
 mod ffi;
 
-pub use checker::{CheckError, Checker, Host};
+pub use checker::{
+    CheckError, Checker, Completion, CompletionKind, Declaration, Description, Host, Signature,
+};
 pub use ffi::{CancellationToken, Config, builtin_definitions};

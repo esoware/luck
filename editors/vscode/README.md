@@ -2,12 +2,12 @@
 
 Luau language support powered by the luck toolchain:
 
-- **Diagnostics** from `luck_linter` on every change, with the rules `luck lint` runs on the same project, each linking to its rule, with the places it's about as related locations, and unused code faded and deprecated code struck through, a `require` that doesn't resolve shown where it's named, as `luck build` reports it, and a `luck.json` that doesn't load shown as an error on the file
+- **Diagnostics** from `luck_linter` and Luau's own type checker on every change, with the rules `luck lint` runs and the definitions `luck check` loads on the same project, each linking to its rule, with the places it's about as related locations, and unused code faded and deprecated code struck through, a `require` that doesn't resolve shown where it's named, as `luck build` reports it, and a `luck.json` that doesn't load shown as an error on the file
 - **Formatting** + range formatting from `luck_formatter`
-- **Hover** with stdlib signatures and deprecations
-- **Completion** of stdlib globals, namespace members, locals, keywords, and constant string arguments such as Roblox service names
-- **Signature help** with active-parameter tracking
-- **Go to definition**, find references, and rename for locals, and across the workspace for the members of a module's table, such as `util.greet` from `local util = require("./util")`, and `require` paths jump to the module file
+- **Hover** with the type at the cursor as Luau prints it, and the documentation a definition file has of what it names, Roblox's API and Luau's library included
+- **Completion** from Luau's own autocomplete, with each entry's type, deprecation, and documentation
+- **Signature help** from the callee's type, with active-parameter tracking
+- **Go to definition**, find references, and rename for locals, and across the workspace for the members of a module's table, such as `util.greet` from `local util = require("./util")`, `require` paths jump to the module file, and a global, type, or member a definition file declares jumps to its declaration, in Luau's and Roblox's definitions too, which open read-only
 - **Document and workspace symbols**
 - **Code actions**: a quick fix per fix or suggestion, `source.fixAll.luck` for every fix that keeps what the code does (suggestions, such as renaming an unused variable to `_x`, stay quick fixes), "disable rule for this statement"
 - **JS/TS-style highlighting**: variables, globals, properties, functions, types, and word operators use standard theme scopes, and semantic tokens add scope-aware classification and stdlib deprecation strikethrough

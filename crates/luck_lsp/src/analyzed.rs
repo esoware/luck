@@ -57,7 +57,7 @@ impl Analyzed {
 
     /// The text an editor sent, which is UTF-8, and which the parse reads as
     /// bytes.
-    pub(crate) fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &Arc<str> {
         &self.0.borrow_owner().borrow_owner().text
     }
 
@@ -145,7 +145,7 @@ mod tests {
         assert!(!spare.is_empty(), "the first version left its arena");
         let second = analyzed("local two = 2\n", &spare);
         assert!(spare.is_empty(), "the second version took it");
-        assert_eq!(second.text(), "local two = 2\n");
+        assert_eq!(&**second.text(), "local two = 2\n");
         assert_eq!(second.parse().source, b"local two = 2\n");
         drop(second);
         spare.clear();

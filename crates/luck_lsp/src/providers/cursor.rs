@@ -1,4 +1,4 @@
-use luck_ast::{Name, StringLiteral};
+use luck_ast::Name;
 use luck_semantic::{NodeId, SymbolId};
 use luck_token::{CommentKind, Span, TokenKind};
 
@@ -70,17 +70,8 @@ pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
 /// Whether `offset` is inside the string token or block comment at `span`:
 /// past its first byte, and before its end unless a line break or the end of
 /// the text cut it off there.
-pub(crate) const fn is_inside(span: Span, offset: u32, is_cut_off: bool) -> bool {
+const fn is_inside(span: Span, offset: u32, is_cut_off: bool) -> bool {
     span.start < offset && (offset < span.end || (offset == span.end && is_cut_off))
-}
-
-/// Whether the string token starting where `literal` does runs to the end of
-/// its line or of the source without its closing delimiter.
-pub(crate) fn is_unterminated(document: &DocumentState, literal: &StringLiteral<'_>) -> bool {
-    let tokens = document.tokens();
-    tokens
-        .binary_search_by_key(&literal.span.start, |token| token.span.start)
-        .is_ok_and(|i| tokens[i].is_unterminated)
 }
 
 #[cfg(test)]

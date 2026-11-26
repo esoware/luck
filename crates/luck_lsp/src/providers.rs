@@ -14,7 +14,6 @@ pub(crate) mod rename;
 pub(crate) mod selection_range;
 pub(crate) mod semantic_tokens;
 pub(crate) mod signature_help;
-mod stdlib_render;
 pub(crate) mod syntax_tree;
 pub(crate) mod workspace_symbol;
 
@@ -22,7 +21,10 @@ pub(crate) mod workspace_symbol;
 ///
 /// The server analyzes what's typed as it's typed, broken or not, and every
 /// request walks that tree, so each runs on input nested to the parser's cap,
-/// past it, broken at every level, or holding long runs and lists.
+/// past it, broken at every level, or holding long runs and lists. The
+/// requests Luau's type checker answers run on all but the long runs and
+/// lists, as `luck check`'s own stack test leaves them out, since Luau takes
+/// tens of seconds to check a function of 20,000 parameters.
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -34,21 +36,51 @@ mod tests {
     };
     use luck_config::Project;
     use luck_testgen::{
-        broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_past_the_nesting_cap,
+        broken_sources, deep_and_long_sources, on_the_smallest_stack, sources_at_the_nesting_cap,
+        sources_past_the_nesting_cap,
     };
+    use luck_type_checker::CancellationToken;
 
     use super::*;
     use crate::fixtures::{document_at, session, uri};
+    use crate::type_check::{OpenModules, with_types};
     use crate::workspace::WorkspaceView;
 
     fn serve_every_request(source: &str) {
+        serve_every_request_but_types(source);
+        serve_every_typed_request(source);
+    }
+
+    fn serve_every_typed_request(source: &str) {
+        let uri = uri();
+        let project = Project::defaults(PathBuf::from("."));
+        let document = document_at(source, project, Path::new("main.luau"));
+        let session = session();
+        let positions: Vec<_> = [0, source.len().div_ceil(2), source.len()]
+            .into_iter()
+            .map(|index| document.position(u32::try_from(index).expect("a small source")))
+            .collect();
+        let open = OpenModules::default();
+        let checked =
+            with_types(&session, &uri, &document, open, &CancellationToken::new(), |types| {
+                for &position in &positions {
+                    let _ = hover::hover(&document, position, types);
+                    let _ = completion::completion(&document, position, types);
+                    let _ = signature_help::signature_help(&document, position, types);
+                    let _ = definition::declared(&document, position, types);
+                }
+            });
+        assert!(checked.is_some(), "nothing cancels the check");
+    }
+
+    fn serve_every_request_but_types(source: &str) {
         let uri = uri();
         let project = Project::defaults(PathBuf::from("."));
         let document = document_at(source, project, Path::new("main.luau"));
         let session = session();
         let workspace = WorkspaceView::new(&session, &[], &|| false);
         let lints = document.lint(&|| false).expect("nothing cancels it");
-        let diagnostics = diagnostics::to_lsp(&uri, &document, &lints);
+        let diagnostics = diagnostics::to_lsp(&uri, &document, &lints, &[]);
         let full_range = document.full_range();
         let text_document = TextDocumentIdentifier { uri: uri.clone() };
         let _ = code_action::code_action(
@@ -68,9 +100,6 @@ mod tests {
             .collect();
         for &position in &positions {
             let at = TextDocumentPositionParams { text_document: text_document.clone(), position };
-            let _ = hover::hover(&document, position);
-            let _ = completion::completion(&document, position);
-            let _ = signature_help::signature_help(&document, position);
             let _ = document_highlight::document_highlights(&document, position);
             let _ = rename::prepare(&workspace, &uri, &document, position);
             let _ = rename::rename(
@@ -110,7 +139,8 @@ mod tests {
 
     #[test]
     fn every_request_on_deep_and_long_input_fits_the_smallest_stack() {
-        on_the_smallest_stack(deep_and_long_sources(), serve_every_request);
+        on_the_smallest_stack(deep_and_long_sources(), serve_every_request_but_types);
+        on_the_smallest_stack(sources_at_the_nesting_cap(), serve_every_typed_request);
     }
 
     #[test]

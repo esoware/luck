@@ -7,4 +7,5 @@ mod common;
 mod cancel;
 mod check;
 mod definitions;
+mod describe;
 mod invalidate;

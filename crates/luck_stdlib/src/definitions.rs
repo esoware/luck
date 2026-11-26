@@ -6,6 +6,13 @@ use crate::SecurityLevel;
 /// it.
 pub(crate) const LUAU: &str = include_str!("../stdlib_data/luau.luau");
 
+/// Luau's standard library as a definition file: Luau's built-in definitions,
+/// with a declaration for each function they leave to Luau's C++, and the
+/// library reference's description above each declaration it documents.
+pub const fn luau_definitions() -> &'static str {
+    LUAU
+}
+
 /// Roblox's API as a Luau definition file at `RobloxScriptSecurity`. A member
 /// a weaker level can't reach ends with a comment naming the level it needs,
 /// as `-- PluginSecurity`, and a property a weaker level can only read names

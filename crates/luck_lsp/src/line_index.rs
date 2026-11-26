@@ -134,6 +134,10 @@ impl LineIndex {
         Self { line_starts, wide_chars, source_length: index_to_offset(source.len()), encoding }
     }
 
+    pub(crate) const fn encoding(&self) -> PositionEncoding {
+        self.encoding
+    }
+
     /// How many more bytes than units every character before `wide` takes.
     const fn extra_before(&self, wide: WideChar) -> u32 {
         let own = self.encoding.extra_bytes(wide.end - wide.start);
