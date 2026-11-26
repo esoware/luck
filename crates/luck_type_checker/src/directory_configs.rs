@@ -45,7 +45,8 @@ impl DirectoryConfigs {
             let luau_config = directory.join(".config.luau");
             let applied = match (read(&luaurc), read(&luau_config)) {
                 (Some(text), Some(_)) => {
-                    let both = Err("Both .luaurc and .config.luau files exist".to_owned());
+                    let both =
+                        Err("the directory has both a `.luaurc` and a `.config.luau`".to_owned());
                     Some((luaurc, text, both))
                 }
                 (Some(text), None) => {

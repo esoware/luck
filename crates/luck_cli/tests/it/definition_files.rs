@@ -54,7 +54,11 @@ fn lint_reports_a_definition_file_s_syntax_errors() {
 fn a_require_of_a_definition_file_is_an_error() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "app.d.luau", APP);
-    write_file(directory.path(), "main.luau", "local app = require(\"./app.d\")\nprint(app)\n");
+    let main = "\
+local app = require(\"./app.d\")
+print(app)
+";
+    write_file(directory.path(), "main.luau", main);
 
     let output = run(directory.path(), &["bundle", "main.luau"]);
 

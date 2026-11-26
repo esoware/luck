@@ -412,6 +412,7 @@ void luck_string_assign(std::string* string, LuckStr value) noexcept {
 }
 
 void luck_config_apply_luaurc(Luau::Config* config, LuckStr text, LuckErrors errors) noexcept {
+    set_flags();
     Luau::ConfigOptions options;
     options.aliasOptions = Luau::ConfigOptions::AliasOptions{std::nullopt, true};
     if (std::optional<std::string> error = Luau::parseConfig(owned(text), *config, options)) {
@@ -425,6 +426,7 @@ void luck_config_apply_luau_config(
     LuckStr source,
     LuckErrors errors
 ) noexcept try {
+    set_flags();
     Luau::TypeCheckLimits limits;
     limits.finishTime = Luau::TimeTrace::getClock() + CONFIG_TIME_LIMIT_SECONDS;
     limits.cancellationToken = *cancellation;

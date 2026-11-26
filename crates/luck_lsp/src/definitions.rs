@@ -309,16 +309,17 @@ declare app: { -- trailing
             Package::find(&packages, &declaration)?.documentation()
         };
 
-        assert_eq!(
-            documentation("@app/global/greet").as_deref(),
-            Some("Greets someone.\nBy name.\nSee t[1].")
-        );
+        let greets = "\
+Greets someone.
+By name.
+See t[1].";
+        assert_eq!(documentation("@app/global/greet").as_deref(), Some(greets));
         assert_eq!(documentation("@app/global/app.start").as_deref(), Some("Starts the app."));
         assert_eq!(documentation("@app/global/app.stop"), None);
         assert_eq!(documentation("@app/global/app"), None);
         assert_eq!(
             documentation("@app/global/greet/overload/(string) -> string").as_deref(),
-            Some("Greets someone.\nBy name.\nSee t[1].")
+            Some(greets)
         );
     }
 

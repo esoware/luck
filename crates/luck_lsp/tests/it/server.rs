@@ -293,7 +293,11 @@ fn parse_errors_surface_without_config() {
 fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join("luck.json");
-    fs::write(&config_path, "{\n  \"definitions\": [\"@bogus\"]\n}\n").expect("write luck.json");
+    let config = r#"{
+  "definitions": ["@bogus"]
+}
+"#;
+    fs::write(&config_path, config).expect("write luck.json");
     let path = directory.path().join("main.luau");
     fs::write(&path, "local unused = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
@@ -515,6 +519,34 @@ fn a_cancelled_request_gets_exactly_one_answer() {
     }
     // A later request's answer comes after any second answer to the first.
     assert_eq!(document_symbols(&mut client, &uri), ["value"]);
+    assert!(client.stray_responses().is_empty(), "{:?}", client.stray_responses());
+}
+
+/// Cancelling it stops the type check it waits on, which a later hover runs
+/// again.
+#[test]
+fn a_cancelled_hover_gets_exactly_one_answer() {
+    let mut client = Client::start();
+    let uri = workspace_uri("cancelled_hover.luau");
+    client.open(&uri, "local value = 1\nreturn value\n");
+    let hover = || HoverParams {
+        text_document_position_params: position_params(&uri, 1, 8),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+    let id = client.send::<HoverRequest>(hover());
+    let as_json = serde_json::to_value(&id).expect("an id serializes");
+    let cancelled = serde_json::from_value(as_json).expect("an id is a number or a string");
+    client.notify::<Cancel>(CancelParams { id: cancelled });
+    if let Err(error) = client.answer::<HoverRequest>(&id) {
+        assert_eq!(error.code, -32800, "RequestCancelled: {error:?}");
+    }
+
+    let hovered = client.request::<HoverRequest>(hover()).expect("the local's type");
+
+    let HoverContents::Markup(markup) = hovered.contents else {
+        panic!("markup: {hovered:?}");
+    };
+    assert!(markup.value.contains("number"), "{}", markup.value);
     assert!(client.stray_responses().is_empty(), "{:?}", client.stray_responses());
 }
 

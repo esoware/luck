@@ -27,6 +27,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::slice;
 use std::sync::Arc;
 
 use ls_types::{Location, Uri};
@@ -275,11 +276,13 @@ pub(crate) fn with_types<R>(
 /// What Luau finds checking every open document together.
 #[derive(Debug)]
 pub(crate) struct TypeErrors {
-    /// Each document's, in order: a module's type errors, or what Luau found
-    /// wrong with a definition file as it loaded it. A document the project
-    /// leaves out has none.
+    /// Each document's, in order: a module's type errors, what Luau found
+    /// wrong with a definition file as it loaded it, or the E014 of a
+    /// `.luaurc` or `.config.luau` it couldn't read. A document the project
+    /// leaves out has no type errors.
     pub documents: Vec<Vec<Diagnostic>>,
-    /// Why Luau can't load each definition file no document holds open.
+    /// Why Luau can't load each definition file, or read each config, that
+    /// no document holds open.
     pub problems: Vec<Problem>,
 }
 
@@ -313,6 +316,7 @@ pub(crate) fn type_errors(
     }
     let mut errors = vec![Vec::new(); documents.len()];
     let mut rejected: Vec<(Arc<Package>, Vec<Diagnostic>)> = Vec::new();
+    let mut config_errors: Vec<(PathBuf, Diagnostic)> = Vec::new();
     for CheckGroup { check, modules } in groups {
         let (indices, names): (Vec<usize>, Vec<String>) = modules.into_iter().unzip();
         let checked =
@@ -320,6 +324,11 @@ pub(crate) fn type_errors(
                 for (package, problems) in &loaded.rejected {
                     if rejected.iter().all(|(known, _)| known.name() != package.name()) {
                         rejected.push((Arc::clone(package), problems.clone()));
+                    }
+                }
+                for (path, diag) in loaded.checker.host_mut().config_errors.get_mut().iter() {
+                    if config_errors.iter().all(|(known, _)| known != path) {
+                        config_errors.push((path.clone(), diag.clone()));
                     }
                 }
                 diags
@@ -346,6 +355,28 @@ pub(crate) fn type_errors(
             });
             problems.push(Problem { message, published });
         }
+    }
+    for (path, diag) in config_errors {
+        let open_config =
+            documents.iter().position(|(_, document)| document.path(session) == Some(&*path));
+        if let Some(index) = open_config {
+            errors[index].push(diag);
+            continue;
+        }
+        let message = format!(
+            "luck: Luau can't read `{}`, so it checks the modules below it without all of its \
+             settings: {}",
+            module_name(&path),
+            diag.message
+        );
+        let published = session.files().uri(&path).map(|uri| {
+            let bytes = session.files().read(&path).unwrap_or_default();
+            let text = String::from_utf8_lossy(&bytes);
+            let diags =
+                diagnostics::config_to_lsp(&uri, slice::from_ref(&diag), &text, session.encoding());
+            (uri, diags)
+        });
+        problems.push(Problem { message, published });
     }
     Some(TypeErrors { documents: errors, problems })
 }
@@ -392,6 +423,7 @@ fn sync(
     let host = checker.host_mut();
     if changed.is_config_changed {
         host.configs.clear();
+        host.config_errors.get_mut().clear();
     }
     let mut stale: Vec<String> = host
         .read
@@ -436,6 +468,9 @@ struct ModuleHost {
     /// it and its path.
     resolved: RefCell<FxHashMap<(String, String), Option<String>>>,
     configs: DirectoryConfigs,
+    /// The E014 of each config Luau couldn't read, by its path, which
+    /// `configs` gives only the first time it reads one.
+    config_errors: RefCell<Vec<(PathBuf, Diagnostic)>>,
 }
 
 impl ModuleHost {
@@ -447,6 +482,7 @@ impl ModuleHost {
             read: RefCell::default(),
             resolved: RefCell::default(),
             configs: DirectoryConfigs::default(),
+            config_errors: RefCell::default(),
         }
     }
 }
@@ -475,7 +511,13 @@ impl Host for ModuleHost {
             return;
         }
         let read = |file: &Path| String::from_utf8(self.files.read(file).ok()?).ok();
-        let _ = self.configs.apply(path, config, read);
+        let errors = self.configs.apply(path, config, read);
+        let mut known = self.config_errors.borrow_mut();
+        for (config_path, diag) in errors {
+            if known.iter().all(|(known_path, _)| *known_path != config_path) {
+                known.push((config_path, diag));
+            }
+        }
     }
 }
 

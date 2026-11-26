@@ -118,7 +118,8 @@ type Definitions<'files> = (SecurityLevel, &'files [DefinitionSource]);
 /// checking together, on `threads` threads, the files of the projects with
 /// one security level and one list of definitions, which need one checker. A
 /// definition file is no module, so only loading it checks it, and one Luau
-/// can't load adds nothing.
+/// can't load adds nothing. Its errors are reported once, on the file when the
+/// run checks it, however many groups load it.
 fn type_errors(
     files: &[ProjectFile],
     sources: &[io::Result<Vec<u8>>],
@@ -142,9 +143,15 @@ fn type_errors(
             None => groups.push((settings, vec![index])),
         }
     }
+    let definition_files: FxHashMap<&str, usize> = modules
+        .iter()
+        .enumerate()
+        .filter(|&(index, _)| is_definition_file(&files[index].path))
+        .filter_map(|(index, module)| Some((module.as_deref()?, index)))
+        .collect();
 
     let mut by_file = vec![Vec::new(); files.len()];
-    let mut elsewhere = Vec::new();
+    let mut elsewhere: Vec<FileDiagnostics> = Vec::new();
     for ((security, definitions), group) in groups {
         let names_and_texts: Vec<(String, &str)> = definitions
             .iter()
@@ -153,18 +160,23 @@ fn type_errors(
                 DefinitionSource::File { path, text } => (host.module_name(path), text.as_str()),
             })
             .collect();
-        let (definition_files, group_modules): (Vec<_>, Vec<_>) = group
+        let group_modules: Vec<(usize, &str)> = group
             .into_iter()
+            .filter(|&index| !is_definition_file(&files[index].path))
             .filter_map(|index| Some((index, modules[index].as_deref()?)))
-            .partition(|&(index, _)| is_definition_file(&files[index].path));
+            .collect();
         let names: Vec<&str> = group_modules.iter().map(|&(_, name)| name).collect();
         let mut checker = Checker::new(&host);
         for (name, text) in &names_and_texts {
-            if let Err(diags) = checker.load_definitions(name, text) {
-                match definition_files.iter().find(|&&(_, checked)| name == checked) {
-                    Some(&(index, _)) => by_file[index] = diags,
-                    None => elsewhere.push(FileDiagnostics { path: PathBuf::from(name), diags }),
+            let Err(diags) = checker.load_definitions(name, text) else {
+                continue;
+            };
+            match definition_files.get(name.as_str()) {
+                Some(&index) if by_file[index].is_empty() => by_file[index] = diags,
+                None if elsewhere.iter().all(|file| file.path != Path::new(name)) => {
+                    elsewhere.push(FileDiagnostics { path: PathBuf::from(name), diags });
                 }
+                Some(_) | None => {}
             }
         }
         if definitions.contains(&DefinitionSource::Roblox) {

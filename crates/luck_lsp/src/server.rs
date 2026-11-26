@@ -191,9 +191,9 @@ impl LspRequest for TextDocumentContent {
 /// A client that gives a config as its `initializationOptions`, the keys of a
 /// `luck.json` but `extends`, relative to its first workspace folder, or to
 /// `/` with none, has every document take that config's project, which
-/// `workspace/didChangeConfiguration` replaces with its `settings`, and the
-/// server reads only its open documents and the files it pushes with
-/// `luck/didChangeFiles`, never the disk.
+/// `workspace/didChangeConfiguration` replaces with its `settings` unless
+/// they're `null` or `{}`, and the server reads only its open documents and
+/// the files it pushes with `luck/didChangeFiles`, never the disk.
 ///
 /// Every job runs on the `threads` threads this starts, each with
 /// [`luck_ast::MIN_STACK_BYTES`] of stack.
@@ -242,9 +242,10 @@ pub fn serve(connection: Connection, threads: NonZero<usize>) -> io::Result<()> 
         documents: BTreeMap::new(),
         published: BTreeMap::new(),
         config_problems: Vec::new(),
-        definition_problems: BTreeMap::new(),
+        check_problems: BTreeMap::new(),
         workspace_folders: Vec::new(),
         checks: CancellationToken::new(),
+        request_checks: BTreeMap::new(),
         is_shutting_down: false,
     };
     server.set_workspace_folders(folders);
@@ -278,15 +279,19 @@ struct Server {
     /// Each file a config's problem is published on, which a reload of the
     /// settings clears.
     config_problems: Vec<Uri>,
-    /// What's published on each definition file no document holds open
-    /// about why Luau can't load it.
-    definition_problems: BTreeMap<Uri, Vec<Diagnostic>>,
+    /// What's published on each definition file, `.luaurc`, or
+    /// `.config.luau` that no document holds open about why Luau can't load
+    /// or read it.
+    check_problems: BTreeMap<Uri, Vec<Diagnostic>>,
     /// The client's, which the workspace walks.
     workspace_folders: Vec<Uri>,
     /// What stops the type checks that the last change to an open document,
     /// or to a file one can read, started, which the next change, or
     /// `shutdown`, cancels.
     checks: CancellationToken,
+    /// What stops the type check of each request a job is answering that
+    /// reads types, which the client's cancelling it cancels too.
+    request_checks: BTreeMap<RequestId, CancellationToken>,
     is_shutting_down: bool,
 }
 
@@ -316,9 +321,9 @@ impl Server {
                 }
             }
         };
-        let Self { session, pool, documents, checks, .. } = self;
-        session.stop();
-        checks.cancel();
+        self.session.stop();
+        self.cancel_checks();
+        let Self { pool, documents, .. } = self;
         for document in documents.values() {
             document.mark_stale();
         }
@@ -334,8 +339,8 @@ impl Server {
         let _ = self.sender.send(message.into());
     }
 
-    fn publish(&self, uri: Uri, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
-        let published = PublishDiagnosticsParams { uri, diagnostics, version };
+    fn publish(&self, uri: Uri, diags: Vec<Diagnostic>, version: Option<i32>) {
+        let published = PublishDiagnosticsParams { uri, diagnostics: diags, version };
         self.send(Notification::new(PublishDiagnostics::METHOD.to_owned(), published));
     }
 
@@ -352,6 +357,7 @@ impl Server {
     fn finish(&mut self, task: Task) {
         match task {
             Task::Respond(response) => {
+                self.request_checks.remove(&response.id);
                 if self.pending.remove(&response.id).is_some() {
                     self.send(response);
                 }
@@ -372,16 +378,16 @@ impl Server {
                         published.type_errors = diags;
                     });
                 }
-                let mut last = mem::take(&mut self.definition_problems);
+                let mut last = mem::take(&mut self.check_problems);
                 for problem in problems {
-                    let Some((uri, diagnostics)) = &problem.published else {
+                    let Some((uri, diags)) = &problem.published else {
                         continue;
                     };
-                    let (uri, diagnostics) = (uri.clone(), diagnostics.clone());
-                    if last.remove(&uri).as_ref() != Some(&diagnostics) {
+                    let (uri, diags) = (uri.clone(), diags.clone());
+                    if last.remove(&uri).as_ref() != Some(&diags) {
                         self.report(problem);
                     }
-                    self.definition_problems.insert(uri, diagnostics);
+                    self.check_problems.insert(uri, diags);
                 }
                 for uri in last.into_keys() {
                     self.publish(uri, Vec::new(), None);
@@ -435,8 +441,8 @@ impl Server {
         let Problem { message, published } = problem;
         let shown = ShowMessageParams { typ: MessageType::ERROR, message };
         self.send(Notification::new(ShowMessage::METHOD.to_owned(), shown));
-        if let Some((uri, diagnostics)) = published {
-            self.publish(uri, diagnostics, None);
+        if let Some((uri, diags)) = published {
+            self.publish(uri, diags, None);
         }
     }
 
@@ -469,7 +475,7 @@ impl Server {
     /// lints go out once they're done, with the type errors of the last
     /// check until this one's are.
     fn republish(&mut self) {
-        self.checks.cancel();
+        self.cancel_checks();
         self.checks = CancellationToken::new();
         let documents = self.open_documents();
         for (uri, document) in &documents {
@@ -508,6 +514,23 @@ impl Server {
             session.send(Task::Checked { documents: checked, problems, cancellation });
             session.type_checks().drop_unused();
         });
+    }
+
+    /// Stops every type check a job is running, for the open documents or
+    /// for a request.
+    fn cancel_checks(&mut self) {
+        self.checks.cancel();
+        for cancellation in mem::take(&mut self.request_checks).into_values() {
+            cancellation.cancel();
+        }
+    }
+
+    /// What stops the type check of request `id`, which the client's
+    /// cancelling it cancels, as the next change does.
+    fn request_check(&mut self, id: &RequestId) -> CancellationToken {
+        let cancellation = CancellationToken::new();
+        self.request_checks.insert(id.clone(), cancellation.clone());
+        cancellation
     }
 
     /// Makes `folders` the workspace and walks it. A client's files with no
@@ -603,7 +626,7 @@ impl Server {
         let path = self.session.files().path(&item.uri);
         let text: Arc<str> = Arc::from(item.text);
         // The document's own diagnostics take the place of its file's.
-        self.definition_problems.remove(&item.uri);
+        self.check_problems.remove(&item.uri);
         let document = Document::new(item.version, Arc::clone(&text), path);
         self.replace(item.uri.clone(), Arc::new(document));
         let change = self.lay_over(&item.uri, Some(text));
@@ -658,29 +681,29 @@ impl Server {
         // A range that doesn't fit means we've already desynced from the
         // client. Drop the document so nothing is served from corrupt text
         // until the client reopens it.
-        if let Some(desynced) = self.documents.remove(&text_document.uri) {
-            desynced.mark_stale();
-        }
-        self.published.remove(&text_document.uri);
-        self.publish(text_document.uri, Vec::new(), None);
-        self.republish();
+        self.drop_document(text_document.uri);
     }
 
     fn close(&mut self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri;
-        if let Some(closed) = self.documents.remove(&uri) {
-            closed.mark_stale();
+        self.drop_document(params.text_document.uri);
+    }
+
+    /// Forgets the document open at `uri` and the text it laid over the
+    /// files, and clears what went out on it.
+    fn drop_document(&mut self, uri: Uri) {
+        if let Some(dropped) = self.documents.remove(&uri) {
+            dropped.mark_stale();
         }
         self.published.remove(&uri);
         let change = self.lay_over(&uri, None);
         self.session.spare_arena().clear();
-        // LSP has a server clear a closed file's diagnostics.
-        self.publish(uri.clone(), Vec::new(), None);
         if let Some(path) = self.session.files().path(&uri) {
             // What the files hold may not be what the document last held,
             // which a client that watches no files never says.
             self.session.workspace().forget(path);
         }
+        // LSP has a server clear a closed file's diagnostics.
+        self.publish(uri, Vec::new(), None);
         if !change.is_some_and(|change| self.files_changed(&[change])) {
             self.republish();
         }
@@ -723,9 +746,14 @@ impl Server {
         self.files_changed(&changes);
     }
 
-    /// Takes the client's new config, when it gave one to start with.
+    /// Takes the client's new config, when it gave one to start with. A
+    /// `null` or `{}` is what a client sends when it has no settings, so
+    /// neither replaces the config.
     fn configuration_changed(&mut self, params: &DidChangeConfigurationParams) {
-        if !self.session.settings().is_given() {
+        let settings = &params.settings;
+        let is_empty =
+            settings.is_null() || settings.as_object().is_some_and(serde_json::Map::is_empty);
+        if is_empty || !self.session.settings().is_given() {
             return;
         }
         self.session.settings().set_given(params.settings.to_string());
@@ -835,6 +863,9 @@ impl Server {
             NumberOrString::Number(number) => RequestId::from(number),
             NumberOrString::String(text) => RequestId::from(text),
         };
+        if let Some(cancellation) = self.request_checks.remove(&id) {
+            cancellation.cancel();
+        }
         if let Some(is_cancelled) = self.pending.remove(&id) {
             is_cancelled.store(true, Ordering::Relaxed);
             let refusal = "the client cancelled it".to_owned();
@@ -949,7 +980,8 @@ impl Server {
     /// `answer` gives for the document's types at what `target` finds in it,
     /// once Luau has checked it with the open documents as they stood when
     /// the request came, or with `null` where `target` finds nothing, or
-    /// once a change stops the check.
+    /// once a change stops the check. The client's cancelling the request
+    /// stops the check too.
     fn spawn_on_types<R, U, G, A, Target, T>(
         &mut self,
         request: Request,
@@ -969,7 +1001,7 @@ impl Server {
         let uri = uri_of(&params).clone();
         let document = self.document(&uri);
         let documents = self.open_documents();
-        let cancellation = self.checks.clone();
+        let cancellation = self.request_check(&id);
         self.spawn::<R, _>(id, move |session, _| {
             let Some(open) = document else {
                 return Ok(None);
@@ -995,7 +1027,7 @@ impl Server {
         match request.method.as_str() {
             Shutdown::METHOD => {
                 self.is_shutting_down = true;
-                self.checks.cancel();
+                self.cancel_checks();
                 for document in self.documents.values() {
                     document.mark_stale();
                 }
@@ -1093,7 +1125,7 @@ impl Server {
                 let uri = params.text_document_position_params.text_document.uri;
                 let document = self.document(&uri);
                 let documents = self.open_documents();
-                let cancellation = self.checks.clone();
+                let cancellation = self.request_check(&id);
                 self.spawn::<GotoDefinition, _>(id, move |session, is_cancelled| {
                     let Some(open) = document else {
                         return Ok(None);

@@ -8,6 +8,11 @@ local count: number = \"one\"
 return count
 ";
 
+const DEFAULT_MODE_MISMATCH: &str = "\
+local count: number = \"one\"
+return count
+";
+
 #[test]
 fn check_reports_a_type_error_in_luaus_words() {
     let directory = TempDir::new().unwrap();
@@ -47,13 +52,9 @@ return count
 #[test]
 fn check_takes_the_mode_of_the_luaurc_above_a_file() {
     let directory = TempDir::new().unwrap();
-    write_file(directory.path(), "loose.luau", "local count: number = \"one\"\nreturn count\n");
+    write_file(directory.path(), "loose.luau", DEFAULT_MODE_MISMATCH);
     write_file(directory.path(), "strict/.luaurc", r#"{ "languageMode": "strict" }"#);
-    write_file(
-        directory.path(),
-        "strict/main.luau",
-        "local count: number = \"one\"\nreturn count\n",
-    );
+    write_file(directory.path(), "strict/main.luau", DEFAULT_MODE_MISMATCH);
 
     let output = run(directory.path(), &["check", "."]);
 
@@ -144,7 +145,12 @@ return count
 
 #[test]
 fn check_reports_a_class_name_roblox_has_no_class_for() {
-    let stderr = roblox_type_errors("--!strict\nreturn Instance.new(\"Parts\")\n");
+    let stderr = roblox_type_errors(
+        "\
+--!strict
+return Instance.new(\"Parts\")
+",
+    );
 
     assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
     assert!(stderr.contains("Unknown type 'Parts'"), "{stderr}");
@@ -191,17 +197,22 @@ return material, key
     );
 
     assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
-    assert!(
-        stderr.contains("Expected this to be\n\t'Enum.KeyCode'\nbut got\n\t'Enum.Material'"),
-        "{stderr}"
-    );
+    let mismatch = "\
+Expected this to be
+\t'Enum.KeyCode'
+but got
+\t'Enum.Material'";
+    assert!(stderr.contains(mismatch), "{stderr}");
     assert!(stderr.contains("main.luau:3:27"), "{stderr}");
 }
 
 /// `GetDebugId` needs `PluginSecurity`, so a script at `None` can't reach it.
 #[test]
 fn check_gives_a_roblox_project_the_api_of_its_security_level() {
-    const DEBUG_ID: &str = "--!strict\nreturn game:GetDebugId()\n";
+    const DEBUG_ID: &str = "\
+--!strict
+return game:GetDebugId()
+";
     let script = TempDir::new().unwrap();
     write_file(script.path(), "luck.json", r#"{ "definitions": ["@roblox"] }"#);
     write_file(script.path(), "main.luau", DEBUG_ID);
@@ -271,6 +282,36 @@ fn check_reports_luau_s_errors_in_a_definition_file_at_it() {
     assert_eq!(stderr.matches("[E015]").count(), 2, "{stderr}");
     assert!(stderr.contains("app.d.luau:1:30"), "{stderr}");
     assert!(stderr.contains("main.luau:2:23"), "{stderr}");
+}
+
+/// Each group of projects that lists it loads it, and its errors are
+/// reported once, on the file when the run checks it.
+#[test]
+fn check_reports_a_definition_file_two_groups_load_once() {
+    let directory = TempDir::new().unwrap();
+    write_file(
+        directory.path(),
+        "shared.d.luau",
+        "declare function greet(name: Missing): string\n",
+    );
+    write_file(directory.path(), "extra.d.luau", "declare function wave(): ()\n");
+    write_file(directory.path(), "app/luck.json", r#"{ "definitions": ["../shared.d.luau"] }"#);
+    write_file(
+        directory.path(),
+        "plugin/luck.json",
+        r#"{ "definitions": ["../shared.d.luau", "../extra.d.luau"] }"#,
+    );
+    write_file(directory.path(), "app/main.luau", "return 1\n");
+    write_file(directory.path(), "plugin/main.luau", "return 2\n");
+
+    for paths in [&["app/main.luau", "plugin/main.luau"][..], &["."]] {
+        let output = run(directory.path(), &[&["check"][..], paths].concat());
+
+        let stderr = stderr_text(&output);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert_eq!(stderr.matches("[E015]").count(), 1, "{stderr}");
+        assert!(stderr.contains("shared.d.luau:1:30"), "{stderr}");
+    }
 }
 
 /// Reported once, by luck's parser where `check` reads the file and by

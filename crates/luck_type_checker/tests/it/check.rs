@@ -98,8 +98,15 @@ fn a_module_with_no_source_has_no_diagnostics() {
 
 #[test]
 fn a_luaurc_sets_the_mode_a_hot_comment_overrides() {
-    let unannotated = "local count: number = \"one\"\nreturn count\n";
-    let unchecked = "--!nocheck\nlocal count: number = \"one\"\nreturn count\n";
+    let unannotated = "\
+local count: number = \"one\"
+return count
+";
+    let unchecked = "\
+--!nocheck
+local count: number = \"one\"
+return count
+";
     let mut checker = checker(&[("unannotated", unannotated), ("unchecked", unchecked)]);
     // The alias comes first, which Luau's parser stops at without alias
     // options.
@@ -116,7 +123,14 @@ fn a_luaurc_sets_the_mode_a_hot_comment_overrides() {
 fn many_modules_check_across_threads() {
     let modules: Vec<(String, String)> = (0..32)
         .map(|index| {
-            (format!("m{index}"), format!("--!strict\nlocal x: string = {index}\nreturn x\n"))
+            let source = format!(
+                "\
+--!strict
+local x: string = {index}
+return x
+"
+            );
+            (format!("m{index}"), source)
         })
         .collect();
     let sources: Vec<(&str, &str)> =

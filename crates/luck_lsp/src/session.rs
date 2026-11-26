@@ -166,8 +166,8 @@ impl Session {
             // A file that can't be read has no text to place the problem in.
             let bytes = self.files.read(&file.path).unwrap_or_default();
             let text = String::from_utf8_lossy(&bytes);
-            let diagnostics = diagnostics::config_to_lsp(&uri, &file.diags, &text, self.encoding);
-            Some((uri, diagnostics))
+            let lsp_diags = diagnostics::config_to_lsp(&uri, &file.diags, &text, self.encoding);
+            Some((uri, lsp_diags))
         });
         self.send(Task::ConfigError { generation, problem: Problem { message, published } });
     }

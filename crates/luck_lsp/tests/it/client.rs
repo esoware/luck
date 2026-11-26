@@ -8,7 +8,7 @@ use ls_types::request::{Formatting, HoverRequest, Rename};
 use ls_types::{
     Diagnostic, DidChangeConfigurationParams, DidCloseTextDocumentParams, DocumentFormattingParams,
     FormattingOptions, HoverContents, HoverParams, MessageType, NumberOrString, Position, Range,
-    RenameParams, Uri, WorkDoneProgressParams,
+    RenameParams, TextDocumentContentChangeEvent, Uri, WorkDoneProgressParams,
 };
 use serde_json::{Value, json};
 
@@ -253,6 +253,22 @@ fn an_invalid_config_is_shown_and_a_new_one_replaces_it() {
     }
 }
 
+/// What a client with no settings sends keeps the config it gave.
+#[test]
+fn settings_of_null_or_nothing_keep_the_given_config() {
+    let (mut client, main) = started();
+    assert_eq!(codes(&checked(&mut client, &main, Some(1))), ["E015"]);
+
+    for settings in [Value::Null, json!({})] {
+        client.notify::<DidChangeConfiguration>(DidChangeConfigurationParams { settings });
+    }
+    client.replace_all(&main, 2, &MAIN.replace("\"eight\"", "\"nine\""));
+
+    let diags = checked(&mut client, &main, Some(2));
+    assert_eq!(codes(&diags), ["E015"], "`alert` and `game` are still declared: {diags:?}");
+    assert!(client.shown(MessageType::ERROR).is_empty(), "{:?}", client.shown(MessageType::ERROR));
+}
+
 #[test]
 fn an_open_definition_file_parses_and_formats_as_one() {
     let client = Client::start_given(given_config(), &folder());
@@ -298,13 +314,41 @@ fn a_config_luau_that_never_returns_is_stopped() {
         (&uri("lib/util.luau"), Some(UTIL)),
     ]);
     let main = uri("1");
-    client.open(&main, "local util = require(\"@lib/util\")\nreturn util\n");
+    let requirer = "\
+local util = require(\"@lib/util\")
+return util
+";
+    client.open(&main, requirer);
     let mut client = client;
 
     let diags = client.diagnostics(&main, Some(1));
 
     assert_eq!(codes(&diags), ["E004"], "{diags:?}");
     assert!(diags[0].message.contains(".config.luau`, which doesn't load"), "{diags:?}");
+}
+
+/// Shown and published on the file, however many checks read it, until it
+/// reads again.
+#[test]
+fn a_luaurc_luau_cannot_read_is_reported_on_it() {
+    let client = Client::start_given(json!({}), &folder());
+    let luaurc = uri(".luaurc");
+    client.push(&[(&luaurc, Some(r#"{ "languageMode": "strictt" }"#))]);
+    client.open(&uri("1"), "return 1\n");
+    client.open(&uri("2"), "return 2\n");
+    let mut client = client;
+
+    let diags = client.diagnostics(&luaurc, None);
+
+    assert_eq!(codes(&diags), ["E014"], "{diags:?}");
+    assert!(diags[0].message.starts_with("invalid config: "), "{diags:?}");
+    let shown = client.shown(MessageType::ERROR);
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(shown[0].starts_with("luck: Luau can't read `/inmemory/model/.luaurc`"), "{shown:?}");
+
+    client.push(&[(&luaurc, Some(r#"{ "languageMode": "strict" }"#))]);
+
+    assert_eq!(client.next_published(&luaurc).diagnostics, []);
 }
 
 #[test]
@@ -376,6 +420,39 @@ alert(\"hi\", \"eight\")
         text_document: document(&definitions),
     });
     assert_eq!(client.next_published(&definitions).diagnostics, []);
+    wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
+}
+
+/// A change whose range doesn't fit drops the open definition file, so the
+/// checks go back to the file pushed under it, as they do once it closes.
+#[test]
+fn a_desynced_definition_file_gives_way_to_the_pushed_one() {
+    let client = Client::start_given(json!({ "definitions": ["app.d.luau"] }), &folder());
+    let definitions = uri("app.d.luau");
+    client.push(&[(&definitions, Some(DEFINITIONS))]);
+    let main = uri("1");
+    client.open(
+        &main,
+        "\
+--!strict
+alert(\"hi\", \"eight\")
+",
+    );
+    let mut client = client;
+    wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
+    client.open(&definitions, &DEFINITIONS.replace("seconds: number", "seconds: boolean"));
+    wait_for(&mut client, &main, "Expected this to be 'boolean', but got 'string'");
+
+    client.change(
+        &definitions,
+        2,
+        vec![TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 5), Position::new(0, 2))),
+            range_length: None,
+            text: "x".to_owned(),
+        }],
+    );
+
     wait_for(&mut client, &main, "Expected this to be 'number', but got 'string'");
 }
 

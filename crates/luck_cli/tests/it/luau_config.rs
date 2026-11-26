@@ -64,8 +64,9 @@ fn a_directory_with_both_configs_is_an_error() {
     let check_stderr = stderr_text(&checked);
     assert_eq!(checked.status.code(), Some(1), "{check_stderr}");
     assert!(
-        check_stderr
-            .contains("[E014] error: invalid config: Both .luaurc and .config.luau files exist"),
+        check_stderr.contains(
+            "[E014] error: invalid config: the directory has both a `.luaurc` and a `.config.luau`"
+        ),
         "{check_stderr}"
     );
 
@@ -81,7 +82,11 @@ fn a_directory_with_both_configs_is_an_error() {
 
 #[test]
 fn a_config_luau_that_errors_is_reported_in_luau_s_words() {
-    let directory = project(".config.luau", "local aliases = nil\nreturn aliases.lib\n");
+    let erroring = "\
+local aliases = nil
+return aliases.lib
+";
+    let directory = project(".config.luau", erroring);
 
     let checked = run(directory.path(), &["check", "main.luau"]);
     let check_stderr = stderr_text(&checked);
