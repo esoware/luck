@@ -235,6 +235,48 @@ end
 }
 
 #[test]
+fn a_replacement_takes_the_calls_its_declared_types_take() {
+    let stdlib = layered(
+        r#"
+declare app: {
+    open: (path: string, mode: ("r" | "w")?) -> boolean,
+    run: <A..., R...>(callback: thread | (A...) -> R..., A...) -> thread,
+}
+@[deprecated {use = "app.open"}] declare function load(path: string): boolean
+@[deprecated {use = "app.open"}] declare function fetch(path: number): boolean
+@[deprecated {use = "app.run"}] declare function call(callback: () -> ())
+@[deprecated {use = "print"}] declare function log(...: any)
+
+declare extern type Door with
+    @[deprecated {use = "Open"}] function open(self, force: boolean?): ()
+    function Open(self, force: boolean?, speed: number?): ()
+end
+"#,
+    );
+    let library = stdlib.library();
+    let replacement = |path: &[&str]| function(library, path).deprecated?.replacement;
+
+    let load = replacement(&["load"]).expect("`app.open` is declared");
+    assert!(!load.is_method);
+    assert!(load.takes(1, true), "`app.open` takes a path and returns a boolean");
+    assert!(!load.takes(0, false) && !load.takes(2, false), "`load` takes one argument");
+
+    let fetch = replacement(&["fetch"]).expect("`app.open` is declared");
+    assert!(!fetch.takes(1, false), "`app.open` takes no number");
+
+    let call = replacement(&["call"]).expect("`app.run` is declared");
+    assert!(call.takes(1, false), "`app.run` takes any function");
+    assert!(!call.takes(1, true), "`app.run` returns a thread, and `call` nothing");
+
+    assert_eq!(replacement(&["log"]), None, "the file doesn't declare `print`");
+
+    let open = method(library, "Door", "open").deprecated.and_then(|it| it.replacement);
+    let open = open.expect("`Open` is declared");
+    assert!(open.is_method);
+    assert!(open.takes(0, true) && open.takes(1, true));
+}
+
+#[test]
 fn a_declared_global_is_read_only_and_a_field_only_when_declared_read() {
     let stdlib = layered(
         "

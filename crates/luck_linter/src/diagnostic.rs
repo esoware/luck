@@ -47,6 +47,7 @@ pub(crate) struct Finding {
     span: Span,
     labels: Vec<Label>,
     help: Option<Cow<'static, str>>,
+    note: Option<Cow<'static, str>>,
     tag: Option<Tag>,
     fix: Option<Fix>,
 }
@@ -56,7 +57,15 @@ impl Finding {
     where
         Text: Into<Cow<'static, str>>,
     {
-        Self { message: message.into(), span, labels: Vec::new(), help: None, tag: None, fix: None }
+        Self {
+            message: message.into(),
+            span,
+            labels: Vec::new(),
+            help: None,
+            note: None,
+            tag: None,
+            fix: None,
+        }
     }
 
     /// Adds another place the finding is about, such as the first of two
@@ -74,6 +83,14 @@ impl Finding {
         Help: Into<Cow<'static, str>>,
     {
         self.help = Some(help.into());
+        self
+    }
+
+    pub(crate) fn with_note<Note>(mut self, note: Note) -> Self
+    where
+        Note: Into<Cow<'static, str>>,
+    {
+        self.note = Some(note.into());
         self
     }
 
@@ -133,11 +150,12 @@ impl Finding {
     }
 
     pub(crate) fn into_message(self, rule: RuleId, severity: Severity) -> Message {
-        let Self { message, span, labels, help, tag, fix } = self;
+        let Self { message, span, labels, help, note, tag, fix } = self;
         let mut diagnostic =
             Diagnostic::lint(rule.name(), severity, span, message).with_url(rule.docs_url());
         diagnostic.labels = labels;
         diagnostic.help = help;
+        diagnostic.note = note;
         diagnostic.tag = tag;
         Message { diagnostic, fix }
     }

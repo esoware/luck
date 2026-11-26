@@ -153,7 +153,9 @@ fn a_definition_file_yields_its_syntax_errors_alone() {
     let allocator = Allocator::new();
     let linter = Linter::new(LintConfig::default());
     let library = luau_library();
-    let source = b"local unused = nil\nprint(undefined_name)";
+    let source = b"\
+local unused = nil
+print(undefined_name)";
     let code = luck_parser::parse(&allocator, source);
     assert!(!linter.run(&code, library, FixKind::all(), None).is_empty(), "code lints");
     let definitions = luck_parser::parse_definitions(&allocator, source);

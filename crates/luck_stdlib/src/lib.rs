@@ -46,6 +46,7 @@
 
 mod analysis;
 mod definitions;
+mod replacement;
 mod resolve;
 mod security_level;
 mod stdlib;
@@ -61,5 +62,5 @@ pub use stdlib::{Stdlib, library_for, luau_library, roblox_library};
 pub use stdlib_map::StdlibMap;
 pub use stdlib_model::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibNamespace,
-    StdlibParam, StdlibShape, StdlibSignature, StdlibValue,
+    StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };

@@ -28,8 +28,8 @@ fn lint_stdin_fix_json_keeps_findings_out_of_the_fixed_source() {
         .args(["lint", "--fix-suggestions", "--format", "json", "--stdin-filepath", "buffer.luau"])
         .write_stdin(
             "\
-local s = wait()
-return s, missingglobal",
+wait()
+return missingglobal",
         )
         .output()
         .expect("luck runs");
@@ -37,8 +37,8 @@ return s, missingglobal",
     assert_eq!(
         stdout_text(&output),
         "\
-local s = task.wait()
-return s, missingglobal",
+task.wait()
+return missingglobal",
         "`--fix` over stdin writes the fixed source to stdout, and nothing else may follow it"
     );
 }
@@ -55,17 +55,17 @@ fn lint_stdin_fix_renders_spans_past_the_end_of_the_original() {
         .args(["lint", "--fix-suggestions", "--stdin-filepath", "buffer.luau"])
         .write_stdin(
             "\
-local s = wait()
-return s, missingglobal",
+wait()
+return missingglobal",
         )
         .assert()
         .code(1)
         .stdout(
             "\
-local s = task.wait()
-return s, missingglobal",
+task.wait()
+return missingglobal",
         )
-        .stderr(predicate::str::contains("buffer.luau:2:11"));
+        .stderr(predicate::str::contains("buffer.luau:2:8"));
 }
 
 /// A fix that shrinks the file keeps every span in bounds of the original, so

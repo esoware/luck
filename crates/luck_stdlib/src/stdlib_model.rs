@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use crate::stdlib_map::StdlibMap;
 
 /// Each variant holds a reference, so an entry is two words, and a table of
@@ -154,16 +152,54 @@ pub struct StdlibDeprecation<'lib> {
     /// What to call instead, as `task.wait`, or a method's name.
     pub r#use: Option<&'lib str>,
     pub reason: Option<&'lib str>,
+    /// Which calls `use` takes in the deprecated function's place, when the
+    /// definition file that deprecates the function declares `use` too.
+    pub replacement: Option<StdlibReplacement>,
 }
 
-impl<'lib> StdlibDeprecation<'lib> {
-    /// What a reader is told: the reason, or else what to use instead.
-    pub fn advice(&self) -> Option<Cow<'lib, str>> {
-        match (self.reason, self.r#use) {
-            (Some(reason), _) => Some(Cow::Borrowed(reason)),
-            (None, Some(replacement)) => Some(Cow::Owned(format!("use `{replacement}` instead"))),
-            (None, None) => None,
+/// Which calls of a deprecated function the function its `use` names takes in
+/// its place, as the types the definition file declares for both say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StdlibReplacement {
+    /// Whether `use` names a method of the deprecated method's type, or
+    /// else a path from the globals.
+    pub is_method: bool,
+    /// Bit `n` is set when the deprecated function takes `n` arguments.
+    pub(crate) accepted: u64,
+    /// Bit `n` is set when the replacement takes every `n` arguments the
+    /// deprecated function takes.
+    pub(crate) covered: u64,
+    /// The calls of `covered` whose replacement returns what the deprecated
+    /// function returns.
+    pub(crate) returning: u64,
+}
+
+impl StdlibReplacement {
+    /// Whether the replacement takes a call of `arg_count` arguments in the
+    /// deprecated function's place, returning the same values when
+    /// `is_value_used`.
+    pub const fn takes(&self, arg_count: usize, is_value_used: bool) -> bool {
+        let calls = if is_value_used { self.returning } else { self.covered };
+        arg_count < u64::BITS as usize && calls & (1 << arg_count) != 0
+    }
+
+    /// The replacement of one function that two declarations deprecate in
+    /// favor of the same function, which takes a call when the replacement
+    /// of each declaration that takes the call does.
+    pub(crate) fn both(self, other: Self) -> Option<Self> {
+        if self.is_method != other.is_method {
+            return None;
         }
+        let accepted = self.accepted | other.accepted;
+        let in_both = |first: u64, second: u64| {
+            (first | !self.accepted) & (second | !other.accepted) & accepted
+        };
+        Some(Self {
+            is_method: self.is_method,
+            accepted,
+            covered: in_both(self.covered, other.covered),
+            returning: in_both(self.returning, other.returning),
+        })
     }
 }
 

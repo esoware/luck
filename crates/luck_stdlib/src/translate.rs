@@ -12,17 +12,18 @@ use std::mem;
 
 use luck_allocator::Allocator;
 use luck_ast::{
-    Declaration, DeclaredExternType, DeclaredFunction, Expression, ExternTypeMember, Field,
-    FunctionAttribute, FunctionType, GenericTypeList, Statement, Type, TypeDeclarationValue,
-    TypeField, TypeFieldAccess,
+    Declaration, DeclaredExternType, DeclaredFunction, DeclaredGlobal, Expression,
+    ExternTypeMember, Field, FunctionAttribute, FunctionType, GenericTypeList, Statement, Type,
+    TypeDeclarationValue, TypeField, TypeFieldAccess,
 };
 use luck_diagnostics::Diagnostic;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
+use crate::replacement::{Signature, replacement, unparenthesized};
 use crate::stdlib_map::StdlibMap;
 use crate::stdlib_model::{
     StdlibArgKind, StdlibDeprecation, StdlibEntry, StdlibFunction, StdlibLibrary, StdlibNamespace,
-    StdlibParam, StdlibShape, StdlibSignature, StdlibValue,
+    StdlibParam, StdlibReplacement, StdlibShape, StdlibSignature, StdlibValue,
 };
 
 /// How many aliases one type may go through, which only a cycle of them
@@ -49,7 +50,8 @@ pub(crate) fn layer<'lib>(
     let mut translation = Translation {
         allocator,
         base_shapes: base.map_or(StdlibMap::EMPTY, |library| library.shapes),
-        extern_types: FxHashSet::default(),
+        extern_types: FxHashMap::default(),
+        declarations: FxHashMap::default(),
         aliases: FxHashMap::default(),
         names: FxHashMap::default(),
         globals: base
@@ -61,10 +63,16 @@ pub(crate) fn layer<'lib>(
         declares_string: false,
     };
     for statement in statements {
-        if let Statement::Declaration(declaration) = statement
-            && let Declaration::ExternType(extern_type) = &**declaration
-        {
-            translation.extern_types.insert(extern_type.name.text.as_str());
+        if let Statement::Declaration(declaration) = statement {
+            match &**declaration {
+                Declaration::ExternType(extern_type) => {
+                    translation.extern_types.insert(extern_type.name.text.as_str(), extern_type);
+                }
+                Declaration::Global(DeclaredGlobal { name, .. })
+                | Declaration::Function(DeclaredFunction { name, .. }) => {
+                    translation.declarations.insert(name.text.as_str(), declaration);
+                }
+            }
         } else if let Statement::TypeDeclaration(declaration) = statement
             && let TypeDeclarationValue::Alias(ty) = &declaration.value
         {
@@ -126,9 +134,13 @@ impl<'lib> Declared<'lib> {
                 },
             ) => {
                 signatures.extend(more);
+                let kept = deprecated.or(other_deprecated).map(|kept| StdlibDeprecation {
+                    replacement: merged_replacement(deprecated, other_deprecated),
+                    ..kept
+                });
                 Self::Function {
                     signatures,
-                    deprecated: deprecated.or(other_deprecated),
+                    deprecated: kept,
                     returns_shape: returns_shape.filter(|_| returns_shape == other_shape),
                 }
             }
@@ -157,7 +169,9 @@ impl<'lib> Declared<'lib> {
 struct Translation<'lib, 'ast> {
     allocator: &'lib Allocator,
     base_shapes: StdlibMap<'lib, StdlibShape<'lib>>,
-    extern_types: FxHashSet<&'ast str>,
+    extern_types: FxHashMap<&'ast str, &'ast DeclaredExternType<'ast>>,
+    /// Each global the file declares, by its name.
+    declarations: FxHashMap<&'ast str, &'ast Declaration<'ast>>,
     aliases: FxHashMap<&'ast str, &'ast Type<'ast>>,
     /// Each name copied into the library's arena, once.
     names: FxHashMap<&'ast str, &'lib str>,
@@ -179,7 +193,7 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
                 (global.name.text.as_str(), self.entry(declared, true))
             }
             Declaration::Function(function) => {
-                (function.name.text.as_str(), self.declared_function(function, false))
+                (function.name.text.as_str(), self.declared_function(function, None))
             }
             Declaration::ExternType(extern_type) => {
                 let shape = self.extern_type(extern_type);
@@ -201,7 +215,7 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
                 ExternTypeMember::Field(field) => members.extend(self.field(field)),
                 ExternTypeMember::Method(method) => {
                     let name = method.name.text.as_str();
-                    let entry = self.declared_function(method, true);
+                    let entry = self.declared_function(method, Some(extern_type));
                     let overloaded = methods.iter_mut().find(|(known, _)| *known == name);
                     match (overloaded, entry) {
                         (
@@ -210,7 +224,18 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
                         ) => {
                             let signatures = [known.signatures, overload.signatures].concat();
                             let signatures = self.allocator.alloc_slice_copy(&signatures);
-                            *known = self.allocator.alloc(StdlibFunction { signatures, ..**known });
+                            let deprecated = known.deprecated.map(|kept| StdlibDeprecation {
+                                replacement: merged_replacement(
+                                    known.deprecated,
+                                    overload.deprecated,
+                                ),
+                                ..kept
+                            });
+                            *known = self.allocator.alloc(StdlibFunction {
+                                signatures,
+                                deprecated,
+                                ..**known
+                            });
                         }
                         _ => methods.push((name, entry)),
                     }
@@ -262,12 +287,14 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
         }
     }
 
-    /// A global's or a method's function, which is read-only.
+    /// A global's function, or with its `owner`, a method's, which is
+    /// read-only.
     fn declared_function(
         &mut self,
         function: &'ast DeclaredFunction<'ast>,
-        is_method: bool,
+        owner: Option<&'ast DeclaredExternType<'ast>>,
     ) -> StdlibEntry<'lib> {
+        let is_method = owner.is_some();
         let generics = generic_names(function.generics.as_deref());
         let typed = function.params.iter().skip(usize::from(is_method));
         let mut params: Vec<StdlibParam<'lib>> = typed
@@ -284,7 +311,9 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
         let signature = StdlibSignature::new(self.allocator.alloc_slice_copy(&params));
         StdlibEntry::Function(self.allocator.alloc(StdlibFunction {
             signatures: self.allocator.alloc_slice_copy(&[signature]),
-            deprecated: self.deprecation(&function.attributes),
+            deprecated: self.deprecation(&function.attributes, owner, || {
+                Signature::of_declared(function, is_method)
+            }),
             is_read_only: true,
             is_method,
             returns_shape,
@@ -357,19 +386,24 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
         let returns_shape = self.returned_shape(&function.return_type, &generics);
         Declared::Function {
             signatures: vec![StdlibSignature::new(self.allocator.alloc_slice_copy(&params))],
-            deprecated: self.deprecation(&function.attributes),
+            deprecated: self
+                .deprecation(&function.attributes, None, || Signature::of_type(function)),
             returns_shape,
         }
     }
 
-    /// `@deprecated`, or `@[deprecated {use = "...", reason = "..."}]`.
+    /// `@deprecated`, or `@[deprecated {use = "...", reason = "..."}]`, of
+    /// the function `signature` gives the signature of, a method of `owner`
+    /// when it has one.
     fn deprecation(
         &mut self,
         attributes: &'ast [FunctionAttribute<'ast>],
+        owner: Option<&'ast DeclaredExternType<'ast>>,
+        signature: impl FnOnce() -> Signature<'ast>,
     ) -> Option<StdlibDeprecation<'lib>> {
         let attribute =
             attributes.iter().find(|attribute| attribute.name.text.as_str() == "deprecated")?;
-        let mut deprecation = StdlibDeprecation { r#use: None, reason: None };
+        let mut deprecation = StdlibDeprecation { r#use: None, reason: None, replacement: None };
         let Some(Expression::TableConstructor(table)) =
             attribute.args.as_ref().and_then(|args| args.first())
         else {
@@ -387,7 +421,85 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
                 _ => {}
             }
         }
+        deprecation.replacement = deprecation.r#use.and_then(|name| {
+            let replacing = match owner {
+                Some(owner) => self.method_signatures(owner, name)?,
+                None => self.path_signatures(name)?,
+            };
+            Some(replacement(&signature(), &replacing, owner.is_some()))
+        });
         Some(deprecation)
+    }
+
+    /// The signatures of the method `name` of `owner`, or of the nearest type
+    /// it extends that has one, when the file declares each type up to that
+    /// one.
+    fn method_signatures(
+        &self,
+        owner: &'ast DeclaredExternType<'ast>,
+        name: &str,
+    ) -> Option<Vec<Signature<'ast>>> {
+        let mut current = owner;
+        // A chain longer than the type count is an `extends` cycle.
+        for _ in 0..=self.extern_types.len() {
+            let mut signatures = Vec::new();
+            for member in &current.members {
+                match member {
+                    ExternTypeMember::Method(method) if method.name.text.as_str() == name => {
+                        signatures.push(Signature::of_declared(method, true));
+                    }
+                    ExternTypeMember::Field(TypeField::Named { name: field, .. })
+                        if field.text.as_str() == name =>
+                    {
+                        return None;
+                    }
+                    ExternTypeMember::Method(_) | ExternTypeMember::Field(_) => {}
+                }
+            }
+            if !signatures.is_empty() {
+                return Some(signatures);
+            }
+            current = self.extern_types.get(current.supertype.as_ref()?.text.as_str())?;
+        }
+        None
+    }
+
+    /// The signatures of the function at `path`, dotted from the globals,
+    /// when the file declares it as a function, or as a function type, or an
+    /// intersection of them, through the fields of table types.
+    fn path_signatures(&self, path: &str) -> Option<Vec<Signature<'ast>>> {
+        let mut segments = path.split('.');
+        let mut ty = match self.declarations.get(segments.next()?)? {
+            Declaration::Function(function) => {
+                let signature = Signature::of_declared(function, false);
+                return segments.next().is_none().then(|| vec![signature]);
+            }
+            Declaration::Global(global) => &global.ty,
+            Declaration::ExternType(_) => return None,
+        };
+        for segment in segments {
+            let Type::Table(table) = unparenthesized(ty) else {
+                return None;
+            };
+            ty = table.fields.iter().rev().find_map(|field| match field {
+                TypeField::Named { name, value, .. } if name.text.as_str() == segment => {
+                    Some(value)
+                }
+                TypeField::Named { .. } | TypeField::Indexer { .. } | TypeField::Array { .. } => {
+                    None
+                }
+            })?;
+        }
+        let signature = |part: &'ast Type<'ast>| {
+            let Type::Function(function) = unparenthesized(part) else {
+                return None;
+            };
+            Some(Signature::of_type(function))
+        };
+        if let Type::Intersection(intersection) = unparenthesized(ty) {
+            return intersection.types.iter().map(signature).collect();
+        }
+        signature(ty).map(|found| vec![found])
     }
 
     /// A param of type `ty`, which is optional when `ty` takes `nil`, as
@@ -547,7 +659,7 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
         if name == "string" {
             return Some("string");
         }
-        if self.extern_types.contains(name) || self.base_shapes.contains_key(name) {
+        if self.extern_types.contains_key(name) || self.base_shapes.contains_key(name) {
             return Some(self.name(name));
         }
         let alias = self.aliases.get(name).filter(|_| depth < MAX_ALIAS_DEPTH)?;
@@ -619,6 +731,19 @@ impl<'lib, 'ast> Translation<'lib, 'ast> {
     }
 }
 
+/// The replacement of a function that two declarations deprecate, which
+/// needs both to name the same function.
+fn merged_replacement(
+    first: Option<StdlibDeprecation<'_>>,
+    second: Option<StdlibDeprecation<'_>>,
+) -> Option<StdlibReplacement> {
+    let (first, second) = (first?, second?);
+    if first.r#use != second.r#use {
+        return None;
+    }
+    first.replacement?.both(second.replacement?)
+}
+
 fn generic_names<'ast>(generics: Option<&'ast GenericTypeList<'ast>>) -> Vec<&'ast str> {
     generics.map_or_else(Vec::new, |list| {
         list.params.iter().map(|param| param.name.text.as_str()).collect()
@@ -626,7 +751,7 @@ fn generic_names<'ast>(generics: Option<&'ast GenericTypeList<'ast>>) -> Vec<&'a
 }
 
 /// Whether a value of type `ty` can be `nil`, as Luau's `isOptional` says.
-fn takes_nil(ty: &Type<'_>) -> bool {
+pub(crate) fn takes_nil(ty: &Type<'_>) -> bool {
     match ty {
         Type::Nil(_) | Type::Optional(_) => true,
         Type::Name(name) => matches!(name.text.as_str(), "any" | "unknown"),

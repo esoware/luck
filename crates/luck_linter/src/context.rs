@@ -155,13 +155,20 @@ impl<'ast> ContextHost<'ast> {
         node: &AstNode<'node>,
     ) -> impl Iterator<Item = Call<'node>> {
         let chain = node.kind().as_suffixed_expr();
-        let is_statement = matches!(self.nodes.parent_kind(node.id()), Some(AstKind::Block(_)));
-        let dropped = chain.filter(|_| is_statement).map(|chain| chain.suffixes.len() - 1);
+        let dropped = self.dropped_call(node);
         chain
             .into_iter()
             .flat_map(SuffixedExpression::calls)
             .filter(move |&(index, _)| Some(index) != dropped)
             .map(|(_, call)| call)
+    }
+
+    /// The index of the suffix of `node`, a chain, whose results the code
+    /// drops: a call statement's last.
+    pub(crate) fn dropped_call(&self, node: &AstNode<'_>) -> Option<usize> {
+        let chain = node.kind().as_suffixed_expr()?;
+        let is_statement = matches!(self.nodes.parent_kind(node.id()), Some(AstKind::Block(_)));
+        is_statement.then(|| chain.suffixes.len() - 1)
     }
 
     /// The suffixes `node`, a chain, reads through: all of them, but for the

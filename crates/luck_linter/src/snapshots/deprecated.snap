@@ -6,48 +6,83 @@ warning: `table.getn` is deprecated
 1 | local n = table.getn(t)
   |           ^^^^^^^^^^^^^
 tag: deprecated
-help: use `#t` instead
+note: use `#t` instead
 
 warning: `table.foreach` is deprecated
  --> Luau:1:1
 1 | table.foreach(t, print)
   | ^^^^^^^^^^^^^^^^^^^^^^^
 tag: deprecated
-help: use `for` loop instead
+note: use `for` loop instead
 
 warning: `table.foreachi` is deprecated
  --> Luau:1:1
 1 | table.foreachi(t, print)
   | ^^^^^^^^^^^^^^^^^^^^^^^^
 tag: deprecated
-help: use `for` loop instead
+note: use `for` loop instead
 
 warning: `wait` is deprecated
  --> Roblox:1:1
 1 | wait(1)
   | ^^^^^^^
 tag: deprecated
-help: This method has been superseded by `task.wait()` and should not be used for future work.
+help: use `task.wait` instead
+note: This method has been superseded by `task.wait()` and should not be used for future work.
 suggestion: replace deprecated `wait` with `task.wait`
   | task.wait(1)
+
+warning: `wait` is deprecated
+ --> Roblox:1:17
+1 | local elapsed = wait(1)
+  |                 ^^^^^^^
+tag: deprecated
+help: use `task.wait` instead
+note: This method has been superseded by `task.wait()` and should not be used for future work.
+
+warning: `wait` is deprecated
+ --> Roblox:1:1
+1 | wait(duration())
+  | ^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use `task.wait` instead
+note: This method has been superseded by `task.wait()` and should not be used for future work.
+
+warning: `delay` is deprecated
+ --> Roblox:1:1
+1 | delay(1, f)
+  | ^^^^^^^^^^^
+tag: deprecated
+help: use `task.delay` instead
+note: This method has been superseded by `task.delay()` and should not be used for future work.
+suggestion: replace deprecated `delay` with `task.delay`
+  | task.delay(1, f)
 
 warning: `delay` is deprecated
  --> Roblox:1:1
 1 | delay(1, f, 'x')
   | ^^^^^^^^^^^^^^^^
 tag: deprecated
-help: This method has been superseded by `task.delay()` and should not be used for future work.
-suggestion: replace deprecated `delay` with `task.delay`
-  | task.delay(1, f, 'x')
+help: use `task.delay` instead
+note: This method has been superseded by `task.delay()` and should not be used for future work.
+
+warning: `spawn` is deprecated
+ --> Roblox:1:1
+1 | spawn(f)
+  | ^^^^^^^^
+tag: deprecated
+help: use `task.spawn` instead
+note: This method has been superseded by `task.spawn()` and should not be used for future work.
+suggestion: replace deprecated `spawn` with `task.spawn`
+  | task.spawn(f)
 
 warning: `spawn` is deprecated
  --> Roblox:1:16
 1 | local thread = spawn(f)
   |                ^^^^^^^^
 tag: deprecated
-help: This method has been superseded by `task.spawn()` and should not be used for future work.
-suggestion: replace deprecated `spawn` with `task.spawn`
-  | local thread = task.spawn(f)
+help: use `task.spawn` instead
+note: This method has been superseded by `task.spawn()` and should not be used for future work.
 
 warning: `wait` is deprecated
  --> Roblox:2:1
@@ -55,7 +90,8 @@ warning: `wait` is deprecated
 2 | wait(1)
   | ^^^^^^^
 tag: deprecated
-help: This method has been superseded by `task.wait()` and should not be used for future work.
+help: use `task.wait` instead
+note: This method has been superseded by `task.wait()` and should not be used for future work.
 
 warning: `ypcall` is deprecated
  --> Roblox:1:1
@@ -80,7 +116,8 @@ warning: `script:children` is deprecated
 1 | local children = script:children()
   |                  ^^^^^^^^^^^^^^^^^
 tag: deprecated
-help: This item has been superseded by `Instance:GetChildren()` which should be used in all new work.
+help: use `GetChildren` instead
+note: This item has been superseded by `Instance:GetChildren()` which should be used in all new work.
 suggestion: replace deprecated `script:children` with `GetChildren`
   | local children = script:GetChildren()
 
@@ -89,16 +126,42 @@ warning: `workspace:findFirstChild` is deprecated
 1 | local child = workspace:findFirstChild('x')
   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 tag: deprecated
-help: This deprecated function is a variant of `Instance:FindFirstChild()` which should be used instead.
+help: use `FindFirstChild` instead
+note: This deprecated function is a variant of `Instance:FindFirstChild()` which should be used instead.
 suggestion: replace deprecated `workspace:findFirstChild` with `FindFirstChild`
   | local child = workspace:FindFirstChild('x')
+
+warning: `workspace:IsRegion3Empty` is deprecated
+ --> Roblox:1:4
+1 | if workspace:IsRegion3Empty(region) then end
+  |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use `GetPartBoundsInBox` instead
+note: This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work.
+
+warning: `workspace:FindPartsInRegion3` is deprecated
+ --> Roblox:1:1
+1 | workspace:FindPartsInRegion3(region, ignore, 10)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use `GetPartBoundsInBox` instead
+note: This function has been deprecated. Use `WorldRoot:GetPartBoundsInBox()` along with `OverlapParams` for new work.
+
+warning: `workspace:FindPartOnRay` is deprecated
+ --> Roblox:1:13
+1 | local hit = workspace:FindPartOnRay(ray)
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag: deprecated
+help: use `Raycast` instead
+note: This function has been deprecated. Use `WorldRoot:Raycast()` along with `RaycastParams` for new work.
 
 warning: `begin` is deprecated
  --> Luau:1:1
 1 | begin()
   | ^^^^^^^
 tag: deprecated
-help: begin was renamed
+help: use `app.start` instead
+note: begin was renamed
 suggestion: replace deprecated `begin` with `app.start`
   | app.start()
 
@@ -108,3 +171,33 @@ warning: `launch` is deprecated
   | ^^^^^^^^
 tag: deprecated
 help: use `the start function` instead
+
+warning: `halt` is deprecated
+ --> Luau:1:1
+1 | halt()
+  | ^^^^^^
+tag: deprecated
+help: use `app.stop` instead
+
+warning: `load` is deprecated
+ --> Luau:1:1
+1 | load(1)
+  | ^^^^^^^
+tag: deprecated
+help: use `app.open` instead
+
+warning: `log` is deprecated
+ --> Luau:1:1
+1 | log('x')
+  | ^^^^^^^^
+tag: deprecated
+help: use `print` instead
+
+warning: `door:open` is deprecated
+ --> Luau:1:1
+1 | door:open()
+  | ^^^^^^^^^^^
+tag: deprecated
+help: use `Open` instead
+suggestion: replace deprecated `door:open` with `Open`
+  | door:Open()
