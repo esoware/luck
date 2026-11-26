@@ -23,6 +23,18 @@ fn lint_prints_a_rules_help() {
 }
 
 #[test]
+fn a_report_off_a_terminal_has_no_color() {
+    let directory = TempDir::new().unwrap();
+    write_file(directory.path(), "main.luau", MISTYPED_TYPE_CHECK);
+
+    luck_in(directory.path())
+        .args(["lint", "main.luau"])
+        .assert()
+        .stderr(predicate::str::contains("did you mean `string`?"))
+        .stderr(predicate::str::contains('\u{1b}').not());
+}
+
+#[test]
 fn lint_json_carries_a_rules_help() {
     let directory = TempDir::new().unwrap();
     write_file(directory.path(), "main.luau", MISTYPED_TYPE_CHECK);

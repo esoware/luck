@@ -221,8 +221,8 @@ fn bundle_at_the_nesting_cap_reads_back() {
 fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
     let directory = deep_module_project(MAX_NESTING_DEPTH - 1);
     // The first table the wrapper pushes past the cap follows `return ` and
-    // the tables before it.
-    let first_too_deep = format!("deep.luau:1:{} ", "return ".len() + MAX_NESTING_DEPTH - 2);
+    // the tables before it, on a line too long for a snippet.
+    let first_too_deep = format!("deep.luau: byte {})", "return ".len() + MAX_NESTING_DEPTH - 3);
 
     for args in [&["bundle", "main.luau"][..], &["bundle", "main.luau", "--minify"]] {
         let output = run(directory.path(), args);
