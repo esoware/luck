@@ -396,9 +396,11 @@ static KEYWORDS: [(u64, TokenKind); 32] = {
 
 /// The bytes of a name's first eight that it spells, by its length. A name
 /// longer than every keyword spells none, and packs to 0, which matches no
-/// keyword, so its length needs no check of its own.
-const SPELLED_BYTES: [u64; 10] = {
-    let mut masks = [0; 10];
+/// keyword, so its length needs no check of its own. The lengths run to 65,
+/// so one a lexer counts as a 64-bit mask's trailing zeros plus one indexes
+/// it unclamped.
+const SPELLED_BYTES: [u64; 66] = {
+    let mut masks = [0; 66];
     let mut length = 1;
     while length <= 8 {
         masks[length] = u64::MAX >> (64 - 8 * length);

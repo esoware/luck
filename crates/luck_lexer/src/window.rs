@@ -52,16 +52,20 @@ struct Tables {
 const A_TO_O: u8 = 1 << 0;
 const UPPER_P_TO_Z_OR_UNDERSCORE: u8 = 1 << 1;
 const LOWER_P_TO_Z: u8 = 1 << 2;
-const CONTROL_WHITESPACE: u8 = 1 << 3;
-const SPACE: u8 = 1 << 4;
-const CARRIAGE_RETURN: u8 = 1 << 5;
-const BACKSLASH: u8 = 1 << 6;
+const BACKSLASH: u8 = 1 << 3;
+const CONTROL_WHITESPACE: u8 = 1 << 4;
+const SPACE: u8 = 1 << 5;
+const CARRIAGE_RETURN: u8 = 1 << 6;
 /// The top bit, which a movemask reads with no compare.
 const DIGIT: u8 = 1 << 7;
 
 const NAME: u8 = DIGIT | A_TO_O | UPPER_P_TO_Z_OR_UNDERSCORE | LOWER_P_TO_Z;
-const WHITESPACE: u8 = CONTROL_WHITESPACE | SPACE;
 const STRING_BREAK: u8 = CARRIAGE_RETURN | BACKSLASH;
+/// The letters' and the backslash's bits are the ones below this, and only
+/// whitespace has a bit between it and the digit's, so a byte is whitespace
+/// where its classes are above this as an `i8`. It's the nibble mask, which
+/// the kernels already hold, so the test takes one compare.
+const BELOW_WHITESPACE: u8 = CONTROL_WHITESPACE - 1;
 
 const PUNCT_ROW_2: u8 = 1 << 0;
 const PUNCT_ROW_3: u8 = 1 << 1;
@@ -72,7 +76,8 @@ const CONTINUATION_ROW_2: u8 = 1 << 5;
 const CONTINUATION_ROW_3: u8 = 1 << 6;
 const CONTINUATION_ROW_5: u8 = 1 << 7;
 
-const PUNCT: u8 = PUNCT_ROW_2 | PUNCT_ROW_3 | PUNCT_ROW_4 | PUNCT_ROW_5 | PUNCT_ROW_7;
+/// Every continuation is also punctuation, so a byte is punctuation where any
+/// bit of its punctuation classes is set.
 const CONTINUATION: u8 = CONTINUATION_ROW_2 | CONTINUATION_ROW_3 | CONTINUATION_ROW_5;
 
 const fn word_bits(byte: u8) -> u8 {
@@ -223,11 +228,11 @@ fn classify_avx2_half(half: &[u8; 32], cpu: Avx2) -> [u32; PLANES] {
     let has_any =
         |classes: Vec256, bits: u8| !(classes & Vec256::splat(bits, cpu)).eq(zero).movemask();
     [
-        has(word, WHITESPACE),
+        word.gt_i8(Vec256::splat(BELOW_WHITESPACE, cpu)).movemask(),
         has_any(word, NAME),
         word.movemask(),
         v.eq(Vec256::splat(b'\n', cpu)).movemask(),
-        has(punct, PUNCT),
+        !punct.eq(zero).movemask(),
         has_any(punct, CONTINUATION),
         v.eq(Vec256::splat(b'.', cpu)).movemask(),
         v.eq(Vec256::splat(b'"', cpu)).movemask(),
@@ -279,11 +284,11 @@ fn classify_neon_quarter(quarter: &[u8; 16], cpu: Neon) -> [Vec128; PLANES] {
         & table(&TABLES.punct_high).lookup(high_nibbles);
     let has = |classes: Vec128, bits: u8| classes.test(Vec128::splat(bits, cpu));
     [
-        has(word, WHITESPACE),
+        word.gt_i8(Vec128::splat(BELOW_WHITESPACE, cpu)),
         has(word, NAME),
         has(word, DIGIT),
         v.eq(Vec128::splat(b'\n', cpu)),
-        has(punct, PUNCT),
+        punct.test(punct),
         has(punct, CONTINUATION),
         v.eq(Vec128::splat(b'.', cpu)),
         v.eq(Vec128::splat(b'"', cpu)),
