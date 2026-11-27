@@ -36,7 +36,7 @@ use ls_types::{
 use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
 };
-use luck_config::EDITORCONFIG_FILE_NAME;
+use luck_config::{EDITORCONFIG_FILE_NAME, located_path};
 use luck_resolver::is_definition_file;
 use luck_type_checker::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -762,8 +762,8 @@ impl Server {
 
     /// Brings everything to the files at each of `changes`' paths, which
     /// changed as it says, and says whether that republished, as a change
-    /// to a settings file, a definition file a project lists, a module, or a
-    /// `.luaurc` or `.config.luau` does.
+    /// to a settings file, a definition file a project reads or globs for, a
+    /// module, or a `.luaurc` or `.config.luau` does.
     fn files_changed(&mut self, changes: &[(PathBuf, FileChangeType)]) -> bool {
         let session = Arc::clone(&self.session);
         let mut affected = FileChanges::default();
@@ -783,7 +783,7 @@ impl Server {
             } else if name == ".luaurc" || name == ".config.luau" {
                 affected.is_config_changed = true;
             } else if is_definition_file(path) {
-                definitions.push(name);
+                definitions.push(located_path(session.files(), path));
             } else if is_luau {
                 affected.modules.push(path.clone());
                 affected.is_module_added_or_removed |= is_added_or_removed;
@@ -811,8 +811,8 @@ impl Server {
             self.walk_workspace();
         }
         let mut is_definition_change = false;
-        for name in definitions {
-            is_definition_change |= session.settings().definition_changed(name);
+        for located in definitions {
+            is_definition_change |= session.settings().definition_changed(&located);
             // A job may still be finding a document's settings under a
             // project that read the file before it changed.
             let stale: Vec<Uri> = self
@@ -820,7 +820,7 @@ impl Server {
                 .iter()
                 .filter(|(_, document)| {
                     let found = document.found_settings();
-                    found.is_none_or(|settings| settings.project.lists_definition(name))
+                    found.is_none_or(|settings| settings.project.reads_definition(&located))
                 })
                 .map(|(uri, _)| uri.clone())
                 .collect();

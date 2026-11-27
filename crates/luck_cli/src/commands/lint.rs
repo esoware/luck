@@ -318,7 +318,9 @@ impl LintArgs {
         let source = read_stdin_source()?;
 
         let path = Path::new(stdin_path);
-        let (stdlib, linter) = (project.stdlib().library(), project.linter_for(Some(path)));
+        let (definitions, linter) =
+            (project.definitions_for(Some(path)), project.linter_for(Some(path)));
+        let stdlib = definitions.stdlib().library();
         let allocator = Allocator::new();
         let fixes = self.fixes();
         let (current_source, messages, fix_error) =
@@ -408,7 +410,8 @@ impl LintArgs {
             }
         };
 
-        let stdlib = file.project.stdlib().library();
+        let definitions = file.project.definitions_for(Some(file_path));
+        let stdlib = definitions.stdlib().library();
         let linter = file.project.linter_for(Some(file_path));
         let (fixed, fixed_messages, fix_error) =
             fixed_or_linted(&linter, allocator, file_path, &source, stdlib, self.fixes(), timings);
@@ -819,7 +822,7 @@ print(undefined_var)";
         let args = lint_args(&["-c", &config_arg]);
         let project = working_project(args.config.as_deref()).expect("config resolves");
         let linter = project.linter_for(Some(&directory.path().join("main.luau")));
-        let library = project.stdlib().library();
+        let library = project.definitions().stdlib().library();
         assert!(library.has_roblox);
 
         let diags = lint_source("print(game)", library, &linter);

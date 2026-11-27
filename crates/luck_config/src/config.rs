@@ -12,6 +12,7 @@ use luck_stdlib::SecurityLevel;
 use rustc_hash::FxHashMap;
 use serde::de::{Deserialize, Deserializer, Error, SeqAccess, Visitor};
 
+use crate::definitions::DefinitionFiles;
 use crate::glob::Glob;
 
 /// One entry of a multi-entry build: the file to bundle and where to write
@@ -53,6 +54,14 @@ pub(crate) struct OverrideConfig {
     /// Linter settings over the `lint` section's, which merge as `extends`
     /// merges them.
     pub lint: Option<LintConfig>,
+    /// Definitions the files this applies to load after the top-level
+    /// `definitions`, written as its entries are, relative to this file's
+    /// directory.
+    #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
+    pub definitions: Option<Vec<DefinitionsEntry>>,
+    /// The security level the files this applies to run at, over the
+    /// top-level `security`.
+    pub security: Option<SecurityLevel>,
 }
 
 /// Top-level luck.json configuration.
@@ -62,11 +71,17 @@ pub(crate) struct OverrideConfig {
 pub(crate) struct LuckConfig {
     /// The definitions every `.luau` and `.lua` file runs with over Luau's
     /// standard library, in order: `"@roblox"` for Roblox's API, at the
-    /// `security` level, and any other entry a Luau definition file, whose
-    /// name ends in `.d.luau`, relative to this file's directory, whose
-    /// `declare` statements say what a host gives a script, as they do for
-    /// Luau's type checker. A name a later one declares replaces the one
-    /// before it.
+    /// `security` level, and any other entry, relative to this file's
+    /// directory, a Luau definition file, whose name ends in `.d.luau` and
+    /// whose `declare` statements say what a host gives a script, as they do
+    /// for Luau's type checker, a directory, for every definition file below
+    /// it, or a glob, for every one it matches. Naming a file again moves it
+    /// there, a directory or glob adds the files no entry before it took, each
+    /// directory's files sorted before its subdirectories, and a wildcard
+    /// skips a name that starts with `.` the glob doesn't spell. A `!` before
+    /// a path, directory, or glob drops what it takes from what the entries
+    /// before it took. A name a later file declares replaces the one before
+    /// it.
     #[cfg_attr(test, schemars(with = "Option<Vec<String>>"))]
     pub definitions: Option<Vec<DefinitionsEntry>>,
     /// The security level the files of a project that loads `"@roblox"` run
@@ -120,19 +135,24 @@ pub(crate) struct LuckConfig {
 }
 
 /// An entry of `definitions`: a definition set built into luck, by its name
-/// after `@`, or a definition file's path, which loading makes canonical.
+/// after `@`, or the definition files a path, a directory, or a glob takes,
+/// or after `!`, drops, which loading resolves.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(from = "String")]
 pub(crate) enum DefinitionsEntry {
     BuiltIn(String),
-    File(PathBuf),
+    Files(DefinitionFiles),
+    Dropped(DefinitionFiles),
 }
 
 impl From<String> for DefinitionsEntry {
     fn from(entry: String) -> Self {
-        match entry.strip_prefix('@') {
-            Some(name) => Self::BuiltIn(name.to_owned()),
-            None => Self::File(PathBuf::from(entry)),
+        if let Some(name) = entry.strip_prefix('@') {
+            return Self::BuiltIn(name.to_owned());
+        }
+        match entry.strip_prefix('!') {
+            Some(dropped) => Self::Dropped(DefinitionFiles::Written(PathBuf::from(dropped))),
+            None => Self::Files(DefinitionFiles::Written(PathBuf::from(entry))),
         }
     }
 }
@@ -288,17 +308,19 @@ mod tests {
     fn parses_definitions_and_build_keys() {
         let config = parsed(
             r#"{
-            "definitions": ["@roblox", "types/app.d.luau", "@lune"],
+            "definitions": ["@roblox", "types/app.d.luau", "@lune", "!types/old/**"],
             "entry": "src/main.luau",
             "output_dir": "dist"
         }"#,
         );
+        let written = |path: &str| DefinitionFiles::Written(PathBuf::from(path));
         assert_eq!(
             config.definitions,
             Some(vec![
                 DefinitionsEntry::BuiltIn("roblox".to_owned()),
-                DefinitionsEntry::File(PathBuf::from("types/app.d.luau")),
+                DefinitionsEntry::Files(written("types/app.d.luau")),
                 DefinitionsEntry::BuiltIn("lune".to_owned()),
+                DefinitionsEntry::Dropped(written("types/old/**")),
             ])
         );
         assert_eq!(config.entry.as_deref(), Some("src/main.luau"));

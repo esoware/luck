@@ -17,8 +17,8 @@ use crate::common::{load_error, loaded, project_with};
 #[test]
 fn defaults_take_every_lua_and_luau_file_as_luau() {
     let project = Project::defaults(PathBuf::from("."), FileSystemOs);
-    assert!(!project.stdlib().library().has_roblox);
-    assert_eq!(project.definitions(), []);
+    assert!(!project.definitions().stdlib().library().has_roblox);
+    assert_eq!(project.definitions().sources(), []);
     assert!(project.filter().is_included(Path::new("src/a.lua")));
     assert!(project.filter().is_included(Path::new("src/a.luau")));
     assert_eq!(*project.linter_for(None).config(), LintConfig::default());
@@ -28,13 +28,13 @@ fn defaults_take_every_lua_and_luau_file_as_luau() {
 #[test]
 fn roblox_s_api_is_what_at_roblox_loads() {
     let (_roblox_directory, roblox) = loaded(&[("luck.json", r#"{ "definitions": ["@roblox"] }"#)]);
-    assert!(roblox.stdlib().library().has_roblox);
-    assert_eq!(roblox.definitions(), [DefinitionSource::Roblox]);
-    assert!(roblox.stdlib().library().lookup(["game"]).is_some());
+    assert!(roblox.definitions().stdlib().library().has_roblox);
+    assert_eq!(roblox.definitions().sources(), [DefinitionSource::Roblox]);
+    assert!(roblox.definitions().stdlib().library().lookup(["game"]).is_some());
 
     let (_luau_directory, luau) = loaded(&[("luck.json", "{}")]);
-    assert!(!luau.stdlib().library().has_roblox);
-    assert!(luau.stdlib().library().lookup(["game"]).is_none());
+    assert!(!luau.definitions().stdlib().library().has_roblox);
+    assert!(luau.definitions().stdlib().library().lookup(["game"]).is_none());
 }
 
 #[test]
@@ -58,10 +58,10 @@ fn the_variant_key_is_gone() {
 fn the_security_key_picks_the_level_of_a_roblox_projects_files() {
     let (_plugin_directory, plugin) =
         loaded(&[("luck.json", r#"{ "definitions": ["@roblox"], "security": "PluginSecurity" }"#)]);
-    assert_eq!(plugin.security(), SecurityLevel::PluginSecurity);
+    assert_eq!(plugin.definitions().security(), SecurityLevel::PluginSecurity);
 
     let (_script_directory, script) = loaded(&[("luck.json", r#"{ "definitions": ["@roblox"] }"#)]);
-    assert_eq!(script.security(), SecurityLevel::None);
+    assert_eq!(script.definitions().security(), SecurityLevel::None);
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn definitions_layer_in_order_over_luau_s_library() {
             r#"{ "security": "PluginSecurity", "definitions": ["@roblox", "types/app.d.luau"] }"#,
         ),
     ]);
-    let library = project.stdlib().library();
+    let library = project.definitions().stdlib().library();
     assert!(library.has_roblox);
     assert!(library.lookup(["app", "onMessage"]).is_some());
     assert!(library.lookup(["print"]).is_some());
@@ -273,7 +273,7 @@ fn definitions_layer_in_order_over_luau_s_library() {
     assert!(project.files().contains(&file), "{:?}", project.files());
     assert!(project.filter().is_included(&file), "a definition file is one of the project's");
     assert_eq!(
-        project.definitions(),
+        project.definitions().sources(),
         [DefinitionSource::Roblox, DefinitionSource::File { path: file, text: APP.to_owned() }]
     );
 }
@@ -293,6 +293,7 @@ fn a_definitions_path_is_relative_to_the_file_that_names_it_and_extended_ones_co
         |name: &str| FileSystemOs.canonicalize(&directory.path().join(name)).expect("exists");
     let paths: Vec<&PathBuf> = project
         .definitions()
+        .sources()
         .iter()
         .filter_map(|source| match source {
             DefinitionSource::File { path, .. } => Some(path),
@@ -301,7 +302,7 @@ fn a_definitions_path_is_relative_to_the_file_that_names_it_and_extended_ones_co
         .collect();
     assert_eq!(paths, [&canonical("shared/app.d.luau"), &canonical("local.d.luau")]);
     let Some(StdlibEntry::Function(on_message)) =
-        project.stdlib().library().lookup(["app", "onMessage"])
+        project.definitions().stdlib().library().lookup(["app", "onMessage"])
     else {
         panic!("app.onMessage should be a function");
     };
@@ -331,9 +332,9 @@ fn a_definitions_file_that_does_not_parse_adds_nothing_to_its_project() {
     ]);
     let path = FileSystemOs.canonicalize(&directory.path().join("app.d.luau")).expect("exists");
     let file = DefinitionSource::File { path: path.clone(), text: broken.to_owned() };
-    assert_eq!(project.definitions(), [DefinitionSource::Roblox, file]);
+    assert_eq!(project.definitions().sources(), [DefinitionSource::Roblox, file]);
     assert!(project.files().contains(&path), "{:?}", project.files());
-    let library = project.stdlib().library();
+    let library = project.definitions().stdlib().library();
     assert!(library.has_roblox);
     assert!(library.lookup(["greet"]).is_none());
     assert_eq!(project.linter_for(None).config().extra_globals, ["it"]);
@@ -359,7 +360,7 @@ fn a_given_config_reads_its_definitions_from_its_root() {
     let config = r#"{ "definitions": ["@roblox", "types/app.d.luau"], "lint": { "extra_globals": ["it"] } }"#;
     let project = Project::from_config(config, directory.path().to_path_buf(), FileSystemOs)
         .expect("the config loads");
-    let library = project.stdlib().library();
+    let library = project.definitions().stdlib().library();
     assert!(library.has_roblox);
     assert!(library.lookup(["app", "onMessage"]).is_some());
     assert_eq!(project.root(), directory.path());

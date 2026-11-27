@@ -2,11 +2,12 @@ use std::io;
 use std::path::{self, Path, PathBuf};
 
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
-use luck_resolver::{FileSystem, is_definition_file, to_slash_lossy};
+use luck_resolver::{FileSystem, to_slash_lossy};
 use rustc_hash::FxHashMap;
 
 use crate::config::{DefinitionsEntry, LuckConfig};
-use crate::parse::{entry_span, parse};
+use crate::definitions::{self, DefinitionFiles};
+use crate::parse::{Step, entry_span, parse};
 
 pub const CONFIG_FILE_NAME: &str = "luck.json";
 
@@ -89,25 +90,50 @@ pub(crate) fn given(
             "`extends` names `{name}`, but a config no file holds can't extend one, so give the \
              whole config"
         );
-        return Err(Diagnostic::e014(Some(entry_span(text, "extends", name)), &problem));
+        let span = entry_span(text, &[Step::Key("extends")], name);
+        return Err(Diagnostic::e014(Some(span), &problem));
     }
-    resolve_definitions(file_system, &mut config, root, |name, problem| {
-        Diagnostic::e014(Some(entry_span(text, "definitions", name)), problem)
+    resolve_definitions(file_system, &mut config, root, |path, name, problem| {
+        Diagnostic::e014(Some(entry_span(text, path, name)), problem)
     })?;
     Ok(config)
 }
 
-/// Makes the path of each definition file `config` names canonical, from
-/// `directory`, with `error_on` placing a problem on the entry at fault.
+/// Resolves each entry of the `definitions` of `config` and of its overrides
+/// from `directory`, with `error_on` placing a problem on the entry at fault,
+/// which the path to its list and its text name.
 fn resolve_definitions<E>(
     file_system: &dyn FileSystem,
     config: &mut LuckConfig,
     directory: &Path,
+    error_on: impl Fn(&[Step<'_>], &str, &str) -> E,
+) -> Result<(), E> {
+    let top_level = [Step::Key("definitions")];
+    resolve_entries(
+        file_system,
+        config.definitions.iter_mut().flatten(),
+        directory,
+        |name, problem| error_on(&top_level, name, problem),
+    )?;
+    for (index, layer) in config.overrides.iter_mut().flatten().enumerate() {
+        let path = [Step::Key("overrides"), Step::Index(index), Step::Key("definitions")];
+        let entries = layer.definitions.iter_mut().flatten();
+        resolve_entries(file_system, entries, directory, |name, problem| {
+            error_on(&path, name, problem)
+        })?;
+    }
+    Ok(())
+}
+
+fn resolve_entries<'entry, E>(
+    file_system: &dyn FileSystem,
+    entries: impl Iterator<Item = &'entry mut DefinitionsEntry>,
+    directory: &Path,
     error_on: impl Fn(&str, &str) -> E,
 ) -> Result<(), E> {
-    for entry in config.definitions.iter_mut().flatten() {
-        match entry {
-            DefinitionsEntry::BuiltIn(name) if name == "roblox" => {}
+    for entry in entries {
+        let (files, is_dropped) = match entry {
+            DefinitionsEntry::BuiltIn(name) if name == "roblox" => continue,
             DefinitionsEntry::BuiltIn(name) => {
                 let named = format!("@{name}");
                 let problem = format!(
@@ -116,22 +142,16 @@ fn resolve_definitions<E>(
                 );
                 return Err(error_on(&named, &problem));
             }
-            DefinitionsEntry::File(file) => {
-                let named = file.to_string_lossy().into_owned();
-                if !is_definition_file(file) {
-                    let problem = format!(
-                        "`definitions` names `{named}`, but a definition file's name ends in \
-                         `.d.luau`"
-                    );
-                    return Err(error_on(&named, &problem));
-                }
-                *file = file_system.canonicalize(&directory.join(&*file)).map_err(|e| {
-                    let problem =
-                        format!("`definitions` names `{named}`, which can't be read: {e}");
-                    error_on(&named, &problem)
-                })?;
-            }
-        }
+            DefinitionsEntry::Files(files) => (files, false),
+            DefinitionsEntry::Dropped(files) => (files, true),
+        };
+        let DefinitionFiles::Written(written) = &*files else {
+            continue;
+        };
+        let text = written.to_string_lossy();
+        let named = if is_dropped { format!("!{text}") } else { text.into_owned() };
+        *files = definitions::resolve(file_system, directory, written, &named, is_dropped)
+            .map_err(|problem| error_on(&named, &problem))?;
     }
     Ok(())
 }
@@ -167,13 +187,12 @@ impl ExtendsWalk<'_> {
         }
         let mut config = parse(&text).map_err(|diag| in_file(file_system, path, diag))?;
         let directory = config_directory(path);
-        let error_on = |key: &str, name: &str, problem: &str| {
-            let diag = Diagnostic::e014(Some(entry_span(&text, key, name)), problem);
+        let error_on = |steps: &[Step<'_>], name: &str, problem: &str| {
+            let diag = Diagnostic::e014(Some(entry_span(&text, steps, name)), problem);
             in_file(file_system, path, diag)
         };
-        resolve_definitions(file_system, &mut config, &directory, |name, problem| {
-            error_on("definitions", name, problem)
-        })?;
+        resolve_definitions(file_system, &mut config, &directory, error_on)?;
+        let extends = [Step::Key("extends")];
         let own_boundary = if config.root == Some(true) {
             Some(file_system.canonicalize(&directory).map_err(|e| {
                 in_file(file_system, path, Diagnostic::e010(&display(file_system, &directory), &e))
@@ -187,7 +206,7 @@ impl ExtendsWalk<'_> {
         for name in config.extends.iter().flatten() {
             if self.chain.len() > MAX_EXTENDS_DEPTH {
                 return Err(error_on(
-                    "extends",
+                    &extends,
                     name,
                     &format!("`extends` chains more than {MAX_EXTENDS_DEPTH} files deep"),
                 ));
@@ -195,14 +214,14 @@ impl ExtendsWalk<'_> {
             let extended = directory.join(name);
             let extended_canonical = file_system.canonicalize(&extended).map_err(|e| {
                 error_on(
-                    "extends",
+                    &extends,
                     name,
                     &format!("`extends` names `{name}`, which can't be read: {e}"),
                 )
             })?;
             if self.chain.contains(&extended_canonical) {
                 return Err(error_on(
-                    "extends",
+                    &extends,
                     name,
                     &format!("`extends` names `{name}`, which extends this file again"),
                 ));
@@ -211,7 +230,7 @@ impl ExtendsWalk<'_> {
                 && !extended_canonical.starts_with(boundary_directory)
             {
                 return Err(error_on(
-                    "extends",
+                    &extends,
                     name,
                     &format!(
                         "`extends` names `{name}`, which is outside `{}`, the directory of a \

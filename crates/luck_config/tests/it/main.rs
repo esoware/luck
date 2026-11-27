@@ -4,6 +4,7 @@
 
 mod common;
 
+mod definitions;
 mod editorconfig;
 mod filter;
 mod load;

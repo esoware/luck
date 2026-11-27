@@ -125,7 +125,7 @@ impl Document {
                 Arc::clone(settings),
                 Arc::clone(self.line_index(session.encoding())),
                 Arena::from_spare(session.spare_arena()),
-                settings.project.project().stdlib().clone(),
+                settings.definitions.stdlib().clone(),
             )
         })
     }

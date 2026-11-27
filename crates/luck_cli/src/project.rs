@@ -414,7 +414,7 @@ mod tests {
     }
 
     fn has_roblox(file: &ProjectFile) -> bool {
-        file.project.stdlib().library().has_roblox
+        file.project.definitions().stdlib().library().has_roblox
     }
 
     fn write_file(path: &Path, contents: &str) {
@@ -431,7 +431,7 @@ mod tests {
         fs::create_dir_all(entry.parent().expect("a parent")).expect("mkdir src");
 
         let project = one_shot_project(None, &entry).expect("project loads");
-        assert!(project.stdlib().library().has_roblox);
+        assert!(project.definitions().stdlib().library().has_roblox);
     }
 
     /// With no `luck.json`, the defaults root where discovery started, so a
@@ -443,7 +443,7 @@ mod tests {
         write_file(&entry, "return 1\n");
 
         let project = one_shot_project(None, &entry).expect("defaults");
-        assert!(!project.stdlib().library().has_roblox);
+        assert!(!project.definitions().stdlib().library().has_roblox);
         let canonical_sources =
             entry.parent().and_then(|parent| FileSystemOs.canonicalize(parent).ok());
         if find_config(&FileSystemOs, directory.path()).is_none() {
@@ -634,6 +634,6 @@ mod tests {
 
         let mut projects = Projects::new(None, &root.join("here"), None).expect("projects");
         let project = projects.for_directory(&root.join("here/../pkg")).expect("project resolves");
-        assert!(!project.stdlib().library().has_roblox);
+        assert!(!project.definitions().stdlib().library().has_roblox);
     }
 }

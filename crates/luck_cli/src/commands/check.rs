@@ -3,14 +3,15 @@ use std::cell::RefCell;
 use std::io::{self, Write as _};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::Args;
 use luck_allocator::{Allocator, AllocatorPool};
-use luck_config::DefinitionSource;
+use luck_config::{DefinitionSource, Definitions};
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, is_definition_file, to_slash_lossy};
 use luck_semantic::SemanticBuilder;
-use luck_stdlib::{SecurityLevel, roblox_definitions};
+use luck_stdlib::roblox_definitions;
 use luck_type_checker::{
     CancellationToken, CheckError, Checker, Config, DirectoryConfigs, Host, luau_config_aliases,
 };
@@ -110,13 +111,9 @@ struct TypeErrors {
     elsewhere: Vec<FileDiagnostics>,
 }
 
-/// The security level and definitions of a project, which decide what its
-/// files are checked with.
-type Definitions<'files> = (SecurityLevel, &'files [DefinitionSource]);
-
 /// What Luau's type checker finds in `files`, whose bytes are `sources`, from
-/// checking together, on `threads` threads, the files of the projects with
-/// one security level and one list of definitions, which need one checker. A
+/// checking together, on `threads` threads, the files that load the same
+/// definitions at the same security level, which need one checker. A
 /// definition file is no module, so only loading it checks it, and one Luau
 /// can't load adds nothing. Its errors are reported once, on the file when the
 /// run checks it, however many groups load it.
@@ -135,12 +132,12 @@ fn type_errors(
         .zip(sources)
         .filter_map(|(module, source)| Some((module.clone()?, source.as_deref().ok()?)))
         .collect();
-    let mut groups: Vec<(Definitions<'_>, Vec<usize>)> = Vec::new();
+    let mut groups: Vec<(Arc<Definitions>, Vec<usize>)> = Vec::new();
     for (index, file) in files.iter().enumerate() {
-        let settings = (file.project.security(), file.project.definitions());
-        match groups.iter_mut().find(|(group_settings, _)| *group_settings == settings) {
+        let definitions = file.project.definitions_for(Some(&file.path));
+        match groups.iter_mut().find(|(loaded, _)| **loaded == *definitions) {
             Some((_, group)) => group.push(index),
-            None => groups.push((settings, vec![index])),
+            None => groups.push((definitions, vec![index])),
         }
     }
     let definition_files: FxHashMap<&str, usize> = modules
@@ -152,7 +149,8 @@ fn type_errors(
 
     let mut by_file = vec![Vec::new(); files.len()];
     let mut elsewhere: Vec<FileDiagnostics> = Vec::new();
-    for ((security, definitions), group) in groups {
+    for (loaded, group) in &groups {
+        let (security, definitions) = (loaded.security(), loaded.sources());
         let names_and_texts: Vec<(String, &str)> = definitions
             .iter()
             .map(|source| match source {
@@ -161,7 +159,8 @@ fn type_errors(
             })
             .collect();
         let group_modules: Vec<(usize, &str)> = group
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|&index| !is_definition_file(&files[index].path))
             .filter_map(|index| Some((index, modules[index].as_deref()?)))
             .collect();

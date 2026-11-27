@@ -33,20 +33,23 @@ let project = match find_config(&FileSystemOs, directory) {
     None => Project::defaults(directory.to_path_buf(), FileSystemOs),
 };
 let file = Path::new("src/main.luau");
-let library = project.stdlib().library();
+let definitions = project.definitions_for(Some(file));
+let library = definitions.stdlib().library();
 let linter = project.linter_for(Some(file));
 let format = project.format_options(Some(file), Some(&Editorconfigs::default()));
 ```
 
 ## API
 
-* `Project`, from `load`, `from_config`, or `defaults`, with `stdlib`,
-  `definitions`, `linter_for`, `format_options`, `transforms`,
-  `bundle_options`, and `builds`.
+* `Project`, from `load`, `from_config`, or `defaults`, with `definitions`,
+  `definitions_for`, `reads_definition_files`, `takes_definition_at`,
+  `linter_for`, `format_options`, `transforms`, `bundle_options`, and
+  `builds`.
 * `find_config`, which finds the nearest `luck.json` at or above a directory.
 * `ConfigError`, why a config didn't load.
 * `CONFIG_FILE_NAME` and `EDITORCONFIG_FILE_NAME`, the config files' names.
-* `DefinitionSource`, what one `definitions` entry loads.
+* `Definitions`, what a file loads, with `sources`, `security`, and `stdlib`,
+  and `DefinitionSource`, one definition it loads.
 * `BuildConfig`, one bundle `luck build` writes, and `check_output_paths`,
   which rejects outputs that would overwrite an input or each other.
 * `Editorconfigs`, which caches the `.editorconfig` files a project reads.

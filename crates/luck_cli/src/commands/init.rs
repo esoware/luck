@@ -87,7 +87,11 @@ mod tests {
     fn init_config_loads_roblox_s_api_when_asked_and_builds_a_luau_entry() {
         for has_roblox in [false, true] {
             let (content, project) = initialized(has_roblox);
-            assert_eq!(project.stdlib().library().has_roblox, has_roblox, "{content}");
+            assert_eq!(
+                project.definitions().stdlib().library().has_roblox,
+                has_roblox,
+                "{content}"
+            );
             assert!(content.contains("\"entry\": \"src/main.luau\""), "{content}");
         }
     }

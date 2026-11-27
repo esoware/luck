@@ -1,6 +1,6 @@
 use std::fmt;
 
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
 use serde::de::{Deserialize, Deserializer, Error, Visitor};
 
 /// How deeply a glob's `{` groups may nest. `globset` recurses once per level
@@ -14,8 +14,19 @@ const MAX_BRACE_DEPTH: usize = 64;
 pub(crate) struct Glob(globset::Glob);
 
 impl Glob {
+    /// # Errors
+    ///
+    /// Returns a message naming `pattern` when it isn't a valid glob.
+    pub(crate) fn new(pattern: &str) -> Result<Self, String> {
+        parse(pattern).map(Self)
+    }
+
     pub(crate) fn pattern(&self) -> &str {
         self.0.glob()
+    }
+
+    pub(crate) fn matcher(&self) -> GlobMatcher {
+        self.0.compile_matcher()
     }
 }
 

@@ -3,20 +3,21 @@
 //!
 //! Results, misses and configs that don't load included, stay cached until a
 //! config file changes, or the client gives another config, and a project
-//! that lists a definition file until that file changes. A lookup reads the
-//! files, so only workers make one.
+//! that reads a definition file until that file changes, or one with a
+//! directory or glob in `definitions` until a definition file it takes is
+//! created or deleted. A lookup reads the files, so only workers make one.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use ls_types::Uri;
 use luck_config::{
-    CONFIG_FILE_NAME, ConfigError, DefinitionSource, Editorconfigs, Project, find_config,
+    CONFIG_FILE_NAME, ConfigError, Definitions, Editorconfigs, Project, find_config,
 };
 use luck_linter::Linter;
 use luck_resolver::{FileSystem as _, ResolverGeneric, is_definition_file};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::files::Files;
@@ -42,25 +43,29 @@ pub(crate) struct DocumentSettings {
     /// Whether it's a definition file, by its name, which parses as one and
     /// is no module.
     pub is_definitions: bool,
+    /// What it loads: the project's definitions, with those of the overrides
+    /// its path matches.
+    pub definitions: Arc<Definitions>,
 }
 
 /// A project, with the session's resolver, which its files' requires go
-/// through, and the checker of its files once a job needs it.
+/// through, and the checker of each set of definitions its files load once
+/// a job needs it.
 #[derive(Debug)]
 pub(crate) struct LoadedProject {
     project: Project,
     files: Files,
     resolver: Arc<ResolverGeneric<Files>>,
-    check: OnceLock<Arc<TypeCheck>>,
+    checks: Mutex<Vec<(Arc<Definitions>, Arc<TypeCheck>)>>,
 }
 
 impl LoadedProject {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         project: Project,
         files: Files,
         resolver: Arc<ResolverGeneric<Files>>,
     ) -> Self {
-        Self { project, files, resolver, check: OnceLock::new() }
+        Self { project, files, resolver, checks: Mutex::default() }
     }
 
     pub(crate) const fn project(&self) -> &Project {
@@ -76,18 +81,32 @@ impl LoadedProject {
         self.files.uri(path)
     }
 
-    /// The checker of its files, which it holds from the first time a job
-    /// asks, so `checks` keeps it.
-    pub(crate) fn type_check(&self, checks: &TypeChecks) -> &Arc<TypeCheck> {
-        self.check.get_or_init(|| checks.of(&self.project))
+    /// The checker of its files that load `definitions`, one of its
+    /// project's, which it holds from the first time a job asks, so `checks`
+    /// keeps it.
+    pub(crate) fn type_check(
+        &self,
+        checks: &TypeChecks,
+        definitions: &Arc<Definitions>,
+    ) -> Arc<TypeCheck> {
+        let mut held = self.checks.lock();
+        if let Some((_, check)) = held.iter().find(|(loaded, _)| Arc::ptr_eq(loaded, definitions)) {
+            return Arc::clone(check);
+        }
+        let check = checks.of(definitions);
+        held.push((Arc::clone(definitions), Arc::clone(&check)));
+        check
     }
 
-    /// Whether it lists a definition file named `name`.
-    pub(crate) fn lists_definition(&self, name: &OsStr) -> bool {
-        self.project.definitions().iter().any(|source| match source {
-            DefinitionSource::File { path, .. } => path.file_name() == Some(name),
-            DefinitionSource::Roblox => false,
-        })
+    /// Whether a change to the definition file at `located`, a path
+    /// [`located_path`](luck_config::located_path) gives, can change what its
+    /// files load: it reads a definition file of that name, or a directory or
+    /// glob in its `definitions` takes one there.
+    pub(crate) fn reads_definition(&self, located: &Path) -> bool {
+        let name = located.file_name();
+        let files = self.project.files();
+        files.iter().any(|file| is_definition_file(file) && file.file_name() == name)
+            || self.project.takes_definition_at(located)
     }
 }
 
@@ -233,9 +252,18 @@ impl SettingsCache {
         let linter = loaded.linter_for(file);
         let is_included = file.is_none_or(|located| loaded.filter().includes_document(located));
         let is_definitions = file.is_some_and(is_definition_file);
+        let definitions = loaded.definitions_for(file);
         let path = file.map(|located| self.files.canonicalize_existing(located));
         let located = file.map(Path::to_path_buf);
-        DocumentSettings { path, located, project, linter, is_included, is_definitions }
+        DocumentSettings {
+            path,
+            located,
+            project,
+            linter,
+            is_included,
+            is_definitions,
+            definitions,
+        }
     }
 
     /// The `.editorconfig` files formatting reads.
@@ -310,7 +338,7 @@ impl SettingsCache {
     }
 
     /// Keeps `project`, which a lookup that started at `stamp` found, unless
-    /// the cache was cleared since, or it lists a definition file and one
+    /// the cache was cleared since, or it reads definition files and one
     /// changed since.
     fn keep(
         &self,
@@ -321,13 +349,9 @@ impl SettingsCache {
         error: Option<ConfigError>,
     ) -> (Arc<LoadedProject>, Option<LoadError>) {
         let mut lookups = self.lookups.write();
-        let lists_definitions = project
-            .project()
-            .definitions()
-            .iter()
-            .any(|source| matches!(source, DefinitionSource::File { .. }));
+        let reads_definitions = project.project().reads_definition_files();
         if lookups.generation != stamp.generation
-            || (lists_definitions && lookups.definition_edits != stamp.definition_edits)
+            || (reads_definitions && lookups.definition_edits != stamp.definition_edits)
         {
             return (project, None);
         }
@@ -370,20 +394,22 @@ impl SettingsCache {
         self.lookups.write().editorconfigs = Arc::default();
     }
 
-    /// Forgets every project that lists a definition file named `name`, as a
-    /// change to one needs, and says whether there was one.
-    pub(crate) fn definition_changed(&self, name: &OsStr) -> bool {
+    /// Forgets every project a change to the definition file at `located`, a
+    /// path [`located_path`](luck_config::located_path) gives, can change, as
+    /// [`LoadedProject::reads_definition`] says, and says whether there was
+    /// one.
+    pub(crate) fn definition_changed(&self, located: &Path) -> bool {
         let mut lookups = self.lookups.write();
         lookups.definition_edits += 1;
         let cached = lookups.by_directory.len() + lookups.by_config.len();
-        lookups.by_directory.retain(|_, project| !project.lists_definition(name));
-        lookups.by_config.retain(|_, project| !project.lists_definition(name));
-        let is_untitled_listing =
-            lookups.untitled.as_ref().is_some_and(|project| project.lists_definition(name));
-        if is_untitled_listing {
+        lookups.by_directory.retain(|_, project| !project.reads_definition(located));
+        lookups.by_config.retain(|_, project| !project.reads_definition(located));
+        let is_untitled_reading =
+            lookups.untitled.as_ref().is_some_and(|project| project.reads_definition(located));
+        if is_untitled_reading {
             lookups.untitled = None;
         }
-        is_untitled_listing || lookups.by_directory.len() + lookups.by_config.len() != cached
+        is_untitled_reading || lookups.by_directory.len() + lookups.by_config.len() != cached
     }
 }
 
@@ -416,6 +442,7 @@ mod tests {
     use std::fs;
     use std::ptr;
 
+    use luck_config::located_path;
     use luck_resolver::FileSystemOs;
 
     use super::*;
@@ -433,12 +460,12 @@ mod tests {
         let cache = cache();
         let (project, error) = cache.project_for(Some(&file), None);
         assert!(error.is_none());
-        assert!(!project.project().stdlib().library().has_roblox);
+        assert!(!project.project().definitions().stdlib().library().has_roblox);
         if find_config(&FileSystemOs, directory.path()).is_none() {
             assert_eq!(project.project().root(), directory.path());
         }
         let (untitled, _) = cache.project_for(None, None);
-        assert!(!untitled.project().stdlib().library().has_roblox);
+        assert!(!untitled.project().definitions().stdlib().library().has_roblox);
         assert!(Arc::ptr_eq(&untitled, &cache.project_for(None, None).0));
     }
 
@@ -453,17 +480,17 @@ mod tests {
         let cache = cache();
 
         let (project, _) = cache.project_for(Some(&first), None);
-        assert!(project.project().stdlib().library().has_roblox);
+        assert!(project.project().definitions().stdlib().library().has_roblox);
         assert!(Arc::ptr_eq(&project, &cache.project_for(Some(&nested), None).0));
 
         fs::write(&config_path, "{}").expect("rewrite luck.json");
         let (cached, _) = cache.project_for(Some(&first), None);
-        assert!(cached.project().stdlib().library().has_roblox);
+        assert!(cached.project().definitions().stdlib().library().has_roblox);
         let generation = cache.generation();
         cache.clear();
         assert_ne!(cache.generation(), generation, "a clear starts a new generation");
         let (reloaded, _) = cache.project_for(Some(&first), None);
-        assert!(!reloaded.project().stdlib().library().has_roblox);
+        assert!(!reloaded.project().definitions().stdlib().library().has_roblox);
     }
 
     #[test]
@@ -479,7 +506,7 @@ mod tests {
         let ConfigError::File(problem) = &error.error else { panic!("{error:?}") };
         assert_eq!(problem.diags[0].code, "E014");
         assert_eq!(error.generation, cache.generation());
-        assert!(!project.project().stdlib().library().has_roblox);
+        assert!(!project.project().definitions().stdlib().library().has_roblox);
         assert!(cache.project_for(Some(&file), None).1.is_none(), "reported once");
 
         let other = directory.path().join("other.json");
@@ -537,10 +564,41 @@ mod tests {
         let (listing_project, _) = cache.project_for(Some(&listing), None);
         let (other_project, _) = cache.project_for(Some(&other), None);
 
-        assert!(!cache.definition_changed(OsStr::new("unlisted.d.luau")));
-        assert!(cache.definition_changed(OsStr::new("app.d.luau")));
+        let located = |name: &str| located_path(&FileSystemOs, &directory.path().join(name));
+        assert!(!cache.definition_changed(&located("listing/unlisted.d.luau")));
+        assert!(cache.definition_changed(&located("listing/app.d.luau")));
 
         assert!(!Arc::ptr_eq(&listing_project, &cache.project_for(Some(&listing), None).0));
+        assert!(Arc::ptr_eq(&other_project, &cache.project_for(Some(&other), None).0));
+    }
+
+    #[test]
+    fn creating_a_definition_file_a_glob_takes_forgets_the_project_with_the_glob() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        for (name, text) in [
+            ("globbing/luck.json", r#"{ "definitions": ["types/**/*.d.luau"] }"#),
+            ("other/luck.json", "{}"),
+        ] {
+            let path = directory.path().join(name);
+            fs::create_dir_all(path.parent().expect("a directory")).expect("mkdir");
+            fs::write(path, text).expect("write a config");
+        }
+        let (globbing, other) =
+            (directory.path().join("globbing/a.luau"), directory.path().join("other/a.luau"));
+        let cache = cache();
+        let (globbing_project, _) = cache.project_for(Some(&globbing), None);
+        let (other_project, _) = cache.project_for(Some(&other), None);
+        assert_eq!(globbing_project.project().definitions().sources(), []);
+
+        let created = directory.path().join("globbing/types/ui/app.d.luau");
+        fs::create_dir_all(created.parent().expect("a directory")).expect("mkdir");
+        fs::write(&created, "declare app: {}").expect("write app.d.luau");
+        let located = |path: &Path| located_path(&FileSystemOs, path);
+        assert!(!cache.definition_changed(&located(&directory.path().join("other/app.d.luau"))));
+        assert!(cache.definition_changed(&located(&created)));
+
+        let (reloaded, _) = cache.project_for(Some(&globbing), None);
+        assert_eq!(reloaded.project().definitions().sources().len(), 1);
         assert!(Arc::ptr_eq(&other_project, &cache.project_for(Some(&other), None).0));
     }
 

@@ -352,7 +352,7 @@ impl<'job> WorkspaceView<'job> {
         let text: Arc<str> = String::from_utf8_lossy(&bytes).into();
         let settings = self.session.document_settings(Some(path));
         let line_index = LineIndex::new(&text, self.session.encoding());
-        let stdlib = settings.project.project().stdlib().clone();
+        let stdlib = settings.definitions.stdlib().clone();
         let document = DocumentState::new(
             text,
             Arc::new(settings),

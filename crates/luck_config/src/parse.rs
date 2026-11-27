@@ -110,33 +110,68 @@ fn is_word_char(c: char) -> bool {
     is_json5_identifier(c) || matches!(c, '+' | '-' | '.')
 }
 
-/// Where `name` is written as an entry of the array under the top-level
-/// `key` of `text`, a config, or the start when it's written another way,
-/// such as through an escape.
-pub(crate) fn entry_span(text: &str, key: &str, name: &str) -> Span {
-    let mut depth = 0_usize;
-    let mut is_in_entries = false;
-    let (mut before_previous, mut previous) = ("", "");
+/// One step from a config's top level toward an array: into an object's key
+/// or an array's element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step<'key> {
+    Key(&'key str),
+    Index(usize),
+}
+
+/// Where `name` is written as an entry of the array `path` leads to in
+/// `text`, a config, or the start when it's written another way, such as
+/// through an escape.
+pub(crate) fn entry_span(text: &str, path: &[Step<'_>], name: &str) -> Span {
+    let mut frames: Vec<Frame<'_>> = Vec::new();
     for (start, token) in tokens(text) {
         match token {
-            "[" | "{" => {
-                if depth == 1 {
-                    is_in_entries = token == "["
-                        && previous == ":"
-                        && string_content(before_previous).unwrap_or(before_previous) == key;
+            "{" => frames.push(Frame::Object { key: None, is_at_key: true }),
+            "[" => frames.push(Frame::Array { index: 0 }),
+            "}" | "]" => {
+                frames.pop();
+            }
+            "," => match frames.last_mut() {
+                Some(Frame::Object { is_at_key, .. }) => *is_at_key = true,
+                Some(Frame::Array { index }) => *index += 1,
+                None => {}
+            },
+            ":" => {
+                if let Some(Frame::Object { is_at_key, .. }) = frames.last_mut() {
+                    *is_at_key = false;
                 }
-                depth += 1;
             }
-            "]" | "}" if is_in_entries && depth == 2 => break,
-            "]" | "}" => depth = depth.saturating_sub(1),
-            _ if is_in_entries && depth == 2 && string_content(token) == Some(name) => {
-                return Span::from_indices(start, start + token.len());
+            _ => {
+                if let Some(Frame::Object { key, is_at_key: true }) = frames.last_mut() {
+                    *key = Some(string_content(token).unwrap_or(token));
+                } else if string_content(token) == Some(name) && is_at(&frames, path) {
+                    return Span::from_indices(start, start + token.len());
+                }
             }
-            _ => {}
         }
-        (before_previous, previous) = (previous, token);
     }
     Span::default()
+}
+
+/// An object or array a token is in, with the key or the index of the value
+/// it's reading.
+#[derive(Debug, Clone, Copy)]
+enum Frame<'text> {
+    Object { key: Option<&'text str>, is_at_key: bool },
+    Array { index: usize },
+}
+
+/// Whether `frames`, from the top level in, end in the array `path` leads
+/// to.
+fn is_at(frames: &[Frame<'_>], path: &[Step<'_>]) -> bool {
+    let Some((Frame::Array { .. }, outer)) = frames.split_last() else {
+        return false;
+    };
+    outer.len() == path.len()
+        && outer.iter().zip(path).all(|(frame, step)| match (frame, step) {
+            (Frame::Object { key: Some(key), .. }, Step::Key(expected)) => key == expected,
+            (Frame::Array { index }, Step::Index(expected)) => index == expected,
+            (Frame::Object { .. } | Frame::Array { .. }, Step::Key(_) | Step::Index(_)) => false,
+        })
 }
 
 /// What `token` holds between its quotes, or `None` when it isn't a whole
@@ -260,10 +295,29 @@ mod tests {
   extends: ['b.json', 'a.json'],
   "definitions": ["a.json"],
 }"#;
-        let span = entry_span(text, "extends", "a.json");
+        let extends = [Step::Key("extends")];
+        let span = entry_span(text, &extends, "a.json");
         let start = text.find("'a.json'],").expect("the entry");
         assert_eq!(span, Span::from_indices(start, start + 8));
-        assert_eq!(entry_span(text, "extends", "c.json"), Span::default());
+        assert_eq!(entry_span(text, &extends, "c.json"), Span::default());
+    }
+
+    #[test]
+    fn entry_span_follows_a_path_into_an_override() {
+        let text = r#"{
+  "definitions": ["a.d.luau"],
+  overrides: [
+    { files: ["spec/**"], "definitions": ["a.d.luau"] },
+    { files: ["a.d.luau"], definitions: ["b.d.luau", "a.d.luau"] },
+  ],
+}"#;
+        let path = [Step::Key("overrides"), Step::Index(1), Step::Key("definitions")];
+        let span = entry_span(text, &path, "a.d.luau");
+        let start = text.rfind("\"a.d.luau\"").expect("the entry");
+        assert_eq!(span, Span::from_indices(start, start + 10));
+        let top = entry_span(text, &[Step::Key("definitions")], "a.d.luau");
+        let first = text.find("\"a.d.luau\"").expect("the entry");
+        assert_eq!(top, Span::from_indices(first, first + 10));
     }
 
     #[test]

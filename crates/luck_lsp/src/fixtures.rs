@@ -65,7 +65,8 @@ fn document_with(
     linter: Arc<Linter>,
     path: Option<&Path>,
 ) -> DocumentState {
-    let stdlib = project.stdlib().clone();
+    let definitions = project.definitions_for(path);
+    let stdlib = definitions.stdlib().clone();
     let files = Files::new(None);
     let resolver = Arc::new(ResolverGeneric::new_with_file_system(files.clone()));
     let settings = DocumentSettings {
@@ -75,6 +76,7 @@ fn document_with(
         linter,
         is_included: true,
         is_definitions: false,
+        definitions,
     };
     DocumentState::new(
         Arc::from(text),

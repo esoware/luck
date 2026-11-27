@@ -2,11 +2,11 @@
 //! require.
 //!
 //! The session keeps one checker for each security level and list of
-//! definitions, texts included, that its projects load, as `luck check` does,
-//! which every project that loads them shares, behind a lock. A job that
-//! needs types holds the lock while it brings the checker up to the open
-//! documents as they stood when the job was spawned, checks what it asks
-//! about, and reads the answer. Analysis keeps every module it checked, so a
+//! definitions, texts included, that its projects' files load, as
+//! `luck check` does, which every file that loads them shares, behind a
+//! lock. A job that needs types holds the lock while it brings the checker
+//! up to the open documents as they stood when the job was spawned, checks
+//! what it asks about, and reads the answer. Analysis keeps every module it checked, so a
 //! check reads only the modules whose text changed and the modules that
 //! require them.
 //!
@@ -31,7 +31,7 @@ use std::slice;
 use std::sync::Arc;
 
 use ls_types::{Location, Uri};
-use luck_config::{DefinitionSource, Project};
+use luck_config::{DefinitionSource, Definitions};
 use luck_diagnostics::Diagnostic;
 use luck_resolver::{FileSystem as _, ResolverGeneric, to_slash_lossy};
 use luck_stdlib::SecurityLevel;
@@ -61,10 +61,10 @@ pub(crate) struct TypeChecks {
 }
 
 impl TypeChecks {
-    /// The checker of the files of `project`, which another project that
-    /// loads the same definitions shares.
-    pub(crate) fn of(&self, project: &Project) -> Arc<TypeCheck> {
-        let (security, definitions) = (project.security(), project.definitions());
+    /// The checker of the files that load `loaded`, which every other file
+    /// that loads the same definitions at the same security level shares.
+    pub(crate) fn of(&self, loaded: &Definitions) -> Arc<TypeCheck> {
+        let (security, definitions) = (loaded.security(), loaded.sources());
         let mut checks = self.checks.lock();
         let found = checks
             .iter()
@@ -261,7 +261,7 @@ pub(crate) fn with_types<R>(
     let module = document_module(uri, settings.path.as_deref());
     let mut open = open_modules(session, documents);
     open.insert(module.clone(), Arc::clone(document.shared_text()));
-    let check = settings.project.type_check(session.type_checks());
+    let check = settings.project.type_check(session.type_checks(), &settings.definitions);
     let modules = [module];
     check.with_checked(session, open, &modules, cancellation, |loaded, _| {
         read(&mut Types {
@@ -301,10 +301,10 @@ pub(crate) fn type_errors(
         if !settings.is_included {
             continue;
         }
-        let check = settings.project.type_check(session.type_checks());
-        let found = groups.iter().position(|group| Arc::ptr_eq(&group.check, check));
+        let check = settings.project.type_check(session.type_checks(), &settings.definitions);
+        let found = groups.iter().position(|group| Arc::ptr_eq(&group.check, &check));
         let group = found.unwrap_or_else(|| {
-            groups.push(CheckGroup { check: Arc::clone(check), modules: Vec::new() });
+            groups.push(CheckGroup { check: Arc::clone(&check), modules: Vec::new() });
             groups.len() - 1
         });
         let module = document_module(uri, settings.path.as_deref());
@@ -537,6 +537,7 @@ mod tests {
     use std::str::FromStr as _;
     use std::time::{Duration, Instant};
 
+    use luck_config::Project;
     use luck_resolver::{FileSystemOs, lexically_normalized};
     use luck_type_checker::luau_config_aliases;
 
@@ -641,11 +642,14 @@ return count
     fn projects_that_load_the_same_definitions_share_a_checker_while_one_holds_it() {
         let checks = TypeChecks::default();
         let project = || Project::defaults(PathBuf::from("."), FileSystemOs);
-        let held = checks.of(&project());
-        assert!(Arc::ptr_eq(&held, &checks.of(&project())), "a reloaded project's is the same");
+        let held = checks.of(project().definitions());
+        assert!(
+            Arc::ptr_eq(&held, &checks.of(project().definitions())),
+            "a reloaded project's is the same"
+        );
 
         checks.drop_unused();
-        assert!(Arc::ptr_eq(&held, &checks.of(&project())), "one is held");
+        assert!(Arc::ptr_eq(&held, &checks.of(project().definitions())), "one is held");
 
         drop(held);
         checks.drop_unused();

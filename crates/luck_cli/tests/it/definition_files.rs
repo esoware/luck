@@ -70,3 +70,34 @@ print(app)
         "{stderr}"
     );
 }
+
+#[test]
+fn lint_and_check_give_an_override_s_definitions_to_the_files_it_matches_alone() {
+    let directory = TempDir::new().unwrap();
+    write_file(
+        directory.path(),
+        "luck.json",
+        r#"{ "overrides": [{ "files": ["**/*.spec.luau"], "definitions": ["types"] }] }"#,
+    );
+    write_file(
+        directory.path(),
+        "types/spec.d.luau",
+        "declare function describe(name: string, body: () -> ()): ()\n",
+    );
+    let uses_describe = "\
+--!strict
+describe(\"adds\", function() end)
+";
+    write_file(directory.path(), "src/add.spec.luau", uses_describe);
+    write_file(directory.path(), "src/add.luau", uses_describe);
+
+    for command in ["lint", "check"] {
+        let spec = run(directory.path(), &[command, "src/add.spec.luau"]);
+        assert!(spec.status.success(), "{command}: {}", stderr_text(&spec));
+
+        let source = run(directory.path(), &[command, "src/add.luau"]);
+        let stderr = stderr_text(&source);
+        assert_eq!(source.status.code(), Some(1), "{command}: {stderr}");
+        assert!(stderr.contains("describe"), "{command}: {stderr}");
+    }
+}

@@ -1,6 +1,6 @@
 use std::mem;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use globset::{Candidate, GlobSet};
 use luck_bundler::{BundleOptions, DynamicRequire};
@@ -9,12 +9,13 @@ use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
 use luck_resolver::FileSystem;
-use luck_stdlib::{SecurityLevel, Stdlib};
+use luck_stdlib::SecurityLevel;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::build::{BuildConfig, BuildKeys};
 use crate::config::{DefinitionsEntry, Entries, LuckConfig, OverrideConfig};
+use crate::definitions::{DefinitionFiles, DefinitionGlob, Definitions};
 use crate::editorconfig::Editorconfigs;
 use crate::filter::{ProjectFilter, located_path};
 use crate::glob::compiled;
@@ -28,11 +29,19 @@ pub struct Project {
     file_system: Arc<dyn FileSystem>,
     root: PathBuf,
     files: Vec<PathBuf>,
-    /// Built the first time it's asked for, since only the commands that
-    /// analyze code read it.
-    stdlib: OnceLock<Stdlib>,
-    definitions: Vec<DefinitionSource>,
-    security: SecurityLevel,
+    /// The entries of `definitions`, resolved, which the overrides a file
+    /// matches add theirs after.
+    definition_entries: Vec<DefinitionsEntry>,
+    /// The text of every definition file an entry takes, read once at load.
+    definition_texts: FxHashMap<PathBuf, String>,
+    security: Option<SecurityLevel>,
+    /// What a file loads that no override with `definitions` or `security`
+    /// matches.
+    definitions: Arc<Definitions>,
+    /// What the files load that each set of overrides with `definitions` or
+    /// `security` matches, by their indices, built for the first file they
+    /// all match.
+    layered_definitions: Mutex<FxHashMap<Vec<usize>, Arc<Definitions>>>,
     filter: ProjectFilter,
     format: FormatConfig,
     overrides: Vec<Override>,
@@ -47,22 +56,20 @@ pub struct Project {
     build: BuildKeys,
 }
 
-/// What an entry of a project's `definitions` loads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DefinitionSource {
-    /// Roblox's API, which `"@roblox"` names, at the project's security
-    /// level.
-    Roblox,
-    /// A definition file, by its canonical path, with its text.
-    File { path: PathBuf, text: String },
-}
-
 #[derive(Debug)]
 struct Override {
     files: GlobSet,
     exclude_files: GlobSet,
     format: Option<FormatConfig>,
     lint: Option<LintConfig>,
+    definitions: Vec<DefinitionsEntry>,
+    security: Option<SecurityLevel>,
+}
+
+impl Override {
+    const fn layers_definitions(&self) -> bool {
+        !self.definitions.is_empty() || self.security.is_some()
+    }
 }
 
 impl Project {
@@ -71,11 +78,11 @@ impl Project {
     ///
     /// # Errors
     ///
-    /// Returns E010 when `config_path` or a definition file it names can't
+    /// Returns E010 when `config_path` or a definition file it takes can't
     /// be read, and E014 when it or a file it extends isn't valid, each in
     /// the file at fault and placed where the problem is. A definition file
     /// that doesn't parse is no error of the project, which leaves it out of
-    /// [`Self::stdlib`].
+    /// [`Definitions::stdlib`].
     pub fn load(
         config_path: &Path,
         file_system: impl FileSystem + 'static,
@@ -145,10 +152,17 @@ impl Project {
         if entry.is_some() && entries.is_some() {
             return Err(invalid("`entry` and `entries` can't both be set, so keep one"));
         }
-        let definitions = definitions.unwrap_or_default();
-        let has_roblox =
-            definitions.iter().any(|named| matches!(named, DefinitionsEntry::BuiltIn(_)));
-        if security.is_some() && !has_roblox {
+        let definition_entries = definitions.unwrap_or_default();
+        let overrides = overrides.unwrap_or_default();
+        let override_entries =
+            overrides.iter().flat_map(|layer| layer.definitions.iter().flatten());
+        let names_roblox = definition_entries
+            .iter()
+            .chain(override_entries)
+            .any(|named| matches!(named, DefinitionsEntry::BuiltIn(_)));
+        let sets_security =
+            security.is_some() || overrides.iter().any(|layer| layer.security.is_some());
+        if sets_security && !names_roblox {
             return Err(invalid(
                 "`security` applies only to a project that loads `@roblox`, so add `@roblox` to \
                  `definitions` or remove `security`",
@@ -161,8 +175,7 @@ impl Project {
             Arc::clone(&file_system),
         )
         .map_err(|message| invalid(&message))?;
-        let compiled_overrides = overrides
-            .unwrap_or_default()
+        let compiled_overrides: Vec<Override> = overrides
             .into_iter()
             .map(|layer: OverrideConfig| {
                 Ok(Override {
@@ -170,30 +183,33 @@ impl Project {
                     exclude_files: compiled(&layer.exclude_files)?,
                     format: layer.format,
                     lint: layer.lint,
+                    definitions: layer.definitions.unwrap_or_default(),
+                    security: layer.security,
                 })
             })
             .collect::<Result<_, String>>()
             .map_err(|message| invalid(&message))?;
-        let mut sources = Vec::with_capacity(definitions.len());
-        for named in definitions {
-            let source = match named {
-                // Loading checked that `@roblox` is the one built-in name.
-                DefinitionsEntry::BuiltIn(_) => DefinitionSource::Roblox,
-                DefinitionsEntry::File(path) => {
-                    let text = read_text(&*file_system, &path)?;
-                    files.push(path.clone());
-                    DefinitionSource::File { path, text }
-                }
-            };
-            sources.push(source);
+        let mut definition_texts = FxHashMap::default();
+        let every_entry = definition_entries
+            .iter()
+            .chain(compiled_overrides.iter().flat_map(|layer| &layer.definitions));
+        for path in every_entry.flat_map(taken_paths) {
+            if !definition_texts.contains_key(path) {
+                let text = read_text(&*file_system, path)?;
+                files.push(path.clone());
+                definition_texts.insert(path.clone(), text);
+            }
         }
+        let base = Definitions::new(&definition_entries, security, &definition_texts);
         Ok(Self {
             file_system,
             root,
             files,
-            stdlib: OnceLock::new(),
-            definitions: sources,
-            security: security.unwrap_or_default(),
+            definition_entries,
+            definition_texts,
+            security,
+            definitions: Arc::new(base),
+            layered_definitions: Mutex::default(),
             filter,
             format: format.unwrap_or_default(),
             overrides: compiled_overrides,
@@ -223,9 +239,11 @@ impl Project {
             file_system,
             root,
             files: Vec::new(),
-            stdlib: OnceLock::new(),
-            definitions: Vec::new(),
-            security: SecurityLevel::default(),
+            definition_entries: Vec::new(),
+            definition_texts: FxHashMap::default(),
+            security: None,
+            definitions: Arc::default(),
+            layered_definitions: Mutex::default(),
             filter,
             format: FormatConfig::default(),
             overrides: Vec::new(),
@@ -253,26 +271,66 @@ impl Project {
         &self.filter
     }
 
-    /// The security level the project's files reach Roblox's API at, which
-    /// its `security` key names, `None` unless it names one.
-    pub const fn security(&self) -> SecurityLevel {
-        self.security
-    }
-
-    /// Luau's standard library with what `definitions` loads layered over
-    /// it, in order, but for a definition file that doesn't parse.
-    pub fn stdlib(&self) -> &Stdlib {
-        self.stdlib.get_or_init(|| {
-            self.definitions.iter().fold(Stdlib::luau(), |below, source| match source {
-                DefinitionSource::Roblox => below.with_roblox(self.security),
-                DefinitionSource::File { text, .. } => below.layer(text).unwrap_or(below),
-            })
-        })
-    }
-
-    /// What each entry of `definitions` loads, in order.
-    pub fn definitions(&self) -> &[DefinitionSource] {
+    /// What a file loads that no override with `definitions` or `security`
+    /// matches: what the top-level `definitions` loads, in order, at the
+    /// top-level `security`.
+    pub fn definitions(&self) -> &Definitions {
         &self.definitions
+    }
+
+    /// What the file at `path` loads: the top-level `definitions` with the
+    /// `definitions` of each override it matches after them, at the
+    /// `security` of the last of those that sets one, or else the top-level
+    /// one. A document with no file loads [`Self::definitions`].
+    pub fn definitions_for(&self, path: Option<&Path>) -> Arc<Definitions> {
+        let (indices, layers): (Vec<usize>, Vec<&Override>) = self
+            .overrides_for(path)
+            .into_iter()
+            .filter(|(_, layer)| layer.layers_definitions())
+            .unzip();
+        if indices.is_empty() {
+            return Arc::clone(&self.definitions);
+        }
+        Arc::clone(self.layered_definitions.lock().entry(indices).or_insert_with(|| {
+            let entries = self
+                .definition_entries
+                .iter()
+                .chain(layers.iter().flat_map(|layer| &layer.definitions));
+            let security = layers.iter().rev().find_map(|layer| layer.security).or(self.security);
+            Arc::new(Definitions::new(entries, security, &self.definition_texts))
+        }))
+    }
+
+    /// Whether `definitions`, the top-level one or an override's, names a
+    /// definition file, a directory, or a glob, so a change to a definition
+    /// file can change what the project's files load.
+    pub fn reads_definition_files(&self) -> bool {
+        self.taking_entries().next().is_some()
+    }
+
+    /// Whether a directory or glob in `definitions`, the top-level one or an
+    /// override's, takes a definition file at `located`, a path
+    /// [`located_path`] gives, which needn't exist, so creating or deleting
+    /// one there changes what the project's files load.
+    pub fn takes_definition_at(&self, located: &Path) -> bool {
+        self.taking_entries()
+            .filter_map(|files| match files {
+                DefinitionFiles::Glob(glob) => Some(&**glob),
+                DefinitionFiles::Written(_) | DefinitionFiles::File(_) => None,
+            })
+            .any(|glob: &DefinitionGlob| glob.takes(located))
+    }
+
+    /// The files each entry of `definitions` that takes files, rather than
+    /// drops them, names, the top-level ones then each override's.
+    fn taking_entries(&self) -> impl Iterator<Item = &DefinitionFiles> {
+        self.definition_entries
+            .iter()
+            .chain(self.overrides.iter().flat_map(|layer| &layer.definitions))
+            .filter_map(|entry| match entry {
+                DefinitionsEntry::Files(files) => Some(files),
+                DefinitionsEntry::BuiltIn(_) | DefinitionsEntry::Dropped(_) => None,
+            })
     }
 
     /// The linter of the `lint` section with the overrides `path` matches
@@ -370,6 +428,14 @@ impl Project {
     }
 }
 
+/// The definition files `entry` takes, rather than drops.
+fn taken_paths(entry: &DefinitionsEntry) -> &[PathBuf] {
+    match entry {
+        DefinitionsEntry::Files(files) => files.paths(),
+        DefinitionsEntry::BuiltIn(_) | DefinitionsEntry::Dropped(_) => &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use luck_resolver::FileSystemOs;
@@ -378,12 +444,25 @@ mod tests {
     use crate::fixtures::project_with;
 
     #[test]
-    fn the_standard_library_is_built_the_first_time_it_is_asked_for() {
-        let directory = project_with(&[("luck.json", r#"{ "definitions": ["@roblox"] }"#)]);
+    fn files_that_match_the_same_overrides_share_one_set_of_definitions() {
+        let directory = project_with(&[
+            ("spec.d.luau", "declare it: (name: string) -> ()"),
+            (
+                "luck.json",
+                r#"{ "overrides": [
+                    { "files": ["spec/**"], "definitions": ["spec.d.luau"] },
+                    { "files": ["**/*.luau"], "lint": { "extra_globals": ["a"] } }
+                ] }"#,
+            ),
+        ]);
         let project =
             Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
-        assert!(project.stdlib.get().is_none());
-        assert!(project.stdlib().library().has_roblox);
+        let at = |relative: &str| project.definitions_for(Some(&directory.path().join(relative)));
+        assert!(Arc::ptr_eq(&at("src/a.luau"), &project.definitions));
+        let spec = at("spec/a.luau");
+        assert!(!Arc::ptr_eq(&spec, &project.definitions));
+        assert!(Arc::ptr_eq(&spec, &at("spec/b.luau")));
+        assert!(Arc::ptr_eq(&project.definitions_for(None), &project.definitions));
     }
 
     #[test]
