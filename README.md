@@ -31,6 +31,15 @@ luck lsp           # run the language server
 
 Every command reads its settings from the nearest `luck.json`.
 
+## Benchmarks
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
+  <img src="assets/benchmark-light.svg">
+</picture>
+
+The chart is from [luck-benchmarks](https://github.com/esoware/luck-benchmarks), which also runs each tool on two more real Luau codebases.
+
 ## Tools
 
 - A Prettier-style formatter that handles Luau's full type syntax
