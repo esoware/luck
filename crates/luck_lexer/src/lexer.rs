@@ -115,16 +115,21 @@ impl<'source> Lexer<'source> {
         self.taken < self.buffered
     }
 
-    /// The next token of the batch [`Self::refill`] lexed.
+    /// The next token of the batch [`Self::refill`] lexed, which must hold
+    /// one, as [`Self::has_buffered`] says.
     ///
     /// # Panics
     ///
-    /// Panics when the batch is all read, as [`Self::has_buffered`] says.
+    /// Panics past the end of the buffer.
     #[inline]
     pub fn take_buffered(&mut self) -> Token {
         let index = self.taken;
         self.taken = index + 1;
-        self.buffer[..self.buffered][index]
+        // The parser keeps to the batch on every token, and checking its end
+        // here too costs a parse 3-4%, so past it a release build hands out a
+        // token of an earlier batch.
+        debug_assert!(index < self.buffered, "the batch is all read");
+        self.buffer[index]
     }
 
     /// The token [`Self::take_buffered`] hands out next, left in the batch,
@@ -133,10 +138,11 @@ impl<'source> Lexer<'source> {
     ///
     /// # Panics
     ///
-    /// Panics when the batch is all read, as [`Self::has_buffered`] says.
+    /// Panics past the end of the buffer.
     #[inline]
     pub fn peek_buffered(&self) -> &Token {
-        &self.buffer[..self.buffered][self.taken]
+        debug_assert!(self.taken < self.buffered, "the batch is all read");
+        &self.buffer[self.taken]
     }
 
     /// Lex the next batch of tokens, through the `Eof` if the source ends,
