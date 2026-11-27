@@ -130,6 +130,7 @@ impl<'ast> Visit<'ast> for Misindented<'_> {
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => None,
         };
         if let Some(word) = keyword {

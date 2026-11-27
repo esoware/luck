@@ -14,7 +14,7 @@ use luck_linter::{FixKind, Linter};
 use luck_minifier::TransformConfig;
 use luck_parser::ParseResult;
 use luck_semantic::SemanticBuilder;
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::luau_library;
 use luck_testgen::tree_shape;
 use luck_token::LineIndex;
 
@@ -213,7 +213,7 @@ fn idempotency(again: &[u8], output: &[u8]) -> TestResult {
 /// `linter`'s diagnostics against Luau's stdlib.
 fn lint(linter: &Linter, parse: &ParseResult<'_>, lines: &LineIndex) -> Vec<LintLine> {
     linter
-        .run(parse, library_for(Variant::Standalone), FixKind::empty(), None)
+        .run(parse, luau_library(), FixKind::empty(), None)
         .iter()
         .map(|message| {
             let (line, column) = lines.line_column(message.span().start);

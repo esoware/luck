@@ -2,6 +2,11 @@
 source: crates/luck_ast/src/generated/assert_layouts.rs
 expression: table
 ---
+Declaration: size 104, align 8
+DeclaredGlobal: size 48, align 8
+DeclaredFunction: size 96, align 8
+DeclaredExternType: size 72, align 8
+ExternTypeMember: size 56, align 8
 Expression: size 16, align 8
 Var: size 16, align 8
 SuffixedExpression: size 40, align 8
@@ -56,22 +61,22 @@ TypeofType: size 24, align 8
 TableType: size 32, align 8
 TypeField: size 56, align 8
 TypeFieldAccess: size 1, align 1
-FunctionType: size 48, align 8
+FunctionType: size 64, align 8
 FunctionTypeParam: size 40, align 8
 OptionalType: size 32, align 8
 UnionType: size 32, align 8
 IntersectionType: size 32, align 8
-ParenthesizedType: size 24, align 8
+ParenthesizedType: size 40, align 8
 TypePack: size 24, align 8
 VariadicType: size 24, align 8
 GenericPackType: size 32, align 4
 GenericTypeList: size 24, align 8
 GenericTypeParam: size 48, align 8
+Option<Name>: size 24, align 4
 Option<List<Expression>>: size 16, align 8
 Option<NameIndex>: size 4, align 4
 Option<ThinStr>: size 12, align 4
 Option<ThinBytes>: size 12, align 4
 Option<Expression>: size 16, align 8
-Option<Name>: size 24, align 4
 Option<TypeArgs>: size 24, align 8
 Option<TypeFieldAccess>: size 1, align 1

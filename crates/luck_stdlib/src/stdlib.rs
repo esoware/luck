@@ -1,27 +1,20 @@
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use luck_allocator::Allocator;
 use luck_diagnostics::Diagnostic;
 use self_cell::{MutBorrow, self_cell};
 
-use crate::layering::layer;
-use crate::stdlib_catalog::library_for;
-use crate::stdlib_definition::StdlibDefinition;
+use crate::definitions::{luau_definitions, roblox_definitions};
+use crate::security_level::SecurityLevel;
 use crate::stdlib_model::StdlibLibrary;
-use crate::variant::Variant;
+use crate::translate::layer;
 
-/// A variant's standard library, with the std definitions a project names
-/// layered over it, which semantic analysis reads as it reads a built-in
-/// one. A clone shares it.
+/// A standard library built from definition files: Luau's, with the ones a
+/// project loads layered over it, which semantic analysis reads. A clone
+/// shares it.
 #[derive(Clone)]
-pub struct Stdlib(Layers);
-
-#[derive(Clone)]
-enum Layers {
-    BuiltIn(&'static StdlibLibrary<'static>),
-    Layered(Arc<LayeredLibrary>),
-}
+pub struct Stdlib(Arc<LayeredLibrary>);
 
 /// The arena sits in a [`MutBorrow`], which lends it once, to the layering,
 /// so nothing can reach it again from another thread, and the cell is `Sync`
@@ -29,7 +22,7 @@ enum Layers {
 struct LayeredOwner {
     arena: MutBorrow<Allocator>,
     /// The library the layered one shares every entry it leaves alone with.
-    base: Stdlib,
+    base: Option<Stdlib>,
 }
 
 self_cell!(
@@ -40,58 +33,120 @@ self_cell!(
     }
 );
 
+static LUAU_LIBRARY: OnceLock<Stdlib> = OnceLock::new();
+
+/// Roblox's API over Luau's library at each level of [`SecurityLevel::ALL`].
+static ROBLOX_LIBRARIES: [OnceLock<Stdlib>; SecurityLevel::ALL.len()] =
+    [const { OnceLock::new() }; SecurityLevel::ALL.len()];
+
+/// Luau's own library, `luau.d.luau`'s, which every project's starts from,
+/// built the first time a process asks for it.
+///
+/// # Panics
+///
+/// Never, since the definitions built into the crate parse, as its tests
+/// check.
+pub fn luau_library() -> &'static StdlibLibrary<'static> {
+    built_in_luau().library()
+}
+
+/// Luau's library with Roblox's API for a script at `security` layered over
+/// it, the definitions [`roblox_definitions`] gives, built the first time a
+/// process asks for it.
+///
+/// # Panics
+///
+/// Never, since the definitions built into the crate parse, as its tests
+/// check.
+pub fn roblox_library(security: SecurityLevel) -> &'static StdlibLibrary<'static> {
+    built_in_roblox(security).library()
+}
+
+/// The library a Roblox script runs against when `has_roblox`, which is
+/// [`roblox_library`] at [`SecurityLevel::None`], and else
+/// [`luau_library`].
+pub fn library_for(has_roblox: bool) -> &'static StdlibLibrary<'static> {
+    if has_roblox { roblox_library(SecurityLevel::None) } else { luau_library() }
+}
+
+fn built_in_luau() -> &'static Stdlib {
+    LUAU_LIBRARY.get_or_init(|| {
+        Stdlib::layered(None, false, luau_definitions()).expect("luau.d.luau parses")
+    })
+}
+
+fn built_in_roblox(security: SecurityLevel) -> &'static Stdlib {
+    ROBLOX_LIBRARIES[security as usize].get_or_init(|| built_in_luau().roblox_over(security))
+}
+
 impl Stdlib {
-    /// `variant`'s built-in library.
-    pub const fn new(variant: Variant) -> Self {
-        Self(Layers::BuiltIn(library_for(variant)))
+    /// Luau's own library, as [`luau_library`] gives it.
+    pub fn luau() -> Self {
+        built_in_luau().clone()
     }
 
     pub fn library(&self) -> &StdlibLibrary<'_> {
-        match &self.0 {
-            Layers::BuiltIn(library) => library,
-            Layers::Layered(layered) => layered.borrow_dependent(),
+        self.0.borrow_dependent()
+    }
+
+    /// This library with Roblox's API for a script at `security` layered
+    /// over it, which over Luau's alone a process builds once at each level.
+    ///
+    /// # Panics
+    ///
+    /// Never, since the definitions built into the crate parse, as its tests
+    /// check.
+    #[must_use]
+    pub fn with_roblox(&self, security: SecurityLevel) -> Self {
+        if Arc::ptr_eq(&self.0, &built_in_luau().0) {
+            return built_in_roblox(security).clone();
         }
+        self.roblox_over(security)
     }
 
-    pub fn variant(&self) -> Variant {
-        self.library().variant
+    fn roblox_over(&self, security: SecurityLevel) -> Self {
+        Self::layered(Some(self.clone()), true, roblox_definitions(security))
+            .expect("roblox.d.luau parses at every level")
     }
 
-    /// This library with `definition` layered over it.
+    /// This library with the definition file `source` layered over it.
     ///
-    /// What the definition declares replaces what this library declares
-    /// under the same name, except that a namespace over a namespace, or a
-    /// shape over a shape, keeps the members it doesn't declare, and the
-    /// `shape`, `extends`, or deprecation it doesn't set.
-    ///
-    /// A shape or a constant set the definition names comes from it or from
-    /// this library. One that only Roblox's library declares is left
-    /// unresolved, so one definition can serve both variants: the shape has
-    /// no members, and a param that takes the set takes any string.
+    /// What the file declares replaces what this library declares under the
+    /// same name, as Luau's `loadDefinitionFile` treats a redeclared global,
+    /// and `typeof` of a global reads the one declared before it, here or
+    /// below.
     ///
     /// # Errors
     ///
-    /// Returns E014 when the definition names a shape or a constant set that
-    /// no library declares, or gives a table more than 65535 entries.
-    pub fn layer(&self, definition: &StdlibDefinition) -> Result<Self, Diagnostic> {
-        let owner = LayeredOwner { arena: MutBorrow::new(Allocator::new()), base: self.clone() };
+    /// Returns the E008 of each place `source` doesn't parse.
+    pub fn layer(&self, source: &str) -> Result<Self, Vec<Diagnostic>> {
+        Self::layered(Some(self.clone()), self.library().has_roblox, source)
+    }
+
+    fn layered(
+        base: Option<Self>,
+        has_roblox: bool,
+        source: &str,
+    ) -> Result<Self, Vec<Diagnostic>> {
+        let owner = LayeredOwner { arena: MutBorrow::new(Allocator::new()), base };
         let layered = LayeredLibrary::try_new(owner, |built_from| {
-            layer(built_from.arena.borrow_mut(), built_from.base.library(), definition)
+            let below = built_from.base.as_ref().map(Self::library);
+            layer(built_from.arena.borrow_mut(), below, has_roblox, source)
         })?;
-        Ok(Self(Layers::Layered(Arc::new(layered))))
+        Ok(Self(Arc::new(layered)))
     }
 }
 
 impl fmt::Debug for Stdlib {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut layer_count = 0usize;
-        let mut current = self;
-        while let Layers::Layered(layered) = &current.0 {
+        let mut current = Some(self);
+        while let Some(layered) = current {
             layer_count += 1;
-            current = &layered.borrow_owner().base;
+            current = layered.0.borrow_owner().base.as_ref();
         }
         f.debug_struct("Stdlib")
-            .field("variant", &self.variant())
+            .field("has_roblox", &self.library().has_roblox)
             .field("layer_count", &layer_count)
             .finish()
     }

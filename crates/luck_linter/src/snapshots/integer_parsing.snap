@@ -2,19 +2,19 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: integer literal `0xFFFFFFFFFFFFFFFFFF` exceeds 2^53, so it loses precision when stored as a double
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local x = 0xFFFFFFFFFFFFFFFFFF
   |           ^^^^^^^^^^^^^^^^^^^^
 help: use a smaller value or store as a string
 
 warning: integer literal `9007199254740993` exceeds 2^53, so it loses precision when stored as a double
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local x = 9007199254740993
   |           ^^^^^^^^^^^^^^^^
 help: use a smaller value or store as a string
 
 warning: integer literal `99999999999999999999` exceeds 2^53, so it loses precision when stored as a double
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local x = 99999999999999999999
   |           ^^^^^^^^^^^^^^^^^^^^
 help: use a smaller value or store as a string

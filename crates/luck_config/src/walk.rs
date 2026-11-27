@@ -148,7 +148,7 @@ where
                     let directory = WalkEntry { path, depth };
                     let is_excluded = visitor
                         .directory_filter(&directory)
-                        .is_some_and(|filter| filter.excludes_canonical_tree(&canonical));
+                        .is_some_and(|filter| filter.excludes_tree(&canonical));
                     return if is_excluded || !visitor.enters(&directory) {
                         WalkState::Skip
                     } else {
@@ -248,7 +248,8 @@ mod tests {
     /// The files a walk of a project holding `files` takes, relative to it.
     fn walked(files: &[(&str, &str)], max_entered_depth: usize) -> Vec<String> {
         let directory = project_with(files);
-        let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+        let project =
+            Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
         let canonical = FileSystemOs.canonicalize(directory.path()).expect("the project exists");
         let root = WalkRoot { path: directory.path(), canonical: &canonical };
         let Ok(found) =
@@ -300,7 +301,8 @@ mod tests {
         if symlink_file(&target, directory.path().join("src/b.luau")).is_err() {
             return;
         }
-        let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+        let project =
+            Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
         let canonical = FileSystemOs.canonicalize(directory.path()).expect("the project exists");
         let root = WalkRoot { path: directory.path(), canonical: &canonical };
         let visitor = OneProject { project, max_entered_depth: usize::MAX };

@@ -1,5 +1,6 @@
 mod attributes;
 mod declaration;
+mod definition;
 mod depth;
 mod expr;
 mod forgotten;
@@ -10,9 +11,9 @@ mod types;
 
 use luck_allocator::{Allocator, Box, List, TextBytes, ThinBytes, ThinStr};
 use luck_ast::{
-    BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionAttribute,
-    FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Name, NameIndex, NumberLiteral,
-    Statement, StringLiteral, Suffix, TreeCounts, Type, TypeField, TypedName, Var,
+    BinaryLink, Block, ElseIfClause, ElseIfExprClause, Expression, ExternTypeMember, Field,
+    FunctionAttribute, FunctionTypeParam, GenericTypeParam, InterpolatedSegment, Name, NameIndex,
+    NumberLiteral, Statement, StringLiteral, Suffix, TreeCounts, Type, TypeField, TypedName, Var,
 };
 use luck_diagnostics::Diagnostic;
 use luck_lexer::Lexer;
@@ -48,9 +49,10 @@ use name_token;
 /// which goes in `allocator` too.
 ///
 /// `source` is bytes, as Luau reads it, so a string or a comment in it may
-/// hold any byte.
+/// hold any byte. It's code, where `declare` is an ordinary name, and
+/// [`parse_definitions`] reads a definition file instead.
 pub fn parse<'ast>(allocator: &'ast Allocator, source: &'ast [u8]) -> ParseResult<'ast> {
-    parse_source(allocator, source, Tokens::Discard)
+    parse_source(allocator, source, Tokens::Discard, SourceKind::Code)
 }
 
 /// [`parse`], keeping every token the parse read in
@@ -60,7 +62,27 @@ pub fn parse_with_tokens<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
 ) -> ParseResult<'ast> {
-    parse_source(allocator, source, Tokens::Keep)
+    parse_source(allocator, source, Tokens::Keep, SourceKind::Code)
+}
+
+/// [`parse`], for a definition file, as Luau's `Frontend::loadDefinitionFile`
+/// reads one, with `allowDeclarationSyntax`: a statement may also be a
+/// `declare`, and a function type in the type a `declare name: T` gives may
+/// take attributes. Luau's parser takes either nowhere else.
+pub fn parse_definitions<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast [u8],
+) -> ParseResult<'ast> {
+    parse_source(allocator, source, Tokens::Discard, SourceKind::Definitions)
+}
+
+/// [`parse_definitions`], keeping every token as [`parse_with_tokens`]
+/// does.
+pub fn parse_definitions_with_tokens<'ast>(
+    allocator: &'ast Allocator,
+    source: &'ast [u8],
+) -> ParseResult<'ast> {
+    parse_source(allocator, source, Tokens::Keep, SourceKind::Definitions)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -69,17 +91,26 @@ enum Tokens {
     Discard,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceKind {
+    Code,
+    Definitions,
+}
+
 fn parse_source<'ast>(
     allocator: &'ast Allocator,
     source: &'ast [u8],
     tokens: Tokens,
+    kind: SourceKind,
 ) -> ParseResult<'ast> {
+    let is_definition_file = kind == SourceKind::Definitions;
     let lexer = match Lexer::new(source) {
         Ok(lexer) => lexer,
         Err(error) => {
             let block = Block::new(Span::new(0, 0), List::new());
             return ParseResult {
                 source,
+                is_definition_file,
                 chunk: block,
                 comments: Vec::new(),
                 tokens: Vec::new(),
@@ -105,6 +136,7 @@ fn parse_source<'ast>(
         source,
         text_source: TextBytes::new(source),
         lexer,
+        is_definition_file,
         token: placeholder,
         previous_end: 0,
         nesting_depth: 0,
@@ -141,6 +173,9 @@ struct Parser<'ast> {
     text_source: TextBytes<'ast>,
     /// Never all read between two tokens, so the lookahead is always in it.
     lexer: Lexer<'ast>,
+    /// Whether a statement may be a `declare`, which the parser asks only of
+    /// an identifier that opens one.
+    is_definition_file: bool,
     token: Token,
     /// Where the last token read ends, where the node it ends does.
     previous_end: u32,
@@ -200,6 +235,7 @@ struct Scratch<'ast> {
     segments: Vec<InterpolatedSegment<'ast>>,
     types: Vec<Type<'ast>>,
     type_fields: Vec<TypeField<'ast>>,
+    extern_type_members: Vec<ExternTypeMember<'ast>>,
     function_type_params: Vec<FunctionTypeParam<'ast>>,
     generic_params: Vec<GenericTypeParam<'ast>>,
 }
@@ -241,6 +277,7 @@ impl<'ast> Parser<'ast> {
         self.groupings.finish();
         ParseResult {
             source: self.source,
+            is_definition_file: self.is_definition_file,
             chunk,
             comments: lexed.comments,
             tokens: lexed.tokens,
@@ -277,6 +314,13 @@ impl<'ast> Parser<'ast> {
     #[inline]
     const fn is_at_name(&self) -> bool {
         self.token.kind.is_name()
+    }
+
+    /// Whether the current token is spelled `word`, which no token of
+    /// another kind is when `word` is an identifier's spelling.
+    #[inline]
+    fn is_at_word(&self, word: &[u8]) -> bool {
+        self.token.span.text(self.source) == word
     }
 
     /// The text of the name or numeral at `span`, which the lexer read as

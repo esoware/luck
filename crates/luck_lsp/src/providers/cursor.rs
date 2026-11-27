@@ -1,4 +1,5 @@
-use luck_ast::{Name, StringLiteral};
+use ls_types::Position;
+use luck_ast::Name;
 use luck_semantic::{NodeId, SymbolId};
 use luck_token::{CommentKind, Span, TokenKind};
 
@@ -11,6 +12,14 @@ pub(crate) fn name_at(document: &DocumentState, offset: u32) -> Option<(NodeId, 
     let id = nodes.node_at(offset)?;
     let name = nodes.kind(id).as_name().filter(|name| name.written().is_some())?;
     Some((id, name))
+}
+
+/// Where the name at `position` starts, which Luau's types describe, or
+/// `None` where there's none, so the space inside a function doesn't
+/// describe the whole function.
+pub(crate) fn name_start(document: &DocumentState, position: Position) -> Option<u32> {
+    let (_, name) = name_at(document, document.offset(position))?;
+    Some(name.span.start)
 }
 
 /// The local the name at `offset` declares or refers to, and that name's
@@ -70,17 +79,8 @@ pub(crate) fn text_kind_at(document: &DocumentState, offset: u32) -> TextKind {
 /// Whether `offset` is inside the string token or block comment at `span`:
 /// past its first byte, and before its end unless a line break or the end of
 /// the text cut it off there.
-pub(crate) const fn is_inside(span: Span, offset: u32, is_cut_off: bool) -> bool {
+const fn is_inside(span: Span, offset: u32, is_cut_off: bool) -> bool {
     span.start < offset && (offset < span.end || (offset == span.end && is_cut_off))
-}
-
-/// Whether the string token starting where `literal` does runs to the end of
-/// its line or of the source without its closing delimiter.
-pub(crate) fn is_unterminated(document: &DocumentState, literal: &StringLiteral<'_>) -> bool {
-    let tokens = document.tokens();
-    tokens
-        .binary_search_by_key(&literal.span.start, |token| token.span.start)
-        .is_ok_and(|i| tokens[i].is_unterminated)
 }
 
 #[cfg(test)]

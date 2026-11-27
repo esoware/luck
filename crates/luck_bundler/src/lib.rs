@@ -22,8 +22,11 @@
 //! use luck_bundler::{BundleOptions, DynamicRequire};
 //!
 //! rayon::ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global().unwrap();
-//! let options =
-//!     BundleOptions { project_root: Path::new("."), dynamic_require: DynamicRequire::default() };
+//! let options = BundleOptions {
+//!     project_root: Path::new("."),
+//!     dynamic_require: DynamicRequire::default(),
+//!     luau_config: None,
+//! };
 //! let arenas = ThreadAllocators::new();
 //! let bundle = luck_bundler::bundle(&arenas, Path::new("main.luau"), &options).unwrap();
 //! assert!(!bundle.output.is_empty());

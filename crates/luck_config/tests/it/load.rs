@@ -11,7 +11,7 @@ use crate::common::{finishes_within, in_directory, load_error, project_with};
 #[test]
 fn root_config_rejects_an_escape_through_a_transitive_extends() {
     let project = project_with(&[
-        ("outside.json", r#"{ "variant": "roblox" }"#),
+        ("outside.json", r#"{ "definitions": ["@roblox"] }"#),
         ("project/base.json", r#"{ "extends": ["../outside.json"] }"#),
         ("project/luck.json", r#"{ "root": true, "extends": ["base.json"] }"#),
     ]);
@@ -55,7 +55,8 @@ fn repeated_extends_layers_resolve_promptly() {
         fs::write(project.path().join(format!("layer{layer}.json")), body).expect("write layer");
     }
     let first_layer = project.path().join("layer0.json");
-    let is_finished = finishes_within(Duration::from_secs(10), move || Project::load(&first_layer));
+    let is_finished =
+        finishes_within(Duration::from_secs(10), move || Project::load(&first_layer, FileSystemOs));
     assert!(is_finished, "40 small config files must not take 2^40 file loads to resolve");
 }
 
@@ -72,7 +73,7 @@ fn long_extends_chain_does_not_overflow_the_stack() {
         };
         fs::write(project.path().join(format!("layer{layer}.json")), body).expect("write layer");
     }
-    if let Err(error) = Project::load(&project.path().join("layer0.json")) {
+    if let Err(error) = Project::load(&project.path().join("layer0.json"), FileSystemOs) {
         assert!(
             error.diags.iter().all(|diag| diag.message.contains("extends")),
             "a chain that is too long must be reported as an `extends` error: {error:?}"
@@ -82,10 +83,10 @@ fn long_extends_chain_does_not_overflow_the_stack() {
 
 #[test]
 fn find_config_walks_above_a_relative_start_directory() {
-    let project =
-        project_with(&[("luck.json", r#"{ "variant": "standalone" }"#), ("sub/keep.luau", "")]);
-    let found = in_directory(&project.path().join("sub"), || find_config(Path::new(".")))
-        .expect("discovery from `.` must find the `luck.json` in its parent");
+    let project = project_with(&[("luck.json", r#"{ "minify": true }"#), ("sub/keep.luau", "")]);
+    let found =
+        in_directory(&project.path().join("sub"), || find_config(&FileSystemOs, Path::new(".")))
+            .expect("discovery from `.` must find the `luck.json` in its parent");
     assert_eq!(
         FileSystemOs.canonicalize_existing(&found),
         FileSystemOs.canonicalize_existing(&project.path().join("luck.json"))

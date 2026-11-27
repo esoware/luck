@@ -8,8 +8,9 @@ use crate::server::Task;
 use crate::session::Session;
 
 /// The document formatted, or with `range`, the statements it touches, as
-/// one whole-document edit. `None` when `range` doesn't fit it, or it doesn't
-/// parse, which also shows a warning.
+/// one whole-document edit, under the `.editorconfig` files as they are now.
+/// `None` when `range` doesn't fit it, or it doesn't parse, which also shows a
+/// warning.
 pub(crate) fn formatting(
     session: &Session,
     document: &DocumentState,
@@ -20,7 +21,12 @@ pub(crate) fn formatting(
         None => None,
     };
     let action = if byte_range.is_some() { "range-format" } else { "format" };
-    let options = &document.settings().format;
+    let settings = document.settings();
+    let editorconfigs = session.settings().editorconfigs();
+    let options = &settings
+        .project
+        .project()
+        .format_options(settings.located.as_deref(), Some(&editorconfigs));
     // A scratch arena, so the formatting is freed as soon as it's done.
     let allocator = Allocator::new();
     let parse = document.parse();

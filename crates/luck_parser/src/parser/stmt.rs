@@ -119,8 +119,9 @@ const fn can_follow_last_stmt(kind: TokenKind) -> bool {
     )
 }
 
-/// Whether `kind` after `continue` makes it a name: a call, a field, an
-/// index, or an assignment target, as Luau's parser reads it.
+/// Whether `kind` after `continue`, or a definition file's `declare`, makes
+/// it a name: a call, a field, an index, or an assignment target, as Luau's
+/// parser reads it.
 const fn continues_a_name(kind: TokenKind) -> bool {
     matches!(
         kind,
@@ -289,7 +290,8 @@ impl<'ast> Parser<'ast> {
     ///
     /// A contextual keyword starts its statement only when the next token
     /// continues one, so in `const = 1`, `const()`, and `const.x`, `const` is
-    /// an ordinary name.
+    /// an ordinary name. So is `declare` in a definition file, and anywhere
+    /// in code.
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_stmt(&mut self) -> Statement<'ast> {
         let next = self.peek_next();
@@ -320,6 +322,13 @@ impl<'ast> Parser<'ast> {
             }
             TokenKind::Const if next.is_name() || next == TokenKind::Function => {
                 self.parse_local_stmt(List::new())
+            }
+            TokenKind::Identifier
+                if self.is_definition_file
+                    && !continues_a_name(next)
+                    && self.is_at_word(b"declare") =>
+            {
+                self.parse_declaration(List::new())
             }
             name_token!(TokenKind::LeftParen) => self.parse_assignment_or_call(),
             _ => self.report_unexpected_in_block(),

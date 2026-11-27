@@ -6,19 +6,19 @@ use std::os::windows::fs::symlink_file;
 use std::path::{Path, PathBuf};
 
 use luck_bundler::DynamicRequire;
-use luck_config::{Editorconfigs, Project};
+use luck_config::{ConfigError, DefinitionSource, Editorconfigs, Project};
 use luck_formatter::{FormatOptions, IndentStyle};
 use luck_linter::{Category, LintConfig, RuleId, RuleLevel};
 use luck_resolver::{FileSystem as _, FileSystemOs};
-use luck_stdlib::Variant;
+use luck_stdlib::{SecurityLevel, StdlibEntry};
 
 use crate::common::{load_error, loaded, project_with};
 
 #[test]
 fn defaults_take_every_lua_and_luau_file_as_luau() {
-    let project = Project::defaults(PathBuf::from("."));
-    assert_eq!(project.variant(), Variant::Standalone);
-    assert_eq!(project.stdlib().variant(), Variant::Standalone);
+    let project = Project::defaults(PathBuf::from("."), FileSystemOs);
+    assert!(!project.definitions().stdlib().library().has_roblox);
+    assert_eq!(project.definitions().sources(), []);
     assert!(project.filter().is_included(Path::new("src/a.lua")));
     assert!(project.filter().is_included(Path::new("src/a.luau")));
     assert_eq!(*project.linter_for(None).config(), LintConfig::default());
@@ -26,28 +26,74 @@ fn defaults_take_every_lua_and_luau_file_as_luau() {
 }
 
 #[test]
-fn the_variant_key_picks_the_library_every_file_gets() {
-    let (_roblox_directory, roblox) = loaded(&[("luck.json", r#"{ "variant": "roblox" }"#)]);
-    assert_eq!(roblox.variant(), Variant::Roblox);
-    assert!(roblox.stdlib().library().lookup(["game"]).is_some());
+fn roblox_s_api_is_what_at_roblox_loads() {
+    let (_roblox_directory, roblox) = loaded(&[("luck.json", r#"{ "definitions": ["@roblox"] }"#)]);
+    assert!(roblox.definitions().stdlib().library().has_roblox);
+    assert_eq!(roblox.definitions().sources(), [DefinitionSource::Roblox]);
+    assert!(roblox.definitions().stdlib().library().lookup(["game"]).is_some());
 
-    let (_standalone_directory, standalone) =
-        loaded(&[("luck.json", r#"{ "variant": "standalone" }"#)]);
-    assert_eq!(standalone.variant(), Variant::Standalone);
-    assert!(standalone.stdlib().library().lookup(["game"]).is_none());
+    let (_luau_directory, luau) = loaded(&[("luck.json", "{}")]);
+    assert!(!luau.definitions().stdlib().library().has_roblox);
+    assert!(luau.definitions().stdlib().library().lookup(["game"]).is_none());
 }
 
 #[test]
-fn rejects_a_variant_on_its_value() {
-    let text = r#"{ "variant": "bogus" }"#;
+fn rejects_a_definition_set_luck_lacks_on_its_entry() {
+    let text = r#"{ "definitions": ["@roblox", "@lune"] }"#;
+    let directory = project_with(&[("luck.json", text)]);
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
+    assert_eq!(diag.code, "E014");
+    assert!(diag.message.contains("`definitions` names `@lune`"), "{diag:?}");
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""@lune""#[..]));
+}
+
+#[test]
+fn the_variant_key_is_gone() {
+    let directory = project_with(&[("luck.json", r#"{ "variant": "roblox" }"#)]);
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
+    assert!(diag.message.contains("unknown field `variant`"), "{diag:?}");
+}
+
+#[test]
+fn the_security_key_picks_the_level_of_a_roblox_projects_files() {
+    let (_plugin_directory, plugin) =
+        loaded(&[("luck.json", r#"{ "definitions": ["@roblox"], "security": "PluginSecurity" }"#)]);
+    assert_eq!(plugin.definitions().security(), SecurityLevel::PluginSecurity);
+
+    let (_script_directory, script) = loaded(&[("luck.json", r#"{ "definitions": ["@roblox"] }"#)]);
+    assert_eq!(script.definitions().security(), SecurityLevel::None);
+}
+
+#[test]
+fn rejects_security_on_a_project_without_roblox_s_api() {
+    for text in [
+        r#"{ "security": "None" }"#,
+        r#"{ "definitions": ["app.d.luau"], "security": "PluginSecurity" }"#,
+    ] {
+        let directory = project_with(&[("app.d.luau", ""), ("luck.json", text)]);
+        let (_, diag) = load_error(&directory.path().join("luck.json"));
+        assert_eq!(diag.code, "E014");
+        assert!(
+            diag.message.contains("`security` applies only to a project that loads `@roblox`"),
+            "{text}: {diag:?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_a_security_level_no_script_runs_at_on_its_value() {
+    let text = r#"{ "definitions": ["@roblox"], "security": "RobloxSecurity" }"#;
     let directory = project_with(&[("luck.json", text)]);
     let (_, diag) = load_error(&directory.path().join("luck.json"));
     assert_eq!(diag.code, "E014");
     assert!(
-        diag.message.contains("unknown variant `bogus`, expected `standalone` or `roblox`"),
+        diag.message.contains(
+            "unknown variant `RobloxSecurity`, expected one of `None`, `LocalUserSecurity`, \
+             `PluginSecurity`, `RobloxScriptSecurity`"
+        ),
         "{diag:?}"
     );
-    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""bogus""#[..]));
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""RobloxSecurity""#[..]));
 }
 
 #[test]
@@ -206,82 +252,149 @@ fn records_every_config_file_it_read() {
     assert_eq!(project.files(), [canonical("luck.json"), canonical("base.json")]);
 }
 
-const APP: &str = r#"
-[globals.app]
-kind = "namespace"
-
-[globals.app.members.onMessage]
-kind = "function"
-is_read_only = false
-"#;
+const APP: &str = "declare app: { onMessage: (text: string) -> () }";
 
 #[test]
-fn std_definitions_layer_over_the_variant_s_library() {
+fn definitions_layer_in_order_over_luau_s_library() {
     let (directory, project) = loaded(&[
-        ("std/app.toml", APP),
-        ("luck.json", r#"{ "variant": "roblox", "std": ["std/app.toml"] }"#),
+        ("types/app.d.luau", APP),
+        (
+            "luck.json",
+            r#"{ "security": "PluginSecurity", "definitions": ["@roblox", "types/app.d.luau"] }"#,
+        ),
     ]);
-    let stdlib = project.stdlib();
-    assert_eq!(stdlib.variant(), Variant::Roblox);
-    assert!(stdlib.library().lookup(["app", "onMessage"]).is_some());
-    assert!(stdlib.library().lookup(["game"]).is_some());
-    assert!(stdlib.library().lookup(["print"]).is_some());
-    let std_file =
-        FileSystemOs.canonicalize(&directory.path().join("std/app.toml")).expect("exists");
-    assert!(project.files().contains(&std_file), "{:?}", project.files());
+    let library = project.definitions().stdlib().library();
+    assert!(library.has_roblox);
+    assert!(library.lookup(["app", "onMessage"]).is_some());
+    assert!(library.lookup(["print"]).is_some());
+    assert!(library.shape_member("Instance", "GetDebugId").is_some(), "a plugin's level");
+    let file =
+        FileSystemOs.canonicalize(&directory.path().join("types/app.d.luau")).expect("exists");
+    assert!(project.files().contains(&file), "{:?}", project.files());
+    assert!(project.filter().is_included(&file), "a definition file is one of the project's");
+    assert_eq!(
+        project.definitions().sources(),
+        [DefinitionSource::Roblox, DefinitionSource::File { path: file, text: APP.to_owned() }]
+    );
 }
 
 #[test]
-fn a_std_path_is_relative_to_the_file_that_names_it() {
-    let (_directory, project) = loaded(&[
-        ("shared/app.toml", APP),
-        ("shared/base.json", r#"{ "std": ["app.toml"] }"#),
-        ("luck.json", r#"{ "extends": ["shared/base.json"], "std": ["shared/app.toml"] }"#),
+fn a_definitions_path_is_relative_to_the_file_that_names_it_and_extended_ones_come_first() {
+    let (directory, project) = loaded(&[
+        ("shared/app.d.luau", APP),
+        ("shared/base.json", r#"{ "definitions": ["app.d.luau"] }"#),
+        ("local.d.luau", "declare app: { onMessage: (text: string, sender: string) -> () }"),
+        (
+            "luck.json",
+            r#"{ "extends": ["shared/base.json"], "definitions": ["shared/app.d.luau", "local.d.luau"] }"#,
+        ),
     ]);
-    assert!(project.stdlib().library().lookup(["app"]).is_some());
-    assert_eq!(project.files().len(), 3, "one std file, read once: {:?}", project.files());
+    let canonical =
+        |name: &str| FileSystemOs.canonicalize(&directory.path().join(name)).expect("exists");
+    let paths: Vec<&PathBuf> = project
+        .definitions()
+        .sources()
+        .iter()
+        .filter_map(|source| match source {
+            DefinitionSource::File { path, .. } => Some(path),
+            DefinitionSource::Roblox => None,
+        })
+        .collect();
+    assert_eq!(paths, [&canonical("shared/app.d.luau"), &canonical("local.d.luau")]);
+    let Some(StdlibEntry::Function(on_message)) =
+        project.definitions().stdlib().library().lookup(["app", "onMessage"])
+    else {
+        panic!("app.onMessage should be a function");
+    };
+    assert_eq!(on_message.min_args(), 2, "the later file's declaration replaces the earlier's");
 }
 
 #[test]
-fn a_std_file_that_cannot_be_read_is_reported_on_its_name() {
-    let text = r#"{ "std": ["gone.toml"] }"#;
+fn a_definitions_file_that_cannot_be_read_is_reported_on_its_name() {
+    let text = r#"{ "definitions": ["gone.d.luau"] }"#;
     let directory = project_with(&[("luck.json", text)]);
     let (path, diag) = load_error(&directory.path().join("luck.json"));
     assert!(path.ends_with("luck.json"), "{path:?}");
-    assert!(diag.message.contains("`std` names `gone.toml`, which can't be read"), "{diag:?}");
-    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""gone.toml""#[..]));
+    let message = &diag.message;
+    assert!(message.contains("`definitions` names `gone.d.luau`, which can't be read"), "{diag:?}");
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""gone.d.luau""#[..]));
 }
 
 #[test]
-fn an_invalid_std_definition_is_reported_in_it() {
-    let definition = r#"
-[globals.app]
-kind = "namspace"
-"#;
-    let directory =
-        project_with(&[("app.toml", definition), ("luck.json", r#"{ "std": ["app.toml"] }"#)]);
-    let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("app.toml"), "{path:?}");
-    assert_eq!(diag.code, "E014");
-    assert!(diag.message.contains("unknown variant `namspace`"), "{diag:?}");
-    assert!(diag.span.is_some(), "{diag:?}");
+fn a_definitions_file_that_does_not_parse_adds_nothing_to_its_project() {
+    let broken = "declare function greet(name: string: string";
+    let (directory, project) = loaded(&[
+        ("app.d.luau", broken),
+        (
+            "luck.json",
+            r#"{ "definitions": ["@roblox", "app.d.luau"], "lint": { "extra_globals": ["it"] } }"#,
+        ),
+    ]);
+    let path = FileSystemOs.canonicalize(&directory.path().join("app.d.luau")).expect("exists");
+    let file = DefinitionSource::File { path: path.clone(), text: broken.to_owned() };
+    assert_eq!(project.definitions().sources(), [DefinitionSource::Roblox, file]);
+    assert!(project.files().contains(&path), "{:?}", project.files());
+    let library = project.definitions().stdlib().library();
+    assert!(library.has_roblox);
+    assert!(library.lookup(["greet"]).is_none());
+    assert_eq!(project.linter_for(None).config().extra_globals, ["it"]);
 }
 
 #[test]
-fn a_std_definition_that_names_what_no_library_declares_is_reported_in_it() {
-    let definition = r#"
-[globals.screen]
-kind = "property"
-shape = "Sceen"
-"#;
-    let directory =
-        project_with(&[("app.toml", definition), ("luck.json", r#"{ "std": ["app.toml"] }"#)]);
+fn a_definitions_file_whose_name_does_not_end_in_d_luau_is_reported_on_its_name() {
+    let text = r#"{ "definitions": ["app.luau"] }"#;
+    let directory = project_with(&[("app.luau", APP), ("luck.json", text)]);
     let (path, diag) = load_error(&directory.path().join("luck.json"));
-    assert!(path.ends_with("app.toml"), "{path:?}");
+    assert!(path.ends_with("luck.json"), "{path:?}");
     assert_eq!(
         diag.message,
-        "invalid config: `screen` names the shape `Sceen`, which no library declares"
+        "invalid config: `definitions` names `app.luau`, but a definition file's name ends in \
+         `.d.luau`"
     );
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""app.luau""#[..]));
+}
+
+#[test]
+fn a_given_config_reads_its_definitions_from_its_root() {
+    let directory = project_with(&[("types/app.d.luau", APP)]);
+    let config = r#"{ "definitions": ["@roblox", "types/app.d.luau"], "lint": { "extra_globals": ["it"] } }"#;
+    let project = Project::from_config(config, directory.path().to_path_buf(), FileSystemOs)
+        .expect("the config loads");
+    let library = project.definitions().stdlib().library();
+    assert!(library.has_roblox);
+    assert!(library.lookup(["app", "onMessage"]).is_some());
+    assert_eq!(project.root(), directory.path());
+    assert_eq!(project.linter_for(None).config().extra_globals, ["it"]);
+}
+
+#[test]
+fn a_given_config_reports_what_a_luck_json_with_its_text_does() {
+    let text = r#"{ "definitions": ["@lune"] }"#;
+    let directory = project_with(&[("luck.json", text)]);
+    let (_, from_file) = load_error(&directory.path().join("luck.json"));
+    let given = Project::from_config(text, directory.path().to_path_buf(), FileSystemOs)
+        .expect_err("the config doesn't load");
+    assert_eq!(given, ConfigError::Given(from_file));
+}
+
+#[test]
+fn a_given_config_extends_nothing() {
+    let text = r#"{ "extends": ["base.json"] }"#;
+    let directory = project_with(&[("base.json", "{}")]);
+    let Err(ConfigError::Given(diag)) =
+        Project::from_config(text, directory.path().to_path_buf(), FileSystemOs)
+    else {
+        panic!("the config doesn't load");
+    };
+    assert!(diag.message.starts_with("invalid config: `extends` names `base.json`"), "{diag:?}");
+    assert_eq!(diag.span.map(|span| span.text(text.as_bytes())), Some(&br#""base.json""#[..]));
+}
+
+#[test]
+fn the_std_key_is_gone() {
+    let directory = project_with(&[("luck.json", r#"{ "std": ["app.toml"] }"#)]);
+    let (_, diag) = load_error(&directory.path().join("luck.json"));
+    assert!(diag.message.contains("unknown field `std`"), "{diag:?}");
 }
 
 #[test]

@@ -38,7 +38,7 @@ fn bare_config_name_applies_a_relative_include() {
 #[test]
 fn bare_config_name_loads_a_root_config_with_extends() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "base.json", r#"{"variant":"standalone"}"#);
+    write_file(project.path(), "base.json", r#"{"minify":false}"#);
     write_file(project.path(), "luck.json", r#"{"root":true,"extends":["base.json"]}"#);
     write_file(project.path(), "main.luau", "print(1)\n");
     luck_in(project.path()).args(["check", "-c", "luck.json"]).assert().success();
@@ -205,28 +205,22 @@ fn a_config_error_names_the_place_in_the_file() {
         .stderr(predicate::str::contains("luck.json:2:24"));
 }
 
+/// The definition file sits among the sources, and `lint` reads it as the
+/// definition file its name makes it, so its `declare` statements are no
+/// syntax error.
 #[test]
-fn lint_reads_the_std_definitions_a_config_names() {
+fn lint_reads_the_definition_files_a_config_names() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{ "std": ["app.toml"] }"#);
+    write_file(project.path(), "luck.json", r#"{ "definitions": ["@roblox", "app.d.luau"] }"#);
     write_file(
         project.path(),
-        "app.toml",
-        r#"
-[globals.app]
-kind = "namespace"
-
-[globals.app.members.net]
-kind = "namespace"
-
-[globals.app.members.net.members.send]
-kind = "function"
-params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
-
-[globals.app.members.onMessage]
-kind = "function"
-is_read_only = false
-"#,
+        "app.d.luau",
+        "\
+declare app: {
+    net: { send: (message: string, port: number, timeout: number) -> () },
+    onMessage: () -> (),
+}
+",
     );
     write_file(
         project.path(),
@@ -235,6 +229,7 @@ is_read_only = false
 function app.onMessage()
   app.net.send('hello', 0, 0)
 end
+print(game)
 ",
     );
     luck_in(project.path()).arg("lint").assert().success();
@@ -246,23 +241,20 @@ end
         .stderr(predicate::str::contains("`app.net.send` requires at least 3 argument(s)"));
 }
 
+/// The project loads without it, so its other files lint under the rest of
+/// the config.
 #[test]
-fn a_std_definition_error_names_the_place_in_it() {
+fn a_definition_file_that_does_not_parse_is_reported_where() {
     let project = TempDir::new().expect("project");
-    write_file(project.path(), "luck.json", r#"{ "std": ["app.toml"] }"#);
-    write_file(
-        project.path(),
-        "app.toml",
-        r#"[globals.app]
-kind = "namespace"
-shape = 1
-"#,
-    );
-    write_file(project.path(), "a.luau", "print(1)\n");
+    write_file(project.path(), "luck.json", r#"{ "definitions": ["@roblox", "app.d.luau"] }"#);
+    write_file(project.path(), "app.d.luau", "declare function greet(name: string: string\n");
+    write_file(project.path(), "a.luau", "print(game, greet)\n");
     luck_in(project.path())
         .arg("lint")
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains("E014"))
-        .stderr(predicate::str::contains("app.toml"));
+        .code(1)
+        .stderr(predicate::str::contains("E008"))
+        .stderr(predicate::str::contains("app.d.luau:1:"))
+        .stderr(predicate::str::contains("undefined variable `greet`"))
+        .stderr(predicate::str::contains("undefined variable `game`").not());
 }

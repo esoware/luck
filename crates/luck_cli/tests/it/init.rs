@@ -27,16 +27,13 @@ fn init_failure_leaves_no_partial_project() {
 }
 
 #[test]
-fn bad_init_variant_exits_usage_and_writes_nothing() {
+fn the_variant_flag_is_gone() {
     let directory = TempDir::new().unwrap();
 
     luck_in(directory.path())
-        .args(["init", "--variant", "bogus"])
+        .args(["init", "--variant", "roblox"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("invalid value 'bogus' for '--variant <VARIANT>'"))
-        .stderr(predicate::str::contains(
-            "invalid variant `bogus`: expected `standalone` or `roblox`",
-        ));
+        .stderr(predicate::str::contains("unexpected argument '--variant'"));
     assert!(!directory.path().join("luck.json").exists());
 }

@@ -9,7 +9,8 @@ use luck_diagnostics::{Diagnostic, Severity};
 use luck_linter::{
     Category, FixError, FixKind, Fixed, LintConfig, Linter, Message, RuleId, RuleLevel, RuleTimings,
 };
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_parser::ParseResult;
+use luck_resolver::{FileSystem as _, FileSystemOs, is_definition_file};
 use luck_stdlib::StdlibLibrary;
 
 use crate::exit::{Exit, operation_error, usage_error};
@@ -316,12 +317,14 @@ impl LintArgs {
     ) -> Result<(), Exit> {
         let source = read_stdin_source()?;
 
-        let path = Some(Path::new(stdin_path));
-        let (stdlib, linter) = (project.stdlib().library(), project.linter_for(path));
+        let path = Path::new(stdin_path);
+        let (definitions, linter) =
+            (project.definitions_for(Some(path)), project.linter_for(Some(path)));
+        let stdlib = definitions.stdlib().library();
         let allocator = Allocator::new();
         let fixes = self.fixes();
         let (current_source, messages, fix_error) =
-            fixed_or_linted(&linter, &allocator, &source, stdlib, fixes, timings);
+            fixed_or_linted(&linter, &allocator, path, &source, stdlib, fixes, timings);
 
         if !fixes.is_empty() {
             // Echo the source even with nothing to fix, since editors and
@@ -407,10 +410,11 @@ impl LintArgs {
             }
         };
 
-        let stdlib = file.project.stdlib().library();
+        let definitions = file.project.definitions_for(Some(file_path));
+        let stdlib = definitions.stdlib().library();
         let linter = file.project.linter_for(Some(file_path));
         let (fixed, fixed_messages, fix_error) =
-            fixed_or_linted(&linter, allocator, &source, stdlib, self.fixes(), timings);
+            fixed_or_linted(&linter, allocator, file_path, &source, stdlib, self.fixes(), timings);
         let mut note =
             fix_error.map(|error| format!("error: cannot fix `{}`: {error}", file_path.display()));
         let mut is_fixed = false;
@@ -418,7 +422,7 @@ impl LintArgs {
             (fixed, fixed_messages)
         } else if let Err(error) = fs::write(file_path, fixed) {
             note = Some(format!("error: cannot write `{}`: {error}", file_path.display()));
-            (source.as_slice(), linted(&linter, allocator, &source, stdlib, timings))
+            (source.as_slice(), linted(&linter, allocator, file_path, &source, stdlib, timings))
         } else {
             is_fixed = true;
             (fixed, fixed_messages)
@@ -470,32 +474,41 @@ impl LintArgs {
 fn fixed_or_linted<'ast>(
     linter: &Linter,
     allocator: &'ast Allocator,
+    path: &Path,
     source: &'ast [u8],
     stdlib: &StdlibLibrary<'_>,
     fixes: FixKind,
     timings: Option<&RuleTimings>,
 ) -> (&'ast [u8], Vec<Message>, Option<FixError>) {
-    let fix_error = if fixes.is_empty() {
-        None
-    } else {
-        match linter.fix(allocator, source, stdlib, fixes, timings) {
-            Ok(Fixed { parse, messages }) => return (parse.source, messages, None),
-            Err(error) => Some(error),
+    let parse = parsed(allocator, path, source);
+    match linter.fix(allocator, parse, stdlib, fixes, timings) {
+        Ok(Fixed { parse, messages }) => (parse.source, messages, None),
+        Err(error) => {
+            (source, linted(linter, allocator, path, source, stdlib, timings), Some(error))
         }
-    };
-    (source, linted(linter, allocator, source, stdlib, timings), fix_error)
+    }
 }
 
 /// `source`'s messages, parsed into `allocator` and linted against `stdlib`.
 fn linted(
     linter: &Linter,
     allocator: &Allocator,
+    path: &Path,
     source: &[u8],
     stdlib: &StdlibLibrary<'_>,
     timings: Option<&RuleTimings>,
 ) -> Vec<Message> {
-    let parse = luck_parser::parse(allocator, source);
-    linter.run(&parse, stdlib, FixKind::empty(), timings)
+    linter.run(&parsed(allocator, path, source), stdlib, FixKind::empty(), timings)
+}
+
+/// `source`'s parse into `allocator`, as a definition file when `path` names
+/// one.
+fn parsed<'ast>(allocator: &'ast Allocator, path: &Path, source: &'ast [u8]) -> ParseResult<'ast> {
+    if is_definition_file(path) {
+        luck_parser::parse_definitions(allocator, source)
+    } else {
+        luck_parser::parse(allocator, source)
+    }
 }
 
 /// Count `messages` by severity, as `(errors, warnings)`.
@@ -560,7 +573,7 @@ mod tests {
 
     use clap::Parser as _;
     use clap::error::ErrorKind;
-    use luck_stdlib::{Variant, library_for};
+    use luck_stdlib::luau_library;
 
     use super::*;
     use crate::cli::Cli;
@@ -589,8 +602,8 @@ mod tests {
         project.linter_for(None).config().clone()
     }
 
-    fn lint_source(source: &str, variant: Variant, linter: &Linter) -> Vec<Message> {
-        linted(linter, &Allocator::new(), source.as_bytes(), library_for(variant), None)
+    fn lint_source(source: &str, library: &StdlibLibrary<'_>, linter: &Linter) -> Vec<Message> {
+        linted(linter, &Allocator::new(), Path::new("main.luau"), source.as_bytes(), library, None)
     }
 
     #[test]
@@ -681,9 +694,8 @@ mod tests {
 
     #[test]
     fn lint_config_honors_luck_json_rules() {
-        let (_directory, config_arg) = project_with_config(
-            r#"{"variant":"standalone","lint":{"rules":{"empty_block":"error"}}}"#,
-        );
+        let (_directory, config_arg) =
+            project_with_config(r#"{"lint":{"rules":{"empty_block":"error"}}}"#);
 
         let lint_config = resolved_lint_config(&lint_args(&["-c", &config_arg]));
         assert_eq!(lint_config.rules.level(RuleId::EmptyBlock), Some(RuleLevel::Error));
@@ -692,7 +704,7 @@ mod tests {
     #[test]
     fn lint_cli_levels_win_over_config() {
         let (_directory, config_arg) = project_with_config(
-            r#"{"variant":"standalone","lint":{"categories":{"style":"off"},"rules":{"empty_block":"error"}}}"#,
+            r#"{"lint":{"categories":{"style":"off"},"rules":{"empty_block":"error"}}}"#,
         );
 
         let lint_config = resolved_lint_config(&lint_args(&[
@@ -709,7 +721,7 @@ mod tests {
 
     #[test]
     fn lint_level_flags_set_a_category_to_their_own_level() {
-        let (_directory, config_arg) = project_with_config(r#"{"variant":"standalone"}"#);
+        let (_directory, config_arg) = project_with_config(r#"{"minify":false}"#);
 
         for (flag, level) in
             [("-A", RuleLevel::Off), ("-W", RuleLevel::Warn), ("-D", RuleLevel::Error)]
@@ -721,7 +733,7 @@ mod tests {
 
     #[test]
     fn lint_level_flags_apply_in_command_line_order() {
-        let (_directory, config_arg) = project_with_config(r#"{"variant":"standalone"}"#);
+        let (_directory, config_arg) = project_with_config(r#"{"minify":false}"#);
         let level_after = |flags: &[&str]| {
             let command_line: Vec<&str> =
                 ["-c", config_arg.as_str()].iter().chain(flags).copied().collect();
@@ -758,7 +770,7 @@ mod tests {
         let source = "\
 local unused = 1
 print(undefined_var)";
-        let diags = lint_source(source, Variant::Standalone, &Linter::new(LintConfig::default()));
+        let diags = lint_source(source, luau_library(), &Linter::new(LintConfig::default()));
         let args = lint_args(&["--format", "json"]);
         let file = SourceFile { label: "a.luau", text: Some(source.as_bytes()) };
         let lines_when = |verbosity: Verbosity| {
@@ -777,7 +789,7 @@ print(undefined_var)";
     #[test]
     fn a_silent_run_renders_nothing() {
         let linter = Linter::new(LintConfig::default());
-        let diags = lint_source("print(undefined_var)", Variant::Standalone, &linter);
+        let diags = lint_source("print(undefined_var)", luau_library(), &linter);
         assert!(!diags.is_empty(), "{diags:?}");
         let file = SourceFile { label: "a.luau", text: Some(b"print(undefined_var)") };
         let shown = diags.into_iter().map(|message| message.diagnostic);
@@ -790,7 +802,7 @@ print(undefined_var)";
     #[test]
     fn an_unreadable_file_reports_e010_in_the_run_format() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf(), FileSystemOs));
         let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let outcome =
@@ -804,23 +816,23 @@ print(undefined_var)";
 
     #[test]
     fn lint_roblox_does_not_flag_game_global() {
-        // With `"variant":"roblox"`, a file using `game` must lint clean.
-        let (directory, config_arg) = project_with_config(r#"{"variant":"roblox"}"#);
+        // With `@roblox` loaded, a file using `game` must lint clean.
+        let (directory, config_arg) = project_with_config(r#"{"definitions":["@roblox"]}"#);
 
         let args = lint_args(&["-c", &config_arg]);
         let project = working_project(args.config.as_deref()).expect("config resolves");
         let linter = project.linter_for(Some(&directory.path().join("main.luau")));
-        let variant = project.variant();
-        assert_eq!(variant, Variant::Roblox);
+        let library = project.definitions().stdlib().library();
+        assert!(library.has_roblox);
 
-        let diags = lint_source("print(game)", variant, &linter);
+        let diags = lint_source("print(game)", library, &linter);
         assert!(
             diags.iter().all(|diag| diag.code != "undefined_variable"),
             "roblox global `game` should not be undefined"
         );
 
         // Standalone Luau (the default) does flag it; that contrast is the point.
-        let standalone_diags = lint_source("print(game)", Variant::Standalone, &linter);
+        let standalone_diags = lint_source("print(game)", luau_library(), &linter);
         assert!(standalone_diags.iter().any(|diag| diag.code == "undefined_variable"));
     }
 }

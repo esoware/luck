@@ -3,7 +3,7 @@ name                   = "luck_stdlib"
 version.workspace      = true
 authors.workspace      = true
 categories.workspace   = true
-description            = "The standard libraries of Luau and Roblox, std definitions that layer a host's library over one, and what a chunk's names and calls reach in it"
+description            = "The standard libraries of Luau and Roblox from Luau definition files, a host's definitions layered over one, and what a chunk's names and calls reach in it"
 edition.workspace      = true
 homepage.workspace     = true
 keywords.workspace     = true
@@ -12,32 +12,31 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [features]
-# Derive `JsonSchema` for `Variant`, for the schema `luck_config` generates.
+# Derive `JsonSchema` for `SecurityLevel`, for the schema `luck_config` generates.
 schemars = ["dep:schemars"]
 
 [lints]
 workspace = true
 
-# The generated catalogs are expressions that `include!` splices in, which cargo-shear reads as files
-# with no items.
-[package.metadata.cargo-shear]
-ignored-paths = ["src/stdlib_catalog/*.rs"]
-
 [dependencies]
 luck_allocator   = { workspace = true }
 luck_ast         = { workspace = true }
 luck_diagnostics = { workspace = true }
+luck_parser      = { workspace = true }
 luck_semantic    = { workspace = true }
-luck_token       = { workspace = true }
 
-schemars  = { workspace = true, optional = true }
-self_cell = { workspace = true }
-serde     = { workspace = true }
-toml      = { workspace = true }
+rustc-hash = { workspace = true }
+schemars   = { workspace = true, optional = true }
+self_cell  = { workspace = true }
+serde      = { workspace = true }
 
 [dev-dependencies]
-luck_parser = { workspace = true }
+luck_type_checker = { workspace = true }
 
-# Only the ignored regenerate_roblox_api test uses these, to fetch and parse the live Roblox API dump.
+# Only the ignored regenerate tests use these, to fetch and read the live Roblox API dump, Creator
+# Documentation, and Luau library reference.
+flate2     = { workspace = true }
+saphyr     = { workspace = true }
 serde_json = { workspace = true }
+tar        = { workspace = true }
 ureq       = { workspace = true }

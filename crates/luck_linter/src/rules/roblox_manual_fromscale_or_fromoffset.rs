@@ -23,7 +23,7 @@ impl Rule for RobloxManualFromScaleOrFromOffset {
     const NODE_TYPES: AstTypesBitset = AstTypesBitset::from_types(&[AstType::SuffixedExpression]);
 
     fn should_run(&self, host: &ContextHost<'_>) -> bool {
-        host.semantic.variant().is_roblox()
+        host.semantic.stdlib().has_roblox
     }
 
     /// A call statement's value goes unused, so it isn't checked.

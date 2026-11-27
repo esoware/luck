@@ -115,10 +115,6 @@ impl<'ast> AstNodes<'ast> {
         iter::successors(self.parent_id(id), |&ancestor| self.parent_id(ancestor))
     }
 
-    pub fn ancestor_kinds(&self, id: NodeId) -> impl Iterator<Item = AstKind<'ast>> + '_ {
-        self.ancestor_ids(id).map(|ancestor| self.kind(ancestor))
-    }
-
     /// The innermost node whose span holds `offset`, either end included, so
     /// an editor's cursor just past a name is on it, and of two that meet
     /// there, the later. `None` outside every node.

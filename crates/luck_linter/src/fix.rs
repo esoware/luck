@@ -133,13 +133,14 @@ impl fmt::Display for FixError {
 impl Error for FixError {}
 
 impl Linter {
-    /// Lints `source` against `stdlib` and applies its fixes of the kinds
-    /// `fixes` holds, round after round, until none is left. Each round's
-    /// text is parsed into `allocator` once, both to check it and to lint it,
-    /// and each round's rules are timed into `timings` when given.
+    /// Lints `parse` against `stdlib` and applies its fixes of the kinds
+    /// `fixes` holds, round after round, until none is left. Each fixed text
+    /// is parsed into `allocator` once, both to check it and to lint it, and
+    /// each round's rules are timed into `timings` when given.
     ///
     /// Of two overlapping fixes a round applies one, and the next round lints
-    /// again and applies the other if it still holds.
+    /// again and applies the other if it still holds. A definition file's
+    /// parse, which [`Self::run`] builds no fix for, is left as it is.
     ///
     /// # Errors
     ///
@@ -154,24 +155,23 @@ impl Linter {
     pub fn fix<'ast>(
         &self,
         allocator: &'ast Allocator,
-        source: &'ast [u8],
+        parse: ParseResult<'ast>,
         stdlib: &StdlibLibrary<'_>,
         fixes: FixKind,
         timings: Option<&RuleTimings>,
     ) -> Result<Fixed<'ast>, FixError> {
-        self.fix_within(allocator, source, stdlib, fixes, timings, ROUND_BUDGET)
+        self.fix_within(allocator, parse, stdlib, fixes, timings, ROUND_BUDGET)
     }
 
     fn fix_within<'ast>(
         &self,
         allocator: &'ast Allocator,
-        source: &'ast [u8],
+        mut parse: ParseResult<'ast>,
         stdlib: &StdlibLibrary<'_>,
         fixes: FixKind,
         timings: Option<&RuleTimings>,
         budget: usize,
     ) -> Result<Fixed<'ast>, FixError> {
-        let mut parse = luck_parser::parse(allocator, source);
         for round in 1..=budget {
             let messages = self.run(&parse, stdlib, fixes, timings);
             let Some(text) = apply(parse.source, &messages, fixes) else {
@@ -260,7 +260,7 @@ fn overlaps_kept(kept_spans: &BTreeMap<u32, u32>, span: Span) -> bool {
 #[cfg(test)]
 mod tests {
     use luck_diagnostics::Severity;
-    use luck_stdlib::{Variant, library_for};
+    use luck_stdlib::luau_library;
 
     use super::*;
     use crate::config::{LintConfig, RuleLevel};
@@ -299,9 +299,9 @@ mod tests {
 
     fn fixed_within(source: &str, linter: &Linter, budget: usize) -> Result<String, FixError> {
         let allocator = Allocator::new();
-        let stdlib = library_for(Variant::Standalone);
+        let parse = luck_parser::parse(&allocator, source.as_bytes());
         linter
-            .fix_within(&allocator, source.as_bytes(), stdlib, FixKind::Fix, None, budget)
+            .fix_within(&allocator, parse, luau_library(), FixKind::Fix, None, budget)
             .map(|fixed| String::from_utf8(fixed.parse.source.to_owned()).unwrap())
     }
 

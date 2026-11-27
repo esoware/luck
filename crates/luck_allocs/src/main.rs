@@ -101,7 +101,9 @@ fn run(report: Report) -> io::Result<()> {
 /// last.
 fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()] {
     HEAP.reset();
-    let (source, variant) = (file.source_text.as_slice(), file.variant);
+    let source = file.source_text.as_slice();
+    // Built before the measurements, since a process builds it once.
+    let library = library_for(file.has_roblox);
 
     let ((), lexer) = record_stats_in(allocator, || drop(luck_lexer::lex(source)));
     let (mut parse, parser) = record_stats_in(allocator, || luck_parser::parse(allocator, source));
@@ -118,7 +120,7 @@ fn measure(allocator: &Allocator, file: &TestFile) -> [StageStats; STAGES.len()]
     });
     let every_rule = every_rule();
     let ((), linter) = record_stats_in(allocator, || {
-        drop(every_rule.run(&parse, library_for(variant), FixKind::empty(), None));
+        drop(every_rule.run(&parse, library, FixKind::empty(), None));
     });
     let ((), codegen) = record_stats_in(allocator, || {
         drop(luck_codegen::compact(&parse.chunk, LiteralSpelling::AsWritten));

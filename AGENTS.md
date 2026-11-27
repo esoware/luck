@@ -73,12 +73,6 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - In the extension, labels take no period, and prose is full sentences that end with a period.
 - A diagnostic, help, or error message starts lowercase, has no closing period, is one sentence, and puts code in backticks, as rustc's do.
 
-### Scope
-
-- Three similar lines beat a premature helper.
-- No speculative config and no single-caller helpers.
-- Delete code nothing calls, unless it's public API of a published crate.
-
 ## Language server
 
 - The extension has no language logic. Everything that has to understand Luau runs in `luck_lsp`, so if the extension needs something new, add it there.
@@ -91,10 +85,11 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - `luck_allocator`, `luck_token`, `luck_data_structures`, `luck_simd`, `luck_ast_macros`, and `luck_ast_tools` depend on nothing in the workspace, and `luck_diagnostics` on `luck_token` only.
 - `luck_codegen` and `luck_formatter` never depend on `luck_semantic`, and neither they nor `luck_minifier` depend on `luck_stdlib`, `luck_resolver`, `luck_linter`, `luck_bundler`, or `luck_config`.
 - `luck_cli` is the only crate that depends on `luck_lsp`, only `luck_cli`, `luck_lsp`, and the `luck` facade's opt-in `config` feature depend on `luck_config`, nothing depends on `luck_cli` or on the `luck` facade, and only `luck_allocs` turns on `luck_allocator`'s `track_allocations` feature.
-- `Variant` in `luck_stdlib` is the Luau a user names, standalone or Roblox, and it decides only the stdlib. Whatever needs the stdlib, such as `luck_stdlib`'s analysis and the linter, takes a `StdlibLibrary`, the variant's or one with a project's std definitions layered over it, and whatever else needs the variant takes a `Variant`. The lexer, parser, semantic analysis, codegen, formatter, minifier, and bundler never take one, so both variants read and print identically.
+- Files differ only in the definitions they load: Luau's own library always, then, in their config's `definitions` order with the `definitions` of the `overrides` they match after it, `@roblox`, Roblox's API at the file's `SecurityLevel`, and its own definition files. The linter and `luck_stdlib`'s analysis take a `StdlibLibrary` built from that list, whose `has_roblox` the Roblox-only rules ask, and `luck check` loads the same list into the type checker. The lexer, parser, semantic analysis, codegen, formatter, minifier, and bundler never take a library or a definition, so every file's code reads and prints identically.
 - Modules are private, and each crate re-exports its public items from `lib.rs`, so every item has exactly one path. No `pub mod`. `lib.rs` holds the crate doc, the crate attributes, the module list, and the re-exports, and no other code.
 - Types that two crates share when neither depends on the other live in `luck_token`, diagnostics in `luck_diagnostics`, and data structures that know nothing of Luau in `luck_data_structures`.
 - Every crate in the workspace and the extension share one version. Don't change it by hand, because the Prepare release workflow bumps it.
+- Do not add any extra content to the existing per-crate README.md files, only substitute or remove information that becomes outdated.
 
 ### Types and errors
 
@@ -118,6 +113,3 @@ Copy is any text a user reads. That means every string the extension shows, plus
 - A fix test applies the edit and asserts that the result reparses.
 - An error path asserts on the returned errors, never with `#[should_panic]`.
 - Test source or output that spans lines, or reads better across lines, is a multi-line string literal, never one with `\n` escapes. Text that reads fine on one line stays on one line.
-## Extension
-
-- Split a file only once it passes about 700 lines, and only into parts that make sense on their own.

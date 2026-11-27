@@ -75,7 +75,8 @@ impl Linter {
     /// A parse with errors yields its errors, each an E008, and no rules run,
     /// so neither config nor a directive turns one off. So does a clean parse
     /// of a chunk Luau refuses to compile, with the errors semantic analysis
-    /// finds, such as a write to a `const` local.
+    /// finds, such as a write to a `const` local. A definition file's parse,
+    /// which holds no code for a rule to read, yields its errors alone.
     ///
     /// # Panics
     ///
@@ -87,7 +88,7 @@ impl Linter {
         fixes: FixKind,
         timings: Option<&RuleTimings>,
     ) -> Vec<Message> {
-        if !parse.errors.is_empty() {
+        if parse.is_definition_file || !parse.errors.is_empty() {
             return error_messages(&parse.errors);
         }
         let analysis = self.analyze(parse, stdlib);
@@ -111,8 +112,9 @@ impl Linter {
         timings: Option<&RuleTimings>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Option<Vec<Message>> {
-        if !analysis.parse.errors.is_empty() {
-            return Some(error_messages(&analysis.parse.errors));
+        let parse = analysis.parse;
+        if parse.is_definition_file || !parse.errors.is_empty() {
+            return Some(error_messages(&parse.errors));
         }
         if !analysis.errors.is_empty() {
             return Some(error_messages(&analysis.errors));
@@ -377,7 +379,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use luck_allocator::Allocator;
-    use luck_stdlib::{Variant, library_for};
+    use luck_stdlib::luau_library;
 
     use super::*;
     use crate::config::RuleLevel;
@@ -398,7 +400,7 @@ local y = nil
 print(x, y)";
         let parse = luck_parser::parse(&allocator, source.as_bytes());
         let linter = Linter::new(silent());
-        let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
+        let analysis = linter.analyze(&parse, luau_library());
         let diags = linter
             .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
             .expect("nothing cancels it");
@@ -413,7 +415,7 @@ print(x, y)";
         let source = "local x = nil -- luck: deny(redundant_nil_init)";
         let parse = luck_parser::parse(&allocator, source.as_bytes());
         let linter = Linter::new(silent());
-        let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
+        let analysis = linter.analyze(&parse, luau_library());
         let cancelled = linter.run_analyzed(&analysis, FixKind::empty(), None, &|| true);
         assert_eq!(cancelled, None, "a rule only a directive runs stops too");
     }
@@ -427,7 +429,7 @@ local x = 1
 print(x)";
         let parse = luck_parser::parse(&allocator, source.as_bytes());
         let questions = |linter: &Linter| {
-            let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
+            let analysis = linter.analyze(&parse, luau_library());
             let asked = AtomicUsize::new(0);
             let counted = || asked.fetch_add(1, Ordering::Relaxed) == usize::MAX;
             let whole = linter
@@ -443,7 +445,7 @@ print(x)";
         let (asked_without, _) = questions(&Linter::new(without_filter));
         assert_eq!(asked, asked_without + 1, "one more, just before the filter");
 
-        let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
+        let analysis = linter.analyze(&parse, luau_library());
         let answered = AtomicUsize::new(0);
         let cancels_last = || answered.fetch_add(1, Ordering::Relaxed) + 1 == asked;
         let stopped = linter.run_analyzed(&analysis, FixKind::empty(), None, &cancels_last);
@@ -458,8 +460,7 @@ print(x)";
         let linter = Linter::new(config);
         for (source, expected) in [("print(1)", 0), ("print(x == 0/0)", 1)] {
             let parse = luck_parser::parse(&allocator, source.as_bytes());
-            let diags =
-                linter.run(&parse, library_for(Variant::Standalone), FixKind::empty(), None);
+            let diags = linter.run(&parse, luau_library(), FixKind::empty(), None);
             assert_eq!(diags.len(), expected, "{source}: {diags:?}");
         }
     }
@@ -474,8 +475,7 @@ print(x)";
         let source = "print(x == 0/0, x == 1)";
         let parse = luck_parser::parse(&allocator, source.as_bytes());
         let timings = RuleTimings::new();
-        let diags =
-            linter.run(&parse, library_for(Variant::Standalone), FixKind::empty(), Some(&timings));
+        let diags = linter.run(&parse, luau_library(), FixKind::empty(), Some(&timings));
         assert_eq!(diags.len(), 3, "{diags:?}");
         let mut calls: Vec<(&str, u64)> =
             timings.sorted().iter().map(|timing| (timing.rule.name(), timing.calls)).collect();

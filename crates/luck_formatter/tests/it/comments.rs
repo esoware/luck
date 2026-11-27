@@ -2004,3 +2004,20 @@ local y = if a
 ",
     );
 }
+
+/// An attribute spans to the end of its arguments, so a comment after them
+/// that stayed outside its `]` would lead what follows the next time.
+#[test]
+fn a_comment_after_an_attribute_s_arguments_stays_inside_its_brackets() {
+    assert_format(
+        "@[deprecated {use = 'a'} --[[c]] ] function f() end",
+        "\
+@[deprecated({ use = \"a\" } --[[c]])]
+function f() end
+",
+    );
+    assert_format(
+        "local f = @[deprecated() --[[c]], native --[[d]] ] function() end",
+        "local f = @[deprecated(--[[c]])] @native --[[d]] function() end\n",
+    );
+}

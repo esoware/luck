@@ -196,7 +196,6 @@ fn bundle_at_the_nesting_cap_reads_back() {
         &["bundle", "main.luau", "-o", "bundle.luau"][..],
         &["bundle", "main.luau", "--minify", "-o", "minified.luau"],
         &["lint", "bundle.luau", "minified.luau"],
-        &["check", "bundle.luau", "minified.luau"],
         &["fmt", "bundle.luau", "minified.luau"],
     ] {
         let output = run(directory.path(), args);
@@ -208,14 +207,22 @@ fn bundle_at_the_nesting_cap_reads_back() {
             stderr_text(&output)
         );
     }
+
+    // Luau's own parser, which the type checker runs, stops past 1,000 of its
+    // levels, fewer than these tables take.
+    let output = run(directory.path(), &["check", "bundle.luau", "minified.luau"]);
+    let stderr = stderr_text(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("[E008]").count(), 2, "{stderr}");
+    assert!(stderr.contains("Exceeded allowed recursion depth"), "{stderr}");
 }
 
 #[test]
 fn bundle_reports_a_module_too_deep_to_wrap_in_that_module() {
     let directory = deep_module_project(MAX_NESTING_DEPTH - 1);
     // The first table the wrapper pushes past the cap follows `return ` and
-    // the tables before it.
-    let first_too_deep = format!("deep.luau:1:{} ", "return ".len() + MAX_NESTING_DEPTH - 2);
+    // the tables before it, on a line too long for a snippet.
+    let first_too_deep = format!("deep.luau: byte {})", "return ".len() + MAX_NESTING_DEPTH - 3);
 
     for args in [&["bundle", "main.luau"][..], &["bundle", "main.luau", "--minify"]] {
         let output = run(directory.path(), args);

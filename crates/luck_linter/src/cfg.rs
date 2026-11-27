@@ -359,6 +359,7 @@ impl<'ast> GraphBuilder<'_, 'ast> {
             | Statement::LocalFunction(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => {
                 self.simple(stmt.span());
             }

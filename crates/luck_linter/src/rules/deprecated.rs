@@ -1,22 +1,19 @@
-use luck_allocator::Allocator;
-use luck_ast::{
-    AstKind, AstType, Call, Expression, GetSpan as _, Statement, Suffix, SuffixedExpression,
-};
+use luck_ast::{AstKind, AstType, Call, GetSpan as _, is_valid_identifier};
 use luck_diagnostics::Tag;
 use luck_semantic::{AstNode, AstTypesBitset};
-use luck_stdlib::{
-    ResolvedCallee, SemanticAnalysis, StdlibEntry, StdlibFunction, expand_replace_template,
-};
-use luck_token::{index_to_offset, is_luau_whitespace};
+use luck_stdlib::{ResolvedCallee, SemanticAnalysis, StdlibReplacement};
 
-use crate::call::CallArgs;
+use crate::call::{CallArg, CallArgs};
 use crate::context::{ContextHost, LintContext};
 use crate::diagnostic::Finding;
 use crate::fix::{Fix, FixKind, RuleFixer};
 use crate::rule::{Rule, declare_lint_rule};
 
-/// A replacement the catalog marks exact is a fix, and any other one a
-/// suggestion.
+/// A deprecation whose `use` names what to call instead puts it in the
+/// callee's place as a suggestion, since a definition can't say the
+/// replacement behaves the same, but only in a call that the types the
+/// definition file declares for both say the replacement takes, and whose
+/// values the code drops unless it returns the same.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Deprecated;
 
@@ -24,8 +21,8 @@ declare_lint_rule!(
     Deprecated,
     Correctness,
     Warning,
-    "use of a deprecated standard library function, argument, or value",
-    fix = Fix | Suggestion
+    "use of a deprecated standard library function",
+    fix = Suggestion
 );
 
 impl Rule for Deprecated {
@@ -35,267 +32,89 @@ impl Rule for Deprecated {
         let AstKind::SuffixedExpression(chain) = node.kind() else {
             return;
         };
-        let statement_call = context.statement_call(node);
+        let dropped = context.dropped_call(node);
         for (index, call) in chain.calls() {
             if let Some(callee) = context.callee(node, index) {
-                check_call(call, callee, statement_call == Some(index), context);
+                check_call(call, &callee, dropped != Some(index), context);
             }
         }
-        check_field_accesses(node, chain, context);
     }
 }
 
 fn check_call(
     call: Call<'_>,
-    callee: ResolvedCallee<'_>,
-    is_statement: bool,
+    callee: &ResolvedCallee<'_>,
+    is_value_used: bool,
     context: &LintContext<'_, '_>,
 ) {
-    let entry = callee.entry();
-
-    if let Some(deprecation) = entry.deprecation() {
-        let name = callee.name();
-        let finding = Finding::new(format!("`{name}` is deprecated"), call.span())
-            .with_tag(Tag::Deprecated)
-            .with_help(deprecation.message.to_owned());
-        context.diagnostic(match deprecation.replacement {
-            Some(replacement) => {
-                let kind = if replacement.is_exact { FixKind::Fix } else { FixKind::Suggestion };
-                finding.with_fix(context, kind, |fixer| {
-                    replacement_fix(
-                        fixer,
-                        call,
-                        entry,
-                        is_statement,
-                        &name,
-                        replacement.template,
-                        context,
-                    )
-                })
-            }
-            None => finding,
-        });
+    let Some(deprecation) = callee.entry().deprecation() else {
         return;
+    };
+    let name = callee.name();
+    let mut finding =
+        Finding::new(format!("`{name}` is deprecated"), call.span()).with_tag(Tag::Deprecated);
+    if let Some(replacement) = deprecation.r#use {
+        finding = finding.with_help(format!("use `{replacement}` instead"));
     }
-
-    if let StdlibEntry::Function(function) = entry {
-        for finding in deprecated_constants(call, &callee, function)
-            .chain(deprecated_params(call, &callee, function))
-        {
-            context.diagnostic(finding);
-        }
+    if let Some(reason) = deprecation.reason {
+        finding = finding.with_note(reason.to_owned());
     }
+    let takes_call = deprecation
+        .replacement
+        .is_some_and(|replacement| takes_call(&replacement, call, is_value_used));
+    context.diagnostic(match deprecation.r#use.filter(|_| takes_call) {
+        Some(replacement) => finding.with_fix(context, FixKind::Suggestion, |fixer| {
+            replacement_fix(fixer, call, &name, replacement, context)
+        }),
+        None => finding,
+    });
 }
 
-/// Flags each argument in a position that every signature matching the
-/// call's arity marks deprecated, like the `parent` of `Instance.new`.
-///
-/// Any expression counts, since passing that argument at all is the problem.
-fn deprecated_params(
-    call: Call<'_>,
-    callee: &ResolvedCallee<'_>,
-    function: &StdlibFunction<'_>,
-) -> impl Iterator<Item = Finding> {
+/// Whether `replacement` takes `call` in the deprecated function's place: a
+/// call of its form, a method's or not, of as many arguments as it takes,
+/// which no last argument can make more or fewer, and whose values the code
+/// drops unless `replacement` returns the same.
+fn takes_call(replacement: &StdlibReplacement, call: Call<'_>, is_value_used: bool) -> bool {
     let args = CallArgs::new(call.args);
-    let arg_count = args.len();
-    args.enumerate().filter_map(move |(index, arg)| {
-        let mut deprecations = function
-            .matching_signatures(arg_count)
-            .map(|signature| signature.params.get(index)?.deprecated.as_ref());
-        // The first signature's deprecation speaks for all of them.
-        let deprecation = deprecations.next().flatten()?;
-        deprecations.all(|later| later.is_some()).then(|| {
-            let arg_number = index + 1;
-            Finding::new(
-                format!("argument {arg_number} of `{}` is deprecated", callee.name()),
-                arg.span(),
-            )
-            .with_tag(Tag::Deprecated)
-            .with_help(deprecation.message.to_owned())
-        })
-    })
+    replacement.is_method == call.method.is_some()
+        && !args.clone().last().is_some_and(CallArg::is_multi_value)
+        && replacement.takes(args.len(), is_value_used)
 }
 
-/// Flags each literal string argument that's a deprecated constant, like a
-/// dead service name in `game:GetService(...)`.
-///
-/// Only positions that every signature matching the call's arity limits to
-/// constants are checked.
-fn deprecated_constants(
-    call: Call<'_>,
-    callee: &ResolvedCallee<'_>,
-    function: &StdlibFunction<'_>,
-) -> impl Iterator<Item = Finding> {
-    let args = CallArgs::new(call.args);
-    let arg_count = args.len();
-    args.enumerate().filter_map(move |(index, arg)| {
-        let (value, span) = arg.string_literal_value()?;
-        // Each signature's first constant spelled `value` counts, and the
-        // first of those that's deprecated decides.
-        let deprecation = function
-            .allowed_constants(index, arg_count)?
-            .filter_map(|values| values.iter().find(|constant| constant.value == value))
-            .find_map(|constant| constant.deprecated.as_ref())?;
-        Some(
-            Finding::new(
-                format!("`{value}` is a deprecated argument of `{}`", callee.name()),
-                span,
-            )
-            .with_tag(Tag::Deprecated)
-            .with_help(deprecation.message.to_owned()),
-        )
-    })
-}
-
-/// The replacement `template` filled in with the call's argument text, or
-/// `None` when the result can't stand where the call does.
+/// `replacement` in the callee's place: a method's name for a method call,
+/// or a dotted path of names for any other, or `None` when it's neither, or
+/// when its first name may not be the host's global there.
 fn replacement_fix(
     fixer: RuleFixer,
     call: Call<'_>,
-    entry: &StdlibEntry<'_>,
-    is_statement: bool,
     name: &str,
-    template: &str,
+    replacement: &str,
     context: &ContextHost<'_>,
 ) -> Option<Fix> {
-    let StdlibEntry::Function(function) = entry else {
-        return None;
+    let span = if let Some(method) = call.method {
+        if !is_valid_identifier(replacement) {
+            return None;
+        }
+        method.span
+    } else {
+        if !replacement.split('.').all(is_valid_identifier)
+            || is_rebound(replacement, call.span().start, context.semantic)
+        {
+            return None;
+        }
+        call.callee.span()
     };
-    let args = CallArgs::new(call.args);
-    // A template spells the positional arguments, which a method's receiver
-    // isn't among.
-    if call.method.is_some() || !function.accepts_arg_count(args.len()) {
-        return None;
-    }
-    let arg_texts: Vec<&[u8]> = args.map(|arg| arg.span().text(context.source)).collect();
-    let expanded = expand_replace_template(template, &arg_texts);
-    if starts_with_rebound_name(&expanded, call.span().start, context.semantic) {
-        return None;
-    }
-    let replacement = fit_to_position(expanded, call.span().end, is_statement, context)?;
-    let message =
-        format!("replace deprecated `{name}` with `{}`", String::from_utf8_lossy(&replacement));
-    Some(fixer.replace(message, call.span(), replacement))
+    let message = format!("replace deprecated `{name}` with `{replacement}`");
+    Some(fixer.replace(message, span, replacement.as_bytes().to_vec()))
 }
 
-/// Whether the name `expanded` starts with may not be the host's global at
+/// Whether the name `path` starts with may not be the host's global at
 /// `offset`, because a local before it or a write in the chunk rebinds it.
-fn starts_with_rebound_name(expanded: &[u8], offset: u32, semantic: &SemanticAnalysis<'_>) -> bool {
-    let name_length = expanded
-        .iter()
-        .position(|&b| !b.is_ascii_alphanumeric() && b != b'_')
-        .unwrap_or(expanded.len());
-    let name = str::from_utf8(&expanded[..name_length]).expect("a name's bytes are ASCII");
+fn is_rebound(path: &str, offset: u32, semantic: &SemanticAnalysis<'_>) -> bool {
+    let name = path.split('.').next().unwrap_or(path);
     let tree = semantic.scoping();
-    !name.is_empty()
-        && (tree.nearest_local(name, offset).is_some()
-            || tree.name_id(name).is_some_and(|id| tree.is_assigned_global(id)))
-}
-
-/// `expanded` as it must read where the call stood, a statement when
-/// `is_statement`, or `None` if it doesn't parse there.
-///
-/// Parsing inside a block keeps a leading `#` from reading as a shebang
-/// line.
-fn fit_to_position(
-    expanded: Vec<u8>,
-    call_end: u32,
-    is_statement: bool,
-    context: &ContextHost<'_>,
-) -> Option<Vec<u8>> {
-    let allocator = Allocator::new();
-    if is_statement {
-        let statement = [&b"do "[..], &expanded, b" end"].concat();
-        let parse = luck_parser::parse(&allocator, &statement);
-        return parse.errors.is_empty().then_some(expanded);
-    }
-    let return_stmt = [&b"return "[..], &expanded].concat();
-    let parse = luck_parser::parse(&allocator, &return_stmt);
-    if !parse.errors.is_empty() {
-        return None;
-    }
-    let is_unary = matches!(
-        &*parse.chunk.stmts,
-        [Statement::Return(returned)]
-            if matches!(returned.exprs.first(), Some(Expression::UnaryOp(_)))
-    );
-    // A unary expression stops at an operator binding looser than it, but
-    // not at `^` or a suffix, which would capture only its operand.
-    let should_group = is_unary && is_followed_by_tighter_binding(call_end, context);
-    Some(if should_group { [&b"("[..], &expanded, b")"].concat() } else { expanded })
-}
-
-/// Whether the next token after `offset` binds tighter than a unary operator:
-/// `^`, or a suffix that continues the expression.
-fn is_followed_by_tighter_binding(offset: u32, context: &ContextHost<'_>) -> bool {
-    let bytes = context.source;
-    let mut index = offset as usize;
-    loop {
-        index += bytes[index..].iter().take_while(|&&b| is_luau_whitespace(b)).count();
-        let found = context
-            .comments
-            .binary_search_by_key(&index_to_offset(index), |comment| comment.span.start)
-            .ok()
-            .map(|position| &context.comments[position]);
-        let Some(comment) = found else {
-            break;
-        };
-        index = comment.span.end as usize;
-    }
-    match &bytes[index..] {
-        // `..` concatenates, which binds looser than a unary operator.
-        [b'.', second, ..] => *second != b'.',
-        [b'^' | b':' | b'[' | b'(' | b'{' | b'"' | b'\'', ..] => true,
-        _ => false,
-    }
-}
-
-/// Flags each dotted read in the field run `chain` starts with that resolves
-/// to a deprecated constant, property, or namespace.
-///
-/// That includes a deprecated Roblox enum item or type. Each read checks its
-/// own entry, so a chain whose prefix is deprecated warns once. Functions are
-/// skipped because `check_call` reports them at the call.
-fn check_field_accesses(
-    node: &AstNode<'_>,
-    chain: &SuffixedExpression<'_>,
-    context: &LintContext<'_, '_>,
-) {
-    let semantic = context.semantic;
-    let (Expression::Name(root), Suffix::Field(_)) = (&chain.prefix, chain.suffixes.first()) else {
-        return;
-    };
-    if !semantic.scoping().reaches_host_global(root) {
-        return;
-    }
-    let stdlib = semantic.stdlib();
-    let Some(mut entry) = stdlib.globals.get(root.text.as_str()) else {
-        return;
-    };
-    for (read_index, suffix) in (1..).zip(context.read_suffixes(node)) {
-        let Suffix::Field(name) = suffix else {
-            return;
-        };
-        // Nothing past an unknown path resolves either.
-        let Some(member) = stdlib.child(entry, name.text.as_str()) else {
-            return;
-        };
-        entry = member;
-        if matches!(entry, StdlibEntry::Function(_)) {
-            continue;
-        }
-        if let Some(deprecation) = entry.deprecation() {
-            let path = chain
-                .head(read_index)
-                .dotted_path()
-                .expect("every suffix read so far is a field of a name");
-            context.diagnostic(
-                Finding::new(format!("`{path}` is deprecated"), name.span)
-                    .with_tag(Tag::Deprecated)
-                    .with_help(deprecation.message.to_owned()),
-            );
-        }
-    }
+    tree.nearest_local(name, offset).is_some()
+        || tree.name_id(name).is_some_and(|id| tree.is_assigned_global(id))
 }
 
 #[cfg(test)]
@@ -307,62 +126,84 @@ mod tests {
         // The type of `obj` is unknown, so `getn` doesn't resolve to a stdlib
         // entry.
         "obj:getn()",
+        "local n = #t",
     ];
 
     const FAIL: &[&str] = &[
-        // Only a suggestion, since `#` calls `__len`.
+        // Luau's library reference says what to do instead, but names no
+        // function.
         "local n = table.getn(t)",
         "table.foreach(t, print)",
         "table.foreachi(t, print)",
-        "local n = table.getn(f(--[[why]] t))",
-        // The fix should take the length of the whole argument.
-        "local r = table.getn(a or b)",
-        // `#t ^ 2` takes the length of `t ^ 2`, not the square of the length.
-        "local r = table.getn(t) ^ 2",
-        // `#t` can't stand as a statement.
-        "\
-local a = 1
-table.getn(t)",
-        "local r = table.getn(t).x",
-        "local r = table.getn(t) .. 'x'",
-        // The fix would drop the comment.
-        "local r = table.getn(t --[[why]])",
     ];
 
     const ROBLOX_PASS: &[&str] = &[
         "local p = game:GetService('Players')",
-        "local p = Instance.new('Part')",
-        "\
-local Enum = {}
-local a = Enum.AlignType.Parallel",
-        "\
-Enum = {}
-local a = Enum.AlignType.Parallel",
+        "local p = Instance.new('Part', workspace)",
+        "task.wait(1)",
     ];
 
     const ROBLOX_FAIL: &[&str] = &[
         "wait(1)",
-        "ypcall(f)",
-        // The fix shouldn't drop the arguments the template doesn't name.
-        "local ok = ypcall(f, 1, 2)",
+        // `task.wait` returns one number, where `wait` returns two.
+        "local elapsed = wait(1)",
+        // The last argument can be any number of values.
+        "wait(duration())",
+        "delay(1, f)",
+        // `delay` takes two arguments at most.
         "delay(1, f, 'x')",
-        "local ok = ypcall(g(--[[why]] f))",
-        "local s = stats()",
-        "local n = collectgarbage('count')",
-        "local p = game:GetService('PointsService')",
-        "local p = game:GetService'PointsService'",
-        "local p = Instance.new('Part', workspace)",
-        "local a = Enum.AlignType.Parallel",
+        "spawn(f)",
+        // `task.spawn` returns a thread, where `spawn` returns nothing.
+        "local thread = spawn(f)",
         // `task.wait` would read the local `task`, so there's no fix.
         "\
 local task = {}
 wait(1)",
+        "ypcall(f)",
+        "local s = stats()",
+        "local n = collectgarbage('count')",
+        "local children = script:children()",
+        "local child = workspace:findFirstChild('x')",
+        // `GetPartBoundsInBox` takes a `CFrame` and a size, and returns a
+        // table, which is always truthy.
+        "if workspace:IsRegion3Empty(region) then end",
+        "workspace:FindPartsInRegion3(region, ignore, 10)",
+        // `Raycast` takes an origin and a direction.
+        "local hit = workspace:FindPartOnRay(ray)",
+    ];
+
+    const DEFINITIONS: &str = r#"
+declare app: { start: () -> (), stop: (code: number) -> (), open: (path: string) -> () }
+@[deprecated {use = "app.start", reason = "begin was renamed"}] declare function begin()
+@[deprecated {use = "the start function"}] declare function launch()
+@[deprecated {use = "app.stop"}] declare function halt()
+@[deprecated {use = "app.open"}] declare function load(path: number)
+@[deprecated {use = "print"}] declare function log(...: any)
+declare extern type Door with
+    @[deprecated {use = "Open"}] function open(self): ()
+    function Open(self): ()
+end
+declare door: Door
+"#;
+
+    const DEFINITIONS_FAIL: &[&str] = &[
+        "begin()",
+        "launch()",
+        // `app.stop` needs a code.
+        "halt()",
+        // `app.open` takes a string.
+        "load(1)",
+        // The file that deprecates `log` doesn't declare `print`, so it can't
+        // say what `print` takes.
+        "log('x')",
+        "door:open()",
     ];
 
     #[test]
     fn test() {
         Tester::new(RuleId::Deprecated, PASS, FAIL)
             .with_roblox(ROBLOX_PASS, ROBLOX_FAIL)
+            .with_definitions(DEFINITIONS, &[], DEFINITIONS_FAIL)
             .test_and_snapshot();
     }
 }

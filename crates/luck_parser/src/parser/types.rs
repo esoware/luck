@@ -34,6 +34,15 @@ enum Packs {
     Rejected,
 }
 
+/// Where a table type is read, which decides whether a function type in a
+/// named field's type takes attributes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Context {
+    Annotation,
+    /// In the type a definition file's `declare name: T` gives.
+    Declaration,
+}
+
 impl<'ast> Parser<'ast> {
     /// Parse `: T` if present, on a binding that takes a single type.
     #[inline]
@@ -280,6 +289,64 @@ impl<'ast> Parser<'ast> {
         Type::Optional(optional)
     }
 
+    /// The type a definition file's `declare name: T` gives, where Luau's
+    /// `inDeclarationContext` takes attributes on a function type at its top
+    /// and, as deep as they nest, in a table type's named fields. A union's
+    /// later members are no such place.
+    pub(super) fn parse_declared_type(&mut self) -> Type<'ast> {
+        if !matches!(self.peek(), TokenKind::At | TokenKind::LeftBrace) {
+            return self.parse_type();
+        }
+        let outer = self.begin_operand();
+        let primary = if self.is_at(TokenKind::At) {
+            self.parse_attributed_function_type()
+        } else {
+            self.parse_table_type(Context::Declaration)
+        };
+        let ty = self.parse_union_level(primary);
+        self.end_operand(outer);
+        ty
+    }
+
+    /// `@checked (x: T) -> R` or `@checked <T>(x: T) -> R`, or a lone
+    /// `(T)`, which Luau's `parseFunctionType` reads as a parenthesized type
+    /// when no `->` follows it, dropping the attributes, which the tree
+    /// keeps.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
+    fn parse_attributed_function_type(&mut self) -> Type<'ast> {
+        let start = self.token.span;
+        if !self.enter_depth() {
+            return Type::Error(start);
+        }
+        let attributes = self.parse_function_attributes();
+        let parsed = match self.peek() {
+            TokenKind::Less => {
+                let generics = self.parse_generic_type_list(GenericsOwner::Function);
+                self.parse_function_type(generics)
+            }
+            TokenKind::LeftParen => self.parse_paren_or_function_members(Packs::Rejected),
+            _ => {
+                self.report_unexpected("expected `(` after attributes");
+                Type::Error(self.token.span)
+            }
+        };
+        self.exit_depth();
+        match parsed {
+            Type::Function(mut function_type) => {
+                function_type.span = start.merge(function_type.span);
+                function_type.attributes = attributes;
+                Type::Function(function_type)
+            }
+            Type::Parenthesized(mut parenthesized) => {
+                parenthesized.span = start.merge(parenthesized.span);
+                parenthesized.attributes = attributes;
+                Type::Parenthesized(parenthesized)
+            }
+            // An error, which is reported already.
+            other => other,
+        }
+    }
+
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     fn parse_primary_type(&mut self) -> Type<'ast> {
         match self.peek() {
@@ -293,7 +360,7 @@ impl<'ast> Parser<'ast> {
             TokenKind::True => Type::True(self.advance()),
             TokenKind::False => Type::False(self.advance()),
             TokenKind::StringLiteral => Type::StringLiteral(self.advance_string()),
-            TokenKind::LeftBrace => self.parse_table_type(),
+            TokenKind::LeftBrace => self.parse_table_type(Context::Annotation),
             TokenKind::LeftParen => self.parse_paren_or_function_type(Packs::Rejected),
             // `<T>(...) -> R` is a generic function type.
             TokenKind::Less => {
@@ -475,7 +542,7 @@ impl<'ast> Parser<'ast> {
         }
     }
 
-    fn parse_table_type(&mut self) -> Type<'ast> {
+    fn parse_table_type(&mut self, context: Context) -> Type<'ast> {
         let open = self.token.span;
         if !self.enter_depth() {
             return Type::Error(open);
@@ -485,7 +552,7 @@ impl<'ast> Parser<'ast> {
         let start = self.scratch.type_fields.len();
         let mut has_trailing_separator = false;
         while !matches!(self.peek(), TokenKind::RightBrace | TokenKind::Eof) {
-            self.parse_type_field();
+            self.parse_type_field(context);
             has_trailing_separator = matches!(self.peek(), TokenKind::Comma | TokenKind::Semicolon);
             if !has_trailing_separator {
                 break;
@@ -512,15 +579,7 @@ impl<'ast> Parser<'ast> {
         for field in fields {
             match field {
                 TypeField::Indexer { span, key, .. } => {
-                    // `["a"]: T` is a named field, as `parseTableType` builds it.
-                    if let Type::StringLiteral(literal) = key {
-                        // The lexer reports a malformed escape on its own.
-                        if literal.value.contains(&0) {
-                            self.error(
-                                *span,
-                                "string literal contains malformed escape sequence or `\\0`",
-                            );
-                        }
+                    if matches!(key, Type::StringLiteral(_)) {
                         continue;
                     }
                     if has_seen_indexer {
@@ -546,7 +605,7 @@ impl<'ast> Parser<'ast> {
     }
 
     /// Parse one field onto the table type being parsed.
-    fn parse_type_field(&mut self) {
+    fn parse_type_field(&mut self, context: Context) {
         // `read`/`write` is a modifier unless `:` follows it; `{ read: number }`
         // has a field named `read`.
         let access = if self.peek_next() == TokenKind::Colon {
@@ -561,18 +620,14 @@ impl<'ast> Parser<'ast> {
         let access_span = access.map(|_| self.advance());
 
         let field = if self.is_at(TokenKind::LeftBracket) {
-            let open = self.advance();
-            self.open(Closer::Bracket);
-            let key = self.parse_type();
-            self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
-            self.expect(TokenKind::Colon);
-            let value = self.parse_type();
-            let span = access_span.unwrap_or(open).merge(value.span());
-            TypeField::Indexer { span, access, key, value }
+            self.parse_type_indexer(access_span, access)
         } else if self.is_at_name() && self.peek_next() == TokenKind::Colon {
             let name = self.advance_name();
             self.advance();
-            let value = self.parse_type();
+            let value = match context {
+                Context::Annotation => self.parse_type(),
+                Context::Declaration => self.parse_declared_type(),
+            };
             let span = access_span.unwrap_or(name.span).merge(value.span());
             TypeField::Named { span, access, name, value }
         } else {
@@ -581,6 +636,30 @@ impl<'ast> Parser<'ast> {
             TypeField::Array { span, access, value }
         };
         self.scratch.type_fields.push(field);
+    }
+
+    /// `[K]: V`, at its `[`, spanning from `start` when an access opens it.
+    /// `["name"]: T` is a named field, as Luau's `parseTableType` builds it,
+    /// so its key can't hold a `\0`.
+    pub(super) fn parse_type_indexer(
+        &mut self,
+        start: Option<Span>,
+        access: Option<TypeFieldAccess>,
+    ) -> TypeField<'ast> {
+        let open = self.advance();
+        self.open(Closer::Bracket);
+        let key = self.parse_type();
+        self.expect_closer(TokenKind::RightBracket, Closer::Bracket, open);
+        self.expect(TokenKind::Colon);
+        let value = self.parse_type();
+        let span = start.unwrap_or(open).merge(value.span());
+        // The lexer reports a malformed escape on its own.
+        if let Type::StringLiteral(literal) = &key
+            && literal.value.contains(&0)
+        {
+            self.error(span, "string literal contains malformed escape sequence or `\\0`");
+        }
+        TypeField::Indexer { span, access, key, value }
     }
 
     /// Parse a parenthesized type `(T)`, a function type `(a: T, ...U) -> R`,
@@ -632,7 +711,8 @@ impl<'ast> Parser<'ast> {
                 List::split_off_in(&mut self.scratch.function_type_params, start, self.allocator);
             let return_type = self.parse_return_type();
             let span = open.merge(return_type.span());
-            return Type::new_function(span, None, params, return_type, self.allocator);
+            let attributes = List::new();
+            return Type::new_function(span, attributes, None, params, return_type, self.allocator);
         }
         self.finish_paren_or_pack(open.merge(close), start, packs)
     }
@@ -651,7 +731,7 @@ impl<'ast> Parser<'ast> {
             && !matches!(single.ty, Type::Variadic(_) | Type::GenericPack(_))
         {
             let param = params.pop().expect("the match holds one member");
-            Type::new_parenthesized(span, param.ty, self.allocator)
+            Type::new_parenthesized(span, List::new(), param.ty, self.allocator)
         } else if packs == Packs::Allowed {
             let types_start = self.scratch.types.len();
             self.scratch.types.extend(params.drain(start..).map(|param| param.ty));

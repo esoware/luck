@@ -1,31 +1,29 @@
 use crate::stdlib_map::StdlibMap;
-use crate::variant::Variant;
 
 /// Each variant holds a reference, so an entry is two words, and a table of
 /// them stays dense for the lookups that scan it.
 #[derive(Debug, Clone, Copy)]
 pub enum StdlibEntry<'lib> {
     Function(&'lib StdlibFunction<'lib>),
-    Constant(&'lib StdlibValue<'lib>),
-    Property(&'lib StdlibValue<'lib>),
+    Value(&'lib StdlibValue<'lib>),
     Namespace(&'lib StdlibNamespace<'lib>),
 }
 
 impl<'lib> StdlibEntry<'lib> {
+    /// Only a function can be deprecated, since a definition file's
+    /// attributes go only on functions.
     pub const fn deprecation(&self) -> Option<&'lib StdlibDeprecation<'lib>> {
         match *self {
             Self::Function(function) => function.deprecated.as_ref(),
-            Self::Constant(value) | Self::Property(value) => value.deprecated.as_ref(),
-            Self::Namespace(namespace) => namespace.deprecated.as_ref(),
+            Self::Value(_) | Self::Namespace(_) => None,
         }
     }
 
-    /// A namespace is always read-only, even when a member isn't.
     pub const fn is_read_only(&self) -> bool {
         match self {
             Self::Function(function) => function.is_read_only,
-            Self::Constant(value) | Self::Property(value) => value.is_read_only,
-            Self::Namespace(_) => true,
+            Self::Value(value) => value.is_read_only,
+            Self::Namespace(namespace) => namespace.is_read_only,
         }
     }
 
@@ -33,7 +31,7 @@ impl<'lib> StdlibEntry<'lib> {
     /// none; `returns_shape` is the shape of its call's result.
     pub const fn shape(&self) -> Option<&'lib str> {
         match self {
-            Self::Constant(value) | Self::Property(value) => value.shape,
+            Self::Value(value) => value.shape,
             Self::Namespace(namespace) => namespace.shape,
             Self::Function(_) => None,
         }
@@ -42,11 +40,8 @@ impl<'lib> StdlibEntry<'lib> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibFunction<'lib> {
-    /// At least one, in definition order. The first is the primary form,
-    /// shown where only one fits.
+    /// At least one, in definition order.
     pub signatures: &'lib [StdlibSignature<'lib>],
-    pub is_pure: bool,
-    pub is_must_use: bool,
     pub deprecated: Option<StdlibDeprecation<'lib>>,
     pub is_read_only: bool,
     /// Colon-callable on its shape. No signature counts `self` among its
@@ -75,13 +70,6 @@ impl<'lib> StdlibFunction<'lib> {
         self.signatures.iter().any(|signature| signature.accepts(count))
     }
 
-    pub fn matching_signatures(
-        &self,
-        count: usize,
-    ) -> impl Iterator<Item = &'lib StdlibSignature<'lib>> + Clone {
-        self.signatures.iter().filter(move |signature| signature.accepts(count))
-    }
-
     /// The constants that parameter `index` allows in each signature that
     /// accepts a call with `count` arguments, one list per signature in
     /// definition order.
@@ -93,8 +81,9 @@ impl<'lib> StdlibFunction<'lib> {
         &self,
         index: usize,
         count: usize,
-    ) -> Option<impl Iterator<Item = &'lib [StdlibConstant<'lib>]> + Clone> {
-        let sets = self.matching_signatures(count).map(move |signature| {
+    ) -> Option<impl Iterator<Item = &'lib [&'lib str]> + Clone> {
+        let matching = self.signatures.iter().filter(move |signature| signature.accepts(count));
+        let sets = matching.map(move |signature| {
             let StdlibArgKind::Constant(values) = signature.params.get(index)?.kind else {
                 return None;
             };
@@ -105,58 +94,32 @@ impl<'lib> StdlibFunction<'lib> {
             checked.next().is_some_and(|set| set.is_some()) && checked.all(|set| set.is_some());
         is_constrained.then(|| sets.flatten())
     }
-
-    pub const fn primary_signature(&self) -> &'lib StdlibSignature<'lib> {
-        &self.signatures[0]
-    }
-
-    /// Index of the signature to highlight when the cursor sits on
-    /// parameter `active_param`: the first signature with a slot at
-    /// that position, else the last.
-    pub fn signature_index_for_active_param(&self, active_param: usize) -> usize {
-        self.signatures
-            .iter()
-            .position(|signature| {
-                active_param < signature.params.len()
-                    || signature
-                        .params
-                        .last()
-                        .is_some_and(|param| matches!(param.kind, StdlibArgKind::Vararg))
-            })
-            .unwrap_or_else(|| self.signatures.len() - 1)
-    }
 }
 
-/// One form of a function's call: its required params, then its optional
-/// ones, then at most one vararg, and the arities [`Self::new`] counts from
-/// them.
+/// One form of a function's call: its params, of which only the last can be
+/// a vararg, and the arities they allow.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibSignature<'lib> {
     pub params: &'lib [StdlibParam<'lib>],
+    /// Through the last required param, since a call can leave out only the
+    /// optional ones after it.
     pub min_args: usize,
     /// `None` when a trailing vararg leaves it unbounded.
     pub max_args: Option<usize>,
 }
 
 impl<'lib> StdlibSignature<'lib> {
-    pub const fn new(params: &'lib [StdlibParam<'lib>]) -> Self {
-        let mut min_args = 0;
-        let mut max_args = Some(params.len());
-        let mut remaining = params;
-        while let [param, rest @ ..] = remaining {
-            let is_vararg = matches!(param.kind, StdlibArgKind::Vararg);
-            if is_vararg {
-                max_args = None;
-            }
-            if param.is_required && !is_vararg {
-                min_args += 1;
-            }
-            remaining = rest;
-        }
+    pub(crate) fn new(params: &'lib [StdlibParam<'lib>]) -> Self {
+        let is_vararg = |param: &StdlibParam<'_>| matches!(param.kind, StdlibArgKind::Vararg);
+        let min_args = params
+            .iter()
+            .rposition(|param| param.is_required && !is_vararg(param))
+            .map_or(0, |last| last + 1);
+        let max_args = (!params.last().is_some_and(is_vararg)).then_some(params.len());
         Self { params, min_args, max_args }
     }
 
-    pub fn accepts(&self, count: usize) -> bool {
+    fn accepts(&self, count: usize) -> bool {
         count >= self.min_args && self.max_args.is_none_or(|max| count <= max)
     }
 }
@@ -166,73 +129,95 @@ pub struct StdlibParam<'lib> {
     pub kind: StdlibArgKind<'lib>,
     /// Never set on a vararg.
     pub is_required: bool,
-    /// Set when passing this parameter at all is deprecated (e.g. the
-    /// `parent` argument of `Instance.new`).
-    pub deprecated: Option<StdlibDeprecation<'lib>>,
 }
 
+/// What a param takes, as far as the library reads it.
 #[derive(Debug, Clone, Copy)]
 pub enum StdlibArgKind<'lib> {
-    Any,
-    Bool,
-    Number,
+    /// A `string`, which, taken first, makes a `string` function a method of
+    /// strings.
     String,
-    Function,
-    Table,
-    /// A type with no variant of its own, e.g. "buffer" or "thread". The
-    /// string is only a display label.
-    Display(&'lib str),
-    /// A fixed set of string literals, e.g. the options of
-    /// `collectgarbage`.
-    Constant(&'lib [StdlibConstant<'lib>]),
+    /// A fixed set of string literals, e.g. the formats of `os.date`.
+    Constant(&'lib [&'lib str]),
     /// `...`, matching zero or more values of any type.
     Vararg,
+    /// Any other type.
+    Other,
 }
 
-/// One allowed value of a `Constant`-kind parameter. Individual values
-/// can be deprecated, as Roblox's deprecated classes are.
-#[derive(Debug, Clone, Copy)]
-pub struct StdlibConstant<'lib> {
-    pub value: &'lib str,
-    pub deprecated: Option<StdlibDeprecation<'lib>>,
-    /// A curated common value, which completion lists first (e.g.
-    /// `Players` among 300+ Roblox services).
-    pub is_common: bool,
-}
-
+/// What a function's `@[deprecated {use = "...", reason = "..."}]` says, each
+/// part as the definition gives it.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibDeprecation<'lib> {
-    pub message: &'lib str,
-    pub replacement: Option<StdlibReplacement<'lib>>,
+    /// What to call instead, as `task.wait`, or a method's name.
+    pub r#use: Option<&'lib str>,
+    pub reason: Option<&'lib str>,
+    /// Which calls `use` takes in the deprecated function's place, when the
+    /// definition file that deprecates the function declares `use` too.
+    pub replacement: Option<StdlibReplacement>,
 }
 
-/// The call that replaces a call to a deprecated function.
-#[derive(Debug, Clone, Copy)]
-pub struct StdlibReplacement<'lib> {
-    /// The new call, with placeholders for the old call's arguments, as
-    /// [`expand_replace_template`](crate::expand_replace_template) reads them.
-    pub template: &'lib str,
-    /// Whether the new call returns what the old one did for every argument
-    /// the old one accepts. Only then can a fix make it without asking.
-    pub is_exact: bool,
+/// Which calls of a deprecated function the function its `use` names takes in
+/// its place, as the types the definition file declares for both say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StdlibReplacement {
+    /// Whether `use` names a method of the deprecated method's type, or
+    /// else a path from the globals.
+    pub is_method: bool,
+    /// Bit `n` is set when the deprecated function takes `n` arguments.
+    pub(crate) accepted: u64,
+    /// Bit `n` is set when the replacement takes every `n` arguments the
+    /// deprecated function takes.
+    pub(crate) covered: u64,
+    /// The calls of `covered` whose replacement returns what the deprecated
+    /// function returns.
+    pub(crate) returning: u64,
+}
+
+impl StdlibReplacement {
+    /// Whether the replacement takes a call of `arg_count` arguments in the
+    /// deprecated function's place, returning the same values when
+    /// `is_value_used`.
+    pub const fn takes(&self, arg_count: usize, is_value_used: bool) -> bool {
+        let calls = if is_value_used { self.returning } else { self.covered };
+        arg_count < u64::BITS as usize && calls & (1 << arg_count) != 0
+    }
+
+    /// The replacement of one function that two declarations deprecate in
+    /// favor of the same function, which takes a call when the replacement
+    /// of each declaration that takes the call does.
+    pub(crate) fn both(self, other: Self) -> Option<Self> {
+        if self.is_method != other.is_method {
+            return None;
+        }
+        let accepted = self.accepted | other.accepted;
+        let in_both = |first: u64, second: u64| {
+            (first | !self.accepted) & (second | !other.accepted) & accepted
+        };
+        Some(Self {
+            is_method: self.is_method,
+            accepted,
+            covered: in_both(self.covered, other.covered),
+            returning: in_both(self.returning, other.returning),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibValue<'lib> {
     pub is_read_only: bool,
-    pub deprecated: Option<StdlibDeprecation<'lib>>,
     /// The value's shape, if it has one (e.g. `game` is a `DataModel`).
     pub shape: Option<&'lib str>,
 }
 
-/// A dotted-member container. `shape` is set when the namespace is also a
-/// value with methods, as each `Enum.<Type>` is an `Enum` with
-/// `GetEnumItems`.
+/// A dotted-member container: a table type's fields. `shape` is set when
+/// the namespace is also a value with methods, as each `Enum.<Type>` is an
+/// `Enum` with `GetEnumItems`.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibNamespace<'lib> {
     pub members: StdlibMap<'lib, StdlibEntry<'lib>>,
     pub shape: Option<&'lib str>,
-    pub deprecated: Option<StdlibDeprecation<'lib>>,
+    pub is_read_only: bool,
 }
 
 /// The members of a kind of value, such as a string or a Roblox instance.
@@ -245,33 +230,20 @@ pub struct StdlibShape<'lib> {
     pub extends: Option<&'lib str>,
 }
 
-/// A variant's standard library, built in or with std definitions layered
+/// A standard library: Luau's, with the definitions a project loads layered
 /// over it.
 #[derive(Debug, Clone, Copy)]
 pub struct StdlibLibrary<'lib> {
-    pub variant: Variant,
+    /// Whether Roblox's API is among its layers, which the Roblox rules run
+    /// on.
+    pub has_roblox: bool,
     pub globals: StdlibMap<'lib, StdlibEntry<'lib>>,
     pub shapes: StdlibMap<'lib, StdlibShape<'lib>>,
-    /// The lists of constants a std definition's params can name, such as
-    /// Roblox's service names.
-    pub constant_sets: StdlibMap<'lib, &'lib [StdlibConstant<'lib>]>,
 }
 
 impl<'lib> StdlibLibrary<'lib> {
-    /// What the generated catalogs layer their files over.
-    #[cfg(test)]
-    pub(crate) const fn empty(variant: Variant) -> Self {
-        Self {
-            variant,
-            globals: StdlibMap::EMPTY,
-            shapes: StdlibMap::EMPTY,
-            constant_sets: StdlibMap::EMPTY,
-        }
-    }
-
     /// Each step goes through a namespace's members or the shape of a
-    /// property or constant, so `["game", "GetService"]` resolves through
-    /// `game`'s shape.
+    /// value, so `["game", "GetService"]` resolves through `game`'s shape.
     pub fn lookup<Path>(&self, path: Path) -> Option<&'lib StdlibEntry<'lib>>
     where
         Path: IntoIterator,
@@ -316,68 +288,54 @@ impl<'lib> StdlibLibrary<'lib> {
         }
         None
     }
-
-    /// Every member [`Self::shape_member`] finds in `shape`, each name once.
-    pub fn shape_members(&self, shape: &str) -> Vec<(&'lib str, &'lib StdlibEntry<'lib>)> {
-        let mut members = Vec::new();
-        let mut nearer: Vec<&'lib StdlibShape<'lib>> = Vec::new();
-        let mut current = self.shapes.get(shape);
-        while let Some(found) = current
-            && nearer.len() < self.shapes.len()
-        {
-            for (name, member) in &found.members {
-                if !nearer.iter().any(|shadowing| shadowing.members.contains_key(name)) {
-                    members.push((name, member));
-                }
-            }
-            nearer.push(found);
-            current = found.extends.and_then(|base| self.shapes.get(base));
-        }
-        members
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stdlib_catalog::{FUNCTION, optional, required};
+
+    const fn param(kind: StdlibArgKind<'static>, is_required: bool) -> StdlibParam<'static> {
+        StdlibParam { kind, is_required }
+    }
 
     #[test]
-    fn a_signature_counts_its_required_params_and_a_vararg() {
-        const BOUNDED: StdlibSignature<'static> = StdlibSignature::new(&[
-            required(StdlibArgKind::Number),
-            required(StdlibArgKind::Number),
-            optional(StdlibArgKind::Number),
-        ]);
-        const UNBOUNDED: StdlibSignature<'static> = StdlibSignature::new(&[
-            required(StdlibArgKind::String),
-            optional(StdlibArgKind::Vararg),
-        ]);
-        assert_eq!((BOUNDED.min_args, BOUNDED.max_args), (2, Some(3)));
-        assert_eq!((UNBOUNDED.min_args, UNBOUNDED.max_args), (1, None));
+    fn a_signature_counts_through_its_last_required_param_and_a_vararg() {
+        let bounded = [
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, false),
+        ];
+        let unbounded = [param(StdlibArgKind::String, true), param(StdlibArgKind::Vararg, false)];
+        let optional_first =
+            [param(StdlibArgKind::Other, false), param(StdlibArgKind::Other, true)];
+        let [bounded, unbounded, optional_first] =
+            [&bounded[..], &unbounded, &optional_first].map(StdlibSignature::new);
+        assert_eq!((bounded.min_args, bounded.max_args), (2, Some(3)));
+        assert_eq!((unbounded.min_args, unbounded.max_args), (1, None));
+        assert_eq!((optional_first.min_args, optional_first.max_args), (2, Some(2)));
     }
 
     #[test]
     fn overloads_answer_arity_queries() {
-        static OVERLOADED: StdlibFunction<'static> = StdlibFunction {
-            signatures: &[
-                StdlibSignature::new(&[]),
-                StdlibSignature::new(&[
-                    required(StdlibArgKind::Number),
-                    required(StdlibArgKind::Number),
-                    optional(StdlibArgKind::Number),
-                ]),
-            ],
-            ..FUNCTION
+        let two_or_three = [
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, true),
+            param(StdlibArgKind::Other, false),
+        ];
+        let signatures = [StdlibSignature::new(&[]), StdlibSignature::new(&two_or_three)];
+        let overloaded = StdlibFunction {
+            signatures: &signatures,
+            deprecated: None,
+            is_read_only: true,
+            is_method: false,
+            returns_shape: None,
         };
-        assert_eq!(OVERLOADED.min_args(), 0);
-        assert_eq!(OVERLOADED.max_args(), Some(3));
-        assert!(OVERLOADED.accepts_arg_count(0));
-        assert!(!OVERLOADED.accepts_arg_count(1));
-        assert!(OVERLOADED.accepts_arg_count(2));
-        assert!(OVERLOADED.accepts_arg_count(3));
-        assert!(!OVERLOADED.accepts_arg_count(4));
-        assert_eq!(OVERLOADED.matching_signatures(2).count(), 1);
-        assert_eq!(OVERLOADED.signature_index_for_active_param(1), 1);
+        assert_eq!(overloaded.min_args(), 0);
+        assert_eq!(overloaded.max_args(), Some(3));
+        assert!(overloaded.accepts_arg_count(0));
+        assert!(!overloaded.accepts_arg_count(1));
+        assert!(overloaded.accepts_arg_count(2));
+        assert!(overloaded.accepts_arg_count(3));
+        assert!(!overloaded.accepts_arg_count(4));
     }
 }

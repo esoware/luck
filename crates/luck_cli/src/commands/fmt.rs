@@ -8,7 +8,7 @@ use luck_allocator::Allocator;
 use luck_config::{Editorconfigs, Project};
 use luck_diagnostics::Diagnostic;
 use luck_formatter::FormatOptions;
-use luck_resolver::{FileSystem as _, FileSystemOs};
+use luck_resolver::{FileSystem as _, FileSystemOs, is_definition_file};
 
 use crate::exit::{Exit, usage_error};
 use crate::output::{read_stdin_source, write_output};
@@ -277,6 +277,7 @@ impl FmtArgs {
 }
 
 /// Writes nothing; callers decide whether the result goes to disk or stdout.
+/// A definition file, by its name, formats as one.
 fn format_document(
     allocator: &Allocator,
     source: &[u8],
@@ -284,7 +285,11 @@ fn format_document(
     options: &FormatOptions,
     range: Option<Range<usize>>,
 ) -> FormatOutcome {
-    let parse = luck_parser::parse_with_tokens(allocator, source);
+    let parse = if is_definition_file(file_path) {
+        luck_parser::parse_definitions_with_tokens(allocator, source)
+    } else {
+        luck_parser::parse_with_tokens(allocator, source)
+    };
     if !parse.errors.is_empty() {
         let mut rendered = Vec::new();
         let label = file_path.to_string_lossy();
@@ -358,7 +363,7 @@ mod tests {
         // `.editorconfig` defaults: two-space indentation here.
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{"variant":"standalone"}"#).expect("write luck.json");
+        fs::write(&config_path, r#"{"minify":false}"#).expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
             "\
@@ -397,11 +402,8 @@ end
         // `.editorconfig` value: four-space indentation wins over two.
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(
-            &config_path,
-            r#"{"variant":"standalone","format":{"indent_style":"spaces","indent_width":4}}"#,
-        )
-        .expect("write luck.json");
+        fs::write(&config_path, r#"{"format":{"indent_style":"spaces","indent_width":4}}"#)
+            .expect("write luck.json");
         fs::write(
             directory.path().join(".editorconfig"),
             "\
@@ -438,7 +440,7 @@ end
     fn formatted_document(flags: &[&str], source: &str, file_path: &Path) -> FormatOutcome {
         let options = fmt_args(flags).format_options(
             &Editorconfigs::default(),
-            &Project::defaults(PathBuf::from(".")),
+            &Project::defaults(PathBuf::from("."), FileSystemOs),
             file_path,
         );
         format_document(&Allocator::new(), source.as_bytes(), file_path, &options, None)
@@ -498,7 +500,7 @@ end
     #[test]
     fn an_unreadable_file_reports_e010() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let project = Arc::new(Project::defaults(directory.path().to_path_buf()));
+        let project = Arc::new(Project::defaults(directory.path().to_path_buf(), FileSystemOs));
         let file = ProjectFile { path: directory.path().join("gone.luau"), project };
 
         let outcome =

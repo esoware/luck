@@ -21,20 +21,21 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-luck_allocator   = { workspace = true }
-luck_ast         = { workspace = true }
-luck_bundler     = { workspace = true }
-luck_config      = { workspace = true }
-luck_diagnostics = { workspace = true }
-luck_formatter   = { workspace = true }
-luck_linter      = { workspace = true, features = ["serde"] }
-luck_lsp         = { workspace = true }
-luck_minifier    = { workspace = true }
-luck_parser      = { workspace = true }
-luck_resolver    = { workspace = true }
-luck_semantic    = { workspace = true }
-luck_stdlib      = { workspace = true }
-luck_token       = { workspace = true }
+luck_allocator    = { workspace = true }
+luck_ast          = { workspace = true }
+luck_bundler      = { workspace = true }
+luck_config       = { workspace = true }
+luck_diagnostics  = { workspace = true }
+luck_formatter    = { workspace = true }
+luck_linter       = { workspace = true, features = ["serde"] }
+luck_lsp          = { workspace = true }
+luck_minifier     = { workspace = true }
+luck_parser       = { workspace = true }
+luck_resolver     = { workspace = true }
+luck_semantic     = { workspace = true }
+luck_stdlib       = { workspace = true }
+luck_token        = { workspace = true }
+luck_type_checker = { workspace = true }
 
 ariadne               = { workspace = true }
 clap                  = { workspace = true }

@@ -2,93 +2,93 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: `table.insert` with index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.insert(t, 0, v)
   | ^^^^^^^^^^^^^^^^^^^^^
 help: did you mean index 1?
 
 warning: `table.insert` with index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.insert(t, 0x0, v)
   | ^^^^^^^^^^^^^^^^^^^^^^^
 help: did you mean index 1?
 
 warning: `table.remove` with index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.remove(t, 0x0)
   | ^^^^^^^^^^^^^^^^^^^^
 help: did you mean index 1?
 
 warning: `table.move` with start index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.move(t, 0x0, #t, 1)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: `table.move` with destination index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.move(t, 1, #t, 0x0, u)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: `table.insert(t, #t + 1, v)` appends, so the index argument is redundant
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.insert(t, #t + 0x1, v)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: use `table.insert(t, v)` instead
 
 warning: `table.remove(t, #t - 1)` removes the value before the last element
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.remove(t, #t - 0x1)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^
 help: `table.remove(t)` removes the last element
 
 warning: `table.insert(t, #t, v)` inserts the value before the last element
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.insert(t, #t, v)
   | ^^^^^^^^^^^^^^^^^^^^^^
 help: to append, use `table.insert(t, v)`
 
 warning: `table.insert(t, #t + 1, v)` appends, so the index argument is redundant
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.insert(t, #t + 1, v)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: use `table.insert(t, v)` instead
 
 warning: `table.insert(t, #t, v)` inserts the value before the last element
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.insert(a.b, #a.b, v)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: to append, use `table.insert(t, v)`
 
 warning: `table.remove` with index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.remove(t, 0)
   | ^^^^^^^^^^^^^^^^^^
 help: did you mean index 1?
 
 warning: `table.remove(t, #t - 1)` removes the value before the last element
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.remove(t, #t - 1)
   | ^^^^^^^^^^^^^^^^^^^^^^^
 help: `table.remove(t)` removes the last element
 
 warning: `table.move` with start index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.move(t, 0, #t, 1)
   | ^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: `table.move` with destination index 0, but Luau arrays are 1-based
- --> Standalone:1:1
+ --> Luau:1:1
 1 | table.move(t, 1, #t, 0, u)
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: `table.create(n, {...})` fills every slot with the same table object
- --> Standalone:1:11
+ --> Luau:1:11
 1 | local x = table.create(3, {})
   |           ^^^^^^^^^^^^^^^^^^^
 help: use a `for` loop to give each element its own table
 
 warning: `table.remove` with index 0, but Luau arrays are 1-based
- --> Standalone:1:14
+ --> Luau:1:14
 1 | local last = table.remove(t, 0)
   |              ^^^^^^^^^^^^^^^^^^
 help: did you mean index 1?

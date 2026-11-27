@@ -30,7 +30,6 @@ mod misleading_and_or;
 mod mismatched_arg_count;
 mod mixed_table;
 mod multiple_statements_per_line;
-mod must_use;
 mod mutating_uninitialized;
 mod no_implicit_globals;
 mod parenthesized_conditions;
@@ -297,7 +296,6 @@ declare_all_lint_rules! {
     unbalanced_assignment::UnbalancedAssignment,
     if_same_then_else::IfSameThenElse,
     unreachable_code::UnreachableCode,
-    must_use::MustUse,
     placeholder_read::PlaceholderRead,
     mixed_table::MixedTable,
     loop_executes_once::LoopExecutesOnce,
@@ -465,7 +463,7 @@ mod tests {
     #[test]
     fn rule_count_locked() {
         // If this changes, update the rule count in the root README.md.
-        assert_eq!(RuleId::COUNT, 64);
+        assert_eq!(RuleId::COUNT, 63);
     }
 
     #[test]

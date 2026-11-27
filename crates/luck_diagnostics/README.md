@@ -1,14 +1,23 @@
 # luck_diagnostics
 
-The one diagnostic type every luck tool reports a problem with, modeled on oxc's `OxcDiagnostic`.
+A diagnostic type for reporting errors and warnings in source code.
+
+A `Diagnostic` has a code, a severity, a message, and the span the problem is
+at. It can also carry labels that point at related spans, a help line, a note,
+a link to the code's documentation, and a tag that tells an editor to show the
+code as unnecessary or deprecated.
+
+Every code has exactly one constructor, such as `Diagnostic::e008` for a syntax
+error, so each code's meaning is defined in one place. A lint diagnostic is
+built with `Diagnostic::lint` instead, with the rule's name as its code.
+
+A diagnostic doesn't record its file. Diagnostics that travel between files go
+in a `FileDiagnostics`, which pairs them with a path.
 
 ## Usage
 
-- `Diagnostic`: a code, a `Severity`, a message, the span where the problem is, `Label`s for the other places it's about, such as the construct a missing `end` leaves open, help, a note, a link to the page that documents it, and a `Tag` that tells an editor the code it points at is unnecessary or deprecated. Its fields sit behind one box, so a `Result` or a list of them holds a pointer each, and it derefs to them.
-- Numbered constructors build every coded one, such as `Diagnostic::e008` for a lex or parse failure and `Diagnostic::e004` for a module that isn't found, so each code is defined in one place. `Diagnostic::lint` builds a lint rule's, with the rule's name as its code.
-- `FileDiagnostics`: a file's path and the diagnostics in it. A diagnostic names no file, so the path is held once per file, not by each diagnostic.
-
-The CLI renders diagnostics in its output formats, and the language server sends them to the editor, with each label as a related location.
+This example reports an unclosed function, with a label on the `function`
+keyword:
 
 ```rust
 use luck_diagnostics::Diagnostic;
@@ -20,3 +29,12 @@ let diag = Diagnostic::e008(Span::new(18, 18), message)
 assert_eq!(diag.code, "E008");
 assert_eq!(diag.labels[0].message, "unclosed `function`");
 ```
+
+## API
+
+* `Diagnostic`, which boxes a `DiagnosticInner` holding its fields, and derefs
+  to it.
+* `Severity`, either `Error` or `Warning`.
+* `Label`, another span the diagnostic is about, with its own message.
+* `Tag`, either `Unnecessary` or `Deprecated`.
+* `FileDiagnostics`, a path and the diagnostics in that file.

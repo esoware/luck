@@ -49,6 +49,30 @@ fn flat_leading_name<'ast>(ty: &Type<'ast>) -> Option<&'ast str> {
     }
 }
 
+/// Whether `ty` prints an attribute first, which Luau takes only at the start
+/// of a type, so no leading `|` or `&` may come before it.
+fn starts_with_attributes(ty: &Type<'_>) -> bool {
+    match ty {
+        Type::Function(function) => !function.attributes.is_empty(),
+        Type::Parenthesized(parenthesized) => !parenthesized.attributes.is_empty(),
+        Type::Optional(optional) => starts_with_attributes(&optional.ty),
+        Type::Name(_)
+        | Type::Named(_)
+        | Type::Typeof(_)
+        | Type::Table(_)
+        | Type::Union(_)
+        | Type::Intersection(_)
+        | Type::Pack(_)
+        | Type::Nil(_)
+        | Type::True(_)
+        | Type::False(_)
+        | Type::StringLiteral(_)
+        | Type::Variadic(_)
+        | Type::GenericPack(_)
+        | Type::Error(_) => false,
+    }
+}
+
 impl<'ast> Formatter<'ast> {
     /// An alternation places its own leading comments, after the line break
     /// it may open with.
@@ -84,14 +108,22 @@ impl<'ast> Formatter<'ast> {
             Type::Table(table) => self.write_table_type(&table.fields, table.span.end),
             // The parameter list breaks like a call argument list.
             Type::Function(function) => {
+                for attribute in &function.attributes {
+                    self.write_function_attribute(attribute);
+                    self.space();
+                }
                 if let Some(generics) = &function.generics {
                     self.write_generic_type_list(generics);
                 }
                 // The tree keeps no span for the parentheses.
+                let after_attributes = function
+                    .attributes
+                    .last()
+                    .map_or(function.span.start, |attribute| attribute.span.end);
                 let open = function
                     .generics
                     .as_ref()
-                    .map_or(function.span.start, |generics| generics.span.end);
+                    .map_or(after_attributes, |generics| generics.span.end);
                 let last_end = function.params.last().map_or(open, |param| param.span().end);
                 let closer = self.closer_offset(last_end, TokenKind::RightParen);
                 self.write_delimited(
@@ -118,6 +150,10 @@ impl<'ast> Formatter<'ast> {
                 self.write_alternation(&intersection.types, "&", Placement::AfterText);
             }
             Type::Parenthesized(parenthesized) => {
+                for attribute in &parenthesized.attributes {
+                    self.write_function_attribute(attribute);
+                    self.space();
+                }
                 self.token("(");
                 self.write_type(&parenthesized.ty);
                 self.write_closing_comments(parenthesized.span.end);
@@ -178,7 +214,7 @@ impl<'ast> Formatter<'ast> {
         });
     }
 
-    fn write_type_field(&mut self, field: &TypeField<'ast>) {
+    pub(crate) fn write_type_field(&mut self, field: &TypeField<'ast>) {
         self.node(
             |_| field.span(),
             |f| match field {
@@ -255,7 +291,9 @@ impl<'ast> Formatter<'ast> {
                     if let Some(first) = items.first() {
                         f.write_leading_comments(first.span().start);
                     }
-                    f.if_group_breaks(group_id, leading_op);
+                    if !items.first().is_some_and(starts_with_attributes) {
+                        f.if_group_breaks(group_id, leading_op);
+                    }
                     members(f);
                 });
             }),

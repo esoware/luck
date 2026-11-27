@@ -2,67 +2,67 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 error: `require` of restricted module `./forbidden/lib`
- --> Standalone:1:9
+ --> Luau:1:9
 1 | require("./forbidden/lib")
   |         ^^^^^^^^^^^^^^^^^
 help: `./forbidden/lib` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `./forbidden/lib`
- --> Standalone:1:8
+ --> Luau:1:8
 1 | require"./forbidden/lib"
   |        ^^^^^^^^^^^^^^^^^
 help: `./forbidden/lib` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `./forbidden/lib`
- --> Standalone:1:12
+ --> Luau:1:12
 1 | _G.require("./forbidden/lib")
   |            ^^^^^^^^^^^^^^^^^
 help: `./forbidden/lib` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `./forbidden/lib`
- --> Standalone:1:15
+ --> Luau:1:15
 1 | _G["require"]("./forbidden/lib")
   |               ^^^^^^^^^^^^^^^^^
 help: `./forbidden/lib` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@forbidden`
- --> Standalone:1:9
+ --> Luau:1:9
 1 | require("@forbidden")
   |         ^^^^^^^^^^^^
 help: `@forbidden/*` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@forbidden/sub/x`
- --> Standalone:1:9
+ --> Luau:1:9
 1 | require("@forbidden/sub/x")
   |         ^^^^^^^^^^^^^^^^^^
 help: `@forbidden/*` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@Forbidden/sub`
- --> Standalone:1:9
+ --> Luau:1:9
 1 | require("@Forbidden/sub")
   |         ^^^^^^^^^^^^^^^^
 help: `@forbidden/*` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@forbidden\sub`
- --> Standalone:1:9
+ --> Luau:1:9
 1 | require("@forbidden\\sub")
   |         ^^^^^^^^^^^^^^^^^
 help: `@forbidden/sub` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@forbidden/sub`
- --> Standalone:1:9
+ --> Luau:1:9
 1 | require("@forbidden\47sub")
   |         ^^^^^^^^^^^^^^^^^^
 help: `@forbidden/*` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@forbidden`
- --> Standalone:1:8
+ --> Luau:1:8
 1 | require[[@forbidden]]
   |        ^^^^^^^^^^^^^^
 help: `@forbidden/*` is listed in `restricted_module_paths`
 
 error: `require` of restricted module `@forbidden`
- --> Standalone:1:8
+ --> Luau:1:8
 1 | require'\x40forbidden'
   |        ^^^^^^^^^^^^^^^
 help: `@forbidden/*` is listed in `restricted_module_paths`

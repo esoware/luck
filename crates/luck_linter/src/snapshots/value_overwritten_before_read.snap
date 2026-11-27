@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: value assigned to `x` is overwritten before it is read
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local x = 1
   |       ^
 2 | x = 2
@@ -10,7 +10,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local x
 2 | x = 1
   | ^
@@ -19,7 +19,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local x = 1
   |       ^
 2 | if c then x = 2 else x = 3 end
@@ -27,7 +27,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Standalone:1:10
+ --> Luau:1:10
 1 | if local x = f() then
   |          ^
 2 |   x = 2
@@ -35,7 +35,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Standalone:2:14
+ --> Luau:2:14
 1 | if c then
 2 | elseif local x = f() then
   |              ^
@@ -44,7 +44,7 @@ tag: unnecessary
 help: remove the earlier assignment or read it first
 
 warning: value assigned to `x` is overwritten before it is read
- --> Standalone:1:13
+ --> Luau:1:13
 1 | while local x = f() do
   |             ^
 2 |   x = 2

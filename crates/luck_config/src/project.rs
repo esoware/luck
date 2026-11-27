@@ -8,25 +8,40 @@ use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_formatter::{FormatConfig, FormatOptions};
 use luck_linter::{LintConfig, Linter};
 use luck_minifier::TransformConfig;
-use luck_stdlib::{Stdlib, Variant};
+use luck_resolver::FileSystem;
+use luck_stdlib::SecurityLevel;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::build::{BuildConfig, BuildKeys};
-use crate::config::{Entries, LuckConfig, OverrideConfig};
+use crate::config::{DefinitionsEntry, Entries, LuckConfig, OverrideConfig};
+use crate::definitions::{DefinitionFiles, DefinitionGlob, Definitions};
 use crate::editorconfig::Editorconfigs;
 use crate::filter::{ProjectFilter, located_path};
 use crate::glob::compiled;
-use crate::load::{self, Loaded, config_directory, in_file, read_std_definition};
+use crate::load::{self, ConfigError, Loaded, config_directory, in_file, read_text};
 
-/// A `luck.json` loaded through its `extends` chain and validated, or the
-/// defaults where there's none, and the settings it gives each file.
+/// A `luck.json` loaded through its `extends` chain and validated, a config
+/// no file holds, or the defaults where there's none, and the settings it
+/// gives each file, all read through one [`FileSystem`].
 #[derive(Debug)]
 pub struct Project {
+    file_system: Arc<dyn FileSystem>,
     root: PathBuf,
     files: Vec<PathBuf>,
-    /// The variant's library, with the `std` definitions over it.
-    stdlib: Stdlib,
+    /// The entries of `definitions`, resolved, which the overrides a file
+    /// matches add theirs after.
+    definition_entries: Vec<DefinitionsEntry>,
+    /// The text of every definition file an entry takes, read once at load.
+    definition_texts: FxHashMap<PathBuf, String>,
+    security: Option<SecurityLevel>,
+    /// What a file loads that no override with `definitions` or `security`
+    /// matches.
+    definitions: Arc<Definitions>,
+    /// What the files load that each set of overrides with `definitions` or
+    /// `security` matches, by their indices, built for the first file they
+    /// all match.
+    layered_definitions: Mutex<FxHashMap<Vec<usize>, Arc<Definitions>>>,
     filter: ProjectFilter,
     format: FormatConfig,
     overrides: Vec<Override>,
@@ -47,23 +62,75 @@ struct Override {
     exclude_files: GlobSet,
     format: Option<FormatConfig>,
     lint: Option<LintConfig>,
+    definitions: Vec<DefinitionsEntry>,
+    security: Option<SecurityLevel>,
+}
+
+impl Override {
+    const fn layers_definitions(&self) -> bool {
+        !self.definitions.is_empty() || self.security.is_some()
+    }
 }
 
 impl Project {
-    /// The project of the `luck.json` at `config_path`, rooted at its
-    /// directory.
+    /// The project of the `luck.json` at `config_path` in `file_system`,
+    /// rooted at its directory.
     ///
     /// # Errors
     ///
-    /// Returns E010 when `config_path` or a std definition it names can't be
-    /// read, and E014 when it, a file it extends, or a std definition isn't
-    /// valid, each in the file at fault and placed where the problem is.
-    pub fn load(config_path: &Path) -> Result<Self, FileDiagnostics> {
-        let Loaded { config, mut files } = load::load(config_path)?;
-        let invalid = |problem: &str| in_file(config_path, Diagnostic::e014(None, problem));
+    /// Returns E010 when `config_path` or a definition file it takes can't
+    /// be read, and E014 when it or a file it extends isn't valid, each in
+    /// the file at fault and placed where the problem is. A definition file
+    /// that doesn't parse is no error of the project, which leaves it out of
+    /// [`Definitions::stdlib`].
+    pub fn load(
+        config_path: &Path,
+        file_system: impl FileSystem + 'static,
+    ) -> Result<Self, FileDiagnostics> {
+        let file_system: Arc<dyn FileSystem> = Arc::new(file_system);
+        let Loaded { config, files } = load::load(&*file_system, config_path)?;
+        let invalid =
+            |problem: &str| in_file(&*file_system, config_path, Diagnostic::e014(None, problem));
+        let root = config_directory(config_path);
+        Self::validated(config, files, root, Arc::clone(&file_system), invalid)
+    }
+
+    /// The project of `config`, the text of a config no file holds, such as
+    /// one an editor gives, with the keys of a `luck.json` but `extends`,
+    /// rooted at `root`, which its paths and globs are relative to, and
+    /// reading through `file_system`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Given`], the E014 a `luck.json` with the same
+    /// text would report, placed in `config`, or else the E010 of a
+    /// definition file it names that can't be read, in that file.
+    pub fn from_config(
+        config: &str,
+        root: PathBuf,
+        file_system: impl FileSystem + 'static,
+    ) -> Result<Self, ConfigError> {
+        let file_system: Arc<dyn FileSystem> = Arc::new(file_system);
+        let given = load::given(&*file_system, config, &root).map_err(ConfigError::Given)?;
+        let invalid = |problem: &str| ConfigError::Given(Diagnostic::e014(None, problem));
+        Self::validated(given, Vec::new(), root, file_system, invalid)
+    }
+
+    /// The project of `config`, which read `files`, rooted at `root`, with
+    /// `invalid` placing a problem of the config as a whole.
+    fn validated<E>(
+        config: LuckConfig,
+        mut files: Vec<PathBuf>,
+        root: PathBuf,
+        file_system: Arc<dyn FileSystem>,
+        invalid: impl Fn(&str) -> E,
+    ) -> Result<Self, E>
+    where
+        E: From<FileDiagnostics>,
+    {
         let LuckConfig {
-            variant,
-            std,
+            security,
+            definitions,
             root: _,
             extends: _,
             include,
@@ -85,12 +152,30 @@ impl Project {
         if entry.is_some() && entries.is_some() {
             return Err(invalid("`entry` and `entries` can't both be set, so keep one"));
         }
-        let root = config_directory(config_path);
-        let filter =
-            ProjectFilter::new(&root, include.as_deref(), exclude.as_deref().unwrap_or_default())
-                .map_err(|message| invalid(&message))?;
-        let compiled_overrides = overrides
-            .unwrap_or_default()
+        let definition_entries = definitions.unwrap_or_default();
+        let overrides = overrides.unwrap_or_default();
+        let override_entries =
+            overrides.iter().flat_map(|layer| layer.definitions.iter().flatten());
+        let names_roblox = definition_entries
+            .iter()
+            .chain(override_entries)
+            .any(|named| matches!(named, DefinitionsEntry::BuiltIn(_)));
+        let sets_security =
+            security.is_some() || overrides.iter().any(|layer| layer.security.is_some());
+        if sets_security && !names_roblox {
+            return Err(invalid(
+                "`security` applies only to a project that loads `@roblox`, so add `@roblox` to \
+                 `definitions` or remove `security`",
+            ));
+        }
+        let filter = ProjectFilter::new(
+            &root,
+            include.as_deref(),
+            exclude.as_deref().unwrap_or_default(),
+            Arc::clone(&file_system),
+        )
+        .map_err(|message| invalid(&message))?;
+        let compiled_overrides: Vec<Override> = overrides
             .into_iter()
             .map(|layer: OverrideConfig| {
                 Ok(Override {
@@ -98,26 +183,33 @@ impl Project {
                     exclude_files: compiled(&layer.exclude_files)?,
                     format: layer.format,
                     lint: layer.lint,
+                    definitions: layer.definitions.unwrap_or_default(),
+                    security: layer.security,
                 })
             })
             .collect::<Result<_, String>>()
             .map_err(|message| invalid(&message))?;
-        let std_paths = std.unwrap_or_default();
-        let definitions = std_paths
+        let mut definition_texts = FxHashMap::default();
+        let every_entry = definition_entries
             .iter()
-            .map(|std_path| read_std_definition(std_path))
-            .collect::<Result<Vec<_>, _>>()?;
-        let stdlib = std_paths.iter().zip(&definitions).try_fold(
-            Stdlib::new(variant.unwrap_or_default()),
-            |stdlib, (std_path, definition)| {
-                stdlib.layer(definition).map_err(|diag| in_file(std_path, diag))
-            },
-        )?;
-        files.extend(std_paths);
+            .chain(compiled_overrides.iter().flat_map(|layer| &layer.definitions));
+        for path in every_entry.flat_map(taken_paths) {
+            if !definition_texts.contains_key(path) {
+                let text = read_text(&*file_system, path)?;
+                files.push(path.clone());
+                definition_texts.insert(path.clone(), text);
+            }
+        }
+        let base = Definitions::new(&definition_entries, security, &definition_texts);
         Ok(Self {
+            file_system,
             root,
             files,
-            stdlib,
+            definition_entries,
+            definition_texts,
+            security,
+            definitions: Arc::new(base),
+            layered_definitions: Mutex::default(),
             filter,
             format: format.unwrap_or_default(),
             overrides: compiled_overrides,
@@ -139,13 +231,19 @@ impl Project {
     }
 
     /// The defaults, for files with no `luck.json` above them, rooted at
-    /// `root`.
-    pub fn defaults(root: PathBuf) -> Self {
-        let filter = ProjectFilter::everything(&root);
+    /// `root`, reading through `file_system`.
+    pub fn defaults(root: PathBuf, file_system: impl FileSystem + 'static) -> Self {
+        let file_system: Arc<dyn FileSystem> = Arc::new(file_system);
+        let filter = ProjectFilter::everything(&root, Arc::clone(&file_system));
         Self {
+            file_system,
             root,
             files: Vec::new(),
-            stdlib: Stdlib::new(Variant::default()),
+            definition_entries: Vec::new(),
+            definition_texts: FxHashMap::default(),
+            security: None,
+            definitions: Arc::default(),
+            layered_definitions: Mutex::default(),
             filter,
             format: FormatConfig::default(),
             overrides: Vec::new(),
@@ -157,14 +255,14 @@ impl Project {
         }
     }
 
-    /// The directory of the `luck.json`, which the project's relative paths
-    /// and globs start from.
+    /// The directory of the `luck.json`, or the root a config no file holds
+    /// was given, which the project's relative paths and globs start from.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// The canonical path of every config file the project read: its
-    /// `luck.json`, each file it extends, and each std definition.
+    /// `luck.json`, each file it extends, and each definition file.
     pub fn files(&self) -> &[PathBuf] {
         &self.files
     }
@@ -173,15 +271,66 @@ impl Project {
         &self.filter
     }
 
-    /// Where every file of the project runs, which its `variant` key names.
-    pub fn variant(&self) -> Variant {
-        self.stdlib.variant()
+    /// What a file loads that no override with `definitions` or `security`
+    /// matches: what the top-level `definitions` loads, in order, at the
+    /// top-level `security`.
+    pub fn definitions(&self) -> &Definitions {
+        &self.definitions
     }
 
-    /// The variant's standard library, with the `std` definitions layered
-    /// over it.
-    pub const fn stdlib(&self) -> &Stdlib {
-        &self.stdlib
+    /// What the file at `path` loads: the top-level `definitions` with the
+    /// `definitions` of each override it matches after them, at the
+    /// `security` of the last of those that sets one, or else the top-level
+    /// one. A document with no file loads [`Self::definitions`].
+    pub fn definitions_for(&self, path: Option<&Path>) -> Arc<Definitions> {
+        let (indices, layers): (Vec<usize>, Vec<&Override>) = self
+            .overrides_for(path)
+            .into_iter()
+            .filter(|(_, layer)| layer.layers_definitions())
+            .unzip();
+        if indices.is_empty() {
+            return Arc::clone(&self.definitions);
+        }
+        Arc::clone(self.layered_definitions.lock().entry(indices).or_insert_with(|| {
+            let entries = self
+                .definition_entries
+                .iter()
+                .chain(layers.iter().flat_map(|layer| &layer.definitions));
+            let security = layers.iter().rev().find_map(|layer| layer.security).or(self.security);
+            Arc::new(Definitions::new(entries, security, &self.definition_texts))
+        }))
+    }
+
+    /// Whether `definitions`, the top-level one or an override's, names a
+    /// definition file, a directory, or a glob, so a change to a definition
+    /// file can change what the project's files load.
+    pub fn reads_definition_files(&self) -> bool {
+        self.taking_entries().next().is_some()
+    }
+
+    /// Whether a directory or glob in `definitions`, the top-level one or an
+    /// override's, takes a definition file at `located`, a path
+    /// [`located_path`] gives, which needn't exist, so creating or deleting
+    /// one there changes what the project's files load.
+    pub fn takes_definition_at(&self, located: &Path) -> bool {
+        self.taking_entries()
+            .filter_map(|files| match files {
+                DefinitionFiles::Glob(glob) => Some(&**glob),
+                DefinitionFiles::Written(_) | DefinitionFiles::File(_) => None,
+            })
+            .any(|glob: &DefinitionGlob| glob.takes(located))
+    }
+
+    /// The files each entry of `definitions` that takes files, rather than
+    /// drops them, names, the top-level ones then each override's.
+    fn taking_entries(&self) -> impl Iterator<Item = &DefinitionFiles> {
+        self.definition_entries
+            .iter()
+            .chain(self.overrides.iter().flat_map(|layer| &layer.definitions))
+            .filter_map(|entry| match entry {
+                DefinitionsEntry::Files(files) => Some(files),
+                DefinitionsEntry::BuiltIn(_) | DefinitionsEntry::Dropped(_) => None,
+            })
     }
 
     /// The linter of the `lint` section with the overrides `path` matches
@@ -217,7 +366,7 @@ impl Project {
             .fold(self.format, |format, layer| layer.merge_onto(format));
         let editorconfig = path
             .zip(editorconfigs)
-            .map(|(file, reader)| reader.format_config_for(file))
+            .map(|(file, reader)| reader.format_config_for(&*self.file_system, file))
             .unwrap_or_default();
         FormatOptions::from(&format.merge_onto(editorconfig))
     }
@@ -240,9 +389,14 @@ impl Project {
         self.transforms
     }
 
-    /// How a bundle resolves and reads its modules.
+    /// How a bundle resolves and reads its modules, with no `.config.luau`
+    /// reader, which a caller that links Luau gives.
     pub fn bundle_options(&self) -> BundleOptions<'_> {
-        BundleOptions { project_root: &self.root, dynamic_require: self.dynamic_require }
+        BundleOptions {
+            project_root: &self.root,
+            dynamic_require: self.dynamic_require,
+            luau_config: None,
+        }
     }
 
     /// The bundles `luck build` writes under `profile`.
@@ -261,7 +415,7 @@ impl Project {
         let Some(file) = path.filter(|_| !self.overrides.is_empty()) else {
             return Vec::new();
         };
-        let located = located_path(file);
+        let located = located_path(&*self.file_system, file);
         let candidate = Candidate::new(self.filter.relative(&located));
         self.overrides
             .iter()
@@ -274,10 +428,42 @@ impl Project {
     }
 }
 
+/// The definition files `entry` takes, rather than drops.
+fn taken_paths(entry: &DefinitionsEntry) -> &[PathBuf] {
+    match entry {
+        DefinitionsEntry::Files(files) => files.paths(),
+        DefinitionsEntry::BuiltIn(_) | DefinitionsEntry::Dropped(_) => &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use luck_resolver::FileSystemOs;
+
     use super::*;
     use crate::fixtures::project_with;
+
+    #[test]
+    fn files_that_match_the_same_overrides_share_one_set_of_definitions() {
+        let directory = project_with(&[
+            ("spec.d.luau", "declare it: (name: string) -> ()"),
+            (
+                "luck.json",
+                r#"{ "overrides": [
+                    { "files": ["spec/**"], "definitions": ["spec.d.luau"] },
+                    { "files": ["**/*.luau"], "lint": { "extra_globals": ["a"] } }
+                ] }"#,
+            ),
+        ]);
+        let project =
+            Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
+        let at = |relative: &str| project.definitions_for(Some(&directory.path().join(relative)));
+        assert!(Arc::ptr_eq(&at("src/a.luau"), &project.definitions));
+        let spec = at("spec/a.luau");
+        assert!(!Arc::ptr_eq(&spec, &project.definitions));
+        assert!(Arc::ptr_eq(&spec, &at("spec/b.luau")));
+        assert!(Arc::ptr_eq(&project.definitions_for(None), &project.definitions));
+    }
 
     #[test]
     fn files_that_match_the_same_overrides_share_one_linter() {
@@ -288,7 +474,8 @@ mod tests {
                 { "files": ["**/*.luau"], "format": { "line_width": 80 } }
             ] }"#,
         )]);
-        let project = Project::load(&directory.path().join("luck.json")).expect("config loads");
+        let project =
+            Project::load(&directory.path().join("luck.json"), FileSystemOs).expect("config loads");
         let linter_at = |relative: &str| project.linter_for(Some(&directory.path().join(relative)));
         assert!(Arc::ptr_eq(&linter_at("src/a.luau"), &project.linter));
         let spec = linter_at("spec/a.luau");

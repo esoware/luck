@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local x = nil
   | ^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value
@@ -10,7 +10,7 @@ fix: drop redundant `= nil` initializer
   | local x
 
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a, b = nil, nil
   | ^^^^^^^^^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value
@@ -18,7 +18,7 @@ fix: drop redundant `= nil` initializer
   | local a, b
 
 warning: 1 trailing `nil` value in local initializer
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a, b = 1, nil
   | ^^^^^^^^^^^^^^^^^^^
 help: drop trailing `nil` values, because the locals default to `nil`
@@ -26,7 +26,7 @@ fix: drop trailing `nil` initializers
   | local a, b = 1
 
 warning: 1 trailing `nil` value in local initializer
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a, b = (x), (nil)
   | ^^^^^^^^^^^^^^^^^^^^^^^
 help: drop trailing `nil` values, because the locals default to `nil`
@@ -34,7 +34,7 @@ fix: drop trailing `nil` initializers
   | local a, b = (x)
 
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local c = (nil)
   | ^^^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value
@@ -42,7 +42,7 @@ fix: drop redundant `= nil` initializer
   | local c
 
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local x: number? = nil
   | ^^^^^^^^^^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value
@@ -50,7 +50,7 @@ fix: drop redundant `= nil` initializer
   | local x: number?
 
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local x --[[why]] = nil
   | ^^^^^^^^^^^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value
@@ -58,19 +58,19 @@ fix: drop redundant `= nil` initializer
   | local x --[[why]]
 
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local x = --[[why]] nil
   | ^^^^^^^^^^^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value
 
 warning: 1 trailing `nil` value in local initializer
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a, b = 1, --[[why]] nil
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: drop trailing `nil` values, because the locals default to `nil`
 
 warning: redundant `= nil` initializer, because uninitialized locals are `nil`
- --> Standalone:1:1
+ --> Luau:1:1
 1 | export local x = nil
   | ^^^^^^^^^^^^^^^^^^^^
 help: drop the `= nil` to rely on the default value

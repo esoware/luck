@@ -1,6 +1,6 @@
 //! Pinned inputs, two kinds:
 //!
-//! - three single files, Penlight 1.15.0's modules (portable Lua 5.1 that
+//! - four single files, Penlight 1.15.0's modules (portable Lua 5.1 that
 //!   reads as Luau, ~40 files), and a 40-module tree for the bundler in
 //!   esoware/luck-benchmark-files, fetched as one tarball;
 //! - two real multi-file projects fetched as pinned upstream tarballs:
@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 
 use luck_allocator::Allocator;
 use luck_parser::ParseResult;
-use luck_stdlib::Variant;
 
 use crate::download::fetch_project_tarball;
 
@@ -25,7 +24,8 @@ use crate::download::fetch_project_tarball;
 pub struct TestFile {
     pub file_name: &'static str,
     pub source_text: Vec<u8>,
-    pub variant: Variant,
+    /// Whether it's a Roblox script, which loads Roblox's API.
+    pub has_roblox: bool,
 }
 
 impl TestFile {
@@ -47,7 +47,8 @@ pub struct ProjectFile {
 pub struct TestProject {
     pub name: &'static str,
     pub files: Vec<ProjectFile>,
-    pub variant: Variant,
+    /// Whether it's Roblox code, which loads Roblox's API.
+    pub has_roblox: bool,
 }
 
 impl TestProject {
@@ -74,7 +75,7 @@ fn parse_cleanly<'ast>(
     parse_result
 }
 
-const BENCHMARK_FILES_SHA: &str = "6579702412aee193a82f3f69bd67ff98a0c106cf"; // esoware/luck-benchmark-files
+const BENCHMARK_FILES_SHA: &str = "8f7af261d1d60c76297c9f0c69224e173a0c4e8a"; // esoware/luck-benchmark-files
 const ROACT_SHA: &str = "956891b70fdc5410e44e9664719cd0a9f7e6fabd"; // Roblox/roact v1.4.4
 const CRYPTOGRAPHY_SHA: &str = "26226eeecbb7314b91095f3dea4d4b4444495247"; // daily3014/rbx-cryptography v4.1.2
 
@@ -86,11 +87,11 @@ fn benchmark_files_root() -> PathBuf {
     fetch_project_tarball("esoware", "luck-benchmark-files", BENCHMARK_FILES_SHA)
 }
 
-fn benchmark_file(root: &Path, file_name: &'static str, variant: Variant) -> TestFile {
+fn benchmark_file(root: &Path, file_name: &'static str, has_roblox: bool) -> TestFile {
     let path = root.join(file_name);
     let source_text =
         fs::read(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-    TestFile { file_name, source_text, variant }
+    TestFile { file_name, source_text, has_roblox }
 }
 
 fn collect_source_files(root: &Path) -> Vec<ProjectFile> {
@@ -127,12 +128,16 @@ pub fn test_files() -> Vec<TestFile> {
     vec![
         // 40 full-grammar `luck_testgen` programs, each in its own
         // `do ... end`: every construct in a realistic mix.
-        benchmark_file(&root, "gen_full.luau", Variant::Standalone),
+        benchmark_file(&root, "gen_full.luau", false),
         // The `tests/fixtures/idiomatic` files, a small hand-written sample.
-        benchmark_file(&root, "idiomatic.luau", Variant::Standalone),
+        benchmark_file(&root, "idiomatic.luau", false),
         // Real-world Roblox Luau: 13k lines of comment- and string-heavy
         // hand-written code (Infinite Yield admin script).
-        benchmark_file(&root, "infinite_yield.luau", Variant::Roblox),
+        benchmark_file(&root, "infinite_yield.luau", true),
+        // 6k lines that spell every form of Luau's syntax, nested and
+        // knotted, and pin the shapes that once broke a parser or compiler.
+        // It parses but isn't meant to run.
+        benchmark_file(&root, "stress.luau", false),
     ]
 }
 
@@ -169,17 +174,17 @@ pub fn test_projects() -> Vec<TestProject> {
         TestProject {
             name: "roact",
             files: collect_source_files(&roact_root.join("src")),
-            variant: Variant::Roblox,
+            has_roblox: true,
         },
         TestProject {
             name: "rbx_cryptography",
             files: collect_source_files(&cryptography_root().join("src")),
-            variant: Variant::Roblox,
+            has_roblox: true,
         },
         TestProject {
             name: "penlight",
             files: collect_source_files(&benchmark_files_root().join("penlight")),
-            variant: Variant::Standalone,
+            has_roblox: false,
         },
     ]
 }

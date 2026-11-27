@@ -9,7 +9,7 @@ use luck_linter::{Analysis, FixKind, Message};
 use luck_parser::ParseResult;
 use luck_resolver::{Resolution, ResolveError};
 use luck_semantic::{AstNodes, Scoping};
-use luck_stdlib::SemanticAnalysis;
+use luck_stdlib::{SemanticAnalysis, Stdlib};
 use luck_token::{Span, Token};
 
 use crate::analyzed::{Analyzed, Arena};
@@ -22,7 +22,7 @@ use crate::settings::DocumentSettings;
 
 /// An open document's path and the settings its versions share until the
 /// settings change, which a worker finds the first time one is analyzed,
-/// since that reads the disk.
+/// since that reads the files.
 #[derive(Debug)]
 struct LazySettings {
     /// As the client spells it, or `None` for a document with no file.
@@ -81,14 +81,28 @@ impl Document {
         self.version
     }
 
+    pub(crate) const fn text(&self) -> &Arc<str> {
+        &self.text
+    }
+
     /// This version again, under settings found afresh.
     pub(crate) fn reloaded(&self) -> Self {
         Self::new(self.version, Arc::clone(&self.text), self.settings.path.clone())
     }
 
+    /// Its settings, found without analyzing it.
+    pub(crate) fn settings(&self, session: &Session) -> &DocumentSettings {
+        self.settings.resolve(session)
+    }
+
+    /// Its settings, unless no job has found them yet.
+    pub(crate) fn found_settings(&self) -> Option<&DocumentSettings> {
+        self.settings.resolved.get().map(|found| &**found)
+    }
+
     /// The canonical path of its file, or `None` when it has none.
     pub(crate) fn path(&self, session: &Session) -> Option<&Path> {
-        self.settings.resolve(session).path.as_deref()
+        self.settings(session).path.as_deref()
     }
 
     pub(crate) fn mark_stale(&self) {
@@ -105,11 +119,13 @@ impl Document {
 
     pub(crate) fn state(&self, session: &Session) -> &DocumentState {
         self.state.get_or_init(|| {
+            let settings = self.settings.resolve(session);
             DocumentState::new(
                 Arc::clone(&self.text),
-                Arc::clone(self.settings.resolve(session)),
+                Arc::clone(settings),
                 Arc::clone(self.line_index(session.encoding())),
                 Arena::from_spare(session.spare_arena()),
+                settings.definitions.stdlib().clone(),
             )
         })
     }
@@ -183,9 +199,10 @@ impl DocumentState {
         settings: Arc<DocumentSettings>,
         line_index: Arc<LineIndex>,
         arena: Arena,
+        stdlib: Stdlib,
     ) -> Self {
-        let stdlib = settings.project.project().stdlib().clone();
-        let analyzed = Analyzed::new(text, stdlib, &settings.linter, arena);
+        let analyzed =
+            Analyzed::new(text, settings.is_definitions, stdlib, &settings.linter, arena);
         Self {
             settings,
             line_index,
@@ -201,6 +218,12 @@ impl DocumentState {
     }
 
     pub(crate) fn text(&self) -> &str {
+        self.analyzed.text()
+    }
+
+    /// [`Self::text`], which the type checker reads while the version is
+    /// open.
+    pub(crate) fn shared_text(&self) -> &Arc<str> {
         self.analyzed.text()
     }
 
@@ -251,7 +274,7 @@ impl DocumentState {
         })
     }
 
-    /// What `require` loads, through the project's resolver, or `None` for
+    /// What `require` loads, through the session's resolver, or `None` for
     /// a document with no file, which no relative path starts from.
     pub(crate) fn resolve(&self, require: &Require) -> Option<Result<Resolution, ResolveError>> {
         let path = self.settings.path.as_deref()?;
@@ -273,6 +296,10 @@ impl DocumentState {
 
     pub(crate) fn range(&self, span: Span) -> Range {
         self.line_index.range(self.text(), span)
+    }
+
+    pub(crate) fn encoding(&self) -> PositionEncoding {
+        self.line_index.encoding()
     }
 
     /// How many of the session's units the text at `span` takes.

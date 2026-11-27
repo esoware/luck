@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: value assigned to `x` is never read
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local x
   |       ^
 2 | x = 1
@@ -10,7 +10,7 @@ tag: unnecessary
 help: remove the assignment or use the value somewhere
 
 warning: value assigned to `x` is never read
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local x
   |       ^
 2 | x = 1

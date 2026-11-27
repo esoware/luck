@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = 1
   | ^^^^^^^^^^^
 2 | local b = 2
@@ -11,7 +11,7 @@ fix: merge adjacent `local` declarations
   | local a, b = 1, 2
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = (x)
   | ^^^^^^^^^^^^^
 2 | local b = (y)
@@ -20,7 +20,7 @@ fix: merge adjacent `local` declarations
   | local a, b = (x), (y)
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = 1
   | ^^^^^^^^^^^
 2 | local b = 2
@@ -30,7 +30,7 @@ fix: merge adjacent `local` declarations
   | local c = 3
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = 1
   | ^^^^^^^^^^^
 2 | local b = t.a
@@ -39,7 +39,7 @@ fix: merge adjacent `local` declarations
   | local a, b = 1, t.a
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = 1
   | ^^^^^^^^^^^
 2 | local b = "a"
@@ -48,7 +48,7 @@ fix: merge adjacent `local` declarations
   | local a, b = 1, "a"
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = 1
   | ^^^^^^^^^^^
 2 | local b = function(a) return a end
@@ -57,7 +57,7 @@ fix: merge adjacent `local` declarations
   | local a, b = 1, function(a) return a end
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a = 1; local b = 2
   | ^^^^^^^^^^^
 help: combine into a single multi-binding `local`
@@ -65,7 +65,7 @@ fix: merge adjacent `local` declarations
   | local a, b = 1, 2
 
 warning: adjacent `local` declarations can be merged
- --> Standalone:1:1
+ --> Luau:1:1
 1 | local a: number = 1
   | ^^^^^^^^^^^^^^^^^^^
 2 | local b: string = "x"

@@ -4,6 +4,7 @@ use luck_allocator::{Box, List};
 use luck_ast_macros::Ast;
 use luck_token::{CompoundOp, Span};
 
+use crate::definition::Declaration;
 use crate::expr::{Expression, SuffixedExpression, Var};
 use crate::function::{FunctionAttribute, FunctionBody};
 use crate::leaf::Name;
@@ -58,6 +59,7 @@ pub enum Statement<'ast> {
     Continue(Span),
     CompoundAssignment(Box<'ast, CompoundAssignment<'ast>>),
     TypeDeclaration(Box<'ast, TypeDeclaration<'ast>>),
+    Declaration(Box<'ast, Declaration<'ast>>),
     Error(Span),
 }
 
@@ -99,6 +101,7 @@ impl<'ast> Statement<'ast> {
             | Self::Break(_)
             | Self::Continue(_)
             | Self::TypeDeclaration(_)
+            | Self::Declaration(_)
             | Self::Error(_) => return None,
         };
         while let Expression::Suffixed(chain) = current {
@@ -125,6 +128,7 @@ impl<'ast> Statement<'ast> {
             | Self::LocalAssignment(_)
             | Self::CompoundAssignment(_)
             | Self::TypeDeclaration(_)
+            | Self::Declaration(_)
             | Self::Error(_) => false,
         }
     }

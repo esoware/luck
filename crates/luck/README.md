@@ -1,50 +1,72 @@
-# luck_lua
+# luck
 
-The whole luck toolchain behind one dependency, for a build tool or editor that would rather not track each `luck_*` crate. The package is `luck_lua` and the library is `luck`, so code imports `luck::`.
+A Luau parser, formatter, linter, minifier, bundler, and type checker in one
+crate.
 
-## Features
+This crate re-exports the luck crates as modules, so a build tool or editor can
+depend on one crate instead of tracking each `luck_*` crate. It's published as
+`luck_lua` but imported as `luck`. The lexer, parser, and syntax tree are
+always included, and every other stage is behind its own feature. The language
+server and the CLI aren't included.
 
-The parsing crates are always present: `luck::allocator`, `luck::token`, `luck::lexer`, `luck::ast`, `luck::parser`, and `luck::diagnostics`. Every other stage is behind a feature of its name, and none is on by default.
-
-| Feature | Adds |
-| --- | --- |
-| `codegen` | `luck::codegen`, the compact printer |
-| `minifier` | `luck::minifier` |
-| `formatter` | `luck::formatter` |
-| `semantic` | `luck::semantic`, scoping, compile-time checks, the node table, and `require` sites, in one pass |
-| `stdlib` | `luck::stdlib`, the Luau and Roblox standard libraries, the std definitions that layer a host's library over one, and what a chunk reaches in it, and `semantic` |
-| `linter` | `luck::linter`, and `stdlib` |
-| `resolver` | `luck::resolver`, module resolution and source reading |
-| `bundler` | `luck::bundler`, and `resolver` and `minifier` |
-| `config` | `luck::config`, `luck.json` and `.editorconfig` loading, and the stages it configures |
-| `full` | All of them |
-
-The language server is not part of it. `luck::VERSION` is the toolchain's version.
+Every tree lives in an `allocator::Allocator` that you own. Calling `reset`
+frees everything in it at once and keeps the memory for the next file. For
+threads, `allocator::AllocatorPool` lends out arenas that reset when they're
+returned.
 
 ## Usage
 
-A tree lives in a `luck::allocator::Allocator` the caller owns, and borrows the source it was parsed from, so both outlive it. Every stage that builds nodes takes the arena first. `reset` frees everything in it at once and keeps the memory, so one arena serves file after file, and threads each take an arena from an `AllocatorPool`. The bundler reads modules on rayon's pool, each into the arena its thread gets from a `ThreadAllocators`.
-
-```rust
-use luck::allocator::Allocator;
-
-let mut allocator = Allocator::new();
-for source in [&b"local x = 1"[..], b"return x"] {
-    let parsed = luck::parser::parse(&allocator, source);
-    assert!(parsed.errors.is_empty());
-    // The parse borrows the arena, so it goes first.
-    drop(parsed);
-    allocator.reset();
-}
-```
-
-With the `formatter` feature:
+This example needs the `formatter` and `minifier` features:
 
 ```rust
 use luck::allocator::Allocator;
 use luck::formatter::FormatOptions;
+use luck::minifier::TransformConfig;
 
 let allocator = Allocator::new();
 let formatted = luck::formatter::format(&allocator, b"local x=1", &FormatOptions::default());
 assert_eq!(formatted.output, b"local x = 1\n");
+
+let minified = luck::minifier::minify(&allocator, b"return 1 + 2", &TransformConfig::default());
+assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 ```
+
+## Modules
+
+| Module | Crate | Feature |
+| --- | --- | --- |
+| `allocator` | `luck_allocator` | always |
+| `token` | `luck_token` | always |
+| `lexer` | `luck_lexer` | always |
+| `ast` | `luck_ast` | always |
+| `parser` | `luck_parser` | always |
+| `diagnostics` | `luck_diagnostics` | always |
+| `codegen` | `luck_codegen` | `codegen` |
+| `resolver` | `luck_resolver` | `resolver` |
+| `bundler` | `luck_bundler` | `bundler` |
+| `minifier` | `luck_minifier` | `minifier` |
+| `formatter` | `luck_formatter` | `formatter` |
+| `semantic` | `luck_semantic` | `semantic` |
+| `stdlib` | `luck_stdlib` | `stdlib` |
+| `linter` | `luck_linter` | `linter` |
+| `type_checker` | `luck_type_checker` | `type_checker` |
+| `config` | `luck_config` | `config` |
+
+`VERSION` is the toolchain's version.
+
+## Cargo features
+
+No feature is on by default.
+
+* `full` - Enables every feature below.
+* `codegen` - The compact printer.
+* `resolver` - Module resolution for `require`.
+* `bundler` - Single-file bundling. Enables `resolver` and `minifier`.
+* `minifier` - The minifier.
+* `formatter` - The formatter.
+* `semantic` - Scope, symbol, and reference analysis.
+* `stdlib` - Luau's and Roblox's standard libraries. Enables `semantic`.
+* `linter` - The linter. Enables `stdlib`.
+* `type_checker` - Luau's own type checker. Building it needs clang.
+* `config` - `luck.json` loading. Enables `bundler`, `minifier`, `formatter`,
+  and `linter`.

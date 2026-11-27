@@ -4,6 +4,16 @@
   "description": "Top-level luck.json configuration.",
   "type": "object",
   "properties": {
+    "definitions": {
+      "description": "The definitions every `.luau` and `.lua` file runs with over Luau's\nstandard library, in order: `\"@roblox\"` for Roblox's API, at the\n`security` level, and any other entry, relative to this file's\ndirectory, a Luau definition file, whose name ends in `.d.luau` and\nwhose `declare` statements say what a host gives a script, as they do\nfor Luau's type checker, a directory, for every definition file below\nit, or a glob, for every one it matches. Naming a file again moves it\nthere, a directory or glob adds the files no entry before it took, each\ndirectory's files sorted before its subdirectories, and a wildcard\nskips a name that starts with `.` the glob doesn't spell. A `!` before\na path, directory, or glob drops what it takes from what the entries\nbefore it took. A name a later file declares replaces the one before\nit.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
     "dynamic_require": {
       "description": "How the bundler treats a `require` whose argument isn't a string\nliteral: `\"error\"`, `\"warn\"` (default), or `\"allow\"`.",
       "anyOf": [
@@ -144,31 +154,21 @@
         "null"
       ]
     },
-    "std": {
-      "description": "Std definition files, relative to this file's directory, that layer a\nhost's globals, fields, and functions over the variant's standard\nlibrary, in order. Each is TOML in the format of luck's own\n`stdlib_data`, which\n<https://github.com/esoware/luck/tree/main/crates/luck_stdlib#std-definitions>\ndescribes.",
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "type": "string"
-      }
-    },
-    "transforms": {
+    "security": {
+      "description": "The security level the files of a project that loads `\"@roblox\"` run\nat (default `None`), which decides the part of Roblox's API they reach:\n`\"None\"` for a `Script` or `LocalScript`, `\"LocalUserSecurity\"`,\n`\"PluginSecurity\"` for a plugin or Studio's command bar, or\n`\"RobloxScriptSecurity\"` for a `CoreScript`.",
       "anyOf": [
         {
-          "$ref": "#/$defs/TransformConfig"
+          "$ref": "#/$defs/SecurityLevel"
         },
         {
           "type": "null"
         }
       ]
     },
-    "variant": {
-      "description": "Where every `.luau` and `.lua` file runs (default `standalone`):\n`\"standalone\"` for standalone Luau, or `\"roblox\"` for Roblox, whose globals,\nservices, and enums join Luau's standard library.",
+    "transforms": {
       "anyOf": [
         {
-          "$ref": "#/$defs/Variant"
+          "$ref": "#/$defs/TransformConfig"
         },
         {
           "type": "null"
@@ -539,6 +539,16 @@
       "description": "Settings for the files some globs match, over the rest of the config.",
       "type": "object",
       "properties": {
+        "definitions": {
+          "description": "Definitions the files this applies to load after the top-level\n`definitions`, written as its entries are, relative to this file's\ndirectory.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "exclude_files": {
           "description": "Globs of files this leaves alone, even when `files` takes them.",
           "type": "array",
@@ -569,6 +579,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/LintConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "security": {
+          "description": "The security level the files this applies to run at, over the\ntop-level `security`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecurityLevel"
             },
             {
               "type": "null"
@@ -741,7 +762,7 @@
           "$ref": "#/$defs/RuleSetting_CyclomaticComplexityOptions"
         },
         "deprecated": {
-          "description": "use of a deprecated standard library function, argument, or value",
+          "description": "use of a deprecated standard library function",
           "$ref": "#/$defs/RuleLevel"
         },
         "divide_by_zero": {
@@ -830,10 +851,6 @@
         },
         "multiple_statements_per_line": {
           "description": "multiple statements on the same line",
-          "$ref": "#/$defs/RuleLevel"
-        },
-        "must_use": {
-          "description": "return value of a must-use function is discarded",
           "$ref": "#/$defs/RuleLevel"
         },
         "mutating_uninitialized": {
@@ -963,6 +980,16 @@
       },
       "additionalProperties": false
     },
+    "SecurityLevel": {
+      "description": "The security level Roblox runs a script at.",
+      "type": "string",
+      "enum": [
+        "None",
+        "LocalUserSecurity",
+        "PluginSecurity",
+        "RobloxScriptSecurity"
+      ]
+    },
     "SpaceAfterFunction": {
       "description": "Where a space goes before the `(` of a function definition or call.",
       "oneOf": [
@@ -1040,22 +1067,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "Variant": {
-      "description": "The Luau variant: standalone Luau, or Luau on Roblox.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "standalone"
-          ]
-        },
-        {
-          "description": "Luau on Roblox, with the Roblox stdlib.",
-          "type": "string",
-          "const": "roblox"
-        }
-      ]
     }
   }
 }

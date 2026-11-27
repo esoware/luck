@@ -1,10 +1,10 @@
 mod glob;
 
-use std::fs;
 use std::path::{self, Path, PathBuf};
 use std::sync::Arc;
 
 use luck_formatter::{FormatConfig, IndentStyle, LineEndings};
+use luck_resolver::FileSystem;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -45,42 +45,56 @@ struct Section {
 }
 
 impl Editorconfigs {
-    /// The files that apply in `directory`, an absolute path, farthest first.
-    /// Two threads asking at once may both read a file, and either answer is
-    /// kept.
-    fn chain(&self, directory: &Path) -> Chain {
+    /// The files that apply in `directory`, an absolute path, farthest first,
+    /// as `file_system` holds them. Two threads asking at once may both read a
+    /// file, and either answer is kept.
+    fn chain(&self, file_system: &dyn FileSystem, directory: &Path) -> Chain {
         let cached = self.chains.lock().get(directory).cloned();
         if let Some(chain) = cached {
             return chain;
         }
-        let own = fs::read(directory.join(EDITORCONFIG_FILE_NAME))
+        let own = file_system
+            .read(&directory.join(EDITORCONFIG_FILE_NAME))
             .ok()
             .map(|bytes| Editorconfig::parse(directory, &String::from_utf8_lossy(&bytes)));
         let chain: Chain = match own {
             Some(file) if file.is_root => Arc::new([Arc::new(file)]),
             Some(file) => {
-                let parent_chain = directory.parent().map(|parent| self.chain(parent));
+                let parent_chain = directory.parent().map(|parent| self.chain(file_system, parent));
                 parent_chain
                     .iter()
                     .flat_map(|chain| chain.iter().cloned())
                     .chain([Arc::new(file)])
                     .collect()
             }
-            None => directory.parent().map_or_else(|| Chain::from([]), |parent| self.chain(parent)),
+            None => directory
+                .parent()
+                .map_or_else(|| Chain::from([]), |parent| self.chain(file_system, parent)),
         };
         self.chains.lock().insert(directory.to_path_buf(), Arc::clone(&chain));
         chain
     }
 
-    /// The formatter settings the `.editorconfig` files above `file_path` give
-    /// it.
-    pub(crate) fn format_config_for(&self, file_path: &Path) -> FormatConfig {
+    /// The formatter settings the `.editorconfig` files above `file_path` in
+    /// `file_system` give it.
+    pub(crate) fn format_config_for(
+        &self,
+        file_system: &dyn FileSystem,
+        file_path: &Path,
+    ) -> FormatConfig {
         // A relative path would hide the directories above the working
-        // directory from the walk and from sections anchored at them.
-        let Ok(absolute_path) = path::absolute(file_path) else {
-            return FormatConfig::default();
+        // directory from the walk and from sections anchored at them. A
+        // rooted one is whole, as a file system that isn't the disk spells
+        // its paths.
+        let absolute_path = if file_path.has_root() {
+            file_path.to_path_buf()
+        } else {
+            match path::absolute(file_path) {
+                Ok(absolute) => absolute,
+                Err(_) => return FormatConfig::default(),
+            }
         };
-        let chain = absolute_path.parent().map(|directory| self.chain(directory));
+        let chain = absolute_path.parent().map(|directory| self.chain(file_system, directory));
         let properties =
             editorconfig_properties(&absolute_path, chain.as_deref().unwrap_or_default());
         let lowercase_value =
@@ -197,11 +211,13 @@ fn section_name(line: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use luck_resolver::FileSystemOs;
+
     use super::*;
     use crate::fixtures::project_with;
 
     fn format_config_for(file_path: &Path) -> FormatConfig {
-        Editorconfigs::default().format_config_for(file_path)
+        Editorconfigs::default().format_config_for(&FileSystemOs, file_path)
     }
 
     #[test]

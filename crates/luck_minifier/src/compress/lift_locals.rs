@@ -338,7 +338,9 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                     self.collect_block(&generic_for.block);
                     self.close_names(open_loop);
                 }
-                Statement::TypeDeclaration(_) => keeps_declaration = true,
+                Statement::TypeDeclaration(_) | Statement::Declaration(_) => {
+                    keeps_declaration = true;
+                }
                 Statement::Assignment(_)
                 | Statement::FunctionCall(_)
                 | Statement::FunctionDecl(_)
@@ -499,6 +501,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
                 | Statement::Continue(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
+                | Statement::Declaration(_)
                 | Statement::Error(_) => {}
             }
         }
@@ -535,6 +538,7 @@ impl<'walk, 'ast> Lifter<'walk, 'ast> {
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
+            | Statement::Declaration(_)
             | Statement::Error(_)) => {
                 *stmt = kept;
                 return;
@@ -683,6 +687,7 @@ impl Pressure {
                 Statement::Break(_)
                 | Statement::Continue(_)
                 | Statement::TypeDeclaration(_)
+                | Statement::Declaration(_)
                 | Statement::Error(_) => {}
             }
             let declared = declared_count(stmt);

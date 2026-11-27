@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use luck_resolver::{Resolution, ResolveError, Resolver, ResolverGeneric, to_slash_lossy};
+use luck_token::Span;
 use tempfile::TempDir;
 
 use crate::common::{MemoryFileSystem, canonical, sample_project, write_files};
@@ -209,7 +210,7 @@ fn self_alias_resolves_from_an_init_files_own_directory() {
     let resolved = resolve(&project, "src/components/init.luau", "@self/button")
         .expect("resolve @self/button");
     assert_eq!(resolved.path, canonical(&project, "src/components/button.luau"));
-    assert!(!resolved.is_self_alias_shadowed);
+    assert_eq!(resolved.to_diagnostic(Span::default()), None);
 }
 
 #[test]
@@ -222,7 +223,8 @@ fn a_luaurc_alias_named_self_is_shadowed() {
     let resolved =
         resolve(&project, "src/init.luau", "@self/utils").expect("resolve built-in self");
     assert_eq!(resolved.path, canonical(&project, "src/utils.luau"));
-    assert!(resolved.is_self_alias_shadowed);
+    let warning = resolved.to_diagnostic(Span::default()).expect("a shadowed `self` warns");
+    assert_eq!(warning.code, "W004");
 }
 
 #[test]
@@ -524,7 +526,7 @@ fn malformed_closer_luaurc_does_not_fall_through_to_a_parent_alias() {
     );
     let error = resolve(&project, "src/main.luau", "@x/m")
         .expect_err("a malformed `.luaurc` must fail the lookup, not defer to its parent");
-    assert_eq!(error, ResolveError::MalformedLuaurc(canonical(&project, "src/.luaurc")));
+    assert_eq!(error, ResolveError::MalformedConfig(canonical(&project, "src/.luaurc")));
 }
 
 #[test]
@@ -565,7 +567,7 @@ fn deeply_nested_luaurc_does_not_overflow_the_stack() {
     write_files(project.path(), &[(".luaurc", contents.as_str())]);
     let error = resolve(&project, "src/main.luau", "@x/m")
         .expect_err("a `.luaurc` that doesn't parse declares no alias");
-    assert_eq!(error, ResolveError::MalformedLuaurc(canonical(&project, ".luaurc")));
+    assert_eq!(error, ResolveError::MalformedConfig(canonical(&project, ".luaurc")));
 }
 
 // Alias names are limited to `[A-Za-z0-9.\-_]`; Luau fails with `Invalid alias`.
@@ -578,7 +580,7 @@ fn invalid_alias_name_is_rejected() {
     );
     let error =
         resolve(&project, "src/main.luau", "@a b/m").expect_err("`a b` is not a legal alias name");
-    assert_eq!(error, ResolveError::MalformedLuaurc(canonical(&project, ".luaurc")));
+    assert_eq!(error, ResolveError::MalformedConfig(canonical(&project, ".luaurc")));
 }
 
 // The empty component is ignored, so `@x//m` is `lib/m`.
@@ -634,4 +636,75 @@ fn a_drive_in_a_require_path_names_no_module() {
         .resolve(Path::new("/project/main.luau"), "./C:x")
         .expect_err("`C:x` is a child of the requiring directory");
     assert!(matches!(error, ResolveError::NotFound(_)), "{error:?}");
+}
+
+/// What a `.config.luau` of `return { luau = { aliases = ... } }` declares,
+/// read as Luau would only once it ran it, for a test with no Luau to run.
+fn stub_luau_config(source: &str) -> Result<Vec<(String, String)>, String> {
+    match source {
+        "lib" => Ok(vec![("lib".to_owned(), "./lib".to_owned())]),
+        _ => Err("config:1: attempt to call a nil value".to_owned()),
+    }
+}
+
+#[test]
+fn a_config_luau_declares_its_aliases_through_the_reader_given() {
+    let files = MemoryFileSystem::new(&[
+        ("/project/.config.luau", "lib"),
+        ("/project/lib/util.luau", "return {}"),
+        ("/project/src/main.luau", ""),
+    ]);
+    let resolver = ResolverGeneric::new_with_file_system(files).with_luau_config(stub_luau_config);
+    let resolution = resolver
+        .resolve(Path::new("/project/src/main.luau"), "@lib/util")
+        .expect("the alias resolves");
+    assert_eq!(resolution.path, Path::new("/project/lib/util.luau"));
+}
+
+#[test]
+fn a_config_luau_that_does_not_load_hides_the_aliases_above_it() {
+    let files = || {
+        MemoryFileSystem::new(&[
+            ("/project/.luaurc", r#"{"aliases":{"lib":"./lib"}}"#),
+            ("/project/lib/util.luau", "return {}"),
+            ("/project/src/.config.luau", "error()"),
+            ("/project/src/main.luau", ""),
+        ])
+    };
+    let from_file = Path::new("/project/src/main.luau");
+    let config_luau = ResolveError::MalformedConfig("/project/src/.config.luau".into());
+    let unread = ResolverGeneric::new_with_file_system(files()).resolve(from_file, "@lib/util");
+    assert_eq!(unread, Err(config_luau.clone()), "no reader runs it");
+    let resolver =
+        ResolverGeneric::new_with_file_system(files()).with_luau_config(stub_luau_config);
+    assert_eq!(resolver.resolve(from_file, "@lib/util"), Err(config_luau));
+}
+
+#[test]
+fn a_directory_with_both_configs_hides_the_aliases_above_it() {
+    let files = MemoryFileSystem::new(&[
+        ("/project/.luaurc", r#"{"aliases":{"lib":"./lib"}}"#),
+        ("/project/lib/util.luau", "return {}"),
+        ("/project/src/.luaurc", "{}"),
+        ("/project/src/.config.luau", "lib"),
+        ("/project/src/main.luau", ""),
+    ]);
+    let resolver = ResolverGeneric::new_with_file_system(files).with_luau_config(stub_luau_config);
+    let error = resolver
+        .resolve(Path::new("/project/src/main.luau"), "@lib/util")
+        .expect_err("Luau refuses a directory with both");
+    assert_eq!(error, ResolveError::AmbiguousConfig("/project/src".into()));
+}
+
+#[test]
+fn a_definition_file_is_no_module() {
+    let files = MemoryFileSystem::new(&[
+        ("/project/main.luau", ""),
+        ("/project/types.d.luau", "declare function greet(): ()"),
+    ]);
+    let resolver = ResolverGeneric::new_with_file_system(files);
+    let error = resolver
+        .resolve(Path::new("/project/main.luau"), "./types.d")
+        .expect_err("a definition file is no module");
+    assert_eq!(error, ResolveError::DefinitionFile("/project/types.d.luau".into()));
 }

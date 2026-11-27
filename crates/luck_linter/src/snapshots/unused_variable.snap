@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: unused variable `dead`
- --> Standalone:2:7
+ --> Luau:2:7
 1 | export local answer = 42
 2 | local dead = 1
   |       ^^^^
@@ -13,7 +13,7 @@ suggestion: prefix `dead` with `_`
   | local _dead = 1
 
 warning: unused variable `n`
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local n = 1
   |       ^
 2 | type T = number
@@ -25,7 +25,7 @@ suggestion: prefix `n` with `_`
   | export type U = T
 
 warning: unused variable `x`
- --> Standalone:2:7
+ --> Luau:2:7
 1 | local _x = 1
 2 | local x = 2
   |       ^
@@ -34,7 +34,7 @@ tag: unnecessary
 help: prefix with `_` to suppress this warning
 
 warning: unused variable `x`
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local x = 2
   |       ^
 2 | print(_y)
@@ -45,7 +45,7 @@ suggestion: prefix `x` with `_`
   | print(_y)
 
 warning: unused variable `unused`
- --> Standalone:1:7
+ --> Luau:1:7
 1 | local unused = 1
   |       ^^^^^^
 tag: unnecessary
@@ -54,7 +54,7 @@ suggestion: prefix `unused` with `_`
   | local _unused = 1
 
 warning: unused variable `unused`
- --> Standalone:1:10
+ --> Luau:1:10
 1 | if local unused = f() then print(1) end
   |          ^^^^^^
 tag: unnecessary
@@ -63,7 +63,7 @@ suggestion: prefix `unused` with `_`
   | if local _unused = f() then print(1) end
 
 warning: unused variable `unused`
- --> Standalone:1:17
+ --> Luau:1:17
 1 | return if const unused = f() then 1 else 2
   |                 ^^^^^^
 tag: unnecessary

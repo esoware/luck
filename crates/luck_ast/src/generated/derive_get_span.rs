@@ -4,8 +4,9 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock,
-    ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs, FunctionAttribute,
+    Assignment, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding, Declaration,
+    DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause,
+    ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs, FunctionAttribute,
     FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType, FunctionTypeParam,
     GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan, IfExpression,
     IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType, LocalAssignment,
@@ -15,6 +16,46 @@ use crate::{
     TypeCast, TypeDeclaration, TypeDeclarationValue, TypeField, TypePack, TypedName, TypeofType,
     UnaryOp, UnionType, Var, VarArgParam, VariadicType, WhileLoop,
 };
+
+impl GetSpan for Declaration<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Global(declared_global) => declared_global.span(),
+            Self::Function(declared_function) => declared_function.span(),
+            Self::ExternType(declared_extern_type) => declared_extern_type.span(),
+        }
+    }
+}
+
+impl GetSpan for DeclaredGlobal<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for DeclaredFunction<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for DeclaredExternType<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for ExternTypeMember<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Field(type_field) => type_field.span(),
+            Self::Method(declared_function) => declared_function.span(),
+        }
+    }
+}
 
 impl GetSpan for Expression<'_> {
     fn span(&self) -> Span {
@@ -242,6 +283,7 @@ impl GetSpan for Statement<'_> {
             Self::Break(span) | Self::Continue(span) | Self::Error(span) => *span,
             Self::CompoundAssignment(compound_assignment) => compound_assignment.span(),
             Self::TypeDeclaration(type_declaration) => type_declaration.span(),
+            Self::Declaration(declaration) => declaration.span(),
         }
     }
 }

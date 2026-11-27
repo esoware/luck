@@ -4,11 +4,15 @@
 use luck_allocator::Allocator;
 use luck_formatter::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, SpaceAfterFunction,
-    format,
+    format_parsed,
 };
 use luck_parser::ParseResult;
-use luck_testgen::{generate_full_grammar, generate_runtime_safe, source_fixtures, tree_shape};
+use luck_testgen::{
+    definition_fixtures, generate_full_grammar, generate_runtime_safe, source_fixtures, tree_shape,
+};
 use luck_token::{Span, TokenKind, index_to_offset};
+
+use crate::common::Parse;
 
 const SEED_COUNT: u64 = 8;
 const STATEMENT_BUDGET: usize = 25;
@@ -61,12 +65,12 @@ impl Shape {
 ///
 /// That's but where no comment is allowed, after an attribute's `@`, and
 /// where a line break doesn't parse, before a call's `(`.
-fn with_a_comment_in_every_gap(source: &str, shape: Shape) -> String {
+fn with_a_comment_in_every_gap(source: &str, shape: Shape, parse: Parse) -> String {
     let allocator = Allocator::new();
-    let parse = luck_parser::parse_with_tokens(&allocator, source.as_bytes());
+    let parsed = parse(&allocator, source.as_bytes());
     let mut commented = String::new();
     let mut copied = 0;
-    for (index, pair) in parse.tokens.windows(2).enumerate() {
+    for (index, pair) in parsed.tokens.windows(2).enumerate() {
         let [token, next] = pair else {
             continue;
         };
@@ -131,13 +135,14 @@ fn option_sets() -> [FormatOptions; 3] {
     ]
 }
 
-fn assert_comments_keep_the_tree(label: &str, source: &str) {
+/// `source` is one `parse` reads.
+fn assert_comments_keep_the_tree(label: &str, source: &str, parse: Parse) {
     let allocator = Allocator::new();
-    let original = luck_parser::parse(&allocator, source.as_bytes());
+    let original = parse(&allocator, source.as_bytes());
     let expected_shape = tree_shape(&original.chunk);
     for shape in Shape::ALL {
-        let commented = with_a_comment_in_every_gap(source, shape);
-        let commented_parse = luck_parser::parse(&allocator, commented.as_bytes());
+        let commented = with_a_comment_in_every_gap(source, shape, parse);
+        let commented_parse = parse(&allocator, commented.as_bytes());
         assert!(
             commented_parse.errors.is_empty(),
             "{label}, {shape:?}: the commented source parses: {:?}\n{commented}",
@@ -147,16 +152,16 @@ fn assert_comments_keep_the_tree(label: &str, source: &str) {
         for (set, options) in option_sets().iter().enumerate() {
             let case = format!("{label}, {shape:?}, option set {set}");
             let output =
-                String::from_utf8(format(&allocator, commented.as_bytes(), options).output)
+                String::from_utf8(format_parsed(&allocator, &commented_parse, options).output)
                     .unwrap();
+            let formatted = parse(&allocator, output.as_bytes());
             let again =
-                String::from_utf8(format(&allocator, output.as_bytes(), options).output).unwrap();
+                String::from_utf8(format_parsed(&allocator, &formatted, options).output).unwrap();
             assert!(
                 again == output,
                 "{case}: not idempotent:\n{}",
                 first_difference(&output, &again)
             );
-            let formatted = luck_parser::parse(&allocator, output.as_bytes());
             assert!(formatted.errors.is_empty(), "{case}: {:?}\n{output}", formatted.errors);
             assert_eq!(
                 tree_shape(&formatted.chunk),
@@ -182,7 +187,18 @@ fn a_comment_in_any_gap_of_a_fixture_keeps_its_tree() {
     assert!(!fixtures.is_empty(), "no fixture outside `errors/`");
     for fixture in fixtures {
         let label = fixture.relative_path.display().to_string();
-        assert_comments_keep_the_tree(&label, &fixture.source);
+        assert_comments_keep_the_tree(&label, &fixture.source, luck_parser::parse_with_tokens);
+    }
+}
+
+#[test]
+fn a_comment_in_any_gap_of_a_definition_fixture_keeps_its_tree() {
+    let fixtures = definition_fixtures();
+    assert!(!fixtures.is_empty(), "no definition fixture");
+    for fixture in fixtures {
+        let label = fixture.relative_path.display().to_string();
+        let parse = luck_parser::parse_definitions_with_tokens;
+        assert_comments_keep_the_tree(&label, &fixture.source, parse);
     }
 }
 
@@ -190,8 +206,9 @@ fn a_comment_in_any_gap_of_a_fixture_keeps_its_tree() {
 fn a_comment_in_any_gap_of_a_generated_program_keeps_its_tree() {
     for seed in 0..SEED_COUNT {
         let full = generate_full_grammar(seed, STATEMENT_BUDGET);
-        assert_comments_keep_the_tree(&format!("full seed {seed}"), &full);
+        let parse = luck_parser::parse_with_tokens;
+        assert_comments_keep_the_tree(&format!("full seed {seed}"), &full, parse);
         let runtime = generate_runtime_safe(seed, STATEMENT_BUDGET);
-        assert_comments_keep_the_tree(&format!("runtime seed {seed}"), &runtime);
+        assert_comments_keep_the_tree(&format!("runtime seed {seed}"), &runtime, parse);
     }
 }

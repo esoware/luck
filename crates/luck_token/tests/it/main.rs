@@ -1,4 +1,5 @@
 mod chunk;
+mod comment;
 mod directive;
 mod line_index;
 mod number;

@@ -17,6 +17,9 @@ impl<'ast> Parser<'ast> {
             TokenKind::Local | TokenKind::Const => self.parse_local_stmt(attributes),
             TokenKind::Function => self.parse_function_decl(attributes),
             TokenKind::Export => self.parse_export_stmt(attributes),
+            TokenKind::Identifier if self.is_definition_file && self.is_at_word(b"declare") => {
+                self.parse_declaration(attributes)
+            }
             _ => {
                 let span = self.token.span;
                 self.syntax_error(

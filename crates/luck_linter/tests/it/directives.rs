@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
 use luck_linter::{FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::luau_library;
 
 use crate::common::{lint, lint_bytes, with_level};
 
@@ -180,7 +180,7 @@ local _x = 1";
 #[test]
 fn invalid_lint_filter_shows_a_word_that_is_not_utf8() {
     let source = b"-- luck: allow(x) \xE9t\xE9\nlocal _x = 1";
-    let diags = lint_bytes(source, Variant::Standalone, &LintConfig::default(), FixKind::empty());
+    let diags = lint_bytes(source, luau_library(), &LintConfig::default(), FixKind::empty());
     let found: Vec<(&str, &[u8])> = diags
         .iter()
         .filter(|diag| diag.code == "invalid_lint_filter")
@@ -323,8 +323,9 @@ local a = 1
 print(a) -- luck: allow(unused_variable, undefined_variable)
 ";
     let allocator = Allocator::new();
+    let parse = luck_parser::parse(&allocator, source.as_bytes());
     let fixed = Linter::new(LintConfig::default())
-        .fix(&allocator, source.as_bytes(), library_for(Variant::Standalone), FixKind::Fix, None)
+        .fix(&allocator, parse, luau_library(), FixKind::Fix, None)
         .expect("fixes converge");
     assert_eq!(
         fixed.parse.source,

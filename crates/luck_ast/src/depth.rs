@@ -59,16 +59,6 @@ pub fn expr_nesting_depth(expr: &Expression<'_>) -> usize {
     meter.deepest
 }
 
-/// How many levels deep `ty` nests, zero for a name, or
-/// `MAX_NESTING_DEPTH + 1` for anything deeper.
-///
-/// The walk stops there, so it is safe on a type of any depth.
-pub fn type_nesting_depth(ty: &Type<'_>) -> usize {
-    let mut meter = DepthMeter::default();
-    meter.visit_type(ty);
-    meter.deepest
-}
-
 /// The span of the innermost statement, expression, or type at each place
 /// where `block`, sitting `depth` levels down, nests past
 /// [`MAX_NESTING_DEPTH`]: one for each construct the cap refuses.
@@ -230,7 +220,7 @@ mod tests {
         let fixture = Fixture::default();
         let synth = fixture.synth();
         let twice = synth.ty_optional(synth.ty_optional(synth.ty_named("T")));
-        assert_eq!(type_nesting_depth(&twice), 1);
+        assert_eq!(expr_nesting_depth(&synth.type_cast(synth.name_expr("x"), twice)), 2);
     }
 
     #[test]
@@ -247,11 +237,9 @@ mod tests {
     fn a_type_counts_the_levels_it_nests() {
         let fixture = Fixture::default();
         let synth = fixture.synth();
-        assert_eq!(type_nesting_depth(&synth.ty_named("T")), 0);
-        let nested = || synth.ty_optional(synth.ty_table_array(synth.ty_named("T")));
-        assert_eq!(type_nesting_depth(&nested()), 2);
-        let cast = synth.type_cast(synth.name_expr("x"), nested());
-        assert_eq!(expr_nesting_depth(&cast), 1 + type_nesting_depth(&nested()));
+        let cast_to = |ty| expr_nesting_depth(&synth.type_cast(synth.name_expr("x"), ty));
+        assert_eq!(cast_to(synth.ty_named("T")), 1);
+        assert_eq!(cast_to(synth.ty_optional(synth.ty_table_array(synth.ty_named("T")))), 3);
     }
 
     #[test]

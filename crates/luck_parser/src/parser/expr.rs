@@ -224,7 +224,7 @@ impl<'ast> Parser<'ast> {
 
     #[expect(clippy::wildcard_enum_match_arm, reason = "every other token takes the default path")]
     #[inline]
-    fn parse_primary_expr(&mut self) -> Expression<'ast> {
+    pub(super) fn parse_primary_expr(&mut self) -> Expression<'ast> {
         match self.peek() {
             name_token!() => {
                 let start = self.token.span.start;

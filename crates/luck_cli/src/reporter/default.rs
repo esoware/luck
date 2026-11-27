@@ -1,5 +1,7 @@
-use std::iter;
+use std::io::{self, IsTerminal as _};
 use std::ops::Range;
+use std::sync::LazyLock;
+use std::{env, iter};
 
 use ariadne::{Config, IndexType, Label, Report, ReportKind, Source};
 use luck_diagnostics::{Diagnostic, Severity};
@@ -7,11 +9,17 @@ use luck_token::Span;
 
 use super::{Reporter, SourceFile};
 
-/// Above this line length, ariadne's caret rendering effectively hangs.
-///
-/// A minified or obfuscated file is one multi-megabyte line, so such
-/// diagnostics get a compact, snippet-free rendering instead.
-const MAX_RENDERABLE_LINE_CHARS: usize = 10_000;
+/// Above this line length, a snippet is unreadable, and each diagnostic on
+/// the line prints all of it, which for a minified file is megabytes, so
+/// such diagnostics get a compact, snippet-free rendering instead.
+const MAX_RENDERABLE_LINE_CHARS: usize = 1_000;
+
+/// ariadne colors each character of a snippet on its own, so color only goes
+/// to a terminal, and not even there when `NO_COLOR` is set and not empty, as
+/// no-color.org asks.
+static IS_COLORED: LazyLock<bool> = LazyLock::new(|| {
+    io::stderr().is_terminal() && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+});
 
 /// ariadne's report, with a snippet of the code each place a diagnostic
 /// points at, for people to read on stderr.
@@ -110,7 +118,7 @@ fn report<'label>(
     let mut builder = Report::build(kind, (label, Range::<usize>::from(span)))
         .with_code(diag.code)
         .with_message(&diag.message)
-        .with_config(Config::default().with_index_type(IndexType::Byte))
+        .with_config(Config::default().with_index_type(IndexType::Byte).with_color(*IS_COLORED))
         .with_labels(labels);
     if let Some(help) = &diag.help {
         builder = builder.with_help(help);
@@ -142,8 +150,6 @@ fn write_compact(label: &str, diag: &Diagnostic, output: &mut Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::*;
 
     fn rendered(label: &str, text: Option<&[u8]>, diags: &[Diagnostic]) -> String {
@@ -183,6 +189,14 @@ local b = require(\"./x\")
         let first = text.find("first required here");
         let again = text.rfind("required multiple times");
         assert!(first.is_some_and(|first| again.is_some_and(|again| first < again)), "{text}");
+    }
+
+    #[test]
+    fn a_line_just_past_the_cap_uses_compact_rendering() {
+        let source = format!("local x = {}", "1".repeat(MAX_RENDERABLE_LINE_CHARS));
+        let diag = Diagnostic::e008(Span::new(6, 7), "boom");
+        let text = rendered("wide.luau", Some(source.as_bytes()), &[diag]);
+        assert_eq!(text, "[E008] error: boom (wide.luau: byte 6)\n", "{text}");
     }
 
     #[test]

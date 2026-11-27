@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: setting global variable `counter` (missing `local`?)
- --> Standalone:1:1
+ --> Luau:1:1
 1 | counter = 1
   | ^^^^^^^
 help: add `local` before the first assignment

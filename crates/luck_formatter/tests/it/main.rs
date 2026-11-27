@@ -6,6 +6,7 @@ mod common;
 
 mod comment_gaps;
 mod comments;
+mod definitions;
 mod exprs;
 mod fixtures;
 mod functions;

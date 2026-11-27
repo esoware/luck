@@ -1,7 +1,7 @@
 use luck_allocator::Allocator;
 use luck_diagnostics::Severity;
 use luck_linter::{Category, FixKind, LintConfig, Linter, Message, RuleId, RuleLevel};
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::{SecurityLevel, luau_library, roblox_library};
 
 use crate::common::{disable, enable, lint, lint_bytes};
 
@@ -32,7 +32,8 @@ fn game_is_a_global_of_roblox_only() {
             .iter()
             .any(|diag| diag.code == "undefined_variable" && diag.message.contains("game"))
     );
-    let roblox_diags = lint_bytes(b"print(game)", Variant::Roblox, &config, FixKind::empty());
+    let roblox_diags =
+        lint_bytes(b"print(game)", roblox_library(SecurityLevel::None), &config, FixKind::empty());
     assert!(roblox_diags.iter().all(|diag| diag.code != "undefined_variable"));
 }
 
@@ -41,7 +42,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, b"return app");
     let linter = Linter::new(LintConfig::default());
-    let without_app = linter.analyze(&parse, library_for(Variant::Standalone));
+    let without_app = linter.analyze(&parse, luau_library());
     let flagged = linter
         .run_analyzed(&without_app, FixKind::empty(), None, &|| false)
         .expect("nothing cancels it");
@@ -49,7 +50,7 @@ fn analyze_defines_the_extra_globals_of_its_config() {
 
     let with_app =
         Linter::new(LintConfig { extra_globals: vec!["app".to_owned()], ..LintConfig::default() });
-    let analysis = with_app.analyze(&parse, library_for(Variant::Standalone));
+    let analysis = with_app.analyze(&parse, luau_library());
     assert!(analysis.semantic().is_known_global("app"));
     let quiet = with_app
         .run_analyzed(&analysis, FixKind::empty(), None, &|| false)
@@ -62,7 +63,7 @@ fn run_analyzed_reports_parse_errors_without_running_rules() {
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, b"local x =");
     let linter = Linter::new(LintConfig::default());
-    let analysis = linter.analyze(&parse, library_for(Variant::Standalone));
+    let analysis = linter.analyze(&parse, luau_library());
     let diags = linter
         .run_analyzed(&analysis, FixKind::empty(), None, &|| true)
         .expect("a parse error is reported before any rule could be cancelled");

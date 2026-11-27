@@ -28,7 +28,6 @@ use ls_types::{
     WorkspaceClientCapabilities, WorkspaceEdit, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use lsp_server::ErrorCode;
-use luck_token::index_to_offset;
 use serde_json::json;
 
 use crate::common::{Client, document, position_params, references, workspace_uri};
@@ -210,6 +209,60 @@ fn formatting_normalizes_spacing() {
     assert_ne!(new_text.as_str(), ugly, "formatter must change ugly source");
 }
 
+/// Formatting reads the `.editorconfig` files again once the watcher says one
+/// changed.
+#[test]
+fn an_editorconfig_s_change_reaches_formatting() {
+    fn formatted(client: &mut Client, uri: &Uri) -> String {
+        let edits = client.request::<Formatting>(formatting_params(uri));
+        edits.expect("the file formats")[0].new_text.clone()
+    }
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    fs::write(directory.path().join("luck.json"), "{}").expect("write luck.json");
+    let editorconfig = directory.path().join(".editorconfig");
+    let tabs = "\
+[*]
+indent_style = tab
+";
+    fs::write(&editorconfig, tabs).expect("write .editorconfig");
+    let path = directory.path().join("main.luau");
+    let text = "\
+if x then
+print(x)
+end
+";
+    fs::write(&path, text).expect("write main.luau");
+    let uri = Uri::from_file_path(&path).expect("file path URI");
+    let mut client = Client::start();
+    client.open(&uri, text);
+    assert_eq!(
+        formatted(&mut client, &uri),
+        "\
+if x then
+\tprint(x)
+end
+"
+    );
+
+    let spaces = "\
+[*]
+indent_style = space
+indent_size = 2
+";
+    fs::write(&editorconfig, spaces).expect("rewrite .editorconfig");
+    client.file_changed(&editorconfig, FileChangeType::CHANGED);
+
+    assert_eq!(
+        formatted(&mut client, &uri),
+        "\
+if x then
+  print(x)
+end
+"
+    );
+}
+
 /// The editor runs the rules `luck lint` runs on the same project.
 #[test]
 fn lint_runs_the_default_rules_without_config() {
@@ -240,7 +293,11 @@ fn parse_errors_surface_without_config() {
 fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let directory = tempfile::tempdir().expect("tempdir");
     let config_path = directory.path().join("luck.json");
-    fs::write(&config_path, "{\n  \"variant\": \"bogus\"\n}\n").expect("write luck.json");
+    let config = r#"{
+  "definitions": ["@bogus"]
+}
+"#;
+    fs::write(&config_path, config).expect("write luck.json");
     let path = directory.path().join("main.luau");
     fs::write(&path, "local unused = 1\n").expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
@@ -252,8 +309,8 @@ fn a_broken_config_is_reported_on_itself_until_it_is_fixed() {
     let config_diags = client.diagnostics(&config_uri, None);
     let [diag] = config_diags.as_slice() else { panic!("one config error: {config_diags:?}") };
     assert_eq!(diag.code, Some(NumberOrString::String("E014".to_owned())));
-    assert!(diag.message.contains("unknown variant `bogus`"), "{}", diag.message);
-    assert_eq!(diag.range, Range::new(Position::new(1, 13), Position::new(1, 20)));
+    assert!(diag.message.contains("`definitions` names `@bogus`"), "{}", diag.message);
+    assert_eq!(diag.range, Range::new(Position::new(1, 18), Position::new(1, 26)));
     let errors = client.shown(MessageType::ERROR);
     assert!(errors.iter().any(|text| text.contains("bogus")), "{errors:?}");
     assert!(!client.diagnostics(&uri, Some(1)).is_empty(), "the defaults lint the file");
@@ -465,8 +522,36 @@ fn a_cancelled_request_gets_exactly_one_answer() {
     assert!(client.stray_responses().is_empty(), "{:?}", client.stray_responses());
 }
 
+/// Cancelling it stops the type check it waits on, which a later hover runs
+/// again.
 #[test]
-fn hover_renders_stdlib_signature() {
+fn a_cancelled_hover_gets_exactly_one_answer() {
+    let mut client = Client::start();
+    let uri = workspace_uri("cancelled_hover.luau");
+    client.open(&uri, "local value = 1\nreturn value\n");
+    let hover = || HoverParams {
+        text_document_position_params: position_params(&uri, 1, 8),
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+    let id = client.send::<HoverRequest>(hover());
+    let as_json = serde_json::to_value(&id).expect("an id serializes");
+    let cancelled = serde_json::from_value(as_json).expect("an id is a number or a string");
+    client.notify::<Cancel>(CancelParams { id: cancelled });
+    if let Err(error) = client.answer::<HoverRequest>(&id) {
+        assert_eq!(error.code, -32800, "RequestCancelled: {error:?}");
+    }
+
+    let hovered = client.request::<HoverRequest>(hover()).expect("the local's type");
+
+    let HoverContents::Markup(markup) = hovered.contents else {
+        panic!("markup: {hovered:?}");
+    };
+    assert!(markup.value.contains("number"), "{}", markup.value);
+    assert!(client.stray_responses().is_empty(), "{:?}", client.stray_responses());
+}
+
+#[test]
+fn hover_renders_a_library_function_s_type_and_reference() {
     let mut client = Client::start();
     let uri = workspace_uri("hover.luau");
     // Cursor on `format` in `string.format`.
@@ -482,15 +567,18 @@ fn hover_renders_stdlib_signature() {
         panic!("hover should return markup contents");
     };
     assert!(
-        markup.value.contains("string.format"),
-        "hover markdown should name the stdlib symbol: {}",
+        markup.value.starts_with(
+            "\
+```luau
+@checked (string, ...unknown) -> string
+```"
+        ),
+        "{}",
         markup.value
     );
-    assert!(
-        markup.value.contains("function"),
-        "hover markdown should render the function signature: {}",
-        markup.value
-    );
+    assert!(markup.value.contains("printf-style format string"), "{}", markup.value);
+    let range = hover.range.expect("a range");
+    assert_eq!((range.start.character, range.end.character), (18, 31), "{range:?}");
 }
 
 #[test]
@@ -926,20 +1014,6 @@ print(value)
 }
 
 #[test]
-fn goto_definition_returns_none_for_a_global() {
-    let mut client = Client::start();
-    let uri = workspace_uri("definition_global.luau");
-    client.open(&uri, "print(1)\n");
-
-    let response = client.request::<GotoDefinition>(GotoDefinitionParams {
-        text_document_position_params: position_params(&uri, 0, 2),
-        work_done_progress_params: WorkDoneProgressParams::default(),
-        partial_result_params: PartialResultParams::default(),
-    });
-    assert!(response.is_none(), "stdlib globals have no definition site");
-}
-
-#[test]
 fn references_are_scope_exact_for_shadowed_names() {
     let mut client = Client::start();
     let uri = workspace_uri("references.luau");
@@ -1159,33 +1233,6 @@ print(3)
 }
 
 #[test]
-fn completion_offers_collectgarbage_options_inside_the_string() {
-    let mut client = Client::start();
-    let uri = workspace_uri("gc.luau");
-    let text = "collectgarbage('c')";
-    client.open(&uri, text);
-
-    let utf16_column = index_to_offset(text.find("('").expect("literal") + 2);
-    let response = client
-        .request::<Completion>(CompletionParams {
-            text_document_position: position_params(&uri, 0, utf16_column),
-            work_done_progress_params: WorkDoneProgressParams::default(),
-            partial_result_params: PartialResultParams::default(),
-            context: None,
-        })
-        .expect("constant completion should return items");
-    let CompletionResponse::Array(items) = response else {
-        panic!("completion should return an array response");
-    };
-    assert!(items.iter().any(|item| item.label == "collect"));
-    assert!(items.iter().any(|item| item.label == "count"));
-    assert!(
-        !items.iter().any(|item| item.label == "print"),
-        "no identifier completion inside a constant string"
-    );
-}
-
-#[test]
 fn formatting_unparsable_file_warns_and_returns_none() {
     let mut client = Client::start();
     let uri = workspace_uri("unparsable.luau");
@@ -1322,8 +1369,8 @@ fn did_change_with_no_changes_stores_the_new_version() {
     client.open(&uri, "local a = 1\n");
     let _opened = client.diagnostics(&uri, Some(1));
 
+    // The same diagnostics don't go out again.
     client.change(&uri, 5, Vec::new());
-    let _republished = client.diagnostics(&uri, Some(5));
 
     // A repeated version is stale, so it changes and republishes nothing.
     client.replace_all(&uri, 5, "local b = 2\n");
@@ -1478,25 +1525,18 @@ fn watched_config_change_reseeds_open_documents_with_extra_globals() {
 }
 
 #[test]
-fn a_std_definition_reaches_lints_and_hover_and_an_edit_to_it_reseeds_them() {
-    let app = r#"
-[globals.app]
-kind = "namespace"
-
-[globals.app.members.net]
-kind = "namespace"
-
-[globals.app.members.net.members.send]
-kind = "function"
-params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
-"#;
+fn a_definition_file_reaches_lints_hover_and_completion_and_an_edit_to_it_reseeds_them() {
+    let app = r#"declare app: { net: { send: (mode: "tcp" | "udp", port: number, timeout: number) -> () } }"#;
     let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("luck.json"), r#"{ "std": ["app.toml"] }"#)
+    fs::write(directory.path().join("luck.json"), r#"{ "definitions": ["types/app.d.luau"] }"#)
         .expect("write luck.json");
-    let std_path = directory.path().join("app.toml");
-    fs::write(&std_path, app).expect("write app.toml");
+    fs::create_dir_all(directory.path().join("types")).expect("mkdir types");
+    let definitions_path = directory.path().join("types/app.d.luau");
+    fs::write(&definitions_path, app).expect("write app.d.luau");
     let path = directory.path().join("main.luau");
-    let text = "app.net.send('hello')\n";
+    let text = "app.net.send('', 1, 2)
+app.net.send('tcp')
+";
     fs::write(&path, text).expect("write main.luau");
     let uri = Uri::from_file_path(&path).expect("file path URI");
 
@@ -1514,11 +1554,26 @@ params = [{ kind = "string" }, { kind = "number" }, { kind = "number" }]
     let HoverContents::Markup(markup) = hover.contents else {
         panic!("hover should return markup contents");
     };
-    assert!(markup.value.contains("app.net.send"), "{}", markup.value);
+    let ty = "(mode: \"tcp\" | \"udp\", port: number, timeout: number) -> ()";
+    assert!(markup.value.contains(ty), "{}", markup.value);
+    let response = client
+        .request::<Completion>(CompletionParams {
+            text_document_position: position_params(&uri, 0, 14),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: None,
+        })
+        .expect("constant completion should return items");
+    let CompletionResponse::Array(items) = response else {
+        panic!("completion should return an array response");
+    };
+    let mut labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+    labels.sort_unstable();
+    assert_eq!(labels, ["tcp", "udp"], "no identifier completion inside a constant string");
 
-    fs::write(&std_path, app.replace(", { kind = \"number\" }, { kind = \"number\" }", ""))
-        .expect("rewrite app.toml");
-    client.file_changed(&std_path, FileChangeType::CHANGED);
+    fs::write(&definitions_path, app.replace(", port: number, timeout: number", ""))
+        .expect("rewrite app.d.luau");
+    client.file_changed(&definitions_path, FileChangeType::CHANGED);
     let reseeded = client.diagnostics(&uri, Some(1));
     assert!(reseeded.iter().all(|diag| diag.message != arity), "{reseeded:?}");
 }

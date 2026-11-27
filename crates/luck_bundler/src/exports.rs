@@ -82,6 +82,7 @@ impl<'ast> Exports<'ast> {
                 | Statement::Continue(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
+                | Statement::Declaration(_)
                 | Statement::Error(_) => continue,
             };
             if statement_symbols.iter().any(|&symbol| needs_table(symbol)) {
@@ -183,6 +184,7 @@ impl<'ast> Exports<'ast> {
                 | Statement::Continue(_)
                 | Statement::CompoundAssignment(_)
                 | Statement::TypeDeclaration(_)
+                | Statement::Declaration(_)
                 | Statement::Error(_) => continue,
             };
             edits.push((span, Edit::Text(text)));
@@ -215,6 +217,7 @@ fn has_value_exports(block: &Block<'_>) -> bool {
         | Statement::Continue(_)
         | Statement::CompoundAssignment(_)
         | Statement::TypeDeclaration(_)
+        | Statement::Declaration(_)
         | Statement::Error(_) => false,
     })
 }

@@ -3,7 +3,8 @@
 
 use crate::{
     Assignment, AstKind, BinaryLink, BinaryOp, Block, CompoundAssignment, ConditionalBinding,
-    DoBlock, ElseClause, ElseIfClause, ElseIfExprClause, Expression, Field, FunctionArgs,
+    Declaration, DeclaredExternType, DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause,
+    ElseIfClause, ElseIfExprClause, Expression, ExternTypeMember, Field, FunctionArgs,
     FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
     FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam,
     IfExpression, IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType,
@@ -58,6 +59,31 @@ pub trait Visit<'ast> {
 
     #[inline]
     fn ascend(&mut self) {}
+
+    #[inline]
+    fn visit_declaration(&mut self, declaration: &'ast Declaration<'ast>) {
+        self.walk_declaration(declaration);
+    }
+
+    #[inline]
+    fn visit_declared_global(&mut self, declared_global: &'ast DeclaredGlobal<'ast>) {
+        self.walk_declared_global(declared_global);
+    }
+
+    #[inline]
+    fn visit_declared_function(&mut self, declared_function: &'ast DeclaredFunction<'ast>) {
+        self.walk_declared_function(declared_function);
+    }
+
+    #[inline]
+    fn visit_declared_extern_type(&mut self, declared_extern_type: &'ast DeclaredExternType<'ast>) {
+        self.walk_declared_extern_type(declared_extern_type);
+    }
+
+    #[inline]
+    fn visit_extern_type_member(&mut self, extern_type_member: &'ast ExternTypeMember<'ast>) {
+        self.walk_extern_type_member(extern_type_member);
+    }
 
     #[inline]
     fn visit_expr(&mut self, expr: &'ast Expression<'ast>) {
@@ -376,6 +402,75 @@ pub trait Visit<'ast> {
     #[inline]
     fn visit_generic_type_param(&mut self, generic_type_param: &'ast GenericTypeParam<'ast>) {
         self.walk_generic_type_param(generic_type_param);
+    }
+
+    fn walk_declaration(&mut self, declaration: &'ast Declaration<'ast>) {
+        match declaration {
+            Declaration::Global(declared_global) => self.visit_declared_global(declared_global),
+            Declaration::Function(declared_function) => {
+                self.visit_declared_function(declared_function);
+            }
+            Declaration::ExternType(declared_extern_type) => {
+                self.visit_declared_extern_type(declared_extern_type);
+            }
+        }
+    }
+
+    #[inline]
+    fn walk_declared_global(&mut self, declared_global: &'ast DeclaredGlobal<'ast>) {
+        let kind = AstKind::DeclaredGlobal(declared_global);
+        self.enter_node(kind);
+        self.visit_name(&declared_global.name);
+        self.visit_type(&declared_global.ty);
+        self.leave_node(kind);
+    }
+
+    fn walk_declared_function(&mut self, declared_function: &'ast DeclaredFunction<'ast>) {
+        let kind = AstKind::DeclaredFunction(declared_function);
+        self.enter_node(kind);
+        for function_attribute in &declared_function.attributes {
+            self.visit_function_attribute(function_attribute);
+        }
+        if let Some(declare_chain) = &declared_function.declare_chain {
+            self.visit_suffixed_expr(declare_chain);
+        }
+        self.visit_name(&declared_function.name);
+        if let Some(generics) = &declared_function.generics {
+            self.visit_generic_type_list(generics);
+        }
+        for typed_name in &declared_function.params {
+            self.visit_typed_name(typed_name);
+        }
+        if let Some(vararg) = &declared_function.vararg {
+            self.visit_var_arg_param(vararg);
+        }
+        if let Some(return_type) = &declared_function.return_type {
+            self.visit_type(return_type);
+        }
+        self.leave_node(kind);
+    }
+
+    #[inline]
+    fn walk_declared_extern_type(&mut self, declared_extern_type: &'ast DeclaredExternType<'ast>) {
+        let kind = AstKind::DeclaredExternType(declared_extern_type);
+        self.enter_node(kind);
+        self.visit_name(&declared_extern_type.name);
+        if let Some(supertype) = &declared_extern_type.supertype {
+            self.visit_name(supertype);
+        }
+        for extern_type_member in &declared_extern_type.members {
+            self.visit_extern_type_member(extern_type_member);
+        }
+        self.leave_node(kind);
+    }
+
+    fn walk_extern_type_member(&mut self, extern_type_member: &'ast ExternTypeMember<'ast>) {
+        match extern_type_member {
+            ExternTypeMember::Field(type_field) => self.visit_type_field(type_field),
+            ExternTypeMember::Method(declared_function) => {
+                self.visit_declared_function(declared_function);
+            }
+        }
     }
 
     fn walk_expr(&mut self, expr: &'ast Expression<'ast>) {
@@ -717,6 +812,7 @@ pub trait Visit<'ast> {
             Statement::TypeDeclaration(type_declaration) => {
                 self.visit_type_declaration(type_declaration);
             }
+            Statement::Declaration(declaration) => self.visit_declaration(declaration),
         }
     }
 
@@ -1033,6 +1129,9 @@ pub trait Visit<'ast> {
         let kind = AstKind::FunctionType(function_type);
         self.enter_node(kind);
         if self.descend() {
+            for function_attribute in &function_type.attributes {
+                self.visit_function_attribute(function_attribute);
+            }
             if let Some(generics) = &function_type.generics {
                 self.visit_generic_type_list(generics);
             }
@@ -1098,6 +1197,9 @@ pub trait Visit<'ast> {
         let kind = AstKind::ParenthesizedType(parenthesized_type);
         self.enter_node(kind);
         if self.descend() {
+            for function_attribute in &parenthesized_type.attributes {
+                self.visit_function_attribute(function_attribute);
+            }
             self.visit_type(&parenthesized_type.ty);
         }
         self.ascend();

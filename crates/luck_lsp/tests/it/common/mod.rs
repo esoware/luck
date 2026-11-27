@@ -12,17 +12,18 @@ use ls_types::notification::{
     DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, Exit, Initialized,
     Notification as LspNotification, PublishDiagnostics, ShowMessage,
 };
-use ls_types::request::{Initialize, References, Request as LspRequest, Shutdown};
+use ls_types::request::{GotoDefinition, Initialize, References, Request as LspRequest, Shutdown};
 use ls_types::{
     ClientCapabilities, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidOpenTextDocumentParams, FileChangeType, FileEvent, InitializeParams, InitializeResult,
-    InitializedParams, Location, MessageType, PartialResultParams, Position,
-    PublishDiagnosticsParams, ReferenceContext, ReferenceParams, ShowMessageParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
-    WorkspaceFolder,
+    DidOpenTextDocumentParams, FileChangeType, FileEvent, GotoDefinitionParams,
+    GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, Location,
+    MessageType, PartialResultParams, Position, PublishDiagnosticsParams, ReferenceContext,
+    ReferenceParams, ShowMessageParams, TextDocumentContentChangeEvent, TextDocumentIdentifier,
+    TextDocumentItem, TextDocumentPositionParams, Uri, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams, WorkspaceFolder,
 };
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseError};
+use serde_json::{Value, json};
 
 /// How long a test waits for any one message before it fails.
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -54,6 +55,19 @@ impl Client {
             name: "workspace".to_owned(),
         }];
         let params = InitializeParams {
+            workspace_folders: Some(workspace_folders),
+            ..InitializeParams::default()
+        };
+        Self::initialized(params).0
+    }
+
+    /// A server that reads nothing but what the client holds, under `config`,
+    /// with the workspace folder `folder`.
+    pub(crate) fn start_given(config: Value, folder: &Uri) -> Self {
+        let workspace_folders =
+            vec![WorkspaceFolder { uri: folder.clone(), name: "workspace".to_owned() }];
+        let params = InitializeParams {
+            initialization_options: Some(config),
             workspace_folders: Some(workspace_folders),
             ..InitializeParams::default()
         };
@@ -153,9 +167,21 @@ impl Client {
     /// The next diagnostics published for `uri` at `version`, skipping any
     /// published for it before.
     pub(crate) fn diagnostics(&mut self, uri: &Uri, version: Option<i32>) -> Vec<Diagnostic> {
+        self.diagnostics_where(uri, version, |_| true)
+    }
+
+    /// The next diagnostics published for `uri` at `version` that
+    /// `is_wanted` takes, such as the ones Luau's check adds to the lints,
+    /// which go out first.
+    pub(crate) fn diagnostics_where(
+        &mut self,
+        uri: &Uri,
+        version: Option<i32>,
+        is_wanted: impl Fn(&[Diagnostic]) -> bool,
+    ) -> Vec<Diagnostic> {
         loop {
             let published = self.next_published(uri);
-            if published.version == version {
+            if published.version == version && is_wanted(&published.diagnostics) {
                 return published.diagnostics;
             }
         }
@@ -247,6 +273,16 @@ impl Client {
         });
     }
 
+    /// Pushes the client's files, each with its text, or with none to delete
+    /// it, through `luck/didChangeFiles`.
+    pub(crate) fn push(&self, files: &[(&Uri, Option<&str>)]) {
+        let changes: Vec<Value> =
+            files.iter().map(|(uri, text)| json!({ "uri": uri, "text": text })).collect();
+        let notification =
+            Notification::new("luck/didChangeFiles".to_owned(), json!({ "changes": changes }));
+        self.connection.sender.send(notification.into()).expect("the server reads");
+    }
+
     /// What a client sends when the file at `path` changes on disk.
     pub(crate) fn file_changed(&self, path: &Path, typ: FileChangeType) {
         self.notify::<DidChangeWatchedFiles>(DidChangeWatchedFilesParams {
@@ -322,4 +358,20 @@ pub(crate) fn references(
             context: ReferenceContext { include_declaration },
         })
         .expect("the document is open")
+}
+
+/// The one location `textDocument/definition` finds for the name at `line`
+/// and `utf16_column` in the open document at `uri`.
+pub(crate) fn definition(client: &mut Client, uri: &Uri, line: u32, utf16_column: u32) -> Location {
+    let found = client
+        .request::<GotoDefinition>(GotoDefinitionParams {
+            text_document_position_params: position_params(uri, line, utf16_column),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .expect("a definition");
+    let GotoDefinitionResponse::Scalar(location) = found else {
+        panic!("one location: {found:?}");
+    };
+    location
 }

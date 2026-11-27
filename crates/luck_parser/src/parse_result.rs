@@ -10,6 +10,9 @@ use crate::groupings::Groupings;
 #[derive(Debug)]
 pub struct ParseResult<'ast> {
     pub source: &'ast [u8],
+    /// Whether the parse read `source` as a definition file, as
+    /// [`crate::parse_definitions`] does.
+    pub is_definition_file: bool,
     pub chunk: Block<'ast>,
     pub comments: Vec<Comment>,
     /// Every token the parse read, as [`luck_lexer::lex`] gives them, from

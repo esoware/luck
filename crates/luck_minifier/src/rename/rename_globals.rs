@@ -112,6 +112,7 @@ fn function_globals(top_level: &[&Statement<'_>], scoping: &Scoping) -> Vec<Name
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
             | Statement::TypeDeclaration(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => reads.visit_stmt(stmt),
         }
     }

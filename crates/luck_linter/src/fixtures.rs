@@ -5,7 +5,7 @@ use std::slice;
 
 use luck_allocator::Allocator;
 use luck_diagnostics::{Severity, Tag};
-use luck_stdlib::{Variant, library_for};
+use luck_stdlib::{Stdlib, library_for, luau_library};
 use luck_token::{Span, line_breaks};
 use serde_json::{Value, json};
 
@@ -23,13 +23,15 @@ pub(crate) const CATEGORIES: [Category; 4] =
 /// A source a rule's test lints, as oxlint's `TestCase` is.
 ///
 /// It's linted against Luau's standard library, or Roblox's for a case of
-/// [`Tester::with_roblox`], with the rule's options and the rest of a
+/// [`Tester::with_roblox`], or Luau's with a definition file over it for one
+/// of [`Tester::with_definitions`], with the rule's options and the rest of a
 /// `luck.json` `lint` section, each JSON, as oxlint's holds a rule's config
 /// and the rest of `.oxlintrc.json`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TestCase<'case> {
     source: &'case str,
-    variant: Variant,
+    has_roblox: bool,
+    definitions: Option<&'case str>,
     options: Option<&'case str>,
     lint: Option<&'case str>,
 }
@@ -50,13 +52,20 @@ type FullCase<'case> = (&'case str, Option<&'case str>, Option<&'case str>);
 
 impl<'case> From<FullCase<'case>> for TestCase<'case> {
     fn from((source, options, lint): FullCase<'case>) -> Self {
-        Self { source, variant: Variant::Standalone, options, lint }
+        Self { source, has_roblox: false, definitions: None, options, lint }
+    }
+}
+
+impl TestCase<'_> {
+    /// What the snapshot calls the library it's linted against.
+    const fn label(&self) -> &'static str {
+        if self.has_roblox { "Roblox" } else { "Luau" }
     }
 }
 
 impl fmt::Display for TestCase<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the {} case `{}`", self.variant, self.source)
+        write!(f, "the {} case `{}`", self.label(), self.source)
     }
 }
 
@@ -83,7 +92,7 @@ impl<'case> Tester<'case> {
     where
         Case: Copy + Into<TestCase<'case>>,
     {
-        Self { rule, pass: Vec::new(), fail: Vec::new() }.with(Variant::Standalone, pass, fail)
+        Self { rule, pass: Vec::new(), fail: Vec::new() }.with(false, pass, fail)
     }
 
     /// Adds cases linted against the Roblox standard library, which come
@@ -92,19 +101,40 @@ impl<'case> Tester<'case> {
     where
         Case: Copy + Into<TestCase<'case>>,
     {
-        self.with(Variant::Roblox, pass, fail)
+        self.with(true, pass, fail)
     }
 
-    fn with<Case>(mut self, variant: Variant, pass: &[Case], fail: &[Case]) -> Self
+    /// Adds cases linted against Luau's standard library with the definition
+    /// file `definitions` layered over it, which come after the others in the
+    /// snapshot.
+    pub(crate) fn with_definitions<Case>(
+        self,
+        definitions: &'case str,
+        pass: &[Case],
+        fail: &[Case],
+    ) -> Self
     where
         Case: Copy + Into<TestCase<'case>>,
     {
-        let on_variant = |&case: &Case| {
+        let with_definitions = |&case: &Case| {
             let case: TestCase<'case> = case.into();
-            TestCase { variant, ..case }
+            TestCase { definitions: Some(definitions), ..case }
         };
-        self.pass.extend(pass.iter().map(on_variant));
-        self.fail.extend(fail.iter().map(on_variant));
+        let pass: Vec<TestCase<'case>> = pass.iter().map(with_definitions).collect();
+        let fail: Vec<TestCase<'case>> = fail.iter().map(with_definitions).collect();
+        self.with(false, &pass, &fail)
+    }
+
+    fn with<Case>(mut self, has_roblox: bool, pass: &[Case], fail: &[Case]) -> Self
+    where
+        Case: Copy + Into<TestCase<'case>>,
+    {
+        let on_library = |&case: &Case| {
+            let case: TestCase<'case> = case.into();
+            TestCase { has_roblox, ..case }
+        };
+        self.pass.extend(pass.iter().map(on_library));
+        self.fail.extend(fail.iter().map(on_library));
         self
     }
 
@@ -161,8 +191,14 @@ impl<'case> Tester<'case> {
         let allocator = Allocator::new();
         let parse = luck_parser::parse(&allocator, case.source.as_bytes());
         assert!(parse.errors.is_empty(), "{case} doesn't parse: {:?}", parse.errors);
-        let mut messages =
-            Linter::new(config).run(&parse, library_for(case.variant), FixKind::all(), None);
+        let layered = case.definitions.map(|definitions| {
+            Stdlib::luau()
+                .layer(definitions)
+                .unwrap_or_else(|diags| panic!("{case}'s definitions don't parse: {diags:?}"))
+        });
+        let library =
+            layered.as_ref().map_or_else(|| library_for(case.has_roblox), Stdlib::library);
+        let mut messages = Linter::new(config).run(&parse, library, FixKind::all(), None);
         assert!(
             messages.iter().all(|message| RuleId::from_name(message.code).is_some()),
             "{case} doesn't compile: {messages:?}"
@@ -184,7 +220,7 @@ fn rendered(case: &TestCase<'_>, messages: &[Message], problems: &mut Vec<String
         if !text.is_empty() {
             text.push('\n');
         }
-        render_message(&mut text, &lines, case.variant, message);
+        render_message(&mut text, &lines, case.label(), message);
         let Some(fix) = &message.fix else {
             continue;
         };
@@ -230,7 +266,7 @@ type Mark<'message> = (Span, char, Option<&'message str>);
 /// The message, where it is, the lines its span and labels touch, each
 /// marked under the part it covers, with a line of context around them, as
 /// miette shows oxlint's, and its tag, help, and note.
-fn render_message(text: &mut String, lines: &Lines<'_>, variant: Variant, message: &Message) {
+fn render_message(text: &mut String, lines: &Lines<'_>, library: &str, message: &Message) {
     writeln!(text, "{}: {}", message.severity.name(), message.message).unwrap();
     let marks: Vec<Mark<'_>> = iter::once((message.span(), '^', None))
         .chain(message.labels.iter().map(|label| (label.span, '-', Some(&*label.message))))
@@ -253,7 +289,7 @@ fn render_message(text: &mut String, lines: &Lines<'_>, variant: Variant, messag
     let (line, column) = lines.start(message.span());
     let column_chars = lines.text(line)[..column].chars().count();
     let (line_number, column_number) = (line + 1, column_chars + 1);
-    writeln!(text, "{:width$}--> {variant}:{line_number}:{column_number}", "").unwrap();
+    writeln!(text, "{:width$}--> {library}:{line_number}:{column_number}", "").unwrap();
     let mut last_shown = None;
     for &shown in &shown_lines {
         if last_shown.is_some_and(|last| shown > last + 1) {
@@ -395,7 +431,6 @@ pub(crate) fn with_host<T>(source: &str, answer: impl FnOnce(&ContextHost<'_>) -
     let allocator = Allocator::new();
     let parse = luck_parser::parse(&allocator, source.as_bytes());
     assert!(parse.errors.is_empty(), "parse of {source:?}: {:?}", parse.errors);
-    let analysis =
-        Linter::new(LintConfig::default()).analyze(&parse, library_for(Variant::Standalone));
+    let analysis = Linter::new(LintConfig::default()).analyze(&parse, luau_library());
     answer(&ContextHost::new(&analysis, FixKind::all()))
 }

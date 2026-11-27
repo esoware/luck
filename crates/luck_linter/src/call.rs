@@ -1,8 +1,6 @@
 use std::slice;
 
-use luck_ast::{
-    Call, Expression, FunctionArgs, GetSpan as _, Name, StringLiteral, Suffix, TableConstructor,
-};
+use luck_ast::{Call, Expression, FunctionArgs, Name, StringLiteral, Suffix};
 use luck_semantic::Scoping;
 use luck_token::Span;
 use luck_value::{ToBoolean as _, ValueContext};
@@ -55,23 +53,15 @@ pub(crate) fn global_new_call<'ast>(
 pub(crate) enum CallArg<'ast> {
     Expr(&'ast Expression<'ast>),
     String(&'ast StringLiteral<'ast>),
-    Table(&'ast TableConstructor<'ast>),
+    Table,
 }
 
 impl<'ast> CallArg<'ast> {
-    pub(crate) fn span(self) -> Span {
-        match self {
-            Self::Expr(expr) => expr.span(),
-            Self::String(literal) => literal.span,
-            Self::Table(table) => table.span,
-        }
-    }
-
     pub(crate) fn string_literal(self) -> Option<&'ast StringLiteral<'ast>> {
         match self {
             Self::Expr(Expression::StringLiteral(literal)) => Some(literal),
             Self::String(literal) => Some(literal),
-            Self::Expr(_) | Self::Table(_) => None,
+            Self::Expr(_) | Self::Table => None,
         }
     }
 
@@ -91,7 +81,7 @@ impl<'ast> CallArg<'ast> {
     pub(crate) fn to_boolean(self, context: &dyn ValueContext) -> Option<bool> {
         match self {
             Self::Expr(expr) => expr.to_boolean(context),
-            Self::String(_) | Self::Table(_) => Some(true),
+            Self::String(_) | Self::Table => Some(true),
         }
     }
 }
@@ -109,7 +99,7 @@ impl<'ast> CallArgs<'ast> {
         let (list, bare): (&[Expression<'_>], _) = match function_args {
             FunctionArgs::Parenthesized { args, .. } => (args, None),
             FunctionArgs::StringLiteral(literal) => (&[], Some(CallArg::String(literal))),
-            FunctionArgs::TableConstructor(table) => (&[], Some(CallArg::Table(table))),
+            FunctionArgs::TableConstructor(_) => (&[], Some(CallArg::Table)),
             FunctionArgs::Error(_) => (&[], None),
         };
         Self { list: list.iter(), bare }

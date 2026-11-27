@@ -11,6 +11,7 @@ use luck_config::{
 };
 use luck_linter::LintConfig;
 use luck_resolver::{FileSystem as _, FileSystemOs, lexically_normalized};
+use luck_type_checker::luau_config_aliases;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
@@ -24,18 +25,23 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
 }
 
-/// How `bundle` and `graph` resolve and read modules: as `project` says, with
+/// How `build`, `bundle`, and `graph` resolve and read modules: as `project`
+/// says, with each `.config.luau` read by Luau's own Config library, and with
 /// `--dynamic-require` replacing its mode when given.
 pub(crate) fn bundle_options(
     project: &Project,
     dynamic_require: Option<DynamicRequire>,
 ) -> BundleOptions<'_> {
     let options = project.bundle_options();
-    BundleOptions { dynamic_require: dynamic_require.unwrap_or(options.dynamic_require), ..options }
+    BundleOptions {
+        dynamic_require: dynamic_require.unwrap_or(options.dynamic_require),
+        luau_config: Some(luau_config_aliases),
+        ..options
+    }
 }
 
 pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {
-    Project::load(config_path).map_err(|error| config_error(&error))
+    Project::load(config_path, FileSystemOs).map_err(|error| config_error(&error))
 }
 
 /// The project a command that takes one input reads it under: `-c` when
@@ -62,9 +68,9 @@ pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Resu
         // A bare file name, or `-` for stdin: cwd is the only context there is.
         None => current_directory()?,
     };
-    match find_config(&start_directory) {
+    match find_config(&FileSystemOs, &start_directory) {
         Some(found) => load_project(&found),
-        None => Ok(Project::defaults(start_directory)),
+        None => Ok(Project::defaults(start_directory, FileSystemOs)),
     }
 }
 
@@ -72,9 +78,12 @@ pub(crate) fn one_shot_project(config_path: Option<&Path>, input: &Path) -> Resu
 /// walking up from cwd, or else the defaults rooted at cwd.
 pub(crate) fn working_project(config_path: Option<&Path>) -> Result<Project, Exit> {
     let working_directory = current_directory()?;
-    match config_path.map(Path::to_path_buf).or_else(|| find_config(&working_directory)) {
+    let config_path = config_path
+        .map(Path::to_path_buf)
+        .or_else(|| find_config(&FileSystemOs, &working_directory));
+    match config_path {
         Some(found) => load_project(&found),
-        None => Ok(Project::defaults(working_directory)),
+        None => Ok(Project::defaults(working_directory, FileSystemOs)),
     }
 }
 
@@ -273,7 +282,7 @@ impl<'overlay> Projects<'overlay> {
             return Ok(Arc::clone(known));
         }
         // Found by stat alone, so a project met before isn't loaded again.
-        let project = if let Some(config_path) = find_config(directory) {
+        let project = if let Some(config_path) = find_config(&FileSystemOs, directory) {
             if let Some(known) = self.discovered.get(&config_path) {
                 Arc::clone(known)
             } else {
@@ -284,7 +293,8 @@ impl<'overlay> Projects<'overlay> {
         } else if let Some(fallback) = &self.fallback {
             Arc::clone(fallback)
         } else {
-            let fallback = self.prepared(Project::defaults(self.working_directory.clone()));
+            let fallback =
+                self.prepared(Project::defaults(self.working_directory.clone(), FileSystemOs));
             self.fallback = Some(Arc::clone(&fallback));
             fallback
         };
@@ -390,8 +400,6 @@ fn canonical_directory(directory: &Path) -> Result<PathBuf, Exit> {
 mod tests {
     use std::fs;
 
-    use luck_stdlib::Variant;
-
     use super::*;
 
     fn selected(config_path: Option<&Path>, paths: &[String]) -> Vec<ProjectFile> {
@@ -405,8 +413,8 @@ mod tests {
             .collect()
     }
 
-    fn variant(file: &ProjectFile) -> Variant {
-        file.project.variant()
+    fn has_roblox(file: &ProjectFile) -> bool {
+        file.project.definitions().stdlib().library().has_roblox
     }
 
     fn write_file(path: &Path, contents: &str) {
@@ -417,13 +425,13 @@ mod tests {
     #[test]
     fn one_shot_project_is_the_one_above_the_input() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("luck.json"), r#"{"variant":"roblox"}"#)
+        fs::write(directory.path().join("luck.json"), r#"{"definitions":["@roblox"]}"#)
             .expect("write luck.json");
         let entry = directory.path().join("src/main.luau");
         fs::create_dir_all(entry.parent().expect("a parent")).expect("mkdir src");
 
         let project = one_shot_project(None, &entry).expect("project loads");
-        assert_eq!(project.variant(), Variant::Roblox);
+        assert!(project.definitions().stdlib().library().has_roblox);
     }
 
     /// With no `luck.json`, the defaults root where discovery started, so a
@@ -435,55 +443,52 @@ mod tests {
         write_file(&entry, "return 1\n");
 
         let project = one_shot_project(None, &entry).expect("defaults");
-        assert_eq!(project.variant(), Variant::Standalone);
+        assert!(!project.definitions().stdlib().library().has_roblox);
         let canonical_sources =
             entry.parent().and_then(|parent| FileSystemOs.canonicalize(parent).ok());
-        if find_config(directory.path()).is_none() {
+        if find_config(&FileSystemOs, directory.path()).is_none() {
             assert_eq!(Some(project.root()), canonical_sources.as_deref());
         }
     }
 
-    /// Every `.luau` and `.lua` file under a roblox config gets the roblox
-    /// variant, whatever its extension.
+    /// Every `.luau` and `.lua` file under a config that loads `@roblox` gets
+    /// Roblox's API, whatever its extension.
     #[test]
-    fn files_take_the_variant_of_their_config() {
+    fn files_take_the_definitions_of_their_config() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("luck.json");
-        fs::write(&config_path, r#"{"variant":"roblox"}"#).expect("write luck.json");
+        fs::write(&config_path, r#"{"definitions":["@roblox"]}"#).expect("write luck.json");
         fs::write(directory.path().join("main.lua"), "return 1\n").expect("write main.lua");
         fs::write(directory.path().join("main.luau"), "return 2\n").expect("write main.luau");
 
         let root = directory.path().display().to_string();
-        let variants: Vec<(String, Variant)> = selected(Some(&config_path), &[root])
+        let libraries: Vec<(String, bool)> = selected(Some(&config_path), &[root])
             .iter()
-            .map(|file| (file.path.file_name().unwrap().to_string_lossy().into(), variant(file)))
+            .map(|file| (file.path.file_name().unwrap().to_string_lossy().into(), has_roblox(file)))
             .collect();
-        assert_eq!(
-            variants,
-            [("main.lua".to_owned(), Variant::Roblox), ("main.luau".to_owned(), Variant::Roblox),]
-        );
+        assert_eq!(libraries, [("main.lua".to_owned(), true), ("main.luau".to_owned(), true)]);
     }
 
     #[test]
     fn files_take_the_nearest_config_above_them() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(&root.join("luck.json"), r#"{"variant":"roblox"}"#);
-        write_file(&root.join("pkg/luck.json"), r#"{"variant":"standalone"}"#);
+        write_file(&root.join("luck.json"), r#"{"definitions":["@roblox"]}"#);
+        write_file(&root.join("pkg/luck.json"), r#"{"minify":false}"#);
         write_file(&root.join("a.luau"), "return 1\n");
         write_file(&root.join("pkg/deep/b.luau"), "return 2\n");
 
         let walked = selected(None, &[root.display().to_string()]);
-        let walked_targets: Vec<Variant> = walked.iter().map(variant).collect();
+        let walked_libraries: Vec<bool> = walked.iter().map(has_roblox).collect();
         assert_eq!(file_names(&walked), ["a.luau", "b.luau"]);
-        assert_eq!(walked_targets, [Variant::Roblox, Variant::Standalone]);
+        assert_eq!(walked_libraries, [true, false]);
 
         let named = selected(None, &[root.join("pkg/deep/b.luau").display().to_string()]);
-        assert_eq!(variant(&named[0]), Variant::Standalone);
+        assert!(!has_roblox(&named[0]));
 
         // `-c` puts every file under the one config.
         let pinned = selected(Some(&root.join("luck.json")), &[root.display().to_string()]);
-        assert!(pinned.iter().all(|file| variant(file) == Variant::Roblox), "{pinned:?}");
+        assert!(pinned.iter().all(has_roblox), "{pinned:?}");
         assert_eq!(file_names(&pinned), ["a.luau", "b.luau"]);
     }
 
@@ -624,11 +629,11 @@ mod tests {
     fn discovery_ignores_a_config_reached_only_through_dot_dot() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory.path();
-        write_file(&root.join("here/luck.json"), r#"{"variant":"roblox"}"#);
+        write_file(&root.join("here/luck.json"), r#"{"definitions":["@roblox"]}"#);
         write_file(&root.join("pkg/a.luau"), "return 1\n");
 
         let mut projects = Projects::new(None, &root.join("here"), None).expect("projects");
         let project = projects.for_directory(&root.join("here/../pkg")).expect("project resolves");
-        assert_eq!(project.variant(), Variant::Standalone);
+        assert!(!project.definitions().stdlib().library().has_roblox);
     }
 }

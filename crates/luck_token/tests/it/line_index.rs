@@ -32,3 +32,18 @@ y";
     assert_eq!(LineIndex::new(source.as_bytes()).line_column(3), (1, 4));
     assert_eq!(LineIndex::new(source.as_bytes()).line_column(11), (2, 1));
 }
+
+#[test]
+fn line_index_offset_inverts_line_column() {
+    let source = "\
+local x
+do local y
+end";
+    let lines = LineIndex::new(source.as_bytes());
+    for offset in [0, 6, 8, 17] {
+        let (line, column) = lines.line_column(offset);
+        assert_eq!(lines.offset(line, column), Some(offset), "at {offset}");
+    }
+    assert_eq!(lines.offset(0, 1), None);
+    assert_eq!(lines.offset(4, 1), None);
+}

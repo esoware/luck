@@ -1,20 +1,20 @@
 linter Summary:
 Files Linted   : 55/55
-Diagnostics    : 14843
+Diagnostics    : 14799
  11107 no_implicit_globals
    765 multiple_statements_per_line
    503 setting_global
    490 shadowing
-   291 undefined_variable
+   373 undefined_variable
    212 placeholder_read
    177 unused_loop_variable
-   158 must_use
    148 merge_adjacent_locals
    138 redefining_local
    133 unused_argument
    115 unused_variable
     88 unnecessary_assert
     60 divide_by_zero
+    54 incorrect_stdlib_use
     54 unnecessary_negation
     42 empty_block
     38 global_usage
@@ -22,7 +22,6 @@ Diagnostics    : 14843
     32 value_overwritten_before_read
     31 deprecated
     28 mixed_table
-    22 incorrect_stdlib_use
     21 string_index_to_field
     20 duplicate_function
     16 redundant_nil_init
@@ -62,7 +61,6 @@ apicalls.luau
 22:10 no_implicit_globals: global variable `pi` used
 25:10 setting_global: setting global variable `largealloc` (missing `local`?)
 25:10 no_implicit_globals: global variable `largealloc` used
-26:3 must_use: return value of `table.create` is discarded
 26:3 no_implicit_globals: global variable `table` used
 29:10 setting_global: setting global variable `oops` (missing `local`?)
 29:10 no_implicit_globals: global variable `oops` used
@@ -112,11 +110,13 @@ assert.luau
 28:25 unnecessary_assert: `assert` on a constant falsy value always errors
 31:1 no_implicit_globals: global variable `assert` used
 31:8 no_implicit_globals: global variable `select` used
+31:20 incorrect_stdlib_use: `assert` accepts at most 2 argument(s), got 3
 31:20 no_implicit_globals: global variable `assert` used
 31:20 unnecessary_assert: `assert` on a constant value always passes
 32:1 no_implicit_globals: global variable `assert` used
 32:8 no_implicit_globals: global variable `table` used
 32:21 no_implicit_globals: global variable `table` used
+32:32 incorrect_stdlib_use: `assert` accepts at most 2 argument(s), got 3
 32:32 no_implicit_globals: global variable `assert` used
 32:32 unnecessary_assert: `assert` on a constant value always passes
 
@@ -1252,6 +1252,7 @@ basic.luau
 441:1 no_implicit_globals: global variable `assert` used
 442:5 merge_adjacent_locals: adjacent `local` declarations can be merged
 445:5 no_implicit_globals: global variable `setmetatable` used
+452:1 incorrect_stdlib_use: `assert` accepts at most 2 argument(s), got 3
 452:1 no_implicit_globals: global variable `assert` used
 452:45 multiple_statements_per_line: statement starts on the same line as the previous statement
 453:1 no_implicit_globals: global variable `assert` used
@@ -1656,6 +1657,7 @@ basic.luau
 593:83 no_implicit_globals: global variable `concat` used
 596:1 no_implicit_globals: global variable `assert` used
 596:27 no_implicit_globals: global variable `concat` used
+596:34 undefined_variable: undefined variable `loadstring`
 596:34 no_implicit_globals: global variable `loadstring` used
 599:10 setting_global: setting global variable `f` (missing `local`?)
 599:10 no_implicit_globals: global variable `f` used
@@ -1820,7 +1822,6 @@ basic.luau
 808:79 multiple_statements_per_line: statement starts on the same line as the previous statement
 811:10 setting_global: setting global variable `testgetfenv` (missing `local`?)
 811:10 no_implicit_globals: global variable `testgetfenv` used
-812:5 must_use: return value of `getfenv` is discarded
 812:5 no_implicit_globals: global variable `getfenv` used
 815:19 multiple_statements_per_line: statement starts on the same line as the previous statement
 818:5 no_implicit_globals: global variable `assert` used
@@ -1964,6 +1965,7 @@ bitwise.luau
 7:8 no_implicit_globals: global variable `bit32` used
 7:24 no_implicit_globals: global variable `bit32` used
 8:1 no_implicit_globals: global variable `assert` used
+8:8 incorrect_stdlib_use: `bit32.btest` requires at least 1 argument(s), got 0
 8:8 no_implicit_globals: global variable `bit32` used
 9:1 no_implicit_globals: global variable `assert` used
 9:8 no_implicit_globals: global variable `bit32` used
@@ -2562,6 +2564,7 @@ buffers.luau
 171:30 no_implicit_globals: global variable `is_native_if_supported` used
 179:13 no_implicit_globals: global variable `buffer` used
 180:3 no_implicit_globals: global variable `buffer` used
+180:33 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 180:33 no_implicit_globals: global variable `vector` used
 181:14 no_implicit_globals: global variable `buffer` used
 182:3 no_implicit_globals: global variable `assert` used
@@ -2623,11 +2626,9 @@ buffers.luau
 244:30 no_implicit_globals: global variable `is_native_if_supported` used
 252:3 no_implicit_globals: global variable `assert` used
 252:10 no_implicit_globals: global variable `ecall` used
-252:27 must_use: return value of `buffer.create` is discarded
 252:27 no_implicit_globals: global variable `buffer` used
 253:3 no_implicit_globals: global variable `assert` used
 253:10 no_implicit_globals: global variable `ecall` used
-253:27 must_use: return value of `buffer.create` is discarded
 253:27 no_implicit_globals: global variable `buffer` used
 259:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 259:24 undefined_variable: undefined variable `is_native_if_supported`
@@ -2638,15 +2639,12 @@ buffers.luau
 262:33 no_implicit_globals: global variable `buffer` used
 263:3 no_implicit_globals: global variable `assert` used
 263:10 no_implicit_globals: global variable `ecall` used
-263:27 must_use: return value of `buffer.readi8` is discarded
 263:27 no_implicit_globals: global variable `buffer` used
 264:3 no_implicit_globals: global variable `assert` used
 264:10 no_implicit_globals: global variable `ecall` used
-264:27 must_use: return value of `buffer.readi8` is discarded
 264:27 no_implicit_globals: global variable `buffer` used
 265:3 no_implicit_globals: global variable `assert` used
 265:10 no_implicit_globals: global variable `ecall` used
-265:27 must_use: return value of `buffer.readi8` is discarded
 265:27 no_implicit_globals: global variable `buffer` used
 267:3 no_implicit_globals: global variable `call` used
 267:19 no_implicit_globals: global variable `buffer` used
@@ -2664,35 +2662,27 @@ buffers.luau
 273:33 no_implicit_globals: global variable `buffer` used
 274:3 no_implicit_globals: global variable `assert` used
 274:10 no_implicit_globals: global variable `ecall` used
-274:27 must_use: return value of `buffer.readi16` is discarded
 274:27 no_implicit_globals: global variable `buffer` used
 275:3 no_implicit_globals: global variable `assert` used
 275:10 no_implicit_globals: global variable `ecall` used
-275:27 must_use: return value of `buffer.readi16` is discarded
 275:27 no_implicit_globals: global variable `buffer` used
 276:3 no_implicit_globals: global variable `assert` used
 276:10 no_implicit_globals: global variable `ecall` used
-276:27 must_use: return value of `buffer.readi16` is discarded
 276:27 no_implicit_globals: global variable `buffer` used
 277:3 no_implicit_globals: global variable `assert` used
 277:10 no_implicit_globals: global variable `ecall` used
-277:27 must_use: return value of `buffer.readi16` is discarded
 277:27 no_implicit_globals: global variable `buffer` used
 278:3 no_implicit_globals: global variable `assert` used
 278:10 no_implicit_globals: global variable `ecall` used
-278:27 must_use: return value of `buffer.readi16` is discarded
 278:27 no_implicit_globals: global variable `buffer` used
 279:3 no_implicit_globals: global variable `assert` used
 279:10 no_implicit_globals: global variable `ecall` used
-279:27 must_use: return value of `buffer.readi16` is discarded
 279:27 no_implicit_globals: global variable `buffer` used
 280:3 no_implicit_globals: global variable `assert` used
 280:10 no_implicit_globals: global variable `ecall` used
-280:27 must_use: return value of `buffer.readi16` is discarded
 280:27 no_implicit_globals: global variable `buffer` used
 281:3 no_implicit_globals: global variable `assert` used
 281:10 no_implicit_globals: global variable `ecall` used
-281:27 must_use: return value of `buffer.readi16` is discarded
 281:27 no_implicit_globals: global variable `buffer` used
 283:3 no_implicit_globals: global variable `call` used
 283:19 no_implicit_globals: global variable `buffer` used
@@ -2710,15 +2700,12 @@ buffers.luau
 289:33 no_implicit_globals: global variable `buffer` used
 290:3 no_implicit_globals: global variable `assert` used
 290:10 no_implicit_globals: global variable `ecall` used
-290:27 must_use: return value of `buffer.readi32` is discarded
 290:27 no_implicit_globals: global variable `buffer` used
 291:3 no_implicit_globals: global variable `assert` used
 291:10 no_implicit_globals: global variable `ecall` used
-291:27 must_use: return value of `buffer.readi32` is discarded
 291:27 no_implicit_globals: global variable `buffer` used
 292:3 no_implicit_globals: global variable `assert` used
 292:10 no_implicit_globals: global variable `ecall` used
-292:27 must_use: return value of `buffer.readi32` is discarded
 292:27 no_implicit_globals: global variable `buffer` used
 294:3 no_implicit_globals: global variable `call` used
 294:19 no_implicit_globals: global variable `buffer` used
@@ -2736,15 +2723,12 @@ buffers.luau
 300:33 no_implicit_globals: global variable `buffer` used
 301:3 no_implicit_globals: global variable `assert` used
 301:10 no_implicit_globals: global variable `ecall` used
-301:27 must_use: return value of `buffer.readf32` is discarded
 301:27 no_implicit_globals: global variable `buffer` used
 302:3 no_implicit_globals: global variable `assert` used
 302:10 no_implicit_globals: global variable `ecall` used
-302:27 must_use: return value of `buffer.readf32` is discarded
 302:27 no_implicit_globals: global variable `buffer` used
 303:3 no_implicit_globals: global variable `assert` used
 303:10 no_implicit_globals: global variable `ecall` used
-303:27 must_use: return value of `buffer.readf32` is discarded
 303:27 no_implicit_globals: global variable `buffer` used
 305:3 no_implicit_globals: global variable `call` used
 305:19 no_implicit_globals: global variable `buffer` used
@@ -2762,15 +2746,12 @@ buffers.luau
 311:33 no_implicit_globals: global variable `buffer` used
 312:3 no_implicit_globals: global variable `assert` used
 312:10 no_implicit_globals: global variable `ecall` used
-312:27 must_use: return value of `buffer.readf64` is discarded
 312:27 no_implicit_globals: global variable `buffer` used
 313:3 no_implicit_globals: global variable `assert` used
 313:10 no_implicit_globals: global variable `ecall` used
-313:27 must_use: return value of `buffer.readf64` is discarded
 313:27 no_implicit_globals: global variable `buffer` used
 314:3 no_implicit_globals: global variable `assert` used
 314:10 no_implicit_globals: global variable `ecall` used
-314:27 must_use: return value of `buffer.readf64` is discarded
 314:27 no_implicit_globals: global variable `buffer` used
 316:3 no_implicit_globals: global variable `call` used
 316:19 no_implicit_globals: global variable `buffer` used
@@ -2788,19 +2769,15 @@ buffers.luau
 322:33 no_implicit_globals: global variable `buffer` used
 323:3 no_implicit_globals: global variable `assert` used
 323:10 no_implicit_globals: global variable `ecall` used
-323:27 must_use: return value of `buffer.readstring` is discarded
 323:27 no_implicit_globals: global variable `buffer` used
 324:3 no_implicit_globals: global variable `assert` used
 324:10 no_implicit_globals: global variable `ecall` used
-324:27 must_use: return value of `buffer.readstring` is discarded
 324:27 no_implicit_globals: global variable `buffer` used
 325:3 no_implicit_globals: global variable `assert` used
 325:10 no_implicit_globals: global variable `ecall` used
-325:27 must_use: return value of `buffer.readstring` is discarded
 325:27 no_implicit_globals: global variable `buffer` used
 326:3 no_implicit_globals: global variable `assert` used
 326:10 no_implicit_globals: global variable `ecall` used
-326:27 must_use: return value of `buffer.readstring` is discarded
 326:27 no_implicit_globals: global variable `buffer` used
 328:3 no_implicit_globals: global variable `call` used
 328:19 no_implicit_globals: global variable `buffer` used
@@ -2857,15 +2834,12 @@ buffers.luau
 356:33 no_implicit_globals: global variable `buffer` used
 357:3 no_implicit_globals: global variable `assert` used
 357:10 no_implicit_globals: global variable `ecall` used
-357:27 must_use: return value of `buffer.readi8` is discarded
 357:27 no_implicit_globals: global variable `buffer` used
 358:3 no_implicit_globals: global variable `assert` used
 358:10 no_implicit_globals: global variable `ecall` used
-358:27 must_use: return value of `buffer.readi8` is discarded
 358:27 no_implicit_globals: global variable `buffer` used
 359:3 no_implicit_globals: global variable `assert` used
 359:10 no_implicit_globals: global variable `ecall` used
-359:27 must_use: return value of `buffer.readi8` is discarded
 359:27 no_implicit_globals: global variable `buffer` used
 361:3 no_implicit_globals: global variable `call` used
 361:19 no_implicit_globals: global variable `buffer` used
@@ -2883,31 +2857,24 @@ buffers.luau
 367:33 no_implicit_globals: global variable `buffer` used
 368:3 no_implicit_globals: global variable `assert` used
 368:10 no_implicit_globals: global variable `ecall` used
-368:27 must_use: return value of `buffer.readi16` is discarded
 368:27 no_implicit_globals: global variable `buffer` used
 369:3 no_implicit_globals: global variable `assert` used
 369:10 no_implicit_globals: global variable `ecall` used
-369:27 must_use: return value of `buffer.readi16` is discarded
 369:27 no_implicit_globals: global variable `buffer` used
 370:3 no_implicit_globals: global variable `assert` used
 370:10 no_implicit_globals: global variable `ecall` used
-370:27 must_use: return value of `buffer.readi16` is discarded
 370:27 no_implicit_globals: global variable `buffer` used
 371:3 no_implicit_globals: global variable `assert` used
 371:10 no_implicit_globals: global variable `ecall` used
-371:27 must_use: return value of `buffer.readi16` is discarded
 371:27 no_implicit_globals: global variable `buffer` used
 372:3 no_implicit_globals: global variable `assert` used
 372:10 no_implicit_globals: global variable `ecall` used
-372:27 must_use: return value of `buffer.readi16` is discarded
 372:27 no_implicit_globals: global variable `buffer` used
 373:3 no_implicit_globals: global variable `assert` used
 373:10 no_implicit_globals: global variable `ecall` used
-373:27 must_use: return value of `buffer.readi16` is discarded
 373:27 no_implicit_globals: global variable `buffer` used
 374:3 no_implicit_globals: global variable `assert` used
 374:10 no_implicit_globals: global variable `ecall` used
-374:27 must_use: return value of `buffer.readi16` is discarded
 374:27 no_implicit_globals: global variable `buffer` used
 376:3 no_implicit_globals: global variable `call` used
 376:19 no_implicit_globals: global variable `buffer` used
@@ -2925,15 +2892,12 @@ buffers.luau
 382:33 no_implicit_globals: global variable `buffer` used
 383:3 no_implicit_globals: global variable `assert` used
 383:10 no_implicit_globals: global variable `ecall` used
-383:27 must_use: return value of `buffer.readi32` is discarded
 383:27 no_implicit_globals: global variable `buffer` used
 384:3 no_implicit_globals: global variable `assert` used
 384:10 no_implicit_globals: global variable `ecall` used
-384:27 must_use: return value of `buffer.readi32` is discarded
 384:27 no_implicit_globals: global variable `buffer` used
 385:3 no_implicit_globals: global variable `assert` used
 385:10 no_implicit_globals: global variable `ecall` used
-385:27 must_use: return value of `buffer.readi32` is discarded
 385:27 no_implicit_globals: global variable `buffer` used
 387:3 no_implicit_globals: global variable `call` used
 387:19 no_implicit_globals: global variable `buffer` used
@@ -2951,15 +2915,12 @@ buffers.luau
 393:33 no_implicit_globals: global variable `buffer` used
 394:3 no_implicit_globals: global variable `assert` used
 394:10 no_implicit_globals: global variable `ecall` used
-394:27 must_use: return value of `buffer.readf32` is discarded
 394:27 no_implicit_globals: global variable `buffer` used
 395:3 no_implicit_globals: global variable `assert` used
 395:10 no_implicit_globals: global variable `ecall` used
-395:27 must_use: return value of `buffer.readf32` is discarded
 395:27 no_implicit_globals: global variable `buffer` used
 396:3 no_implicit_globals: global variable `assert` used
 396:10 no_implicit_globals: global variable `ecall` used
-396:27 must_use: return value of `buffer.readf32` is discarded
 396:27 no_implicit_globals: global variable `buffer` used
 398:3 no_implicit_globals: global variable `call` used
 398:19 no_implicit_globals: global variable `buffer` used
@@ -2977,15 +2938,12 @@ buffers.luau
 404:33 no_implicit_globals: global variable `buffer` used
 405:3 no_implicit_globals: global variable `assert` used
 405:10 no_implicit_globals: global variable `ecall` used
-405:27 must_use: return value of `buffer.readf64` is discarded
 405:27 no_implicit_globals: global variable `buffer` used
 406:3 no_implicit_globals: global variable `assert` used
 406:10 no_implicit_globals: global variable `ecall` used
-406:27 must_use: return value of `buffer.readf64` is discarded
 406:27 no_implicit_globals: global variable `buffer` used
 407:3 no_implicit_globals: global variable `assert` used
 407:10 no_implicit_globals: global variable `ecall` used
-407:27 must_use: return value of `buffer.readf64` is discarded
 407:27 no_implicit_globals: global variable `buffer` used
 409:3 no_implicit_globals: global variable `call` used
 409:19 no_implicit_globals: global variable `buffer` used
@@ -3003,15 +2961,12 @@ buffers.luau
 415:33 no_implicit_globals: global variable `buffer` used
 416:3 no_implicit_globals: global variable `assert` used
 416:10 no_implicit_globals: global variable `ecall` used
-416:27 must_use: return value of `buffer.readstring` is discarded
 416:27 no_implicit_globals: global variable `buffer` used
 417:3 no_implicit_globals: global variable `assert` used
 417:10 no_implicit_globals: global variable `ecall` used
-417:27 must_use: return value of `buffer.readstring` is discarded
 417:27 no_implicit_globals: global variable `buffer` used
 418:3 no_implicit_globals: global variable `assert` used
 418:10 no_implicit_globals: global variable `ecall` used
-418:27 must_use: return value of `buffer.readstring` is discarded
 418:27 no_implicit_globals: global variable `buffer` used
 420:3 no_implicit_globals: global variable `call` used
 420:19 no_implicit_globals: global variable `buffer` used
@@ -3036,11 +2991,9 @@ buffers.luau
 434:33 no_implicit_globals: global variable `buffer` used
 435:3 no_implicit_globals: global variable `assert` used
 435:10 no_implicit_globals: global variable `ecall` used
-435:27 must_use: return value of `buffer.readi8` is discarded
 435:27 no_implicit_globals: global variable `buffer` used
 436:3 no_implicit_globals: global variable `assert` used
 436:10 no_implicit_globals: global variable `ecall` used
-436:27 must_use: return value of `buffer.readi8` is discarded
 436:27 no_implicit_globals: global variable `buffer` used
 438:3 no_implicit_globals: global variable `call` used
 438:19 no_implicit_globals: global variable `buffer` used
@@ -3052,15 +3005,12 @@ buffers.luau
 440:27 no_implicit_globals: global variable `buffer` used
 443:3 no_implicit_globals: global variable `assert` used
 443:10 no_implicit_globals: global variable `ecall` used
-443:27 must_use: return value of `buffer.readi16` is discarded
 443:27 no_implicit_globals: global variable `buffer` used
 444:3 no_implicit_globals: global variable `assert` used
 444:10 no_implicit_globals: global variable `ecall` used
-444:27 must_use: return value of `buffer.readi16` is discarded
 444:27 no_implicit_globals: global variable `buffer` used
 445:3 no_implicit_globals: global variable `assert` used
 445:10 no_implicit_globals: global variable `ecall` used
-445:27 must_use: return value of `buffer.readi16` is discarded
 445:27 no_implicit_globals: global variable `buffer` used
 446:3 no_implicit_globals: global variable `assert` used
 446:10 no_implicit_globals: global variable `ecall` used
@@ -3073,15 +3023,12 @@ buffers.luau
 448:27 no_implicit_globals: global variable `buffer` used
 451:3 no_implicit_globals: global variable `assert` used
 451:10 no_implicit_globals: global variable `ecall` used
-451:27 must_use: return value of `buffer.readi32` is discarded
 451:27 no_implicit_globals: global variable `buffer` used
 452:3 no_implicit_globals: global variable `assert` used
 452:10 no_implicit_globals: global variable `ecall` used
-452:27 must_use: return value of `buffer.readi32` is discarded
 452:27 no_implicit_globals: global variable `buffer` used
 453:3 no_implicit_globals: global variable `assert` used
 453:10 no_implicit_globals: global variable `ecall` used
-453:27 must_use: return value of `buffer.readi32` is discarded
 453:27 no_implicit_globals: global variable `buffer` used
 454:3 no_implicit_globals: global variable `assert` used
 454:10 no_implicit_globals: global variable `ecall` used
@@ -3094,15 +3041,12 @@ buffers.luau
 456:27 no_implicit_globals: global variable `buffer` used
 459:3 no_implicit_globals: global variable `assert` used
 459:10 no_implicit_globals: global variable `ecall` used
-459:27 must_use: return value of `buffer.readf32` is discarded
 459:27 no_implicit_globals: global variable `buffer` used
 460:3 no_implicit_globals: global variable `assert` used
 460:10 no_implicit_globals: global variable `ecall` used
-460:27 must_use: return value of `buffer.readf32` is discarded
 460:27 no_implicit_globals: global variable `buffer` used
 461:3 no_implicit_globals: global variable `assert` used
 461:10 no_implicit_globals: global variable `ecall` used
-461:27 must_use: return value of `buffer.readf32` is discarded
 461:27 no_implicit_globals: global variable `buffer` used
 462:3 no_implicit_globals: global variable `assert` used
 462:10 no_implicit_globals: global variable `ecall` used
@@ -3115,15 +3059,12 @@ buffers.luau
 464:27 no_implicit_globals: global variable `buffer` used
 467:3 no_implicit_globals: global variable `assert` used
 467:10 no_implicit_globals: global variable `ecall` used
-467:27 must_use: return value of `buffer.readf64` is discarded
 467:27 no_implicit_globals: global variable `buffer` used
 468:3 no_implicit_globals: global variable `assert` used
 468:10 no_implicit_globals: global variable `ecall` used
-468:27 must_use: return value of `buffer.readf64` is discarded
 468:27 no_implicit_globals: global variable `buffer` used
 469:3 no_implicit_globals: global variable `assert` used
 469:10 no_implicit_globals: global variable `ecall` used
-469:27 must_use: return value of `buffer.readf64` is discarded
 469:27 no_implicit_globals: global variable `buffer` used
 470:3 no_implicit_globals: global variable `assert` used
 470:10 no_implicit_globals: global variable `ecall` used
@@ -3136,15 +3077,12 @@ buffers.luau
 472:27 no_implicit_globals: global variable `buffer` used
 475:3 no_implicit_globals: global variable `assert` used
 475:10 no_implicit_globals: global variable `ecall` used
-475:27 must_use: return value of `buffer.readstring` is discarded
 475:27 no_implicit_globals: global variable `buffer` used
 476:3 no_implicit_globals: global variable `assert` used
 476:10 no_implicit_globals: global variable `ecall` used
-476:27 must_use: return value of `buffer.readstring` is discarded
 476:27 no_implicit_globals: global variable `buffer` used
 477:3 no_implicit_globals: global variable `assert` used
 477:10 no_implicit_globals: global variable `ecall` used
-477:27 must_use: return value of `buffer.readstring` is discarded
 477:27 no_implicit_globals: global variable `buffer` used
 478:3 no_implicit_globals: global variable `assert` used
 478:10 no_implicit_globals: global variable `ecall` used
@@ -3167,11 +3105,9 @@ buffers.luau
 491:33 no_implicit_globals: global variable `buffer` used
 492:3 no_implicit_globals: global variable `assert` used
 492:10 no_implicit_globals: global variable `ecall` used
-492:27 must_use: return value of `buffer.readi8` is discarded
 492:27 no_implicit_globals: global variable `buffer` used
 493:3 no_implicit_globals: global variable `assert` used
 493:10 no_implicit_globals: global variable `ecall` used
-493:27 must_use: return value of `buffer.readi8` is discarded
 493:27 no_implicit_globals: global variable `buffer` used
 495:3 no_implicit_globals: global variable `call` used
 495:19 no_implicit_globals: global variable `buffer` used
@@ -3183,15 +3119,12 @@ buffers.luau
 497:27 no_implicit_globals: global variable `buffer` used
 500:3 no_implicit_globals: global variable `assert` used
 500:10 no_implicit_globals: global variable `ecall` used
-500:27 must_use: return value of `buffer.readi16` is discarded
 500:27 no_implicit_globals: global variable `buffer` used
 501:3 no_implicit_globals: global variable `assert` used
 501:10 no_implicit_globals: global variable `ecall` used
-501:27 must_use: return value of `buffer.readi16` is discarded
 501:27 no_implicit_globals: global variable `buffer` used
 502:3 no_implicit_globals: global variable `assert` used
 502:10 no_implicit_globals: global variable `ecall` used
-502:27 must_use: return value of `buffer.readi16` is discarded
 502:27 no_implicit_globals: global variable `buffer` used
 503:3 no_implicit_globals: global variable `assert` used
 503:10 no_implicit_globals: global variable `ecall` used
@@ -3204,15 +3137,12 @@ buffers.luau
 505:27 no_implicit_globals: global variable `buffer` used
 508:3 no_implicit_globals: global variable `assert` used
 508:10 no_implicit_globals: global variable `ecall` used
-508:27 must_use: return value of `buffer.readi32` is discarded
 508:27 no_implicit_globals: global variable `buffer` used
 509:3 no_implicit_globals: global variable `assert` used
 509:10 no_implicit_globals: global variable `ecall` used
-509:27 must_use: return value of `buffer.readi32` is discarded
 509:27 no_implicit_globals: global variable `buffer` used
 510:3 no_implicit_globals: global variable `assert` used
 510:10 no_implicit_globals: global variable `ecall` used
-510:27 must_use: return value of `buffer.readi32` is discarded
 510:27 no_implicit_globals: global variable `buffer` used
 511:3 no_implicit_globals: global variable `assert` used
 511:10 no_implicit_globals: global variable `ecall` used
@@ -3225,15 +3155,12 @@ buffers.luau
 513:27 no_implicit_globals: global variable `buffer` used
 516:3 no_implicit_globals: global variable `assert` used
 516:10 no_implicit_globals: global variable `ecall` used
-516:27 must_use: return value of `buffer.readf32` is discarded
 516:27 no_implicit_globals: global variable `buffer` used
 517:3 no_implicit_globals: global variable `assert` used
 517:10 no_implicit_globals: global variable `ecall` used
-517:27 must_use: return value of `buffer.readf32` is discarded
 517:27 no_implicit_globals: global variable `buffer` used
 518:3 no_implicit_globals: global variable `assert` used
 518:10 no_implicit_globals: global variable `ecall` used
-518:27 must_use: return value of `buffer.readf32` is discarded
 518:27 no_implicit_globals: global variable `buffer` used
 519:3 no_implicit_globals: global variable `assert` used
 519:10 no_implicit_globals: global variable `ecall` used
@@ -3246,15 +3173,12 @@ buffers.luau
 521:27 no_implicit_globals: global variable `buffer` used
 524:3 no_implicit_globals: global variable `assert` used
 524:10 no_implicit_globals: global variable `ecall` used
-524:27 must_use: return value of `buffer.readf64` is discarded
 524:27 no_implicit_globals: global variable `buffer` used
 525:3 no_implicit_globals: global variable `assert` used
 525:10 no_implicit_globals: global variable `ecall` used
-525:27 must_use: return value of `buffer.readf64` is discarded
 525:27 no_implicit_globals: global variable `buffer` used
 526:3 no_implicit_globals: global variable `assert` used
 526:10 no_implicit_globals: global variable `ecall` used
-526:27 must_use: return value of `buffer.readf64` is discarded
 526:27 no_implicit_globals: global variable `buffer` used
 527:3 no_implicit_globals: global variable `assert` used
 527:10 no_implicit_globals: global variable `ecall` used
@@ -3267,15 +3191,12 @@ buffers.luau
 529:27 no_implicit_globals: global variable `buffer` used
 532:3 no_implicit_globals: global variable `assert` used
 532:10 no_implicit_globals: global variable `ecall` used
-532:27 must_use: return value of `buffer.readstring` is discarded
 532:27 no_implicit_globals: global variable `buffer` used
 533:3 no_implicit_globals: global variable `assert` used
 533:10 no_implicit_globals: global variable `ecall` used
-533:27 must_use: return value of `buffer.readstring` is discarded
 533:27 no_implicit_globals: global variable `buffer` used
 534:3 no_implicit_globals: global variable `assert` used
 534:10 no_implicit_globals: global variable `ecall` used
-534:27 must_use: return value of `buffer.readstring` is discarded
 534:27 no_implicit_globals: global variable `buffer` used
 535:3 no_implicit_globals: global variable `assert` used
 535:10 no_implicit_globals: global variable `ecall` used
@@ -3295,15 +3216,12 @@ buffers.luau
 546:13 no_implicit_globals: global variable `buffer` used
 548:3 no_implicit_globals: global variable `assert` used
 548:10 no_implicit_globals: global variable `ecall` used
-548:27 must_use: return value of `buffer.readi8` is discarded
 548:27 no_implicit_globals: global variable `buffer` used
 549:3 no_implicit_globals: global variable `assert` used
 549:10 no_implicit_globals: global variable `ecall` used
-549:27 must_use: return value of `buffer.readi8` is discarded
 549:27 no_implicit_globals: global variable `buffer` used
 550:3 no_implicit_globals: global variable `assert` used
 550:10 no_implicit_globals: global variable `ecall` used
-550:27 must_use: return value of `buffer.readi8` is discarded
 550:27 no_implicit_globals: global variable `buffer` used
 551:3 no_implicit_globals: global variable `assert` used
 551:10 no_implicit_globals: global variable `ecall` used
@@ -3316,27 +3234,21 @@ buffers.luau
 553:27 no_implicit_globals: global variable `buffer` used
 555:3 no_implicit_globals: global variable `assert` used
 555:10 no_implicit_globals: global variable `ecall` used
-555:27 must_use: return value of `buffer.readi16` is discarded
 555:27 no_implicit_globals: global variable `buffer` used
 556:3 no_implicit_globals: global variable `assert` used
 556:10 no_implicit_globals: global variable `ecall` used
-556:27 must_use: return value of `buffer.readi32` is discarded
 556:27 no_implicit_globals: global variable `buffer` used
 557:3 no_implicit_globals: global variable `assert` used
 557:10 no_implicit_globals: global variable `ecall` used
-557:27 must_use: return value of `buffer.readf32` is discarded
 557:27 no_implicit_globals: global variable `buffer` used
 558:3 no_implicit_globals: global variable `assert` used
 558:10 no_implicit_globals: global variable `ecall` used
-558:27 must_use: return value of `buffer.readf64` is discarded
 558:27 no_implicit_globals: global variable `buffer` used
 559:3 no_implicit_globals: global variable `assert` used
 559:10 no_implicit_globals: global variable `ecall` used
-559:27 must_use: return value of `buffer.readstring` is discarded
 559:27 no_implicit_globals: global variable `buffer` used
 560:3 no_implicit_globals: global variable `assert` used
 560:10 no_implicit_globals: global variable `ecall` used
-560:27 must_use: return value of `buffer.readstring` is discarded
 560:27 no_implicit_globals: global variable `buffer` used
 562:3 no_implicit_globals: global variable `assert` used
 562:30 undefined_variable: undefined variable `is_native_if_supported`
@@ -3723,19 +3635,15 @@ buffers.luau
 866:10 no_implicit_globals: global variable `buffer` used
 869:3 no_implicit_globals: global variable `assert` used
 869:10 no_implicit_globals: global variable `ecall` used
-869:27 must_use: return value of `buffer.readbits` is discarded
 869:27 no_implicit_globals: global variable `buffer` used
 870:3 no_implicit_globals: global variable `assert` used
 870:10 no_implicit_globals: global variable `ecall` used
-870:27 must_use: return value of `buffer.readbits` is discarded
 870:27 no_implicit_globals: global variable `buffer` used
 871:3 no_implicit_globals: global variable `assert` used
 871:10 no_implicit_globals: global variable `ecall` used
-871:27 must_use: return value of `buffer.readbits` is discarded
 871:27 no_implicit_globals: global variable `buffer` used
 872:3 no_implicit_globals: global variable `assert` used
 872:10 no_implicit_globals: global variable `ecall` used
-872:27 must_use: return value of `buffer.readbits` is discarded
 872:27 no_implicit_globals: global variable `buffer` used
 874:3 no_implicit_globals: global variable `assert` used
 874:10 no_implicit_globals: global variable `ecall` used
@@ -3752,7 +3660,6 @@ buffers.luau
 880:3 no_implicit_globals: global variable `assert` used
 880:30 undefined_variable: undefined variable `is_native_if_supported`
 880:30 no_implicit_globals: global variable `is_native_if_supported` used
-894:3 must_use: return value of `getfenv` is discarded
 894:3 no_implicit_globals: global variable `getfenv` used
 912:8 no_implicit_globals: global variable `table` used
 
@@ -3835,9 +3742,12 @@ calls.luau
 69:50 no_implicit_globals: global variable `t` used
 71:10 setting_global: setting global variable `fat` (missing `local`?)
 71:10 no_implicit_globals: global variable `fat` used
+73:17 undefined_variable: undefined variable `loadstring`
 73:17 no_implicit_globals: global variable `loadstring` used
 77:1 no_implicit_globals: global variable `assert` used
+77:8 undefined_variable: undefined variable `loadstring`
 77:8 no_implicit_globals: global variable `loadstring` used
+78:5 undefined_variable: undefined variable `loadstring`
 78:5 no_implicit_globals: global variable `loadstring` used
 79:3 setting_global: setting global variable `b` (missing `local`?)
 79:3 no_implicit_globals: global variable `b` used
@@ -3846,6 +3756,7 @@ calls.luau
 81:1 no_implicit_globals: global variable `print` used
 83:10 setting_global: setting global variable `err_on_n` (missing `local`?)
 83:10 no_implicit_globals: global variable `err_on_n` used
+84:16 incorrect_stdlib_use: `error` requires at least 1 argument(s), got 0
 84:16 no_implicit_globals: global variable `error` used
 84:25 undefined_variable: undefined variable `exit`
 84:25 unreachable_code: unreachable code
@@ -3996,7 +3907,6 @@ calls.luau
 213:43 no_implicit_globals: global variable `unlpack` used
 214:1 no_implicit_globals: global variable `assert` used
 218:1 incorrect_stdlib_use: `rawget` accepts at most 2 argument(s), got 3
-218:1 must_use: return value of `rawget` is discarded
 218:1 no_implicit_globals: global variable `rawget` used
 219:1 incorrect_stdlib_use: `rawset` accepts at most 3 argument(s), got 4
 219:1 no_implicit_globals: global variable `rawset` used
@@ -4098,12 +4008,14 @@ closure.luau
 8:10 no_implicit_globals: global variable `f` used
 13:39 multiple_statements_per_line: statement starts on the same line as the previous statement
 13:48 multiple_statements_per_line: statement starts on the same line as the previous statement
+17:3 undefined_variable: undefined variable `collectgarbage`
 17:3 no_implicit_globals: global variable `collectgarbage` used
 18:10 multiple_statements_per_line: statement starts on the same line as the previous statement
 18:10 no_implicit_globals: global variable `assert` used
 18:35 multiple_statements_per_line: statement starts on the same line as the previous statement
 19:3 no_implicit_globals: global variable `assert` used
 20:3 no_implicit_globals: global variable `assert` used
+21:3 undefined_variable: undefined variable `collectgarbage`
 21:3 no_implicit_globals: global variable `collectgarbage` used
 22:3 no_implicit_globals: global variable `assert` used
 26:1 setting_global: setting global variable `a` (missing `local`?)
@@ -4117,6 +4029,7 @@ closure.luau
 35:8 no_implicit_globals: global variable `a` used
 36:1 no_implicit_globals: global variable `assert` used
 36:8 no_implicit_globals: global variable `a` used
+37:1 undefined_variable: undefined variable `collectgarbage`
 37:1 no_implicit_globals: global variable `collectgarbage` used
 38:1 no_implicit_globals: global variable `assert` used
 38:8 no_implicit_globals: global variable `a` used
@@ -4175,12 +4088,12 @@ closure.luau
 92:10 duplicate_function: duplicate function definition `f`
 92:12 shadowing: variable `x` shadows outer variable
 97:9 implicit_return: function returns on some paths but falls through on others
+106:25 incorrect_stdlib_use: `error` requires at least 1 argument(s), got 0
 106:25 no_implicit_globals: global variable `error` used
 113:3 no_implicit_globals: global variable `f` used
 114:3 no_implicit_globals: global variable `assert` used
 115:17 multiple_statements_per_line: statement starts on the same line as the previous statement
 115:17 no_implicit_globals: global variable `assert` used
-119:1 must_use: return value of `pcall` is discarded
 119:1 no_implicit_globals: global variable `pcall` used
 119:7 no_implicit_globals: global variable `f` used
 120:1 no_implicit_globals: global variable `assert` used
@@ -4215,6 +4128,7 @@ closure.luau
 173:10 no_implicit_globals: global variable `getfenv` used
 174:3 no_implicit_globals: global variable `assert` used
 174:10 no_implicit_globals: global variable `getfenv` used
+174:18 undefined_variable: undefined variable `loadstring`
 174:18 no_implicit_globals: global variable `loadstring` used
 175:10 no_implicit_globals: global variable `getfenv` used
 178:5 no_implicit_globals: global variable `coroutine` used
@@ -4372,6 +4286,7 @@ closure.luau
 335:7 shadowing: variable `f` shadows outer variable
 335:7 redefining_local: local `f` is redeclared in the same block
 336:1 no_implicit_globals: global variable `assert` used
+338:1 undefined_variable: undefined variable `collectgarbage`
 338:1 no_implicit_globals: global variable `collectgarbage` used
 340:1 no_implicit_globals: global variable `assert` used
 345:10 setting_global: setting global variable `co_func` (missing `local`?)
@@ -4417,6 +4332,7 @@ closure.luau
 383:6 no_implicit_globals: global variable `coroutine` used
 384:8 no_implicit_globals: global variable `coroutine` used
 384:24 no_implicit_globals: global variable `getfenv` used
+385:15 undefined_variable: undefined variable `loadstring`
 385:15 no_implicit_globals: global variable `loadstring` used
 395:9 unused_variable: unused variable `f`
 395:9 shadowing: variable `f` shadows outer variable
@@ -4621,6 +4537,7 @@ constructs.luau
 143:1 no_implicit_globals: global variable `assert` used
 145:1 no_implicit_globals: global variable `print` used
 154:5 no_implicit_globals: global variable `string` used
+155:7 undefined_variable: undefined variable `loadstring`
 155:7 no_implicit_globals: global variable `loadstring` used
 156:1 no_implicit_globals: global variable `assert` used
 158:10 setting_global: setting global variable `g` (missing `local`?)
@@ -4711,6 +4628,7 @@ constructs.luau
 223:7 no_implicit_globals: global variable `string` used
 223:21 format_string: wrong argument count, format takes 8, got 9
 234:3 no_implicit_globals: global variable `assert` used
+234:10 undefined_variable: undefined variable `loadstring`
 234:10 no_implicit_globals: global variable `loadstring` used
 235:3 no_implicit_globals: global variable `assert` used
 235:10 no_implicit_globals: global variable `X` used
@@ -4905,6 +4823,7 @@ coroutine.luau
 201:7 shadowing: variable `f` shadows outer variable
 201:7 redefining_local: local `f` is redeclared in the same block
 202:1 no_implicit_globals: global variable `assert` used
+204:1 undefined_variable: undefined variable `collectgarbage`
 204:1 no_implicit_globals: global variable `collectgarbage` used
 205:1 no_implicit_globals: global variable `assert` used
 205:16 undefined_variable: undefined variable `undef`
@@ -5106,7 +5025,6 @@ coroutine.luau
 390:3 no_implicit_globals: global variable `assert` used
 391:3 no_implicit_globals: global variable `assert` used
 397:7 no_implicit_globals: global variable `coroutine` used
-398:7 must_use: return value of `xpcall` is discarded
 398:7 no_implicit_globals: global variable `xpcall` used
 401:9 shadowing: variable `co` shadows outer variable
 401:14 no_implicit_globals: global variable `coroutine` used
@@ -5122,6 +5040,7 @@ coroutine.luau
 410:3 no_implicit_globals: global variable `assert` used
 415:11 shadowing: variable `co` shadows outer variable
 415:16 no_implicit_globals: global variable `coroutine` used
+416:9 incorrect_stdlib_use: `error` requires at least 1 argument(s), got 0
 416:9 no_implicit_globals: global variable `error` used
 419:25 no_implicit_globals: global variable `coroutine` used
 420:5 no_implicit_globals: global variable `assert` used
@@ -5775,7 +5694,6 @@ cyield.luau
 211:3 no_implicit_globals: global variable `assert` used
 212:3 no_implicit_globals: global variable `assert` used
 212:10 no_implicit_globals: global variable `string` used
-218:3 must_use: return value of `pcall` is discarded
 218:3 no_implicit_globals: global variable `pcall` used
 219:3 no_implicit_globals: global variable `coroutine` used
 221:14 no_implicit_globals: global variable `pcall` used
@@ -6166,7 +6084,6 @@ debug.luau
 115:18 no_implicit_globals: global variable `coroutine` used
 116:17 no_implicit_globals: global variable `coroutine` used
 117:7 unused_loop_variable: unused loop variable `i`
-117:21 must_use: return value of `pcall` is discarded
 117:21 no_implicit_globals: global variable `pcall` used
 117:27 no_implicit_globals: global variable `debug` used
 121:23 no_implicit_globals: global variable `coroutine` used
@@ -6177,7 +6094,6 @@ debug.luau
 128:18 no_implicit_globals: global variable `coroutine` used
 129:17 no_implicit_globals: global variable `coroutine` used
 130:7 unused_loop_variable: unused loop variable `i`
-130:21 must_use: return value of `pcall` is discarded
 130:21 no_implicit_globals: global variable `pcall` used
 130:27 no_implicit_globals: global variable `debug` used
 134:23 no_implicit_globals: global variable `coroutine` used
@@ -6188,7 +6104,6 @@ debug.luau
 141:18 no_implicit_globals: global variable `coroutine` used
 142:17 no_implicit_globals: global variable `coroutine` used
 143:7 unused_loop_variable: unused loop variable `i`
-143:21 must_use: return value of `pcall` is discarded
 143:21 no_implicit_globals: global variable `pcall` used
 143:27 no_implicit_globals: global variable `debug` used
 147:23 no_implicit_globals: global variable `coroutine` used
@@ -6252,7 +6167,6 @@ debugger.luau
 77:3 no_implicit_globals: global variable `print` used
 81:1 undefined_variable: undefined variable `breakpoint`
 81:1 no_implicit_globals: global variable `breakpoint` used
-83:1 must_use: return value of `pcall` is discarded
 83:1 no_implicit_globals: global variable `pcall` used
 87:13 no_implicit_globals: global variable `tostring` used
 87:22 undefined_variable: undefined variable `game`
@@ -6269,7 +6183,6 @@ debugger.luau
 93:4 no_implicit_globals: global variable `print` used
 98:1 undefined_variable: undefined variable `breakpoint`
 98:1 no_implicit_globals: global variable `breakpoint` used
-100:1 must_use: return value of `pcall` is discarded
 100:1 no_implicit_globals: global variable `pcall` used
 104:8 shadowing: variable `co` shadows outer variable
 104:13 no_implicit_globals: global variable `coroutine` used
@@ -6286,7 +6199,6 @@ debugger.luau
 122:1 no_implicit_globals: global variable `breakpoint` used
 123:1 undefined_variable: undefined variable `breakpoint`
 123:1 no_implicit_globals: global variable `breakpoint` used
-125:1 must_use: return value of `pcall` is discarded
 125:1 no_implicit_globals: global variable `pcall` used
 129:8 shadowing: variable `co` shadows outer variable
 130:18 no_implicit_globals: global variable `coroutine` used
@@ -6302,13 +6214,13 @@ debugger.luau
 145:1 no_implicit_globals: global variable `breakpoint` used
 146:1 undefined_variable: undefined variable `breakpoint`
 146:1 no_implicit_globals: global variable `breakpoint` used
-148:1 must_use: return value of `pcall` is discarded
 148:1 no_implicit_globals: global variable `pcall` used
 
 errors.luau
 3:1 no_implicit_globals: global variable `print` used
 5:10 setting_global: setting global variable `doit` (missing `local`?)
 5:10 no_implicit_globals: global variable `doit` used
+6:18 undefined_variable: undefined variable `loadstring`
 6:18 no_implicit_globals: global variable `loadstring` used
 8:15 shadowing: variable `msg` shadows outer variable
 8:15 redefining_local: local `msg` is redeclared in the same block
@@ -6397,6 +6309,7 @@ errors.luau
 119:10 no_implicit_globals: global variable `lineerror` used
 120:9 unused_variable: unused variable `err`
 120:19 no_implicit_globals: global variable `pcall` used
+120:25 undefined_variable: undefined variable `loadstring`
 120:25 no_implicit_globals: global variable `loadstring` used
 121:16 no_implicit_globals: global variable `string` used
 125:1 no_implicit_globals: global variable `assert` used
@@ -6454,6 +6367,7 @@ errors.luau
 175:15 no_implicit_globals: global variable `setmetatable` used
 186:14 no_implicit_globals: global variable `tostring` used
 192:16 no_implicit_globals: global variable `debug` used
+193:7 incorrect_stdlib_use: `error` requires at least 1 argument(s), got 0
 193:7 no_implicit_globals: global variable `error` used
 197:20 no_implicit_globals: global variable `newproxy` used
 198:3 no_implicit_globals: global variable `getmetatable` used
@@ -6530,9 +6444,11 @@ errors.luau
 322:24 no_implicit_globals: global variable `limitedstack` used
 324:34 no_implicit_globals: global variable `string` used
 325:11 unused_variable: unused variable `b`
+325:15 undefined_variable: undefined variable `loadstring`
 325:15 no_implicit_globals: global variable `loadstring` used
 326:3 no_implicit_globals: global variable `assert` used
 349:9 unused_variable: unused variable `b`
+349:13 undefined_variable: undefined variable `loadstring`
 349:13 no_implicit_globals: global variable `loadstring` used
 350:1 no_implicit_globals: global variable `assert` used
 359:7 shadowing: variable `a` shadows outer variable
@@ -6540,6 +6456,7 @@ errors.luau
 359:9 value_overwritten_before_read: value assigned to `b` is overwritten before it is read
 359:9 shadowing: variable `b` shadows outer variable
 359:9 redefining_local: local `b` is redeclared in the same block
+359:13 undefined_variable: undefined variable `loadstring`
 359:13 no_implicit_globals: global variable `loadstring` used
 360:1 no_implicit_globals: global variable `assert` used
 369:8 no_implicit_globals: global variable `xpcall` used
@@ -6558,12 +6475,14 @@ errors.luau
 384:7 redefining_local: local `a` is redeclared in the same block
 384:9 shadowing: variable `b` shadows outer variable
 384:9 redefining_local: local `b` is redeclared in the same block
+384:13 undefined_variable: undefined variable `loadstring`
 384:13 no_implicit_globals: global variable `loadstring` used
 385:1 no_implicit_globals: global variable `assert` used
 387:7 shadowing: variable `a` shadows outer variable
 387:7 redefining_local: local `a` is redeclared in the same block
 387:9 shadowing: variable `b` shadows outer variable
 387:9 redefining_local: local `b` is redeclared in the same block
+387:13 undefined_variable: undefined variable `loadstring`
 387:13 no_implicit_globals: global variable `loadstring` used
 387:39 no_implicit_globals: global variable `string` used
 388:1 no_implicit_globals: global variable `assert` used
@@ -6571,12 +6490,14 @@ errors.luau
 390:7 redefining_local: local `a` is redeclared in the same block
 390:9 shadowing: variable `b` shadows outer variable
 390:9 redefining_local: local `b` is redeclared in the same block
+390:13 undefined_variable: undefined variable `loadstring`
 390:13 no_implicit_globals: global variable `loadstring` used
 391:1 no_implicit_globals: global variable `assert` used
 393:7 shadowing: variable `a` shadows outer variable
 393:7 redefining_local: local `a` is redeclared in the same block
 393:9 shadowing: variable `b` shadows outer variable
 393:9 redefining_local: local `b` is redeclared in the same block
+393:13 undefined_variable: undefined variable `loadstring`
 393:13 no_implicit_globals: global variable `loadstring` used
 393:39 no_implicit_globals: global variable `string` used
 394:1 no_implicit_globals: global variable `assert` used
@@ -6695,7 +6616,6 @@ events.luau
 16:14 no_implicit_globals: global variable `getmetatable` used
 17:1 no_implicit_globals: global variable `assert` used
 17:8 no_implicit_globals: global variable `pcall` used
-17:32 incorrect_stdlib_use: `getmetatable` requires at least 1 argument(s), got 0
 17:32 no_implicit_globals: global variable `getmetatable` used
 18:1 no_implicit_globals: global variable `assert` used
 18:8 no_implicit_globals: global variable `select` used
@@ -6736,6 +6656,7 @@ events.luau
 38:13 no_implicit_globals: global variable `rawget` used
 42:13 no_implicit_globals: global variable `f` used
 45:1 no_implicit_globals: global variable `assert` used
+47:1 undefined_variable: undefined variable `collectgarbage`
 47:1 no_implicit_globals: global variable `collectgarbage` used
 49:5 no_implicit_globals: global variable `setmetatable` used
 50:10 setting_global: setting global variable `f` (missing `local`?)
@@ -6901,6 +6822,7 @@ events.luau
 149:20 shadowing: variable `a` shadows outer variable
 149:22 shadowing: variable `b` shadows outer variable
 149:24 shadowing: variable `c` shadows outer variable
+150:3 undefined_variable: undefined variable `collectgarbage`
 150:3 no_implicit_globals: global variable `collectgarbage` used
 151:3 no_implicit_globals: global variable `assert` used
 152:6 no_implicit_globals: global variable `type` used
@@ -7290,7 +7212,6 @@ exceptions.luau
 26:5 no_implicit_globals: global variable `infinite_recursion_error` used
 29:10 setting_global: setting global variable `large_allocation_error` (missing `local`?)
 29:10 no_implicit_globals: global variable `large_allocation_error` used
-32:5 must_use: return value of `table.create` is discarded
 32:5 no_implicit_globals: global variable `table` used
 
 explicit_type_instantiations.luau
@@ -7312,6 +7233,7 @@ explicit_type_instantiations.luau
 
 gc.luau
 3:1 no_implicit_globals: global variable `print` used
+5:1 undefined_variable: undefined variable `collectgarbage`
 5:1 no_implicit_globals: global variable `collectgarbage` used
 7:1 global_usage: global environment `_G` used
 7:1 no_implicit_globals: global variable `_G` used
@@ -7357,6 +7279,7 @@ gc.luau
 38:10 no_implicit_globals: global variable `a` used
 39:9 no_implicit_globals: global variable `contCreate` used
 39:23 no_implicit_globals: global variable `limit` used
+40:5 undefined_variable: undefined variable `loadstring`
 40:5 no_implicit_globals: global variable `loadstring` used
 40:16 no_implicit_globals: global variable `string` used
 40:67 no_implicit_globals: global variable `contCreate` used
@@ -7425,15 +7348,16 @@ gc.luau
 71:18 no_implicit_globals: global variable `gcinfo` used
 74:3 setting_global: setting global variable `a` (missing `local`?)
 74:3 no_implicit_globals: global variable `a` used
+79:3 undefined_variable: undefined variable `collectgarbage`
 79:3 no_implicit_globals: global variable `collectgarbage` used
+80:3 undefined_variable: undefined variable `collectgarbage`
 80:3 no_implicit_globals: global variable `collectgarbage` used
-80:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 81:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 82:3 redundant_nil_init: redundant `= nil` initializer, because uninitialized locals are `nil`
 87:3 no_implicit_globals: global variable `assert` used
 89:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 89:13 no_implicit_globals: global variable `gcinfo` used
-93:9 incorrect_stdlib_use: `collectgarbage` accepts at most 1 argument(s), got 2
+93:9 undefined_variable: undefined variable `collectgarbage`
 93:9 no_implicit_globals: global variable `collectgarbage` used
 94:3 no_implicit_globals: global variable `assert` used
 94:10 no_implicit_globals: global variable `gcinfo` used
@@ -7442,16 +7366,17 @@ gc.luau
 100:1 no_implicit_globals: global variable `assert` used
 106:9 unused_variable: unused variable `x`
 106:13 no_implicit_globals: global variable `gcinfo` used
+107:3 undefined_variable: undefined variable `collectgarbage`
 107:3 no_implicit_globals: global variable `collectgarbage` used
+108:3 undefined_variable: undefined variable `collectgarbage`
 108:3 no_implicit_globals: global variable `collectgarbage` used
-108:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 109:3 redundant_nil_init: redundant `= nil` initializer, because uninitialized locals are `nil`
 109:9 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
 112:9 no_implicit_globals: global variable `gcinfo` used
 113:3 no_implicit_globals: global variable `assert` used
 114:3 value_overwritten_before_read: value assigned to `a` is overwritten before it is read
+115:3 undefined_variable: undefined variable `collectgarbage`
 115:3 no_implicit_globals: global variable `collectgarbage` used
-115:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `restart`
 118:9 no_implicit_globals: global variable `gcinfo` used
 119:3 no_implicit_globals: global variable `assert` used
 123:1 setting_global: setting global variable `lim` (missing `local`?)
@@ -7471,9 +7396,11 @@ gc.luau
 132:3 no_implicit_globals: global variable `assert` used
 132:10 no_implicit_globals: global variable `type` used
 132:33 no_implicit_globals: global variable `next` used
+133:3 undefined_variable: undefined variable `collectgarbage`
 133:3 no_implicit_globals: global variable `collectgarbage` used
 135:1 setting_global: setting global variable `b` (missing `local`?)
 135:1 no_implicit_globals: global variable `b` used
+136:1 undefined_variable: undefined variable `collectgarbage`
 136:1 no_implicit_globals: global variable `collectgarbage` used
 137:1 loop_executes_once: generic `for` loop body always errors, so the loop executes at most once
 137:5 unused_loop_variable: unused loop variable `n`
@@ -7503,6 +7430,7 @@ gc.luau
 149:24 no_implicit_globals: global variable `string` used
 149:44 multiple_statements_per_line: statement starts on the same line as the previous statement
 149:44 no_implicit_globals: global variable `a` used
+150:1 undefined_variable: undefined variable `collectgarbage`
 150:1 no_implicit_globals: global variable `collectgarbage` used
 152:12 no_implicit_globals: global variable `pairs` used
 152:18 no_implicit_globals: global variable `a` used
@@ -7517,6 +7445,7 @@ gc.luau
 155:22 no_implicit_globals: global variable `a` used
 156:1 no_implicit_globals: global variable `a` used
 156:8 no_implicit_globals: global variable `string` used
+157:1 undefined_variable: undefined variable `collectgarbage`
 157:1 no_implicit_globals: global variable `collectgarbage` used
 158:1 no_implicit_globals: global variable `assert` used
 158:8 no_implicit_globals: global variable `a` used
@@ -7536,6 +7465,7 @@ gc.luau
 165:9 no_implicit_globals: global variable `lim` used
 165:16 no_implicit_globals: global variable `a` used
 165:20 no_implicit_globals: global variable `lim` used
+166:1 undefined_variable: undefined variable `collectgarbage`
 166:1 no_implicit_globals: global variable `collectgarbage` used
 167:7 shadowing: variable `i` shadows outer variable
 167:7 redefining_local: local `i` is redeclared in the same block
@@ -7571,6 +7501,7 @@ gc.luau
 180:32 multiple_statements_per_line: statement starts on the same line as the previous statement
 180:32 no_implicit_globals: global variable `a` used
 182:1 no_implicit_globals: global variable `filltables` used
+183:1 undefined_variable: undefined variable `collectgarbage`
 183:1 no_implicit_globals: global variable `collectgarbage` used
 184:1 no_implicit_globals: global variable `assert` used
 184:8 no_implicit_globals: global variable `next` used
@@ -7582,6 +7513,7 @@ gc.luau
 187:3 no_implicit_globals: global variable `assert` used
 192:1 no_implicit_globals: global variable `assert` used
 193:1 unbalanced_assignment: 3 target(s) but 1 value(s) in assignment
+194:1 undefined_variable: undefined variable `collectgarbage`
 194:1 no_implicit_globals: global variable `collectgarbage` used
 195:1 no_implicit_globals: global variable `assert` used
 195:8 no_implicit_globals: global variable `next` used
@@ -7595,6 +7527,7 @@ gc.luau
 199:5 shadowing: variable `i` shadows outer variable
 199:9 no_implicit_globals: global variable `lim` used
 199:16 no_implicit_globals: global variable `a` used
+200:1 undefined_variable: undefined variable `collectgarbage`
 200:1 no_implicit_globals: global variable `collectgarbage` used
 201:1 no_implicit_globals: global variable `assert` used
 201:8 no_implicit_globals: global variable `next` used
@@ -7611,6 +7544,7 @@ gc.luau
 214:26 no_implicit_globals: global variable `tostring` used
 216:5 undefined_variable: undefined variable `setblockallocations`
 216:5 no_implicit_globals: global variable `setblockallocations` used
+217:5 undefined_variable: undefined variable `collectgarbage`
 217:5 no_implicit_globals: global variable `collectgarbage` used
 218:5 undefined_variable: undefined variable `setblockallocations`
 218:5 no_implicit_globals: global variable `setblockallocations` used
@@ -7627,6 +7561,7 @@ gc.luau
 229:17 no_implicit_globals: global variable `a` used
 231:5 undefined_variable: undefined variable `setblockallocations`
 231:5 no_implicit_globals: global variable `setblockallocations` used
+232:5 undefined_variable: undefined variable `collectgarbage`
 232:5 no_implicit_globals: global variable `collectgarbage` used
 233:5 undefined_variable: undefined variable `setblockallocations`
 233:5 no_implicit_globals: global variable `setblockallocations` used
@@ -7638,30 +7573,32 @@ gc.luau
 239:5 no_implicit_globals: global variable `recurse` used
 241:5 undefined_variable: undefined variable `setblockallocations`
 241:5 no_implicit_globals: global variable `setblockallocations` used
+242:5 undefined_variable: undefined variable `collectgarbage`
 242:5 no_implicit_globals: global variable `collectgarbage` used
 243:5 undefined_variable: undefined variable `setblockallocations`
 243:5 no_implicit_globals: global variable `setblockallocations` used
+248:3 undefined_variable: undefined variable `collectgarbage`
 248:3 no_implicit_globals: global variable `collectgarbage` used
-248:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `restart`
 250:7 shadowing: variable `i` shadows outer variable
 252:5 setting_global: setting global variable `gcimport` (missing `local`?)
 252:5 no_implicit_globals: global variable `gcimport` used
 252:16 no_implicit_globals: global variable `setmetatable` used
 252:53 unused_argument: unused argument `t`
+253:22 undefined_variable: undefined variable `collectgarbage`
 253:22 no_implicit_globals: global variable `collectgarbage` used
-253:37 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `restart`
 255:15 shadowing: variable `k` shadows outer variable
 255:15 unused_loop_variable: unused loop variable `k`
-255:30 must_use: return value of `coroutine.create` is discarded
 255:30 no_implicit_globals: global variable `coroutine` used
+257:11 undefined_variable: undefined variable `collectgarbage`
 257:11 no_implicit_globals: global variable `collectgarbage` used
+264:15 undefined_variable: undefined variable `loadstring`
 264:15 no_implicit_globals: global variable `loadstring` used
 265:5 no_implicit_globals: global variable `assert` used
 268:5 no_implicit_globals: global variable `assert` used
 269:5 setting_global: setting global variable `gcimport` (missing `local`?)
 269:5 no_implicit_globals: global variable `gcimport` used
+274:1 undefined_variable: undefined variable `collectgarbage`
 274:1 no_implicit_globals: global variable `collectgarbage` used
-274:16 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 275:1 merge_adjacent_locals: adjacent `local` declarations can be merged
 275:11 no_implicit_globals: global variable `newproxy` used
 276:7 unused_variable: unused variable `s`
@@ -7684,7 +7621,9 @@ gc.luau
 290:1 unbalanced_assignment: 2 target(s) but 1 value(s) in assignment
 291:1 no_implicit_globals: global variable `assert` used
 291:8 no_implicit_globals: global variable `next` used
+292:1 undefined_variable: undefined variable `collectgarbage`
 292:1 no_implicit_globals: global variable `collectgarbage` used
+293:1 undefined_variable: undefined variable `collectgarbage`
 293:1 no_implicit_globals: global variable `collectgarbage` used
 294:1 no_implicit_globals: global variable `assert` used
 294:8 no_implicit_globals: global variable `next` used
@@ -7696,6 +7635,7 @@ gc.luau
 299:1 no_implicit_globals: global variable `getmetatable` used
 299:34 unused_argument: unused argument `o`
 299:37 no_implicit_globals: global variable `os` used
+300:1 undefined_variable: undefined variable `collectgarbage`
 300:1 no_implicit_globals: global variable `collectgarbage` used
 302:7 shadowing: variable `u` shadows outer variable
 302:7 redefining_local: local `u` is redeclared in the same block
@@ -7708,10 +7648,12 @@ gc.luau
 306:3 unnecessary_assert: `assert` on a constant falsy value always errors
 308:1 value_overwritten_before_read: value assigned to `u` is overwritten before it is read
 308:1 unbalanced_assignment: 2 target(s) but 1 value(s) in assignment
+309:1 undefined_variable: undefined variable `collectgarbage`
 309:1 no_implicit_globals: global variable `collectgarbage` used
 312:5 no_implicit_globals: global variable `newproxy` used
 313:1 no_implicit_globals: global variable `getmetatable` used
 313:36 no_implicit_globals: global variable `error` used
+316:1 undefined_variable: undefined variable `collectgarbage`
 316:1 no_implicit_globals: global variable `collectgarbage` used
 319:8 no_implicit_globals: global variable `rawget` used
 319:15 global_usage: global environment `_G` used
@@ -7720,6 +7662,7 @@ gc.luau
 321:9 shadowing: variable `a` shadows outer variable
 322:7 shadowing: variable `i` shadows outer variable
 322:7 unused_loop_variable: unused loop variable `i`
+325:3 undefined_variable: undefined variable `collectgarbage`
 325:3 no_implicit_globals: global variable `collectgarbage` used
 330:3 merge_adjacent_locals: adjacent `local` declarations can be merged
 333:12 setting_global: setting global variable `fn` (missing `local`?)
@@ -7729,6 +7672,7 @@ gc.luau
 342:22 no_implicit_globals: global variable `coroutine` used
 342:39 no_implicit_globals: global variable `fn` used
 343:7 no_implicit_globals: global variable `coroutine` used
+347:3 undefined_variable: undefined variable `collectgarbage`
 347:3 no_implicit_globals: global variable `collectgarbage` used
 355:25 unused_variable: unused variable `type`
 356:9 no_implicit_globals: global variable `newproxy` used
@@ -7761,6 +7705,7 @@ gc.luau
 393:5 no_implicit_globals: global variable `assert` used
 394:5 no_implicit_globals: global variable `table` used
 397:7 shadowing: variable `i` shadows outer variable
+401:3 undefined_variable: undefined variable `collectgarbage`
 401:3 no_implicit_globals: global variable `collectgarbage` used
 407:7 shadowing: variable `i` shadows outer variable
 408:15 no_implicit_globals: global variable `coroutine` used
@@ -7768,6 +7713,7 @@ gc.luau
 415:7 no_implicit_globals: global variable `coroutine` used
 418:5 no_implicit_globals: global variable `assert` used
 419:5 no_implicit_globals: global variable `table` used
+424:3 undefined_variable: undefined variable `collectgarbage`
 424:3 no_implicit_globals: global variable `collectgarbage` used
 
 ifelseexpr.luau
@@ -8025,15 +7971,12 @@ interrupt.luau
 79:42 no_implicit_globals: global variable `string` used
 81:10 setting_global: setting global variable `hang1` (missing `local`?)
 81:10 no_implicit_globals: global variable `hang1` used
-82:2 must_use: return value of `string.find` is discarded
 82:2 no_implicit_globals: global variable `string` used
 85:10 setting_global: setting global variable `hang2` (missing `local`?)
 85:10 no_implicit_globals: global variable `hang2` used
-86:2 must_use: return value of `string.match` is discarded
 86:2 no_implicit_globals: global variable `string` used
 89:10 setting_global: setting global variable `hang3` (missing `local`?)
 89:10 no_implicit_globals: global variable `hang3` used
-90:2 must_use: return value of `string.gsub` is discarded
 90:2 no_implicit_globals: global variable `string` used
 93:10 setting_global: setting global variable `hang4` (missing `local`?)
 93:10 no_implicit_globals: global variable `hang4` used
@@ -8044,7 +7987,6 @@ interrupt.luau
 98:10 setting_global: setting global variable `hang5` (missing `local`?)
 98:10 no_implicit_globals: global variable `hang5` used
 99:12 no_implicit_globals: global variable `string` used
-100:2 must_use: return value of `string.match` is discarded
 100:2 no_implicit_globals: global variable `string` used
 100:18 no_implicit_globals: global variable `string` used
 103:10 setting_global: setting global variable `hang6` (missing `local`?)
@@ -8055,10 +7997,8 @@ interrupt.luau
 114:10 no_implicit_globals: global variable `hang7` used
 116:11 setting_global: setting global variable `l0` (missing `local`?)
 116:11 no_implicit_globals: global variable `l0` used
-117:3 must_use: return value of `pcall` is discarded
 117:3 no_implicit_globals: global variable `pcall` used
 117:9 no_implicit_globals: global variable `l0` used
-118:3 must_use: return value of `pcall` is discarded
 118:3 no_implicit_globals: global variable `pcall` used
 118:9 no_implicit_globals: global variable `l0` used
 121:2 no_implicit_globals: global variable `l0` used
@@ -8356,7 +8296,6 @@ iter.luau
 582:28 empty_block: empty generic `for` loop body
 582:49 multiple_statements_per_line: statement starts on the same line as the previous statement
 583:14 no_implicit_globals: global variable `coroutine` used
-583:42 must_use: return value of `pcall` is discarded
 583:42 no_implicit_globals: global variable `pcall` used
 584:9 no_implicit_globals: global variable `coroutine` used
 584:43 no_implicit_globals: global variable `coroutine` used
@@ -8432,6 +8371,7 @@ lazyload.luau
 39:34 no_implicit_globals: global variable `select` used
 40:1 no_implicit_globals: global variable `assert` used
 44:1 no_implicit_globals: global variable `assert` used
+51:1 undefined_variable: undefined variable `collectgarbage`
 51:1 no_implicit_globals: global variable `collectgarbage` used
 53:3 no_implicit_globals: global variable `assert` used
 60:1 no_implicit_globals: global variable `assert` used
@@ -8439,6 +8379,7 @@ lazyload.luau
 literals.luau
 3:1 no_implicit_globals: global variable `print` used
 5:36 no_implicit_globals: global variable `assert` used
+5:43 undefined_variable: undefined variable `loadstring`
 5:43 no_implicit_globals: global variable `loadstring` used
 12:1 no_implicit_globals: global variable `assert` used
 12:1 unnecessary_assert: `assert` on a constant value always passes
@@ -8520,6 +8461,7 @@ literals.luau
 152:17 no_implicit_globals: global variable `pairs` used
 158:10 no_implicit_globals: global variable `coroutine` used
 159:3 no_implicit_globals: global variable `assert` used
+159:15 undefined_variable: undefined variable `loadstring`
 159:15 no_implicit_globals: global variable `loadstring` used
 
 locals.luau
@@ -8541,6 +8483,7 @@ locals.luau
 23:1 no_implicit_globals: global variable `x` used
 25:1 setting_global: setting global variable `a` (missing `local`?)
 25:1 no_implicit_globals: global variable `a` used
+26:1 undefined_variable: undefined variable `loadstring`
 26:1 no_implicit_globals: global variable `loadstring` used
 27:1 no_implicit_globals: global variable `assert` used
 27:8 no_implicit_globals: global variable `type` used
@@ -8597,12 +8540,14 @@ locals.luau
 71:8 multiple_statements_per_line: statement starts on the same line as the previous statement
 71:8 no_implicit_globals: global variable `assert` used
 71:15 no_implicit_globals: global variable `getfenv` used
+76:10 undefined_variable: undefined variable `loadstring`
 76:10 no_implicit_globals: global variable `loadstring` used
 79:1 no_implicit_globals: global variable `assert` used
 79:8 no_implicit_globals: global variable `getfenv` used
 79:28 no_implicit_globals: global variable `getfenv` used
 80:7 shadowing: variable `a` shadows outer variable
 80:7 redefining_local: local `a` is redeclared in the same block
+80:25 undefined_variable: undefined variable `loadstring`
 80:25 no_implicit_globals: global variable `loadstring` used
 81:1 no_implicit_globals: global variable `setfenv` used
 82:1 no_implicit_globals: global variable `assert` used
@@ -8617,24 +8562,28 @@ locals.luau
 90:7 shadowing: variable `a` shadows outer variable
 90:7 redefining_local: local `a` is redeclared in the same block
 94:5 no_implicit_globals: global variable `assert` used
+94:12 undefined_variable: undefined variable `loadstring`
 94:12 no_implicit_globals: global variable `loadstring` used
 94:23 no_implicit_globals: global variable `string` used
 98:5 no_implicit_globals: global variable `assert` used
+98:12 undefined_variable: undefined variable `loadstring`
 98:12 no_implicit_globals: global variable `loadstring` used
 98:23 no_implicit_globals: global variable `string` used
 101:5 no_implicit_globals: global variable `assert` used
+101:12 undefined_variable: undefined variable `loadstring`
 101:12 no_implicit_globals: global variable `loadstring` used
 101:23 no_implicit_globals: global variable `string` used
 108:1 no_implicit_globals: global variable `print` used
 111:4 no_implicit_globals: global variable `rawget` used
 111:11 global_usage: global environment `_G` used
 111:11 no_implicit_globals: global variable `_G` used
+113:3 undefined_variable: undefined variable `collectgarbage`
 113:3 no_implicit_globals: global variable `collectgarbage` used
-113:18 incorrect_stdlib_use: `collectgarbage` argument 1 must be one of `collect`, `count`, got `stop`
 114:9 shadowing: variable `a` shadows outer variable
 117:13 undefined_variable: undefined variable `querytab`
 117:13 no_implicit_globals: global variable `querytab` used
 119:14 no_implicit_globals: global variable `pairs` used
+120:3 undefined_variable: undefined variable `collectgarbage`
 120:3 no_implicit_globals: global variable `collectgarbage` used
 122:15 undefined_variable: undefined variable `querytab`
 122:15 no_implicit_globals: global variable `querytab` used
@@ -8896,6 +8845,7 @@ math.luau
 145:1 no_implicit_globals: global variable `f` used
 145:5 no_implicit_globals: global variable `f` used
 146:1 no_implicit_globals: global variable `assert` used
+146:8 undefined_variable: undefined variable `loadstring`
 146:8 no_implicit_globals: global variable `loadstring` used
 146:19 no_implicit_globals: global variable `f` used
 148:1 no_implicit_globals: global variable `assert` used
@@ -9767,6 +9717,7 @@ native.luau
 187:8 no_implicit_globals: global variable `pcall` used
 190:3 no_implicit_globals: global variable `assert` used
 190:3 unnecessary_assert: `assert` on a constant value always passes
+191:3 incorrect_stdlib_use: `assert` accepts at most 2 argument(s), got 3
 191:3 no_implicit_globals: global variable `assert` used
 191:3 unnecessary_assert: `assert` on a constant falsy value always errors
 191:17 placeholder_read: read of `_`, but convention is to use `_` only for ignored bindings
@@ -9908,6 +9859,7 @@ native.luau
 270:7 placeholder_read: read of `_`, but convention is to use `_` only for ignored bindings
 279:1 no_implicit_globals: global variable `assert` used
 279:8 no_implicit_globals: global variable `pcall` used
+283:5 incorrect_stdlib_use: `assert` accepts at most 2 argument(s), got 3
 283:5 no_implicit_globals: global variable `assert` used
 283:12 placeholder_read: read of `_`, but convention is to use `_` only for ignored bindings
 283:15 placeholder_read: read of `_`, but convention is to use `_` only for ignored bindings
@@ -9983,9 +9935,7 @@ native.luau
 321:8 no_implicit_globals: global variable `pcall` used
 324:3 empty_block: empty generic `for` loop body
 324:10 unused_loop_variable: unused loop variable `v`
-325:3 must_use: return value of `bit32.bnot` is discarded
 325:3 no_implicit_globals: global variable `bit32` used
-326:3 must_use: return value of `bit32.arshift` is discarded
 326:3 no_implicit_globals: global variable `bit32` used
 329:1 no_implicit_globals: global variable `assert` used
 329:8 no_implicit_globals: global variable `pcall` used
@@ -10487,7 +10437,6 @@ native_types.luau
 75:22 no_implicit_globals: global variable `buffer` used
 76:1 no_implicit_globals: global variable `call` used
 77:1 no_implicit_globals: global variable `ecall` used
-83:5 must_use: return value of `pcall` is discarded
 83:5 no_implicit_globals: global variable `pcall` used
 89:1 no_implicit_globals: global variable `assert` used
 89:8 no_implicit_globals: global variable `call` used
@@ -10597,7 +10546,6 @@ pcall.luau
 64:36 unused_variable: unused variable `a`
 65:2 no_implicit_globals: global variable `checkerror` used
 65:13 no_implicit_globals: global variable `pcall` used
-65:30 must_use: return value of `select` is discarded
 65:30 no_implicit_globals: global variable `select` used
 69:12 setting_global: setting global variable `stackinfinite` (missing `local`?)
 69:12 no_implicit_globals: global variable `stackinfinite` used
@@ -10664,7 +10612,6 @@ pcall.luau
 90:77 no_implicit_globals: global variable `colog` used
 90:101 no_implicit_globals: global variable `pcall` used
 90:118 no_implicit_globals: global variable `coroutine` used
-90:136 must_use: return value of `pcall` is discarded
 90:136 multiple_statements_per_line: statement starts on the same line as the previous statement
 90:136 no_implicit_globals: global variable `pcall` used
 90:153 no_implicit_globals: global variable `coroutine` used
@@ -10822,29 +10769,23 @@ pcall.luau
 177:87 no_implicit_globals: global variable `recurse` used
 180:2 no_implicit_globals: global variable `checkresults` used
 180:47 no_implicit_globals: global variable `pcall` used
-180:64 must_use: return value of `table.create` is discarded
 180:64 no_implicit_globals: global variable `table` used
 181:2 no_implicit_globals: global variable `checkresults` used
 181:47 no_implicit_globals: global variable `xpcall` used
-181:65 must_use: return value of `table.create` is discarded
 181:65 no_implicit_globals: global variable `table` used
 182:2 no_implicit_globals: global variable `checkresults` used
 182:34 no_implicit_globals: global variable `xpcall` used
-182:52 must_use: return value of `table.create` is discarded
 182:52 no_implicit_globals: global variable `table` used
 182:84 unused_argument: unused argument `e`
 183:2 no_implicit_globals: global variable `checkresults` used
 183:53 no_implicit_globals: global variable `xpcall` used
 183:71 no_implicit_globals: global variable `error` used
 183:99 unused_argument: unused argument `e`
-183:102 must_use: return value of `table.create` is discarded
 183:102 no_implicit_globals: global variable `table` used
 184:2 no_implicit_globals: global variable `checkresults` used
 184:47 no_implicit_globals: global variable `xpcall` used
-184:65 must_use: return value of `table.create` is discarded
 184:65 no_implicit_globals: global variable `table` used
 184:97 unused_argument: unused argument `e`
-184:100 must_use: return value of `table.create` is discarded
 184:100 no_implicit_globals: global variable `table` used
 187:30 no_implicit_globals: global variable `coroutine` used
 189:3 no_implicit_globals: global variable `checkresults` used
@@ -10858,19 +10799,16 @@ pcall.luau
 195:3 no_implicit_globals: global variable `checkresults` used
 195:48 no_implicit_globals: global variable `pcall` used
 195:65 no_implicit_globals: global variable `coroutine` used
-195:84 must_use: return value of `table.create` is discarded
 195:84 multiple_statements_per_line: statement starts on the same line as the previous statement
 195:84 no_implicit_globals: global variable `table` used
 196:3 no_implicit_globals: global variable `checkresults` used
 196:48 no_implicit_globals: global variable `xpcall` used
 196:66 no_implicit_globals: global variable `coroutine` used
-196:85 must_use: return value of `table.create` is discarded
 196:85 multiple_statements_per_line: statement starts on the same line as the previous statement
 196:85 no_implicit_globals: global variable `table` used
 197:3 no_implicit_globals: global variable `checkresults` used
 197:35 no_implicit_globals: global variable `xpcall` used
 197:53 no_implicit_globals: global variable `coroutine` used
-197:72 must_use: return value of `table.create` is discarded
 197:72 multiple_statements_per_line: statement starts on the same line as the previous statement
 197:72 no_implicit_globals: global variable `table` used
 197:104 unused_argument: unused argument `e`
@@ -10880,16 +10818,13 @@ pcall.luau
 198:91 multiple_statements_per_line: statement starts on the same line as the previous statement
 198:91 no_implicit_globals: global variable `error` used
 198:119 unused_argument: unused argument `e`
-198:122 must_use: return value of `table.create` is discarded
 198:122 no_implicit_globals: global variable `table` used
 199:3 no_implicit_globals: global variable `checkresults` used
 199:48 no_implicit_globals: global variable `xpcall` used
 199:66 no_implicit_globals: global variable `coroutine` used
-199:85 must_use: return value of `table.create` is discarded
 199:85 multiple_statements_per_line: statement starts on the same line as the previous statement
 199:85 no_implicit_globals: global variable `table` used
 199:117 unused_argument: unused argument `e`
-199:120 must_use: return value of `table.create` is discarded
 199:120 no_implicit_globals: global variable `table` used
 204:2 empty_block: empty `while` loop body
 207:29 no_implicit_globals: global variable `xpcall` used
@@ -10905,7 +10840,6 @@ pcall.luau
 213:66 no_implicit_globals: global variable `getnumber` used
 215:11 setting_global: setting global variable `recursivepcall` (missing `local`?)
 215:11 no_implicit_globals: global variable `recursivepcall` used
-215:31 must_use: return value of `pcall` is discarded
 215:31 no_implicit_globals: global variable `pcall` used
 215:37 no_implicit_globals: global variable `recursivepcall` used
 216:2 no_implicit_globals: global variable `checkresults` used
@@ -10919,7 +10853,6 @@ pcall.luau
 221:1 setting_global: setting global variable `co` (missing `local`?)
 221:1 no_implicit_globals: global variable `co` used
 221:6 no_implicit_globals: global variable `coroutine` used
-221:34 must_use: return value of `table.create` is discarded
 221:34 no_implicit_globals: global variable `table` used
 222:1 no_implicit_globals: global variable `coroutine` used
 222:18 no_implicit_globals: global variable `co` used
@@ -10933,48 +10866,39 @@ pcall.luau
 234:3 no_implicit_globals: global variable `assert` used
 235:16 no_implicit_globals: global variable `table` used
 241:2 no_implicit_globals: global variable `error` used
-247:2 must_use: return value of `pcall` is discarded
 247:2 no_implicit_globals: global variable `pcall` used
 248:2 no_implicit_globals: global variable `assert` used
-253:2 must_use: return value of `xpcall` is discarded
 253:2 no_implicit_globals: global variable `xpcall` used
 253:26 unused_argument: unused argument `err`
 254:2 no_implicit_globals: global variable `assert` used
-259:2 must_use: return value of `xpcall` is discarded
 259:2 no_implicit_globals: global variable `xpcall` used
 259:26 unused_argument: unused argument `err`
 260:2 no_implicit_globals: global variable `assert` used
 266:2 no_implicit_globals: global variable `checkresults` used
 266:42 no_implicit_globals: global variable `colog` used
-267:3 must_use: return value of `pcall` is discarded
 267:3 no_implicit_globals: global variable `pcall` used
 267:17 no_implicit_globals: global variable `coroutine` used
 274:2 no_implicit_globals: global variable `checkresults` used
 274:42 no_implicit_globals: global variable `colog` used
-275:3 must_use: return value of `xpcall` is discarded
 275:3 no_implicit_globals: global variable `xpcall` used
 275:27 unused_argument: unused argument `err`
 275:37 no_implicit_globals: global variable `coroutine` used
 282:2 no_implicit_globals: global variable `checkresults` used
 282:42 no_implicit_globals: global variable `colog` used
-283:3 must_use: return value of `xpcall` is discarded
 283:3 no_implicit_globals: global variable `xpcall` used
 283:27 unused_argument: unused argument `err`
 283:83 no_implicit_globals: global variable `coroutine` used
-292:2 must_use: return value of `xpcall` is discarded
 292:2 no_implicit_globals: global variable `xpcall` used
 292:26 unused_argument: unused argument `err`
 295:2 no_implicit_globals: global variable `assert` used
 301:2 no_implicit_globals: global variable `checkresults` used
 301:36 no_implicit_globals: global variable `colog` used
-302:3 must_use: return value of `xpcall` is discarded
 302:3 no_implicit_globals: global variable `xpcall` used
 302:27 unused_argument: unused argument `err`
 304:8 no_implicit_globals: global variable `coroutine` used
 306:2 no_implicit_globals: global variable `assert` used
 310:8 undefined_variable: undefined variable `limitedstack`
 310:8 no_implicit_globals: global variable `limitedstack` used
-314:3 must_use: return value of `pcall` is discarded
 314:3 no_implicit_globals: global variable `pcall` used
 315:3 no_implicit_globals: global variable `coroutine` used
 317:2 no_implicit_globals: global variable `checkerror` used
@@ -11156,7 +11080,6 @@ pm.luau
 92:8 no_implicit_globals: global variable `string` used
 94:10 setting_global: setting global variable `strset` (missing `local`?)
 94:10 no_implicit_globals: global variable `strset` used
-96:3 must_use: return value of `string.gsub` is discarded
 96:3 no_implicit_globals: global variable `string` used
 100:1 no_implicit_globals: global variable `assert` used
 100:8 no_implicit_globals: global variable `string` used
@@ -11237,7 +11160,6 @@ pm.luau
 147:34 no_implicit_globals: global variable `rawset` used
 147:41 global_usage: global environment `_G` used
 147:41 no_implicit_globals: global variable `_G` used
-148:3 must_use: return value of `string.gsub` is discarded
 148:3 no_implicit_globals: global variable `string` used
 149:3 no_implicit_globals: global variable `assert` used
 149:10 global_usage: global environment `_G` used
@@ -11253,6 +11175,7 @@ pm.luau
 153:1 no_implicit_globals: global variable `assert` used
 153:8 no_implicit_globals: global variable `string` used
 153:83 no_implicit_globals: global variable `f` used
+156:36 undefined_variable: undefined variable `loadstring`
 156:36 no_implicit_globals: global variable `loadstring` used
 157:1 no_implicit_globals: global variable `assert` used
 157:8 no_implicit_globals: global variable `string` used
@@ -11295,7 +11218,6 @@ pm.luau
 183:1 no_implicit_globals: global variable `assert` used
 183:8 no_implicit_globals: global variable `string` used
 183:65 multiple_statements_per_line: statement starts on the same line as the previous statement
-187:1 must_use: return value of `string.gsub` is discarded
 187:1 no_implicit_globals: global variable `string` used
 187:67 multiple_statements_per_line: statement starts on the same line as the previous statement
 188:1 no_implicit_globals: global variable `assert` used
@@ -11746,7 +11668,9 @@ sort.luau
 103:18 no_implicit_globals: global variable `table` used
 103:30 no_implicit_globals: global variable `a` used
 103:43 shadowing: variable `x` shadows outer variable
+104:11 undefined_variable: undefined variable `loadstring`
 104:11 no_implicit_globals: global variable `loadstring` used
+105:11 undefined_variable: undefined variable `collectgarbage`
 105:11 no_implicit_globals: global variable `collectgarbage` used
 108:1 no_implicit_globals: global variable `assert` used
 110:1 setting_global: setting global variable `tt` (missing `local`?)
@@ -12153,7 +12077,6 @@ strings.luau
 160:8 no_implicit_globals: global variable `string` used
 161:1 no_implicit_globals: global variable `assert` used
 161:8 no_implicit_globals: global variable `pcall` used
-162:2 must_use: return value of `string.format` is discarded
 162:2 no_implicit_globals: global variable `string` used
 165:1 no_implicit_globals: global variable `assert` used
 165:8 no_implicit_globals: global variable `string` used
@@ -12185,10 +12108,10 @@ strings.luau
 183:14 no_implicit_globals: global variable `string` used
 186:1 no_implicit_globals: global variable `assert` used
 186:8 no_implicit_globals: global variable `pcall` used
-187:2 must_use: return value of `string.format` is discarded
 187:2 no_implicit_globals: global variable `string` used
 187:19 format_string: invalid format: unknown specifier `%*` at offset 2
 190:1 no_implicit_globals: global variable `assert` used
+190:8 undefined_variable: undefined variable `loadstring`
 190:8 no_implicit_globals: global variable `loadstring` used
 193:1 no_implicit_globals: global variable `assert` used
 193:8 no_implicit_globals: global variable `table` used
@@ -12303,6 +12226,7 @@ tables.luau
 59:7 shadowing: variable `lim` shadows outer variable
 59:7 redefining_local: local `lim` is redeclared in the same block
 63:9 shadowing: variable `s` shadows outer variable
+65:15 undefined_variable: undefined variable `loadstring`
 65:15 no_implicit_globals: global variable `loadstring` used
 66:5 no_implicit_globals: global variable `assert` used
 68:9 no_implicit_globals: global variable `string` used
@@ -12424,6 +12348,7 @@ tables.luau
 258:12 no_implicit_globals: global variable `string` used
 259:6 global_usage: global environment `_G` used
 259:6 no_implicit_globals: global variable `_G` used
+261:5 undefined_variable: undefined variable `collectgarbage`
 261:5 no_implicit_globals: global variable `collectgarbage` used
 267:9 no_implicit_globals: global variable `getfenv` used
 267:18 no_implicit_globals: global variable `setfenv` used
@@ -12497,6 +12422,7 @@ tables.luau
 328:35 no_implicit_globals: global variable `string` used
 332:13 no_implicit_globals: global variable `pairs` used
 334:3 no_implicit_globals: global variable `assert` used
+336:3 undefined_variable: undefined variable `collectgarbage`
 336:3 no_implicit_globals: global variable `collectgarbage` used
 337:3 no_implicit_globals: global variable `assert` used
 339:1 no_implicit_globals: global variable `assert` used
@@ -12818,6 +12744,7 @@ tables.luau
 769:5 no_implicit_globals: global variable `string` used
 770:5 no_implicit_globals: global variable `string` used
 772:5 no_implicit_globals: global variable `string` used
+776:5 undefined_variable: undefined variable `collectgarbage`
 776:5 no_implicit_globals: global variable `collectgarbage` used
 779:3 no_implicit_globals: global variable `assert` used
 779:25 no_implicit_globals: global variable `next` used
@@ -12942,6 +12869,7 @@ tables.luau
 1007:18 no_implicit_globals: global variable `setmetatable` used
 1009:3 no_implicit_globals: global variable `table` used
 1010:3 no_implicit_globals: global variable `assert` used
+1013:3 undefined_variable: undefined variable `collectgarbage`
 1013:3 no_implicit_globals: global variable `collectgarbage` used
 1014:3 no_implicit_globals: global variable `assert` used
 1019:3 merge_adjacent_locals: adjacent `local` declarations can be merged
@@ -12949,6 +12877,7 @@ tables.luau
 1022:18 no_implicit_globals: global variable `setmetatable` used
 1024:3 no_implicit_globals: global variable `table` used
 1025:3 no_implicit_globals: global variable `assert` used
+1029:3 undefined_variable: undefined variable `collectgarbage`
 1029:3 no_implicit_globals: global variable `collectgarbage` used
 1030:3 no_implicit_globals: global variable `assert` used
 1034:9 shadowing: variable `t` shadows outer variable
@@ -13678,6 +13607,7 @@ utf8.luau
 24:8 no_implicit_globals: global variable `table` used
 26:3 no_implicit_globals: global variable `assert` used
 26:10 no_implicit_globals: global variable `assert` used
+26:17 undefined_variable: undefined variable `loadstring`
 26:17 no_implicit_globals: global variable `loadstring` used
 29:1 no_implicit_globals: global variable `assert` used
 29:12 no_implicit_globals: global variable `utf8` used
@@ -13958,10 +13888,8 @@ vararg.luau
 114:1 no_implicit_globals: global variable `assert` used
 115:6 no_implicit_globals: global variable `select` used
 116:1 no_implicit_globals: global variable `assert` used
-117:1 must_use: return value of `pcall` is discarded
 117:1 no_implicit_globals: global variable `pcall` used
 117:7 no_implicit_globals: global variable `select` used
-118:1 must_use: return value of `pcall` is discarded
 118:1 no_implicit_globals: global variable `pcall` used
 118:7 no_implicit_globals: global variable `select` used
 121:10 setting_global: setting global variable `selectone` (missing `local`?)
@@ -14005,6 +13933,7 @@ vararg.luau
 152:8 no_implicit_globals: global variable `selectmany` used
 155:1 setting_global: setting global variable `f` (missing `local`?)
 155:1 no_implicit_globals: global variable `f` used
+155:5 undefined_variable: undefined variable `loadstring`
 155:5 no_implicit_globals: global variable `loadstring` used
 156:1 setting_global: setting global variable `x` (missing `local`?)
 156:1 no_implicit_globals: global variable `x` used
@@ -14015,6 +13944,7 @@ vararg.luau
 157:36 no_implicit_globals: global variable `x` used
 160:1 setting_global: setting global variable `f` (missing `local`?)
 160:1 no_implicit_globals: global variable `f` used
+160:5 undefined_variable: undefined variable `loadstring`
 160:5 no_implicit_globals: global variable `loadstring` used
 167:1 no_implicit_globals: global variable `assert` used
 167:8 no_implicit_globals: global variable `f` used
@@ -14041,17 +13971,21 @@ vector.luau
 16:34 no_implicit_globals: global variable `vector` used
 20:2 no_implicit_globals: global variable `assert` used
 20:9 no_implicit_globals: global variable `vector` used
+20:35 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 20:35 no_implicit_globals: global variable `vector` used
 21:2 no_implicit_globals: global variable `assert` used
 21:9 unnecessary_negation: negated comparison, consider `vector.create(1, 2, 3) ~= vector.create(1, 2, 3, 9)`
 21:14 no_implicit_globals: global variable `vector` used
+21:40 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 21:40 no_implicit_globals: global variable `vector` used
 23:2 no_implicit_globals: global variable `assert` used
 23:9 no_implicit_globals: global variable `vector` used
+23:35 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 23:35 no_implicit_globals: global variable `vector` used
 24:2 no_implicit_globals: global variable `assert` used
 24:9 unnecessary_negation: negated comparison, consider `vector.create(1, 2, 3) == vector.create(1, 2, 3, 9)`
 24:14 no_implicit_globals: global variable `vector` used
+24:40 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 24:40 no_implicit_globals: global variable `vector` used
 28:1 no_implicit_globals: global variable `assert` used
 28:8 no_implicit_globals: global variable `rawequal` used
@@ -14070,9 +14004,11 @@ vector.luau
 33:13 no_implicit_globals: global variable `vector` used
 36:2 no_implicit_globals: global variable `assert` used
 36:9 no_implicit_globals: global variable `tostring` used
+36:18 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 36:18 no_implicit_globals: global variable `vector` used
 37:2 no_implicit_globals: global variable `assert` used
 37:9 no_implicit_globals: global variable `tostring` used
+37:18 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 37:18 no_implicit_globals: global variable `vector` used
 39:2 no_implicit_globals: global variable `assert` used
 39:9 no_implicit_globals: global variable `tostring` used
@@ -14132,17 +14068,25 @@ vector.luau
 73:14 no_implicit_globals: global variable `vector` used
 73:40 no_implicit_globals: global variable `vector` used
 76:2 no_implicit_globals: global variable `assert` used
+76:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 76:9 no_implicit_globals: global variable `vector` used
+76:37 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 76:37 no_implicit_globals: global variable `vector` used
+76:69 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 76:69 no_implicit_globals: global variable `vector` used
 77:2 no_implicit_globals: global variable `assert` used
+77:13 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 77:13 no_implicit_globals: global variable `vector` used
+77:45 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 77:45 no_implicit_globals: global variable `vector` used
 78:2 no_implicit_globals: global variable `assert` used
+78:15 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 78:15 no_implicit_globals: global variable `vector` used
+78:47 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 78:47 no_implicit_globals: global variable `vector` used
 80:2 no_implicit_globals: global variable `assert` used
 80:9 no_implicit_globals: global variable `vector` used
+80:34 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 80:34 no_implicit_globals: global variable `vector` used
 80:65 no_implicit_globals: global variable `vector` used
 81:2 no_implicit_globals: global variable `assert` used
@@ -14170,11 +14114,16 @@ vector.luau
 93:8 no_implicit_globals: global variable `vector` used
 93:41 no_implicit_globals: global variable `vector` used
 96:2 no_implicit_globals: global variable `assert` used
+96:15 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 96:15 no_implicit_globals: global variable `vector` used
+96:44 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 96:44 no_implicit_globals: global variable `vector` used
 97:2 no_implicit_globals: global variable `assert` used
+97:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 97:9 no_implicit_globals: global variable `vector` used
+97:39 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 97:39 no_implicit_globals: global variable `vector` used
+97:68 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 97:68 no_implicit_globals: global variable `vector` used
 99:2 no_implicit_globals: global variable `assert` used
 99:15 no_implicit_globals: global variable `vector` used
@@ -14268,8 +14217,10 @@ vector.luau
 149:1 no_implicit_globals: global variable `assert` used
 149:8 no_implicit_globals: global variable `vector` used
 153:2 no_implicit_globals: global variable `assert` used
+153:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 153:9 no_implicit_globals: global variable `vector` used
 154:2 no_implicit_globals: global variable `assert` used
+154:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 154:9 no_implicit_globals: global variable `vector` used
 162:13 no_implicit_globals: global variable `vector` used
 165:9 no_implicit_globals: global variable `vector` used
@@ -14302,7 +14253,6 @@ vector_library.luau
 10:10 no_implicit_globals: global variable `ecall` used
 11:21 no_implicit_globals: global variable `pcall` used
 12:5 no_implicit_globals: global variable `assert` used
-17:1 must_use: return value of `pcall` is discarded
 17:1 no_implicit_globals: global variable `pcall` used
 19:5 no_implicit_globals: global variable `assert` used
 19:12 no_implicit_globals: global variable `vector` used
@@ -14324,12 +14274,10 @@ vector_library.luau
 31:43 no_implicit_globals: global variable `vector` used
 32:1 no_implicit_globals: global variable `assert` used
 32:8 no_implicit_globals: global variable `ecall` used
-32:25 must_use: return value of `vector.dot` is discarded
 32:25 no_implicit_globals: global variable `vector` used
 32:36 no_implicit_globals: global variable `vector` used
 33:1 no_implicit_globals: global variable `assert` used
 33:8 no_implicit_globals: global variable `ecall` used
-33:25 must_use: return value of `vector.dot` is discarded
 33:25 no_implicit_globals: global variable `vector` used
 33:36 no_implicit_globals: global variable `vector` used
 36:12 no_implicit_globals: global variable `vector` used
@@ -14643,12 +14591,10 @@ vector_library.luau
 180:1 no_implicit_globals: global variable `assert` used
 180:8 no_implicit_globals: global variable `ecall` used
 180:25 incorrect_stdlib_use: `vector.min` requires at least 1 argument(s), got 0
-180:25 must_use: return value of `vector.min` is discarded
 180:25 no_implicit_globals: global variable `vector` used
 181:1 no_implicit_globals: global variable `assert` used
 181:8 no_implicit_globals: global variable `ecall` used
 181:25 incorrect_stdlib_use: `vector.max` requires at least 1 argument(s), got 0
-181:25 must_use: return value of `vector.max` is discarded
 181:25 no_implicit_globals: global variable `vector` used
 183:1 no_implicit_globals: global variable `assert` used
 183:8 no_implicit_globals: global variable `select` used
@@ -14833,31 +14779,37 @@ vector_library.luau
 229:12 no_implicit_globals: global variable `vector` used
 229:24 no_implicit_globals: global variable `vector` used
 229:37 no_implicit_globals: global variable `vector` used
+229:57 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 229:57 no_implicit_globals: global variable `vector` used
 230:5 no_implicit_globals: global variable `assert` used
 230:12 no_implicit_globals: global variable `vector` used
 230:24 no_implicit_globals: global variable `vector` used
 230:36 no_implicit_globals: global variable `vector` used
+230:57 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 230:57 no_implicit_globals: global variable `vector` used
 231:5 no_implicit_globals: global variable `assert` used
 231:12 no_implicit_globals: global variable `vector` used
 231:24 no_implicit_globals: global variable `vector` used
 231:36 no_implicit_globals: global variable `vector` used
+231:57 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 231:57 no_implicit_globals: global variable `vector` used
 232:5 no_implicit_globals: global variable `assert` used
 232:12 no_implicit_globals: global variable `vector` used
 232:33 no_implicit_globals: global variable `vector` used
 232:47 no_implicit_globals: global variable `vector` used
+232:67 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 232:67 no_implicit_globals: global variable `vector` used
 233:5 no_implicit_globals: global variable `assert` used
 233:12 no_implicit_globals: global variable `vector` used
 233:33 no_implicit_globals: global variable `vector` used
 233:46 no_implicit_globals: global variable `vector` used
+233:67 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 233:67 no_implicit_globals: global variable `vector` used
 234:5 no_implicit_globals: global variable `assert` used
 234:12 no_implicit_globals: global variable `vector` used
 234:33 no_implicit_globals: global variable `vector` used
 234:46 no_implicit_globals: global variable `vector` used
+234:67 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 234:67 no_implicit_globals: global variable `vector` used
 236:5 no_implicit_globals: global variable `assert` used
 236:12 no_implicit_globals: global variable `vector` used
@@ -14932,10 +14884,13 @@ vector_library.luau
 272:8 no_implicit_globals: global variable `ecall` used
 272:32 no_implicit_globals: global variable `vector` used
 276:2 no_implicit_globals: global variable `assert` used
+276:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 276:9 no_implicit_globals: global variable `vector` used
 277:2 no_implicit_globals: global variable `assert` used
+277:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 277:9 no_implicit_globals: global variable `vector` used
 278:2 no_implicit_globals: global variable `assert` used
+278:9 incorrect_stdlib_use: `vector.create` accepts at most 3 argument(s), got 4
 278:9 no_implicit_globals: global variable `vector` used
 278:34 string_index_to_field: `['W']` is equivalent to `.W`
 281:1 no_implicit_globals: global variable `assert` used

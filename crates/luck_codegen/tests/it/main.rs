@@ -5,6 +5,7 @@
 mod common;
 
 mod compact;
+mod definitions;
 mod fixtures;
 mod generated;
 mod literal;

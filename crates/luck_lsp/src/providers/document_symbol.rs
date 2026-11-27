@@ -91,6 +91,7 @@ impl<'ast> Visit<'ast> for SymbolEmitter<'_> {
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::CompoundAssignment(_)
+            | Statement::Declaration(_)
             | Statement::Error(_) => {}
         }
     }

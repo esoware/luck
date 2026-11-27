@@ -19,6 +19,7 @@ fn bench_bundler(criterion: &mut Criterion) {
         let options = BundleOptions {
             project_root: &project.root,
             dynamic_require: DynamicRequire::default(),
+            luau_config: None,
         };
         let mut bundle = || {
             arenas.reset();

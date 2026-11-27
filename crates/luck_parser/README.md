@@ -1,21 +1,21 @@
 # luck_parser
 
-The Luau parser, which builds a `luck_ast` tree in an arena the caller owns.
+A hand-written, error-recovering parser for Luau, including its full type
+syntax.
 
-## Overview
+`parse` reads a source into a `luck_ast` tree in an arena you pass in, using
+Pratt parsing for expressions and recursive descent for statements. When it
+hits a syntax error, it recovers and keeps going, so a single parse reports
+every error in the file. As in Luau, strings and comments may hold any byte.
 
-The parser reads statements by recursive descent and expressions by Pratt parsing, and covers the whole Luau type grammar. It pulls tokens from `luck_lexer` one at a time, with one token of lookahead, which it reads in place in the lexer's batch, and puts every node in the arena. A name or a literal that the token after it shows to be a whole expression, as most are, skips the Pratt loop. A list's items gather on a scratch stack, one per kind of item, and move to the arena in one exact allocation when it closes, but the commonest lists, of one item and of some kinds two, move as values. It reads a source as bytes, as Luau does, so a string or a comment may hold any byte. Names, which are ASCII, borrow their text from the source. It decodes each literal once, with the one numeral and escape reader in `luck_token`, so a literal holds its value beside its spelling, and a string borrows its value from the source too unless an escape or a line break had to be rewritten. As it goes, it numbers each name it reads, each with an index of its own, and counts what the tree holds, for `luck_semantic`, which finds what each name is by its index and reports the compile-time errors that need names resolved, such as a write to a `const` local.
-
-The tree keeps only the parentheses that change what they hold: around a call or `...`, which they truncate to one value. The parser reads every other pair as if it weren't there and records it in the result's `Groupings`, as the lexer keeps comments beside the tree, so a formatter or a lint can tell what the user grouped. Parentheses end a run of operators, so `(a - b) - c` holds a run in a run, while a parenthesized chain reads on, so `(a.b).c` is one. A node spans the tokens it was read from, the parentheses around its first or last operand included.
-
-An error doesn't stop the parse. The parser recovers and reports every error in one pass, sorted by position, each an E008 `luck_diagnostics::Diagnostic`. One that a construct is left open, such as a missing `end` or `)`, labels the token that opened it, as Luau names it, and a missing `end` also labels the most recent construct inside that one whose `end` is indented differently from its first line, where Luau asks whether its `end` was forgotten. Two limits end it early instead, with one error each: a source over 4 GiB, and nesting past `luck_ast::MAX_NESTING_DEPTH`, in levels or in parentheses open at once. So every tree it returns, with errors or without, can be walked on a thread with `luck_ast::MIN_STACK_BYTES`.
+No tree it returns nests deeper than `luck_ast::MAX_NESTING_DEPTH`, so anything
+that walks the tree recursively is safe on a thread with
+`luck_ast::MIN_STACK_BYTES` of stack.
 
 ## Usage
 
-- `parse(allocator, source)` returns a `ParseResult`: the source, the `chunk`, the `Block` at the root of the tree, the comments, the `Groupings`, the errors, the lenient escapes the lexer noted, the nesting depth, and the `TreeCounts`.
-- `parse_with_tokens` also keeps every token it read in the result's `tokens`, which `parse` leaves empty, so a host that needs both, such as the formatter or the language server, lexes the source once.
-
-A `break`, a `continue`, or a `return` is a statement like any other, and a `;` is no node. A statement the grammar takes only at the end of its block but that has others after it is an error, and stays where it was written.
+This example parses one statement, then shows the error a truncated function
+gets:
 
 ```rust
 use luck_allocator::Allocator;
@@ -24,4 +24,19 @@ let allocator = Allocator::new();
 let result = luck_parser::parse(&allocator, b"local x = 1 + 2");
 assert!(result.errors.is_empty());
 assert_eq!(result.chunk.stmts.len(), 1);
+
+let broken = luck_parser::parse(&allocator, b"local function f(");
+assert_eq!(broken.errors[0].code, "E008");
 ```
+
+## API
+
+* `parse`, which parses code.
+* `parse_definitions`, which parses a definition file, where Luau's `declare`
+  statements are allowed.
+* `parse_with_tokens` and `parse_definitions_with_tokens`, which do the same
+  and also keep the token list, as a formatter needs.
+* `ParseResult`, the tree with its comments, tokens, and errors, and node counts
+  for sizing later passes.
+* `Groupings`, the parentheses the tree left out, which a formatter uses to keep
+  the source's grouping.

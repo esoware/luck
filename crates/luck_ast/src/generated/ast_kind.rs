@@ -4,24 +4,28 @@
 use luck_token::Span;
 
 use crate::{
-    Assignment, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DoBlock, ElseClause,
-    ElseIfClause, ElseIfExprClause, FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef,
-    FunctionName, FunctionType, FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList,
-    GenericTypeParam, GetSpan, IfExpression, IfStatement, InterpolatedSegment, InterpolatedString,
-    IntersectionType, LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral,
-    NumericFor, OptionalType, ParenthesizedExpression, ParenthesizedType, RepeatLoop,
-    ReturnStatement, StringLiteral, SuffixedExpression, TableConstructor, TableType, TypeArgs,
-    TypeCast, TypeDeclaration, TypePack, TypedName, TypeofType, UnaryOp, UnionType, VarArgParam,
+    Assignment, BinaryOp, Block, CompoundAssignment, ConditionalBinding, DeclaredExternType,
+    DeclaredFunction, DeclaredGlobal, DoBlock, ElseClause, ElseIfClause, ElseIfExprClause,
+    FunctionAttribute, FunctionBody, FunctionDecl, FunctionDef, FunctionName, FunctionType,
+    FunctionTypeParam, GenericFor, GenericPackType, GenericTypeList, GenericTypeParam, GetSpan,
+    IfExpression, IfStatement, InterpolatedSegment, InterpolatedString, IntersectionType,
+    LocalAssignment, LocalFunction, MethodCall, Name, NamedType, NumberLiteral, NumericFor,
+    OptionalType, ParenthesizedExpression, ParenthesizedType, RepeatLoop, ReturnStatement,
+    StringLiteral, SuffixedExpression, TableConstructor, TableType, TypeArgs, TypeCast,
+    TypeDeclaration, TypePack, TypedName, TypeofType, UnaryOp, UnionType, VarArgParam,
     VariadicType, WhileLoop,
 };
 
 /// The largest discriminant of an [`AstType`].
-pub const AST_TYPE_MAX: u8 = 51;
+pub const AST_TYPE_MAX: u8 = 54;
 
 /// Which kind of node an [`AstKind`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum AstType {
+    DeclaredGlobal,
+    DeclaredFunction,
+    DeclaredExternType,
     SuffixedExpression,
     MethodCall,
     BinaryOp,
@@ -81,6 +85,9 @@ pub enum AstType {
 /// [`Visit::enter_node`](crate::Visit::enter_node) is handed.
 #[derive(Debug, Clone, Copy)]
 pub enum AstKind<'ast> {
+    DeclaredGlobal(&'ast DeclaredGlobal<'ast>),
+    DeclaredFunction(&'ast DeclaredFunction<'ast>),
+    DeclaredExternType(&'ast DeclaredExternType<'ast>),
     SuffixedExpression(&'ast SuffixedExpression<'ast>),
     MethodCall(&'ast MethodCall<'ast>),
     BinaryOp(&'ast BinaryOp<'ast>),
@@ -139,6 +146,9 @@ impl<'ast> AstKind<'ast> {
     #[inline]
     pub const fn ty(self) -> AstType {
         match self {
+            Self::DeclaredGlobal(_) => AstType::DeclaredGlobal,
+            Self::DeclaredFunction(_) => AstType::DeclaredFunction,
+            Self::DeclaredExternType(_) => AstType::DeclaredExternType,
             Self::SuffixedExpression(_) => AstType::SuffixedExpression,
             Self::MethodCall(_) => AstType::MethodCall,
             Self::BinaryOp(_) => AstType::BinaryOp,
@@ -191,6 +201,29 @@ impl<'ast> AstKind<'ast> {
             Self::GenericPackType(_) => AstType::GenericPackType,
             Self::GenericTypeList(_) => AstType::GenericTypeList,
             Self::GenericTypeParam(_) => AstType::GenericTypeParam,
+        }
+    }
+
+    #[inline]
+    pub const fn as_declared_global(self) -> Option<&'ast DeclaredGlobal<'ast>> {
+        if let Self::DeclaredGlobal(declared_global) = self { Some(declared_global) } else { None }
+    }
+
+    #[inline]
+    pub const fn as_declared_function(self) -> Option<&'ast DeclaredFunction<'ast>> {
+        if let Self::DeclaredFunction(declared_function) = self {
+            Some(declared_function)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub const fn as_declared_extern_type(self) -> Option<&'ast DeclaredExternType<'ast>> {
+        if let Self::DeclaredExternType(declared_extern_type) = self {
+            Some(declared_extern_type)
+        } else {
+            None
         }
     }
 
@@ -522,6 +555,9 @@ impl<'ast> AstKind<'ast> {
 impl GetSpan for AstKind<'_> {
     fn span(&self) -> Span {
         match self {
+            Self::DeclaredGlobal(declared_global) => declared_global.span(),
+            Self::DeclaredFunction(declared_function) => declared_function.span(),
+            Self::DeclaredExternType(declared_extern_type) => declared_extern_type.span(),
             Self::SuffixedExpression(suffixed_expr) => suffixed_expr.span(),
             Self::MethodCall(method_call) => method_call.span(),
             Self::BinaryOp(binary_op) => binary_op.span(),

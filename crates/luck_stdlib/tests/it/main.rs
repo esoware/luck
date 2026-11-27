@@ -5,9 +5,6 @@
 mod common;
 
 mod analysis;
-mod drift;
-mod replace_template;
-mod roblox_api;
-mod stdlib_catalog;
-mod stdlib_definition;
-mod variant;
+mod library;
+mod luau_definitions;
+mod roblox_definitions;

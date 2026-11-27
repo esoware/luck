@@ -39,15 +39,26 @@ impl Diagnostic {
         Self::module_not_found(
             span,
             module_name,
-            &format!("alias `@{alias_name}` not found in any `.luaurc`"),
+            &format!("alias `@{alias_name}` not found in any `.luaurc` or `.config.luau`"),
         )
     }
 
-    pub fn e004_malformed_luaurc(span: Span, module_name: &str, luaurc_path: &str) -> Self {
+    /// `config_path` is a `.luaurc` or a `.config.luau`.
+    pub fn e004_malformed_config(span: Span, module_name: &str, config_path: &str) -> Self {
+        Self::module_not_found(span, module_name, &format!("`{config_path}`, which doesn't load"))
+    }
+
+    pub fn e004_definition_file(span: Span, module_name: &str, path: &str) -> Self {
+        Self::error("E004", Some(span), format!("module not found: `{module_name}`")).with_help(
+            format!("`{path}` is a definition file, which declares types and is no module"),
+        )
+    }
+
+    pub fn e004_ambiguous_config(span: Span, module_name: &str, directory: &str) -> Self {
         Self::module_not_found(
             span,
             module_name,
-            &format!("`{luaurc_path}`, which failed to parse"),
+            &format!("`{directory}`, which has both a `.luaurc` and a `.config.luau`"),
         )
     }
 
@@ -152,10 +163,19 @@ impl Diagnostic {
         ))
     }
 
-    /// A `luck.json`, a file it extends, or a std definition it names, that
-    /// isn't valid, at `span` when the problem has a place in the file.
+    /// A `luck.json`, or a file it extends, that isn't valid, at `span` when
+    /// the problem has a place in the file.
     pub fn e014(span: Option<Span>, problem: &str) -> Self {
         Self::error("E014", span, format!("invalid config: {problem}"))
+    }
+
+    /// A type error Luau's type checker found, in its own words, at `span`
+    /// when it has a place in the file.
+    pub fn e015<Message>(span: Option<Span>, message: Message) -> Self
+    where
+        Message: Into<Cow<'static, str>>,
+    {
+        Self::error("E015", span, message)
     }
 
     pub fn w001(span: Span, module_name: &str, first_span: Span) -> Self {

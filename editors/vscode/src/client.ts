@@ -97,9 +97,7 @@ export class LuckClient {
 		const serverOptions = { command, args, options: { env } } satisfies Executable;
 		const clientOptions = {
 			documentSelector: [
-				{ scheme: "file", language: "lua" },
 				{ scheme: "file", language: "luau" },
-				{ scheme: "untitled", language: "lua" },
 				{ scheme: "untitled", language: "luau" },
 			],
 			outputChannel: outputChannel("server"),

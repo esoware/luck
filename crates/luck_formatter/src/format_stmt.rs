@@ -7,9 +7,10 @@
 use std::{iter, slice};
 
 use luck_ast::{
-    Assignment, Block, CompoundAssignment, ConditionalBinding, Expression, FunctionAttribute,
-    FunctionName, GenericFor, GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind,
-    NumericFor, ReturnStatement, Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
+    Assignment, Block, CompoundAssignment, ConditionalBinding, Declaration, DeclaredExternType,
+    DeclaredFunction, Expression, ExternTypeMember, FunctionAttribute, FunctionName, GenericFor,
+    GetSpan as _, IfStatement, LocalAssignment, LocalFunctionKind, NumericFor, ReturnStatement,
+    Slot, Statement, Type, TypeDeclaration, TypeDeclarationValue,
 };
 
 use crate::CollapseSimpleStatement;
@@ -84,9 +85,94 @@ impl<'ast> Formatter<'ast> {
             Statement::Continue(_) => self.token("continue"),
             Statement::CompoundAssignment(compound) => self.write_compound_assignment(compound),
             Statement::TypeDeclaration(declaration) => self.write_type_declaration(declaration),
+            Statement::Declaration(declaration) => self.write_declaration(declaration),
             // A parse-recovery placeholder has no text to print.
             Statement::Error(_) => {}
         }
+    }
+
+    fn write_declaration(&mut self, declaration: &Declaration<'ast>) {
+        match declaration {
+            Declaration::Global(global) => {
+                self.token("declare");
+                self.space();
+                self.name(global.name);
+                self.token(":");
+                self.space();
+                self.write_type(&global.ty);
+            }
+            Declaration::Function(function) => {
+                self.write_declared_function(function, "declare function");
+            }
+            Declaration::ExternType(extern_type) => self.write_declared_extern_type(extern_type),
+        }
+    }
+
+    /// The attributes, each on a line of its own as a function's are, then
+    /// `keywords`, or the chain an attributed `declare` opens and `function`,
+    /// then the name and the signature.
+    fn write_declared_function(
+        &mut self,
+        function: &DeclaredFunction<'ast>,
+        keywords: &'static str,
+    ) {
+        let name = function.name;
+        let chain = function.declare_chain.as_deref();
+        let keyword_start = chain.map_or(name.span.start, |chain| chain.span.start);
+        self.write_function_attributes(&function.attributes, keyword_start);
+        if let Some(chain) = chain {
+            self.node(|_| chain.span, |f| f.write_suffixed(chain));
+            self.space();
+            self.token("function");
+        } else {
+            self.token(keywords);
+        }
+        self.space();
+        self.name(name);
+        self.write_signature(
+            function.generics.as_deref(),
+            name.span.end,
+            &function.params,
+            function.vararg.as_deref(),
+            function.return_type.as_deref(),
+        );
+    }
+
+    /// One member to a line, keeping a blank line the source has above one.
+    fn write_declared_extern_type(&mut self, extern_type: &DeclaredExternType<'ast>) {
+        self.token("declare extern type");
+        self.space();
+        self.name(extern_type.name);
+        if let Some(supertype) = extern_type.supertype {
+            self.space();
+            self.token("extends");
+            self.space();
+            self.name(supertype);
+        }
+        self.space();
+        self.token("with");
+        let closer = extern_type.span.end;
+        if extern_type.members.is_empty() && !self.comments().has_pending_before(closer) {
+            self.space();
+            self.token("end");
+            return;
+        }
+        self.indent(|f| {
+            for (i, member) in extern_type.members.iter().enumerate() {
+                let is_blank = i > 0 && f.has_blank_line_before(member.span().start);
+                f.line_break(is_blank);
+                match member {
+                    ExternTypeMember::Field(field) => f.write_type_field(field),
+                    ExternTypeMember::Method(method) => f.node(
+                        |_| method.span,
+                        |inner| inner.write_declared_function(method, "function"),
+                    ),
+                }
+            }
+            f.write_closing_comments_keeping_blank_lines(closer);
+        });
+        self.hard_line();
+        self.token("end");
     }
 
     fn write_return(&mut self, return_stmt: &ReturnStatement<'ast>) {

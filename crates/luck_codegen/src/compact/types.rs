@@ -1,6 +1,6 @@
 use luck_ast::{
     Expression, FunctionType, FunctionTypeParam, GenericTypeList, GenericTypeParam, NamedType,
-    Type, TypeArgs, TypeField, TypeFieldAccess,
+    ParenthesizedType, Type, TypeArgs, TypeField, TypeFieldAccess,
 };
 
 use super::Printer;
@@ -25,7 +25,7 @@ impl Printer {
             Type::Intersection(intersection) => {
                 self.print_type_run(intersection.has_leading_ampersand, &intersection.types, "&");
             }
-            Type::Parenthesized(parenthesized) => self.print_parenthesized_type(&parenthesized.ty),
+            Type::Parenthesized(parenthesized) => self.print_parenthesized_type(parenthesized),
             Type::Pack(pack) => self.print_type_pack(&pack.types),
             Type::Nil(_) => self.piece("nil"),
             Type::True(_) => self.piece("true"),
@@ -69,6 +69,9 @@ impl Printer {
     }
 
     fn print_function_type(&mut self, function: &FunctionType<'_>) {
+        if !function.attributes.is_empty() {
+            self.print_function_attributes(&function.attributes);
+        }
         if let Some(generics) = &function.generics {
             self.print_generic_type_list(generics);
         }
@@ -95,9 +98,12 @@ impl Printer {
         }
     }
 
-    fn print_parenthesized_type(&mut self, ty: &Type<'_>) {
+    fn print_parenthesized_type(&mut self, parenthesized: &ParenthesizedType<'_>) {
+        if !parenthesized.attributes.is_empty() {
+            self.print_function_attributes(&parenthesized.attributes);
+        }
         self.piece("(");
-        self.print_type(ty);
+        self.print_type(&parenthesized.ty);
         self.piece(")");
     }
 
@@ -107,7 +113,7 @@ impl Printer {
         self.piece(")");
     }
 
-    fn print_type_field(&mut self, field: &TypeField<'_>) {
+    pub(super) fn print_type_field(&mut self, field: &TypeField<'_>) {
         match field {
             TypeField::Named { access, name, value, .. } => {
                 self.print_access(*access);

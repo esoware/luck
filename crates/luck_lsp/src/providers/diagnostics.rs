@@ -14,9 +14,10 @@ use crate::line_index::{LineIndex, PositionEncoding};
 /// The source string in `Diagnostic.source`; VS Code shows it in tooltips.
 const DIAGNOSTIC_SOURCE: &str = "luck";
 
-/// The diagnostics of the document at `uri`: `lints`, sorted by where they
-/// start, as the linter returns them, and then what stops each of its
-/// requires from resolving, which the resolver reads the disk for.
+/// The diagnostics of the document at `uri` but its type errors: `lints`,
+/// sorted by where they start, as the linter returns them, then what stops
+/// each of its requires from resolving, which the resolver reads the disk
+/// for.
 pub(crate) fn to_lsp(uri: &Uri, document: &DocumentState, lints: &[Message]) -> Vec<LspDiagnostic> {
     let unresolved = unresolved(document);
     let mut positions = document.positions();
@@ -26,6 +27,18 @@ pub(crate) fn to_lsp(uri: &Uri, document: &DocumentState, lints: &[Message]) -> 
         .chain(&unresolved)
         .map(|diag| converted(uri, diag, |span| positions.range(span)))
         .collect()
+}
+
+/// `type_errors`, Luau's, of the document at `uri`, but for its syntax
+/// errors where luck's parser reported its own.
+pub(crate) fn type_errors_to_lsp(
+    uri: &Uri,
+    document: &DocumentState,
+    type_errors: &[Diagnostic],
+) -> Vec<LspDiagnostic> {
+    let has_syntax_errors = !document.parse().errors.is_empty();
+    let type_errors = type_errors.iter().filter(|diag| !(has_syntax_errors && diag.code == "E008"));
+    type_errors.map(|diag| converted(uri, diag, |span| document.range(span))).collect()
 }
 
 /// What `luck build` reports of how `document`'s requires resolve.

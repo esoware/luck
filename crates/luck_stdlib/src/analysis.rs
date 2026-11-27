@@ -1,12 +1,11 @@
-use luck_ast::{Block, Call, SuffixedExpression, TreeCounts};
+use luck_ast::{Block, SuffixedExpression, TreeCounts};
 use luck_diagnostics::Diagnostic;
-use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder, SymbolId};
+use luck_semantic::{NameId, Reference, Scoping, Semantic, SemanticBuilder};
 
-use crate::resolve::{ChainCallees, ResolvedCallee, ShapeResolver, symbol_shapes};
+use crate::resolve::{ChainCallees, ShapeResolver, symbol_shapes};
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
-use crate::variant::Variant;
 
-/// A chunk's [`Semantic`], read against the stdlib of one variant.
+/// A chunk's [`Semantic`], read against a standard library.
 #[derive(Debug)]
 pub struct SemanticAnalysis<'ast> {
     semantic: Semantic<'ast>,
@@ -30,8 +29,8 @@ struct HostGlobal {
 ///
 /// The semantic holds every part: the checker's errors, the node table,
 /// which the shapes read, and the `require` sites. Its tables are sized from
-/// `counts`, the parse's or the default. It's the same whether or not the
-/// variant is Roblox, which only adds the Roblox runtime's stdlib.
+/// `counts`, the parse's or the default. It's the same whatever library it's
+/// read against.
 pub fn analyze<'ast>(
     chunk: &'ast Block<'ast>,
     counts: TreeCounts,
@@ -69,10 +68,6 @@ impl<'ast> SemanticAnalysis<'ast> {
         self.stdlib
     }
 
-    pub const fn variant(&self) -> Variant {
-        self.stdlib.variant
-    }
-
     /// Marks `names` as globals the host defines beyond the stdlib, such as
     /// `app`, from the `extra_globals` config. Only the chunk's own names
     /// are kept, since no other name can reach a query.
@@ -87,8 +82,8 @@ impl<'ast> SemanticAnalysis<'ast> {
         }
     }
 
-    /// Whether `name` is recognized as a global: a stdlib entry for this
-    /// variant or an extra global.
+    /// Whether `name` is recognized as a global: a stdlib entry or an extra
+    /// global.
     pub fn is_known_global(&self, name: &str) -> bool {
         match self.scoping().name_id(name) {
             Some(id) => self.is_known_global_name(id),
@@ -113,33 +108,16 @@ impl<'ast> SemanticAnalysis<'ast> {
         self.stdlib.globals.get(name).is_some_and(StdlibEntry::is_read_only)
     }
 
-    /// `symbol`'s shape: a never-reassigned local initialized from a value
-    /// of known shape, such as `local s = string.rep(...)`.
-    pub fn symbol_shape(&self, symbol: SymbolId) -> Option<&'ast str> {
-        self.symbol_shapes[symbol.index()]
-    }
-
-    /// Returns `None` for shadowed bases, unknown names, values of unknown
-    /// shape, and calls whose `.` or `:` doesn't match the function's
-    /// `is_method`.
-    ///
-    /// This reads the callee from its prefix, so for each call of a chain,
-    /// [`Self::chain_callees`] costs less.
-    pub fn resolve_callee<'call>(&'call self, call: Call<'call>) -> Option<ResolvedCallee<'call>> {
-        self.shape_resolver().call_callee(call)
-    }
-
     /// Resolves the calls of `chain`, asked for front to back, in one pass
-    /// over it.
+    /// over it. A call resolves to nothing past a shadowed base, an unknown
+    /// name, a value of unknown shape, or a `.` or `:` that doesn't match the
+    /// function's `is_method`.
     pub fn chain_callees<'chain>(
         &'chain self,
         chain: &'chain SuffixedExpression<'chain>,
     ) -> ChainCallees<'chain> {
-        ChainCallees::new(self.shape_resolver(), chain)
-    }
-
-    fn shape_resolver(&self) -> ShapeResolver<'_, 'ast> {
-        ShapeResolver::new(self.scoping(), self.stdlib, &self.symbol_shapes)
+        let resolver = ShapeResolver::new(self.scoping(), self.stdlib, &self.symbol_shapes);
+        ChainCallees::new(resolver, chain)
     }
 
     /// The entry `segments` names, where `root` is the reference their first
@@ -159,7 +137,8 @@ impl<'ast> SemanticAnalysis<'ast> {
         match root.resolved {
             Some(symbol) => {
                 let (first, rest) = members.split_first()?;
-                let mut current = self.stdlib.shape_member(self.symbol_shape(symbol)?, first)?;
+                let shape = self.symbol_shapes[symbol.index()]?;
+                let mut current = self.stdlib.shape_member(shape, first)?;
                 for segment in rest {
                     current = self.stdlib.child(current, segment)?;
                 }

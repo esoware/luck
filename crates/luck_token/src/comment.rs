@@ -23,6 +23,33 @@ pub enum CommentKind {
     Shebang,
 }
 
+impl CommentKind {
+    /// What `text`, a comment of this kind, holds inside its delimiters: past
+    /// the dashes that open a line comment, or between a block's brackets, or
+    /// to its end when the source cut it off before its closer. A shebang
+    /// has none.
+    pub fn body(self, text: &[u8]) -> Option<&[u8]> {
+        match self {
+            Self::Line => {
+                let after_open = text.get(2..)?;
+                let dashes = after_open.iter().take_while(|&&b| b == b'-').count();
+                Some(&after_open[dashes..])
+            }
+            Self::SingleLineBlock | Self::MultiLineBlock => {
+                let after_open = text.get(3..).unwrap_or_default();
+                let level = after_open.iter().take_while(|&&b| b == b'=').count();
+                let body = after_open.get(level + 1..).unwrap_or_default();
+                let closed = body
+                    .strip_suffix(b"]")
+                    .and_then(|before| before.strip_suffix(after_open.get(..level)?))
+                    .and_then(|before| before.strip_suffix(b"]"));
+                Some(closed.unwrap_or(body))
+            }
+            Self::Shebang => None,
+        }
+    }
+}
+
 /// A comment leads the next token unless no line break comes between it and
 /// the token before it, which it trails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

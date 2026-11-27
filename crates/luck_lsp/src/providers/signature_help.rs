@@ -1,3 +1,7 @@
+//! The innermost call around the cursor, with each signature of its
+//! callee's type as Luau prints a named function, and the comment a
+//! definition file has above the callee.
+
 use std::iter;
 
 use ls_types::{
@@ -5,17 +9,27 @@ use ls_types::{
     SignatureHelp, SignatureInformation,
 };
 use luck_ast::{FunctionArgs, GetSpan as _};
-use luck_stdlib::{StdlibArgKind, StdlibEntry, StdlibParam, StdlibSignature};
-use luck_token::TokenKind;
+use luck_token::{Span, TokenKind, index_to_offset, offset_to_index};
 
-use crate::document::DocumentState;
+use crate::document::{DocumentState, span_text};
+use crate::line_index::LineIndex;
 use crate::providers::cursor::{TextKind, text_kind_at};
-use crate::providers::stdlib_render::{constant_preview, param_label};
+use crate::type_check::Types;
 
-pub(crate) fn signature_help(
-    document: &DocumentState,
-    position: Position,
-) -> Option<SignatureHelp> {
+/// The innermost call whose parentheses hold the cursor.
+pub(crate) struct Call {
+    /// The callee as written.
+    name: String,
+    /// A place in the callee that Luau reads as the whole callee: the
+    /// method's name, or else the callee's last byte.
+    callee_end: u32,
+    /// How many arguments come before the cursor.
+    active_param: usize,
+}
+
+/// The call around `position`, or `None` in a comment or outside every
+/// call's parentheses.
+pub(crate) fn call_at(document: &DocumentState, position: Position) -> Option<Call> {
     let offset = document.offset(position);
     if text_kind_at(document, offset) == TextKind::Comment {
         return None;
@@ -54,220 +68,73 @@ pub(crate) fn signature_help(
                 .is_some_and(|token| token.kind == TokenKind::Comma && token.span.end <= offset)
         })
         .count();
-    // Semantic resolution handles shaped locals (`g:GetService(` after
-    // `local g = game`) and literal receivers (`("x"):rep(`), and
-    // gives a shadowed base no help. Method params exclude `self`, matching
-    // the argument count inside the parens.
-    let callee = document.semantic().resolve_callee(call)?;
-    let StdlibEntry::Function(function) = callee.entry() else {
-        return None;
+    let callee = call.callee.span();
+    let (name, callee_end) = match call.method {
+        Some(method) => {
+            (format!("{}:{}", span_text(document.text(), callee), method.text), method.span.start)
+        }
+        None => (span_text(document.text(), callee).to_owned(), callee.end.saturating_sub(1)),
     };
-    let name = callee.name();
-    let deprecated_message = function.deprecated.as_ref().map(|deprecation| deprecation.message);
-    let signatures: Vec<SignatureInformation> = function
+    Some(Call { name, callee_end, active_param })
+}
+
+/// Each signature of the type of `call`'s callee.
+pub(crate) fn signature_help(
+    document: &DocumentState,
+    call: Call,
+    types: &mut Types<'_>,
+) -> Option<SignatureHelp> {
+    let Call { name, callee_end, active_param } = call;
+    let description = types.describe(callee_end)?;
+    let documentation = types.documentation(&description.declaration).map(|value| {
+        Documentation::MarkupContent(MarkupContent { kind: MarkupKind::Markdown, value })
+    });
+    let encoding = document.encoding();
+    let mut fits = Vec::new();
+    let signatures: Vec<SignatureInformation> = description
         .signatures
-        .iter()
+        .into_iter()
         .map(|signature| {
-            build_signature(&name, signature, deprecated_message, function.is_must_use)
+            // A trailing vararg takes every argument from its own on.
+            let is_variadic = signature.params.last().is_some_and(|param| {
+                signature.label[offset_to_index(param.start)..].starts_with("...")
+            });
+            let count = signature.params.len();
+            fits.push(
+                (active_param < count || is_variadic)
+                    .then(|| if is_variadic { active_param.min(count - 1) } else { active_param }),
+            );
+            let label = format!("{name}{}", signature.label);
+            let units = LineIndex::new(&label, encoding);
+            let shift = index_to_offset(name.len());
+            let parameters = signature
+                .params
+                .iter()
+                .map(|param| ParameterInformation {
+                    label: ParameterLabel::LabelOffsets([
+                        units.length(Span::new(0, shift + param.start)),
+                        units.length(Span::new(0, shift + param.end)),
+                    ]),
+                    documentation: None,
+                })
+                .collect();
+            SignatureInformation {
+                label,
+                documentation: documentation.clone(),
+                parameters: Some(parameters),
+                active_parameter: None,
+            }
         })
         .collect();
-
-    let active_signature = function.signature_index_for_active_param(active_param);
-    let active_param_count = function.signatures[active_signature].params.len();
-
+    // The first overload that takes as many arguments as there are so far.
+    let (active_signature, active_parameter) = fits
+        .iter()
+        .enumerate()
+        .find_map(|(index, parameter)| Some((index, (*parameter)?)))
+        .unwrap_or((0, active_param));
     Some(SignatureHelp {
+        active_parameter: Some(u32::try_from(active_parameter).unwrap_or(u32::MAX)),
+        active_signature: Some(u32::try_from(active_signature).unwrap_or(u32::MAX)),
         signatures,
-        active_signature: Some(
-            u32::try_from(active_signature)
-                .expect("a function has fewer signatures than `u32::MAX`"),
-        ),
-        active_parameter: Some(
-            u32::try_from(active_param.min(active_param_count.saturating_sub(1)))
-                .expect("a signature has fewer parameters than `u32::MAX`"),
-        ),
     })
-}
-
-fn build_signature(
-    name: &str,
-    signature: &StdlibSignature<'_>,
-    deprecated_message: Option<&str>,
-    is_must_use: bool,
-) -> SignatureInformation {
-    let mut label = format!("{name}(");
-    let mut params: Vec<ParameterInformation> = Vec::new();
-    for (i, param) in signature.params.iter().enumerate() {
-        if i > 0 {
-            label.push_str(", ");
-        }
-        let start = u32::try_from(label.chars().count())
-            .expect("a signature label is shorter than `u32::MAX` characters");
-        label.push_str(&param_label(param));
-        let end = u32::try_from(label.chars().count())
-            .expect("a signature label is shorter than `u32::MAX` characters");
-        params.push(ParameterInformation {
-            label: ParameterLabel::LabelOffsets([start, end]),
-            documentation: param_documentation(param),
-        });
-    }
-    label.push(')');
-
-    let mut documentation = deprecated_message
-        .map_or_else(String::new, |message| format!("**Deprecated:** {message}\n"));
-    if is_must_use {
-        documentation.push_str("\n_Don't discard the return value._");
-    }
-
-    SignatureInformation {
-        label,
-        documentation: if documentation.is_empty() {
-            None
-        } else {
-            Some(Documentation::MarkupContent(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: documentation,
-            }))
-        },
-        parameters: Some(params),
-        active_parameter: None,
-    }
-}
-
-fn param_documentation(param: &StdlibParam<'_>) -> Option<Documentation> {
-    if let StdlibArgKind::Constant(values) = &param.kind {
-        let preview =
-            constant_preview(values, ", ", |constant| format!("`\"{}\"`", constant.value));
-        return Some(Documentation::MarkupContent(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: format!("one of: {preview}"),
-        }));
-    }
-    if let Some(deprecation) = &param.deprecated {
-        return Some(Documentation::MarkupContent(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: format!("**Deprecated:** {}", deprecation.message),
-        }));
-    }
-    if !param.is_required {
-        return Some(Documentation::String("optional".to_owned()));
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use luck_token::index_to_offset;
-
-    use super::*;
-    use crate::fixtures::{document, roblox_document};
-
-    fn active_signature(help: &SignatureHelp) -> &SignatureInformation {
-        &help.signatures[help.active_signature.unwrap_or(0) as usize]
-    }
-
-    #[test]
-    fn signature_help_resolves_shaped_local_method() {
-        let text = "\
-local g = game
-g:FindFirstChild('x', true)";
-        let document = roblox_document(text);
-        // Cursor inside the second argument.
-        let help = signature_help(&document, Position::new(1, 23))
-            .expect("instance method signature help");
-        let signature = active_signature(&help);
-        assert!(
-            signature.label.starts_with("g:FindFirstChild("),
-            "method rendering: {}",
-            signature.label
-        );
-        assert_eq!(help.active_parameter, Some(1), "cursor is in arg 2");
-    }
-
-    #[test]
-    fn signature_help_marks_method_active_param_excluding_self() {
-        let text = "local p = game:GetService('Players')";
-        let document = roblox_document(text);
-        let utf16_column = index_to_offset(text.find("'Players'").expect("literal") + 3);
-        let help = signature_help(&document, Position::new(0, utf16_column))
-            .expect("GetService signature help");
-        let signature = active_signature(&help);
-        assert!(signature.label.starts_with("game:GetService("), "label: {}", signature.label);
-        // self is excluded: exactly one declared parameter, and the cursor
-        // in the first paren argument selects it.
-        assert_eq!(signature.parameters.as_ref().map(Vec::len), Some(1));
-        assert_eq!(help.active_parameter, Some(0));
-    }
-
-    #[test]
-    fn signature_help_refuses_shadowed_base() {
-        let text = "\
-local string = 1
-string.format('x')";
-        let document = document(text);
-        assert!(
-            signature_help(&document, Position::new(1, 15)).is_none(),
-            "shadowed base must not show stdlib signatures"
-        );
-    }
-
-    #[test]
-    fn signature_help_finds_a_call_at_stmt_position() {
-        let text = "collectgarbage('collect')";
-        let document = document(text);
-        let help =
-            signature_help(&document, Position::new(0, 16)).expect("statement-position call");
-        assert!(
-            help.signatures.iter().any(|signature| signature.label.starts_with("collectgarbage(")),
-            "{help:?}"
-        );
-    }
-
-    #[test]
-    fn signature_help_ends_at_the_closing_paren() {
-        let document = document("print(1)");
-        let help = signature_help(&document, Position::new(0, 8));
-        assert!(help.is_none(), "the cursor is past `)`, outside the call: {help:?}");
-    }
-
-    #[test]
-    fn signature_help_counts_commas_before_the_cursor() {
-        let text = "string.rep(\"a\" , 3 )";
-        let document = document(text);
-        let before_comma =
-            signature_help(&document, Position::new(0, 15)).expect("inside the call");
-        assert_eq!(before_comma.active_parameter, Some(0), "no comma before the cursor yet");
-        let before_paren =
-            signature_help(&document, Position::new(0, 19)).expect("inside the call");
-        assert_eq!(before_paren.active_parameter, Some(1), "one comma before the cursor");
-    }
-
-    #[test]
-    fn signature_help_reads_the_innermost_call_around_the_cursor() {
-        let document = document("print(string.rep(\"a\", 2), 3)");
-        let label_at = |utf16_column| {
-            let help = signature_help(&document, Position::new(0, utf16_column))?;
-            Some((active_signature(&help).label.clone(), help.active_parameter))
-        };
-        let (inner, inner_param) = label_at(23).expect("inside `string.rep`");
-        assert!(inner.starts_with("string.rep("), "{inner}");
-        assert_eq!(inner_param, Some(1));
-        let (outer, outer_param) = label_at(27).expect("after `string.rep(...)`");
-        assert!(outer.starts_with("print("), "{outer}");
-        assert_eq!(outer_param, Some(0), "`print` takes its arguments as one vararg");
-    }
-
-    #[test]
-    fn signature_help_stays_inside_an_unclosed_argument_list() {
-        let document = document("print(1");
-        assert!(
-            signature_help(&document, Position::new(0, 7)).is_some(),
-            "the closing paren hasn't been typed yet"
-        );
-    }
-
-    #[test]
-    fn signature_help_offers_nothing_inside_a_comment_argument() {
-        let document = document("print(--[[ note ]] 1)");
-        assert!(signature_help(&document, Position::new(0, 13)).is_none());
-    }
 }

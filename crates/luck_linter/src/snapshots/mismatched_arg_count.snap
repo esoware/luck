@@ -2,7 +2,7 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: call passes 3 arguments to function `f`, which accepts only 2
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local function f(a, b) return a + b end
   |                - defined here
 2 | f(1, 2, 3)
@@ -10,7 +10,7 @@ warning: call passes 3 arguments to function `f`, which accepts only 2
 help: extra arguments are silently discarded
 
 warning: call passes 2 arguments to function `f`, which accepts only 1
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local f = function(a) return a end
   |       - defined here
 2 | f(1, 2)
@@ -18,7 +18,7 @@ warning: call passes 2 arguments to function `f`, which accepts only 1
 help: extra arguments are silently discarded
 
 warning: call passes 1 arguments to function `f`, which accepts only 0
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local function f() end
   |                - defined here
 2 | f(1)
@@ -26,7 +26,7 @@ warning: call passes 1 arguments to function `f`, which accepts only 0
 help: extra arguments are silently discarded
 
 warning: call passes 2 arguments to function `f`, which accepts only 1
- --> Standalone:3:1
+ --> Luau:3:1
 1 | local function g() end
 2 | local function f(a) return a end
   |                - defined here
@@ -35,7 +35,7 @@ warning: call passes 2 arguments to function `f`, which accepts only 1
 help: extra arguments are silently discarded
 
 warning: call passes 1 arguments to function `f`, which accepts only 0
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local function f() end
   |                - defined here
 2 | f"x"
@@ -44,7 +44,7 @@ warning: call passes 1 arguments to function `f`, which accepts only 0
 help: extra arguments are silently discarded
 
 warning: call passes 1 arguments to function `f`, which accepts only 0
- --> Standalone:3:1
+ --> Luau:3:1
 1 | local function f() end
   |                - defined here
 2 | f"x"

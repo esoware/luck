@@ -189,6 +189,7 @@ mod tests {
         Range, TextDocumentIdentifier, TextDocumentPositionParams, WorkDoneProgressParams,
     };
     use luck_config::Project;
+    use luck_resolver::FileSystemOs;
 
     use super::*;
     use crate::fixtures::{document, document_at, session, uri};
@@ -306,7 +307,7 @@ export local version = 1
 print(version)
 ";
         fs::write(&path, text).expect("write version.luau");
-        let project = Project::defaults(directory.path().to_path_buf());
+        let project = Project::defaults(directory.path().to_path_buf(), FileSystemOs);
         let exported = document_at(text, project, &path);
         assert!(exported.parse().errors.is_empty(), "{:?}", exported.parse().errors);
         let result = rename_at(&exported, 0, 15, "release");

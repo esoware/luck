@@ -8,11 +8,11 @@
 //! which changes something only at the end of a list.
 
 use luck_ast::{
-    BinaryLink, BinaryOp, Block, ConditionalBinding, Expression, Field, FunctionArgs,
-    FunctionAttribute, FunctionBody, FunctionName, FunctionTypeParam, GenericTypeList,
-    GenericTypeParam, IfStatement, Name, Statement, StringLiteral, Suffix, SuffixedExpression,
-    TableConstructor, Type, TypeArgs, TypeDeclaration, TypeDeclarationValue, TypeField, TypedName,
-    Var,
+    BinaryLink, BinaryOp, Block, ConditionalBinding, Declaration, DeclaredFunction, Expression,
+    ExternTypeMember, Field, FunctionArgs, FunctionAttribute, FunctionBody, FunctionName,
+    FunctionTypeParam, GenericTypeList, GenericTypeParam, IfStatement, Name, Statement,
+    StringLiteral, Suffix, SuffixedExpression, TableConstructor, Type, TypeArgs, TypeDeclaration,
+    TypeDeclarationValue, TypeField, TypedName, Var, VarArgParam,
 };
 use luck_token::Associativity;
 
@@ -144,8 +144,49 @@ impl Printer {
                 self.close();
             }
             Statement::TypeDeclaration(declaration) => self.type_declaration(declaration),
+            Statement::Declaration(declaration) => self.declaration(declaration),
             Statement::Error(_) => self.line("Error"),
         }
+    }
+
+    fn declaration(&mut self, declaration: &Declaration<'_>) {
+        match declaration {
+            Declaration::Global(global) => {
+                self.open(&format!("DeclaredGlobal {}", global.name.text));
+                self.ty(&global.ty);
+                self.close();
+            }
+            Declaration::Function(function) => self.declared_function(function),
+            Declaration::ExternType(extern_type) => {
+                let supertype = extern_type
+                    .supertype
+                    .map_or_else(String::new, |supertype| format!(" extends {}", supertype.text));
+                self.open(&format!("DeclaredExternType {}{supertype}", extern_type.name.text));
+                for member in &extern_type.members {
+                    match member {
+                        ExternTypeMember::Field(field) => self.type_field(field),
+                        ExternTypeMember::Method(method) => self.declared_function(method),
+                    }
+                }
+                self.close();
+            }
+        }
+    }
+
+    fn declared_function(&mut self, function: &DeclaredFunction<'_>) {
+        self.open(&format!("DeclaredFunction {}", function.name.text));
+        self.attributes(&function.attributes);
+        if let Some(chain) = &function.declare_chain {
+            self.suffixed("DeclareChain", chain);
+        }
+        self.generic_type_list(function.generics.as_deref());
+        self.params(&function.params, function.vararg.as_deref());
+        if let Some(return_type) = &function.return_type {
+            self.open("returns");
+            self.ty(return_type);
+            self.close();
+        }
+        self.close();
     }
 
     fn if_statement(&mut self, if_statement: &IfStatement<'_>) {
@@ -410,14 +451,7 @@ impl Printer {
     fn function_body(&mut self, body: &FunctionBody<'_>) {
         self.open("FunctionBody");
         self.generic_type_list(body.generics.as_deref());
-        for param in &body.params {
-            self.typed_name(param);
-        }
-        if let Some(vararg) = &body.vararg {
-            self.open("VarArgParam");
-            self.optional_type(vararg.type_annotation.as_deref());
-            self.close();
-        }
+        self.params(&body.params, body.vararg.as_deref());
         if let Some(return_type) = &body.return_type {
             self.open("returns");
             self.ty(return_type);
@@ -425,6 +459,17 @@ impl Printer {
         }
         self.block(&body.block);
         self.close();
+    }
+
+    fn params(&mut self, params: &[TypedName<'_>], vararg: Option<&VarArgParam<'_>>) {
+        for param in params {
+            self.typed_name(param);
+        }
+        if let Some(vararg) = vararg {
+            self.open("VarArgParam");
+            self.optional_type(vararg.type_annotation.as_deref());
+            self.close();
+        }
     }
 
     fn binding(&mut self, binding: Option<&ConditionalBinding<'_>>) {
@@ -511,6 +556,7 @@ impl Printer {
             }
             Type::Function(function) => {
                 self.open("FunctionType");
+                self.attributes(&function.attributes);
                 self.generic_type_list(function.generics.as_deref());
                 for FunctionTypeParam { name, ty: param_ty } in &function.params {
                     let label = name.map_or_else(String::new, |param| format!(" {}", param.text));
@@ -547,7 +593,15 @@ impl Printer {
                     self.close();
                 }
             }
-            Type::Parenthesized(parenthesized) => self.ty(&parenthesized.ty),
+            Type::Parenthesized(parenthesized) if parenthesized.attributes.is_empty() => {
+                self.ty(&parenthesized.ty);
+            }
+            Type::Parenthesized(parenthesized) => {
+                self.open("AttributedParentheses");
+                self.attributes(&parenthesized.attributes);
+                self.ty(&parenthesized.ty);
+                self.close();
+            }
             Type::Pack(pack) => self.types("TypePack", &pack.types),
             Type::Nil(_) => self.line("NilType"),
             Type::True(_) => self.line("TrueType"),
@@ -624,7 +678,9 @@ fn joining_run<'tree, 'ast>(
 
 fn without_parentheses<'tree, 'ast>(ty: &'tree Type<'ast>) -> &'tree Type<'ast> {
     let mut current = ty;
-    while let Type::Parenthesized(parenthesized) = current {
+    while let Type::Parenthesized(parenthesized) = current
+        && parenthesized.attributes.is_empty()
+    {
         current = &parenthesized.ty;
     }
     current

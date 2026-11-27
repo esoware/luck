@@ -8,7 +8,7 @@
 //! A chain resolves from its prefix forward, a suffix at a time, so what it
 //! reads, or what any of its calls calls, costs one pass over it.
 
-use luck_ast::{AstKind, Call, ChainHead, Expression, Name, Suffix, SuffixedExpression};
+use luck_ast::{AstKind, ChainHead, Expression, Name, Suffix, SuffixedExpression};
 use luck_semantic::{Scoping, Semantic};
 
 use crate::stdlib_model::{StdlibEntry, StdlibLibrary};
@@ -124,10 +124,7 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
         };
         let shape = match callee {
             Some(StdlibEntry::Function(function)) => function.returns_shape,
-            Some(
-                StdlibEntry::Constant(_) | StdlibEntry::Property(_) | StdlibEntry::Namespace(_),
-            )
-            | None => None,
+            Some(StdlibEntry::Value(_) | StdlibEntry::Namespace(_)) | None => None,
         };
         HeadState { shape, global: None }
     }
@@ -165,14 +162,6 @@ impl<'input, 'lib> ShapeResolver<'input, 'lib> {
             path: CalleePath::Method { base, method: method_name.as_str() },
             entry,
         })
-    }
-
-    /// What `call` calls, read from its callee's prefix.
-    pub(crate) fn call_callee(self, call: Call<'input>) -> Option<ResolvedCallee<'input>>
-    where
-        'lib: 'input,
-    {
-        self.callee(call.callee, self.head_state(call.callee), call.method)
     }
 }
 
@@ -266,13 +255,7 @@ impl<'chain> ChainCallees<'chain> {
         Self { resolver, chain, state, read_count: 0 }
     }
 
-    pub const fn chain(&self) -> &'chain SuffixedExpression<'chain> {
-        self.chain
-    }
-
-    /// What the call at `index` calls, as
-    /// [`SemanticAnalysis::resolve_callee`](crate::SemanticAnalysis::resolve_callee)
-    /// gives it. `None` for a suffix that's no call.
+    /// What the call at `index` calls, or `None` for a suffix that's no call.
     ///
     /// A call is read on from the one asked for before it, so `index` is
     /// never below an earlier one.
@@ -292,55 +275,29 @@ mod tests {
     use luck_semantic::SemanticBuilder;
 
     use super::*;
-    use crate::layering::layer;
-    use crate::stdlib_definition::StdlibDefinition;
-    use crate::variant::Variant;
+    use crate::translate::layer;
 
-    const SHAPED_LIBRARY: &str = r#"
-[globals.game]
-kind = "property"
-shape = "DataModel"
+    const SHAPED_LIBRARY: &str = "
+declare extern type DataModel with
+    function GetService(self, name: string): Instance
+end
 
-[globals.fs]
-kind = "namespace"
+declare extern type Instance with
+    function FindFirstChild(self, name: string, recursive: boolean?): any
+end
 
-[globals.fs.members.open]
-kind = "function"
-params = [{ kind = "string" }, { kind = "string", is_required = false }]
-returns = "File"
+declare extern type File with
+    function read(self, ...: any): any
+end
 
-[globals.string]
-kind = "namespace"
-
-[globals.string.members.upper]
-kind = "function"
-is_must_use = true
-params = [{ kind = "string" }]
-returns = "string"
-
-[shapes.DataModel.members.GetService]
-kind = "function"
-is_must_use = true
-is_method = true
-params = [{ kind = "string" }]
-returns = "Instance"
-
-[shapes.Instance.members.FindFirstChild]
-kind = "function"
-is_method = true
-params = [{ kind = "string" }, { kind = "bool", is_required = false }]
-
-[shapes.File.members.read]
-kind = "function"
-is_method = true
-params = [{ kind = "vararg" }]
-"#;
+declare game: DataModel
+declare fs: { open: (path: string, mode: string?) -> File }
+declare string: { upper: (s: string) -> string }
+";
 
     fn shape_of(source: &str, name: &str) -> Option<String> {
         let allocator = Allocator::new();
-        let definition = StdlibDefinition::parse(SHAPED_LIBRARY).expect("the library parses");
-        let library = layer(&allocator, &StdlibLibrary::empty(Variant::Standalone), &definition)
-            .expect("the library layers");
+        let library = layer(&allocator, None, false, SHAPED_LIBRARY).expect("the library parses");
         let parsed = luck_parser::parse(&allocator, source.as_bytes());
         assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
         let chunk = allocator.alloc(parsed.chunk);

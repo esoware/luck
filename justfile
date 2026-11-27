@@ -10,8 +10,9 @@ alias r := ready
 alias t := test
 alias f := fmt
 
-# Install the extension's packages, cargo-nextest, cargo-insta, cargo-deny, cargo-shear, and zizmor
+# Fetch the Luau submodule, and install the extension's packages, cargo-nextest, cargo-insta, cargo-deny, cargo-shear, and zizmor
 init:
+  git submodule update --init
   npm ci --prefix editors/vscode
   cargo install --locked cargo-nextest@0.9.151 cargo-insta@1.49.0 cargo-deny@0.20.2 cargo-shear@1.14.0 zizmor@1.32.0
 
@@ -66,6 +67,27 @@ advisories:
   cargo deny check advisories
   npm audit --prefix editors/vscode --omit=dev --audit-level=high
 
+# Without rustc's fat LTO, lld's LTO over the whole binary linked it smaller and checked as fast.
+# --target keeps the LTO flags off build scripts and proc macros, and apart from other release builds.
+
+# Build the release binary the extension ships into target/<target>/release, with lld optimizing its Rust and Luau's C++ together through cross-language LTO
+[windows]
+release-binary target=(arch() + "-pc-windows-msvc"):
+  $env:PATH += ";$env:ProgramFiles\LLVM\bin"; cargo build -p luck_cli --release --target {{target}} --config profile.release.lto=false --config "target.{{target}}.rustflags = ['-Clinker-plugin-lto', '-Clinker=lld-link']"
+
+# Build the release binary the extension ships into target/<target>/release, with lld optimizing its Rust and Luau's C++ together through cross-language LTO
+[linux]
+release-binary target=(arch() + "-unknown-linux-gnu"):
+  cargo build -p luck_cli --release --target {{target}} --config profile.release.lto=false --config "target.{{target}}.rustflags = ['-Clinker-plugin-lto', '-Clinker=clang', '-Clink-arg=-fuse-ld=lld', '-Clink-arg=--target={{target}}']"
+
+# rustc's -Clinker-plugin-lto passes Apple targets' linker -plugin-opt arguments, which neither
+# ld64 nor ld64.lld accepts, so macOS builds without cross-language LTO.
+
+# Build the release binary the extension ships into target/<target>/release, with rustc's fat LTO over its Rust
+[macos]
+release-binary target=(arch() + "-apple-darwin"):
+  cargo build -p luck_cli --release --target {{target}}
+
 # Run the criterion benches, or one stage with --bench parser
 bench *args:
   cargo bench -p luck_benchmark {{args}}
@@ -78,14 +100,13 @@ ast:
 schema:
   cargo test -p luck_config regenerate_luckrc_schema -- --ignored
 
-# Regenerate luck_stdlib's static stdlib catalog after a stdlib_data file changes
+# Regenerate luck_stdlib's luau.d.luau from Luau's built-in definitions and its live library reference, after `just luau`
 stdlib:
-  cargo test -p luck_stdlib regenerate_stdlib_catalog -- --ignored
+  cargo test -p luck_stdlib regenerate_luau_definitions -- --ignored
 
-# Regenerate roblox_api.toml and roblox_enums.toml from the live Roblox API dump, then the stdlib catalog
+# Regenerate luck_stdlib's roblox.d.luau from the live Roblox API dump, LuauTypes.d.luau, and Creator Documentation
 roblox-api:
-  cargo test -p luck_stdlib regenerate_roblox_api -- --ignored
-  just stdlib
+  cargo test -p luck_stdlib regenerate_roblox_definitions -- --ignored
 
 # Regenerate the committed minsize.snap after the minifier or the benchmark files change
 minsize:
@@ -94,6 +115,11 @@ minsize:
 # Rewrite the committed allocs_*.yaml snapshots after a stage changes, or with `rules`, write the gitignored per-rule linter report
 allocs *args:
   cargo run -p luck_allocs --profile allocs -- {{args}}
+
+# Move the Luau submodule that luck_type_checker builds to a release tag, such as `just luau 0.749`, then run `just stdlib`
+luau tag:
+  git -C crates/luck_type_checker/luau fetch --depth 1 origin tag {{tag}}
+  git -C crates/luck_type_checker/luau checkout {{tag}}
 
 # Run Luau's official conformance tests through every stage and the reference interpreter, and rewrite the committed snapshots, or with `--filter strings`, print the failures of the files whose name holds it
 conformance *args:

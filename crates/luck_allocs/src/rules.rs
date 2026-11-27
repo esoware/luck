@@ -24,7 +24,7 @@ pub(crate) fn write_report(allocator: &mut Allocator, files: &[TestFile]) -> io:
     for file in files {
         allocator.reset();
         let parse = luck_parser::parse(allocator, &file.source_text);
-        let analysis = every_rule.analyze(&parse, library_for(file.variant));
+        let analysis = every_rule.analyze(&parse, library_for(file.has_roblox));
         let mut entries: Vec<(&str, StageStats)> = linters
             .iter()
             .map(|(rule, linter)| {

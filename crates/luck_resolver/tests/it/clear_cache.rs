@@ -12,10 +12,12 @@ use tempfile::TempDir;
 /// The OS's file system, except that its first listing of one directory
 /// reads it, says so, and waits to be let go before it answers, so a test
 /// can change the disk and clear the cache meanwhile.
+#[derive(Debug)]
 struct PausingFileSystem {
     pause: Mutex<Option<Pause>>,
 }
 
+#[derive(Debug)]
 struct Pause {
     directory: PathBuf,
     listed: Sender<()>,

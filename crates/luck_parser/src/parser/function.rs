@@ -57,7 +57,7 @@ impl<'ast> Parser<'ast> {
     /// Parse the parameter list between a function's parens, stopping before
     /// the closing `)`. A list of one, as most are, moves to the arena as a
     /// value.
-    fn parse_params(
+    pub(super) fn parse_params(
         &mut self,
     ) -> (List<'ast, TypedName<'ast>>, Option<Box<'ast, VarArgParam<'ast>>>) {
         if self.is_at(TokenKind::DotDotDot) {

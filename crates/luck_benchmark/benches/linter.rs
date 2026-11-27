@@ -17,15 +17,9 @@ fn bench_linter(criterion: &mut Criterion) {
         let id = BenchmarkId::from_parameter(file.file_name);
         let allocator = Allocator::new();
         let parse_result = file.parse(&allocator);
+        let library = library_for(file.has_roblox);
         group.bench_function(id, |bencher| {
-            bencher.iter(|| {
-                linter.run(
-                    black_box(&parse_result),
-                    library_for(file.variant),
-                    FixKind::empty(),
-                    None,
-                )
-            });
+            bencher.iter(|| linter.run(black_box(&parse_result), library, FixKind::empty(), None));
         });
     }
 
@@ -33,15 +27,11 @@ fn bench_linter(criterion: &mut Criterion) {
         let id = BenchmarkId::from_parameter(project.name);
         let allocator = Allocator::new();
         let parse_results = project.parse_files(&allocator);
+        let library = library_for(project.has_roblox);
         group.bench_function(id, |bencher| {
             bencher.iter(|| {
                 for parse_result in &parse_results {
-                    black_box(linter.run(
-                        black_box(parse_result),
-                        library_for(project.variant),
-                        FixKind::empty(),
-                        None,
-                    ));
+                    black_box(linter.run(black_box(parse_result), library, FixKind::empty(), None));
                 }
             });
         });

@@ -1,5 +1,5 @@
 name: Setup
-description: Install the extension's packages, the pinned Rust toolchain, and cargo tools.
+description: Install the extension's packages, the pinned Rust toolchain, the LLVM it uses, and cargo tools.
 
 runs:
   using: composite
@@ -26,6 +26,8 @@ runs:
             rustup toolchain uninstall "$toolchain"
           fi
         done
+
+    - uses: $/.github/actions/llvm
 
     - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:

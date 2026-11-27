@@ -41,13 +41,24 @@ self_cell!(
 );
 
 impl Analyzed {
-    /// Parses `text` in `arena`, keeping its tokens, and has `linter` analyze
-    /// it against `stdlib`.
-    pub(crate) fn new(text: Arc<str>, stdlib: Stdlib, linter: &Linter, arena: Arena) -> Self {
+    /// Parses `text` in `arena`, as a definition file when `is_definitions`,
+    /// keeping its tokens, and has `linter` analyze it against `stdlib`.
+    pub(crate) fn new(
+        text: Arc<str>,
+        is_definitions: bool,
+        stdlib: Stdlib,
+        linter: &Linter,
+        arena: Arena,
+    ) -> Self {
         let owner = Source { text, arena: MutBorrow::new(arena), stdlib };
         let parsed = ParsedCell::new(owner, |source| {
             let lent: &Arena = source.arena.borrow_mut();
-            luck_parser::parse_with_tokens(&lent.allocator, source.text.as_bytes())
+            let bytes = source.text.as_bytes();
+            if is_definitions {
+                luck_parser::parse_definitions_with_tokens(&lent.allocator, bytes)
+            } else {
+                luck_parser::parse_with_tokens(&lent.allocator, bytes)
+            }
         });
         let analyzed = AnalyzedCell::new(parsed, |cell| {
             linter.analyze(cell.borrow_dependent(), cell.borrow_owner().stdlib.library())
@@ -57,7 +68,7 @@ impl Analyzed {
 
     /// The text an editor sent, which is UTF-8, and which the parse reads as
     /// bytes.
-    pub(crate) fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &Arc<str> {
         &self.0.borrow_owner().borrow_owner().text
     }
 
@@ -127,14 +138,13 @@ mod tests {
     use std::thread;
 
     use luck_linter::LintConfig;
-    use luck_stdlib::Variant;
 
     use super::*;
 
     fn analyzed(text: &str, spare: &Arc<SpareArena>) -> Analyzed {
         let linter = Linter::new(LintConfig::default());
-        let stdlib = Stdlib::new(Variant::Standalone);
-        Analyzed::new(Arc::from(text), stdlib, &linter, Arena::from_spare(spare))
+        let stdlib = Stdlib::luau();
+        Analyzed::new(Arc::from(text), false, stdlib, &linter, Arena::from_spare(spare))
     }
 
     #[test]
@@ -146,7 +156,7 @@ mod tests {
         assert!(!spare.is_empty(), "the first version left its arena");
         let second = analyzed("local two = 2\n", &spare);
         assert!(spare.is_empty(), "the second version took it");
-        assert_eq!(second.text(), "local two = 2\n");
+        assert_eq!(&**second.text(), "local two = 2\n");
         assert_eq!(second.parse().source, b"local two = 2\n");
         drop(second);
         spare.clear();

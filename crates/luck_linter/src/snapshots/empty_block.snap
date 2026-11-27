@@ -2,53 +2,53 @@
 source: crates/luck_linter/src/fixtures.rs
 ---
 warning: empty `if` block
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local c = 1
 2 | if c then elseif c then else end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: empty `elseif` block
- --> Standalone:2:11
+ --> Luau:2:11
 1 | local c = 1
 2 | if c then elseif c then else end
   |           ^^^^^^^^^^^^^^^^^^
 
 warning: empty `else` block
- --> Standalone:2:25
+ --> Luau:2:25
 1 | local c = 1
 2 | if c then elseif c then else end
   |                         ^^^^^^^^
 
 warning: empty `while` loop body
- --> Standalone:2:1
+ --> Luau:2:1
 1 | local c = 1
 2 | while c do end
   | ^^^^^^^^^^^^^^
 3 | do end
 
 warning: empty `do` block
- --> Standalone:3:1
+ --> Luau:3:1
 2 | while c do end
 3 | do end
   | ^^^^^^
 4 | for i = 1, 2 do end
 
 warning: empty numeric `for` loop body
- --> Standalone:4:1
+ --> Luau:4:1
 3 | do end
 4 | for i = 1, 2 do end
   | ^^^^^^^^^^^^^^^^^^^
 5 | for k in pairs({}) do end
 
 warning: empty generic `for` loop body
- --> Standalone:5:1
+ --> Luau:5:1
 4 | for i = 1, 2 do end
 5 | for k in pairs({}) do end
   | ^^^^^^^^^^^^^^^^^^^^^^^^^
 6 | repeat until c
 
 warning: empty `repeat` loop body
- --> Standalone:6:1
+ --> Luau:6:1
 5 | for k in pairs({}) do end
 6 | repeat until c
   | ^^^^^^^^^^^^^^
