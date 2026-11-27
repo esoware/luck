@@ -7,8 +7,8 @@ use std::ops::BitAnd;
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::{
-    uint8x16_t, vandq_u8, vceqq_u8, vdupq_n_u8, vgetq_lane_u64, vld1q_u8, vpaddq_u8, vqtbl1q_u8,
-    vreinterpretq_u64_u8, vshrq_n_u8, vtstq_u8,
+    uint8x16_t, vandq_u8, vceqq_u8, vcgtq_s8, vdupq_n_u8, vgetq_lane_u64, vld1q_u8, vpaddq_u8,
+    vqtbl1q_u8, vreinterpretq_s8_u8, vreinterpretq_u64_u8, vshrq_n_u8, vtstq_u8,
 };
 
 use crate::Neon;
@@ -75,6 +75,28 @@ impl Vec128 {
         {
             // SAFETY: The `Neon` proves the CPU has Neon.
             let inner = unsafe { vceqq_u8(self.inner, other.inner) };
+            Self { inner, cpu: self.cpu }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = other;
+            match self.cpu.0 {}
+        }
+    }
+
+    /// `0xFF` in each byte greater than `other`'s as an `i8`, `0x00` in the
+    /// rest.
+    #[must_use]
+    #[inline(always)]
+    pub fn gt_i8(self, other: Self) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: The `Neon` proves the CPU has Neon.
+            let lhs = unsafe { vreinterpretq_s8_u8(self.inner) };
+            // SAFETY: The `Neon` proves the CPU has Neon.
+            let rhs = unsafe { vreinterpretq_s8_u8(other.inner) };
+            // SAFETY: The `Neon` proves the CPU has Neon.
+            let inner = unsafe { vcgtq_s8(lhs, rhs) };
             Self { inner, cpu: self.cpu }
         }
         #[cfg(not(target_arch = "aarch64"))]
