@@ -1,6 +1,8 @@
+use std::io::{self, Write as _};
 use std::num::NonZero;
 
 use clap::Args;
+use luck_lsp::Connection;
 
 use crate::exit::Exit;
 
@@ -14,7 +16,7 @@ pub(crate) struct LspArgs {
 impl LspArgs {
     pub(crate) fn run(self, threads: NonZero<usize>) -> Result<(), Exit> {
         let served = match self.socket {
-            Some(port) => luck_lsp::serve_socket(port, threads),
+            Some(port) => serve_socket(port, threads),
             None => luck_lsp::serve_stdio(threads),
         };
         served.map_err(|e| {
@@ -22,6 +24,15 @@ impl LspArgs {
             Exit::Failure
         })
     }
+}
+
+fn serve_socket(port: u16, threads: NonZero<usize>) -> io::Result<()> {
+    writeln!(io::stderr(), "luck lsp: waiting for a client on 127.0.0.1:{port}")?;
+    let (connection, io_threads) = Connection::listen(("127.0.0.1", port))?;
+    writeln!(io::stderr(), "luck lsp: a client connected")?;
+    let served = luck_lsp::serve(connection, threads);
+    let joined = io_threads.join();
+    served.and(joined)
 }
 
 #[cfg(test)]

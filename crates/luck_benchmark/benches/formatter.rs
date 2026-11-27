@@ -32,7 +32,7 @@ fn bench_formatter(criterion: &mut Criterion) {
             bencher.iter(|| {
                 for parse_result in &parse_results {
                     scratch.reset();
-                    black_box(format_parsed(&scratch, black_box(parse_result), &options));
+                    let _ = black_box(format_parsed(&scratch, black_box(parse_result), &options));
                 }
             });
         });

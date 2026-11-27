@@ -389,14 +389,8 @@ impl Project {
         self.transforms
     }
 
-    /// How a bundle resolves and reads its modules, with no `.config.luau`
-    /// reader, which a caller that links Luau gives.
     pub fn bundle_options(&self) -> BundleOptions<'_> {
-        BundleOptions {
-            project_root: &self.root,
-            dynamic_require: self.dynamic_require,
-            luau_config: None,
-        }
+        BundleOptions { project_root: &self.root, dynamic_require: self.dynamic_require }
     }
 
     /// The bundles `luck build` writes under `profile`.

@@ -866,6 +866,7 @@ dependencies = [
  "luck_linter",
  "luck_minifier",
  "luck_parser",
+ "luck_resolver",
  "luck_semantic",
  "luck_stdlib",
  "mimalloc-safe",
@@ -914,7 +915,6 @@ dependencies = [
  "ariadne",
  "assert_cmd",
  "clap",
- "globset",
  "luck_allocator",
  "luck_ast",
  "luck_bundler",
@@ -1112,6 +1112,7 @@ dependencies = [
  "luck_stdlib",
  "luck_token",
  "luck_type_checker",
+ "luck_value",
 ]
 
 [[package]]

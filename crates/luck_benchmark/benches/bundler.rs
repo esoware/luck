@@ -2,6 +2,7 @@ use luck_allocator::ThreadAllocators;
 use luck_benchmark::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use luck_benchmark_files::bundle_projects;
 use luck_bundler::{BundleOptions, DynamicRequire};
+use luck_resolver::Resolver;
 use rayon::ThreadPoolBuilder;
 
 fn bench_bundler(criterion: &mut Criterion) {
@@ -19,11 +20,10 @@ fn bench_bundler(criterion: &mut Criterion) {
         let options = BundleOptions {
             project_root: &project.root,
             dynamic_require: DynamicRequire::default(),
-            luau_config: None,
         };
         let mut bundle = || {
             arenas.reset();
-            luck_bundler::bundle(&arenas, &project.entry, &options)
+            luck_bundler::bundle(&arenas, &Resolver::new(), &project.entry, &options)
         };
         bundle().unwrap_or_else(|errors| panic!("{} bundles: {errors:?}", project.name));
         // Measures the full pipeline a `luck bundle` invocation runs:

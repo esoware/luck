@@ -28,15 +28,15 @@ use std::path::Path;
 use luck_allocator::ThreadAllocators;
 use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{BundleOptions, DynamicRequire};
+use luck_resolver::Resolver;
 
 rayon::ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global().unwrap();
-let options = BundleOptions {
-    project_root: Path::new("."),
-    dynamic_require: DynamicRequire::default(),
-    luau_config: None,
-};
+let options =
+    BundleOptions { project_root: Path::new("."), dynamic_require: DynamicRequire::default() };
 let arenas = ThreadAllocators::new();
-let bundle = luck_bundler::bundle(&arenas, Path::new("main.luau"), &options).unwrap();
+let resolver = Resolver::new();
+let bundle =
+    luck_bundler::bundle(&arenas, &resolver, Path::new("main.luau"), &options).unwrap();
 assert!(!bundle.output.is_empty());
 ```
 
@@ -45,8 +45,9 @@ assert!(!bundle.output.is_empty());
 * `bundle`, which bundles every module an entry file reaches into a `Bundle`.
 * `bundle_minified`, which does the same and minifies it with a
   `luck_minifier::TransformConfig`, into a `MinifiedBundle`.
-* `BundleOptions`, the project root, the `DynamicRequire` setting, and the
-  function that reads `.config.luau` aliases.
+* `BundleOptions`, the project root and the `DynamicRequire` setting. Modules
+  resolve through, and are read from, the `luck_resolver::ResolverGeneric`
+  each entry point takes.
 * `DependencyGraph`, every module, the entry, and a topological order, built by
   `DependencyGraph::build`.
 * `ModuleInfo`, `ModuleId`, and `Dependency`, one module and what it requires.

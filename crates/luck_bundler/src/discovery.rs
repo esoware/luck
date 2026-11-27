@@ -7,7 +7,7 @@ use std::thread;
 
 use luck_allocator::{Allocator, ThreadAllocators};
 use luck_diagnostics::Diagnostic;
-use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
+use luck_resolver::{FileSystem, ResolverGeneric, to_slash_lossy};
 use luck_token::{CommentKind, leading_hot_comments};
 use memchr::memmem;
 use rayon::Yield;
@@ -91,19 +91,18 @@ pub(crate) fn parse_module<'ast>(
 }
 
 /// What reading and resolving modules takes, which every task shares.
-#[derive(Clone, Copy)]
-pub(crate) struct Reader<'input> {
+pub(crate) struct Reader<'input, Fs> {
     dynamic_require: DynamicRequire,
     /// From [`absolute_project_root`](crate::relative_path::absolute_project_root).
     project_root: &'input Path,
-    resolver: &'input Resolver,
+    resolver: &'input ResolverGeneric<Fs>,
 }
 
-impl<'input> Reader<'input> {
+impl<'input, Fs: FileSystem> Reader<'input, Fs> {
     pub(crate) const fn new(
         dynamic_require: DynamicRequire,
         project_root: &'input Path,
-        resolver: &'input Resolver,
+        resolver: &'input ResolverGeneric<Fs>,
     ) -> Self {
         Self { dynamic_require, project_root, resolver }
     }
@@ -114,7 +113,9 @@ impl<'input> Reader<'input> {
         allocator: &'ast Allocator,
         path: &Path,
     ) -> Result<ParsedModule<'ast>, Diagnostic> {
-        let file = FileSystemOs
+        let file = self
+            .resolver
+            .file_system()
             .read(path)
             .map_err(|io_error| Diagnostic::e010(&to_slash_lossy(path), &io_error))?;
         if file.len() > MAX_FILE_SIZE {
@@ -177,7 +178,7 @@ impl<'input> Reader<'input> {
 /// a time.
 pub(crate) fn discover_reachable<'ast>(
     arenas: &'ast ThreadAllocators,
-    reader: Reader<'_>,
+    reader: &Reader<'_, impl FileSystem>,
     entry: &Path,
 ) -> FxHashMap<OsString, Discovered<'ast>> {
     let mut found: FxHashMap<OsString, Discovered<'ast>> = FxHashMap::default();

@@ -28,12 +28,18 @@
 //! - `stdlib` - The standard library from Luau definition files, Luau's with
 //!   Roblox's API or a host's definitions over it, and what a chunk reaches
 //!   in it (feature `stdlib`, enables `semantic`)
+//! - `value` - Truthiness, constant evaluation, and side effects of an
+//!   expression (feature `value`)
 //! - `linter` - Rule engine with auto-fixes (feature `linter`, enables
 //!   `stdlib`)
 //! - `type_checker` - Luau's own type checker, its C++ Analysis library
 //!   (feature `type_checker`)
 //! - `config` - `luck.json` and `.editorconfig` loading (feature `config`,
 //!   enables the stages it configures)
+//!
+//! Feature `serde` derives `Deserialize` for the option types of whichever of
+//! `bundler`, `formatter`, `linter`, and `minifier` are on, in the shape
+//! `luck.json` gives them, and `Serialize` for `linter::LintConfig`.
 //!
 //! # Arenas
 //!
@@ -95,7 +101,7 @@
 //!
 //! let allocator = Allocator::new();
 //! let formatted = luck::formatter::format(&allocator, b"local x=1", &FormatOptions::default());
-//! assert_eq!(formatted.output, b"local x = 1\n");
+//! assert_eq!(formatted.as_deref(), Ok(&b"local x = 1\n"[..]));
 //! # }
 //! ```
 //!
@@ -150,8 +156,9 @@
 //! ```
 //!
 //! Bundle, with feature `bundler`. Modules are read on rayon's pool, so give
-//! its threads [`ast::MIN_STACK_BYTES`] of stack. The result borrows no arena,
-//! so they can be reset or dropped right after:
+//! its threads [`ast::MIN_STACK_BYTES`] of stack, and through the resolver's
+//! file system, the disk's for a `resolver::Resolver`. The result borrows no
+//! arena, so they can be reset or dropped right after:
 //!
 //! ```no_run
 //! # #[cfg(feature = "bundler")] {
@@ -159,14 +166,14 @@
 //!
 //! use luck::allocator::ThreadAllocators;
 //! use luck::bundler::{BundleOptions, DynamicRequire};
+//! use luck::resolver::Resolver;
 //!
-//! let options = BundleOptions {
-//!     project_root: Path::new("src"),
-//!     dynamic_require: DynamicRequire::default(),
-//!     luau_config: None,
-//! };
+//! let options =
+//!     BundleOptions { project_root: Path::new("src"), dynamic_require: DynamicRequire::default() };
 //! let arenas = ThreadAllocators::new();
-//! let bundle = luck::bundler::bundle(&arenas, Path::new("src/main.luau"), &options).unwrap();
+//! let resolver = Resolver::new();
+//! let entry = Path::new("src/main.luau");
+//! let bundle = luck::bundler::bundle(&arenas, &resolver, entry, &options).unwrap();
 //! std::io::Write::write_all(&mut std::io::stdout(), &bundle.output).unwrap();
 //! # }
 //! ```
@@ -199,5 +206,7 @@ pub use luck_stdlib as stdlib;
 pub use luck_token as token;
 #[cfg(feature = "type_checker")]
 pub use luck_type_checker as type_checker;
+#[cfg(feature = "value")]
+pub use luck_value as value;
 
 pub use version::VERSION;

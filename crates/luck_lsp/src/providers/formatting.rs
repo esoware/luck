@@ -36,16 +36,22 @@ pub(crate) fn formatting(
         || luck_formatter::format_parsed(&allocator, parse, options),
         |bytes| luck_formatter::format_range(&allocator, parse, options, bytes),
     );
-    if let Some(first) = result.errors.first() {
-        let message = format!("luck: can't {action} file (parse error): {}", first.message);
-        let warning = ShowMessageParams { typ: MessageType::WARNING, message };
-        session.send(Task::Notify(Notification::new(ShowMessage::METHOD.to_owned(), warning)));
-        return None;
-    }
-    if result.output == document.text().as_bytes() {
+    let output = match result {
+        Ok(output) => output,
+        Err(errors) => {
+            if let Some(first) = errors.first() {
+                let message = format!("luck: can't {action} file (parse error): {}", first.message);
+                let warning = ShowMessageParams { typ: MessageType::WARNING, message };
+                let notification = Notification::new(ShowMessage::METHOD.to_owned(), warning);
+                session.send(Task::Notify(notification));
+            }
+            return None;
+        }
+    };
+    if output == document.text().as_bytes() {
         return Some(Vec::new());
     }
     // A text that's UTF-8 formats as UTF-8.
-    let new_text = String::from_utf8_lossy(&result.output).into_owned();
+    let new_text = String::from_utf8_lossy(&output).into_owned();
     Some(vec![TextEdit { range: document.full_range(), new_text }])
 }

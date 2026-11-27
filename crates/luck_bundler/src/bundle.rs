@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use luck_allocator::ThreadAllocators;
 use luck_diagnostics::FileDiagnostics;
 use luck_minifier::TransformConfig;
+use luck_resolver::{FileSystem, ResolverGeneric};
 
 use crate::graph::{BundleOptions, DependencyGraph};
 use crate::text_emitter::{self, LineMapEntry};
@@ -43,10 +44,11 @@ pub struct MinifiedBundle {
 /// module's wrapper would nest past [`luck_ast::MAX_NESTING_DEPTH`].
 pub fn bundle(
     arenas: &ThreadAllocators,
+    resolver: &ResolverGeneric<impl FileSystem>,
     entry_path: &Path,
     options: &BundleOptions<'_>,
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
-    let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
+    let mut graph = DependencyGraph::build(arenas, resolver, entry_path, options)?;
     let (output, line_map) = text_emitter::emit(arenas.get(), &mut graph)?;
     Ok(Bundle {
         output,
@@ -66,11 +68,12 @@ pub fn bundle(
 #[expect(clippy::missing_panics_doc, reason = "the emitter refuses a tree past the cap")]
 pub fn bundle_minified(
     arenas: &ThreadAllocators,
+    resolver: &ResolverGeneric<impl FileSystem>,
     entry_path: &Path,
     options: &BundleOptions<'_>,
     transforms: &TransformConfig,
 ) -> Result<MinifiedBundle, Vec<FileDiagnostics>> {
-    let mut graph = DependencyGraph::build(arenas, entry_path, options)?;
+    let mut graph = DependencyGraph::build(arenas, resolver, entry_path, options)?;
     let allocator = arenas.get();
     let (mut chunk, header) = tree_emitter::emit(allocator, &mut graph)?;
     let output = luck_minifier::minify_chunk(allocator, &mut chunk, transforms, header)

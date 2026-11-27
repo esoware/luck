@@ -10,11 +10,11 @@ fn formatting_fits_the_smallest_stack() {
     on_the_smallest_stack(deep_and_long_sources(), |source| {
         let allocator = Allocator::new();
         let options = FormatOptions::default();
-        let formatted = format(&allocator, source.as_bytes(), &options);
-        assert!(formatted.errors.is_empty(), "{:?}", formatted.errors.first());
-        let reparsed = luck_parser::parse(&allocator, &formatted.output);
+        let formatted = format(&allocator, source.as_bytes(), &options)
+            .unwrap_or_else(|errors| panic!("{:?}", errors.first()));
+        let reparsed = luck_parser::parse(&allocator, &formatted);
         assert!(reparsed.errors.is_empty(), "the output reparses");
-        let again = format(&allocator, &formatted.output, &options);
-        assert!(again.output == formatted.output, "formatting is idempotent");
+        let again = format(&allocator, &formatted, &options);
+        assert!(again.as_ref() == Ok(&formatted), "formatting is idempotent");
     });
 }

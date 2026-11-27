@@ -20,9 +20,8 @@ use luck_allocator::Allocator;
 use luck_formatter::FormatOptions;
 
 let allocator = Allocator::new();
-let result = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::default());
-assert!(result.errors.is_empty());
-assert_eq!(result.output, b"local x = 1\n");
+let output = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::default());
+assert_eq!(output.as_deref(), Ok(&b"local x = 1\n"[..]));
 ```
 
 `format` parses the source itself. If you already have a parse from
@@ -32,8 +31,8 @@ what an editor's format selection needs.
 
 ## API
 
-* `format`, `format_parsed`, and `format_range`, which return a `FormatResult`
-  with the output and any parse errors.
+* `format`, `format_parsed`, and `format_range`, which return the output or
+  the parse errors.
 * `format_chunk`, which formats a tree that has no source, such as one built
   with `luck_ast::Synth`, taking its comments as `Comments` built from
   `SyntheticComment`s.

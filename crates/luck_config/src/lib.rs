@@ -76,6 +76,7 @@ pub use definitions::{DefinitionSource, Definitions};
 pub use editorconfig::{EDITORCONFIG_FILE_NAME, Editorconfigs};
 pub use filter::{ProjectFilter, located_path};
 pub use glob::glob_set;
+pub use globset::GlobSet;
 pub use load::{CONFIG_FILE_NAME, ConfigError, find_config};
 pub use project::Project;
 pub use walk::{WalkEntry, WalkError, WalkRoot, WalkVisitor, WalkedFile, walk_source_files};

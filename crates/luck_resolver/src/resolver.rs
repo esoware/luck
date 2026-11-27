@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ pub type Resolver = ResolverGeneric<FileSystemOs>;
 /// The aliases a `.config.luau`, given its source, declares, by lowercased
 /// name, or why it doesn't load, as Luau's own Config library says once it
 /// runs it in a sandbox. `luck_type_checker::luau_config_aliases` is Luau's.
-pub type LuauConfigAliases = fn(&str) -> Result<Vec<(String, String)>, String>;
+pub type LuauConfigAliases = dyn Fn(&str) -> Result<Vec<(String, String)>, String> + Send + Sync;
 
 /// Resolves requires through `Fs`, one path component at a time, as Luau's
 /// navigator does, and keeps what it reads until [`Self::clear_cache`], so
@@ -47,13 +48,18 @@ pub type LuauConfigAliases = fn(&str) -> Result<Vec<(String, String)>, String>;
 /// through the same directories and reach the same modules, so it also keeps
 /// the alias tables of the `.luaurc` and `.config.luau` files it discovers
 /// and what each module path holds. A missing or malformed file is kept too.
-#[derive(Debug)]
 pub struct ResolverGeneric<Fs> {
     fs_cache: FsCache<Fs>,
     aliases: AliasCache,
     modules: SharedCache<OsString, ModuleFiles>,
     generation: Arc<Generation>,
-    luau_config: Option<LuauConfigAliases>,
+    luau_config: Option<Box<LuauConfigAliases>>,
+}
+
+impl<Fs: fmt::Debug> fmt::Debug for ResolverGeneric<Fs> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResolverGeneric").field("fs_cache", &self.fs_cache).finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -123,9 +129,16 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
     /// This resolver, reading the aliases of each `.config.luau` with
     /// `luau_config`, without which none loads.
     #[must_use]
-    pub const fn with_luau_config(mut self, luau_config: LuauConfigAliases) -> Self {
-        self.luau_config = Some(luau_config);
+    pub fn with_luau_config(
+        mut self,
+        luau_config: impl Fn(&str) -> Result<Vec<(String, String)>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.luau_config = Some(Box::new(luau_config));
         self
+    }
+
+    pub const fn file_system(&self) -> &Fs {
+        self.fs_cache.file_system()
     }
 
     /// Forgets everything read so far, so the next resolution sees the file
@@ -215,8 +228,11 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
                 followed.push(lowercase_name);
                 return Err(ResolveError::AliasCycle(followed));
             }
-            let aliases =
-                self.aliases.in_effect(self.fs_cache.file_system(), self.luau_config, &directory);
+            let aliases = self.aliases.in_effect(
+                self.fs_cache.file_system(),
+                self.luau_config.as_deref(),
+                &directory,
+            );
             match aliases.targets.get(&lowercase_name) {
                 Some(AliasTarget::Directory(target_directory)) => {
                     return Ok((target_directory.clone(), full_sub_path));
@@ -256,7 +272,7 @@ impl<Fs: FileSystem> ResolverGeneric<Fs> {
         let relative_path = sub_path.ok_or(ResolveError::BareSelfAlias)?;
         let is_self_alias_shadowed = self
             .aliases
-            .in_effect(self.fs_cache.file_system(), self.luau_config, lookup_directory)
+            .in_effect(self.fs_cache.file_system(), self.luau_config.as_deref(), lookup_directory)
             .targets
             .contains_key("self");
         let path = self.navigate(requiring_module, relative_path)?;

@@ -1,5 +1,6 @@
-use std::io;
+use std::error::Error;
 use std::path::{self, Path, PathBuf};
+use std::{fmt, io};
 
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_resolver::{FileSystem, to_slash_lossy};
@@ -29,6 +30,17 @@ impl From<FileDiagnostics> for ConfigError {
         Self::File(file)
     }
 }
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Given(diag) => diag.fmt(f),
+            Self::File(file) => file.fmt(f),
+        }
+    }
+}
+
+impl Error for ConfigError {}
 
 /// The nearest `luck.json` at or above `directory` in `file_system`, which
 /// mustn't hold a `..`, since walking up from one would leave the directory

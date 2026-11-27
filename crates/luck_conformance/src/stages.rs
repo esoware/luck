@@ -154,12 +154,12 @@ fn formatter<'ast>(
     parse: &'ast ParseResult<'ast>,
 ) -> (TestResult, Option<Vec<u8>>) {
     let options = FormatOptions::default();
-    let output = luck_formatter::format_parsed(allocator, parse, &options).output;
+    let output = luck_formatter::format_parsed(allocator, parse, &options).unwrap_or_default();
     let result = {
         let reparsed = luck_parser::parse_with_tokens(allocator, &output);
         round_trip(parse, &reparsed).unwrap_or_else(|| {
             let again = luck_formatter::format_parsed(allocator, &reparsed, &options);
-            idempotency(&again.output, &output)
+            idempotency(&again.unwrap_or_default(), &output)
         })
     };
     (result, Some(output))

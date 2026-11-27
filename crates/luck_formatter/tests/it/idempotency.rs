@@ -207,9 +207,10 @@ fn call_parentheses_never_format_valid_input_past_the_nesting_cap() {
             let source = nested_table_calls(levels);
             let allocator = Allocator::new();
             let options = FormatOptions::default();
-            let result = luck_formatter::format(&allocator, source.as_bytes(), &options);
-            let [error] = result.errors.as_slice() else {
-                panic!("{levels} levels: {:?}", result.errors);
+            let errors = luck_formatter::format(&allocator, source.as_bytes(), &options)
+                .expect_err("a source past the cap doesn't parse");
+            let [error] = errors.as_slice() else {
+                panic!("{levels} levels: {errors:?}");
             };
             assert!(
                 error.message.contains("maximum nesting depth exceeded"),

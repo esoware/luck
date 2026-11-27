@@ -84,6 +84,7 @@ impl<'source> Lexer<'source> {
     ///
     /// Returns an E008 for a source over 4 GiB, which `u32` spans can't
     /// address.
+    #[doc(hidden)]
     pub fn with_cpu(source: &'source [u8], cpu: DynCpu) -> Result<Self, Diagnostic> {
         Ok(Self {
             scanner: Scanner::new(source, cpu)?,
@@ -110,6 +111,7 @@ impl<'source> Lexer<'source> {
     /// [`Self::take_buffered`] hasn't handed out. A caller that reads every
     /// token through the two, as the parser does, keeps its refill out of
     /// line, so it calls nothing per token.
+    #[doc(hidden)]
     #[inline]
     pub fn has_buffered(&self) -> bool {
         self.taken < self.buffered
@@ -121,6 +123,7 @@ impl<'source> Lexer<'source> {
     /// # Panics
     ///
     /// Panics past the end of the buffer.
+    #[doc(hidden)]
     #[inline]
     pub fn take_buffered(&mut self) -> Token {
         let index = self.taken;
@@ -139,6 +142,7 @@ impl<'source> Lexer<'source> {
     /// # Panics
     ///
     /// Panics past the end of the buffer.
+    #[doc(hidden)]
     #[inline]
     pub fn peek_buffered(&self) -> &Token {
         debug_assert!(self.taken < self.buffered, "the batch is all read");
@@ -148,6 +152,7 @@ impl<'source> Lexer<'source> {
     /// Lex the next batch of tokens, through the `Eof` if the source ends,
     /// for [`Self::take_buffered`] to hand out, and return it. Past the end
     /// of the source, each batch is the `Eof` again.
+    #[doc(hidden)]
     #[inline(never)]
     pub fn refill(&mut self) -> &[Token] {
         self.buffered = self.scanner.fill(&mut self.buffer);
@@ -156,6 +161,7 @@ impl<'source> Lexer<'source> {
     }
 
     /// What a list of the tokens left to lex reserves.
+    #[doc(hidden)]
     pub fn token_capacity(&self) -> usize {
         self.scanner.token_capacity()
     }

@@ -3,14 +3,13 @@ use std::ops::Deref;
 use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
-use globset::GlobSet;
 use luck_bundler::{BundleOptions, DynamicRequire};
 use luck_config::{
-    CONFIG_FILE_NAME, Project, ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor,
+    CONFIG_FILE_NAME, GlobSet, Project, ProjectFilter, WalkEntry, WalkError, WalkRoot, WalkVisitor,
     find_config, glob_set, walk_source_files,
 };
 use luck_linter::LintConfig;
-use luck_resolver::{FileSystem as _, FileSystemOs, lexically_normalized};
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, lexically_normalized};
 use luck_type_checker::luau_config_aliases;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -25,19 +24,20 @@ pub(crate) fn existing_file(input: &str) -> Result<&Path, Exit> {
     if path.is_file() { Ok(path) } else { Err(usage_error(format!("file not found: `{input}`"))) }
 }
 
-/// How `build`, `bundle`, and `graph` resolve and read modules: as `project`
-/// says, with each `.config.luau` read by Luau's own Config library, and with
+/// How `build`, `bundle`, and `graph` bundle: as `project` says, with
 /// `--dynamic-require` replacing its mode when given.
 pub(crate) fn bundle_options(
     project: &Project,
     dynamic_require: Option<DynamicRequire>,
 ) -> BundleOptions<'_> {
     let options = project.bundle_options();
-    BundleOptions {
-        dynamic_require: dynamic_require.unwrap_or(options.dynamic_require),
-        luau_config: Some(luau_config_aliases),
-        ..options
-    }
+    BundleOptions { dynamic_require: dynamic_require.unwrap_or(options.dynamic_require), ..options }
+}
+
+/// How `build`, `bundle`, and `graph` resolve and read modules, with each
+/// `.config.luau` read by Luau's own Config library.
+pub(crate) fn bundle_resolver() -> Resolver {
+    Resolver::new().with_luau_config(luau_config_aliases)
 }
 
 pub(crate) fn load_project(config_path: &Path) -> Result<Project, Exit> {

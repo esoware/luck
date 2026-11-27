@@ -15,7 +15,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 
 use crate::exit::{Exit, config_error, operation_error, usage_error};
 use crate::output::{format_size, write_output_file};
-use crate::project::{bundle_options, current_directory, load_project};
+use crate::project::{bundle_options, bundle_resolver, current_directory, load_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -214,6 +214,7 @@ impl BuildArgs {
         // The arenas outlive each build, so a rebuild reuses their memory.
         arenas.reset();
         let options = bundle_options(project, None);
+        let resolver = bundle_resolver();
         let bundle_failure = |errors: Vec<FileDiagnostics>| {
             print_files(&errors);
             let source_files =
@@ -228,15 +229,17 @@ impl BuildArgs {
         // A minified build compares its size with the sources', since it
         // never writes the bundle unminified.
         let (bundled, source_files, original_size) = if config.minify {
-            let minified = bundle_minified(arenas, &config.entry, &options, &config.transforms)
-                .map_err(bundle_failure)?;
+            let minified =
+                bundle_minified(arenas, &resolver, &config.entry, &options, &config.transforms)
+                    .map_err(bundle_failure)?;
             check_output(&minified.source_files)?;
             if verbosity != Verbosity::Quiet {
                 print_files(&minified.warnings);
             }
             (minified.output, minified.source_files, Some(minified.source_byte_count))
         } else {
-            let result = bundle(arenas, &config.entry, &options).map_err(bundle_failure)?;
+            let result =
+                bundle(arenas, &resolver, &config.entry, &options).map_err(bundle_failure)?;
             check_output(&result.source_files)?;
             if verbosity != Verbosity::Quiet {
                 print_files(&result.warnings);

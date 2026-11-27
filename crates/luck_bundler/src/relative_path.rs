@@ -1,6 +1,6 @@
 use std::path::{self, Component, Path, PathBuf};
 
-use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
+use luck_resolver::{FileSystem, to_slash_lossy};
 
 /// `project_root` canonicalized, or made absolute when it doesn't exist.
 ///
@@ -8,9 +8,9 @@ use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
 /// is the working directory. When that is unavailable too, the root comes back
 /// unchanged and the build goes on, though host paths can then reach the
 /// output.
-pub(crate) fn absolute_project_root(project_root: &Path) -> PathBuf {
+pub(crate) fn absolute_project_root(file_system: &impl FileSystem, project_root: &Path) -> PathBuf {
     let root = if project_root.as_os_str().is_empty() { Path::new(".") } else { project_root };
-    FileSystemOs
+    file_system
         .canonicalize(root)
         .or_else(|_| path::absolute(root))
         .unwrap_or_else(|_| root.to_path_buf())
@@ -60,6 +60,8 @@ pub(crate) fn make_relative(path: &Path, root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use std::env;
+
+    use luck_resolver::FileSystemOs;
 
     use super::*;
 
@@ -122,16 +124,16 @@ mod tests {
     fn empty_project_root_resolves_to_the_working_directory() {
         let working_directory =
             FileSystemOs.canonicalize(&env::current_dir().expect("cwd")).expect("canonicalize");
-        assert_eq!(absolute_project_root(Path::new("")), working_directory);
-        assert_eq!(absolute_project_root(Path::new(".")), working_directory);
+        assert_eq!(absolute_project_root(&FileSystemOs, Path::new("")), working_directory);
+        assert_eq!(absolute_project_root(&FileSystemOs, Path::new(".")), working_directory);
 
-        let root = absolute_project_root(Path::new(""));
+        let root = absolute_project_root(&FileSystemOs, Path::new(""));
         assert_eq!(make_relative(&root.join("main.luau"), &root), "main.luau");
     }
 
     #[test]
     fn a_missing_project_root_is_made_absolute() {
-        let root = absolute_project_root(Path::new("missing/project"));
+        let root = absolute_project_root(&FileSystemOs, Path::new("missing/project"));
         assert!(root.is_absolute(), "{}", root.display());
         assert!(root.ends_with("missing/project"), "{}", root.display());
     }

@@ -25,7 +25,7 @@ use luck::minifier::TransformConfig;
 
 let allocator = Allocator::new();
 let formatted = luck::formatter::format(&allocator, b"local x=1", &FormatOptions::default());
-assert_eq!(formatted.output, b"local x = 1\n");
+assert_eq!(formatted.as_deref(), Ok(&b"local x = 1\n"[..]));
 
 let minified = luck::minifier::minify(&allocator, b"return 1 + 2", &TransformConfig::default());
 assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
@@ -48,6 +48,7 @@ assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 | `formatter` | `luck_formatter` | `formatter` |
 | `semantic` | `luck_semantic` | `semantic` |
 | `stdlib` | `luck_stdlib` | `stdlib` |
+| `value` | `luck_value` | `value` |
 | `linter` | `luck_linter` | `linter` |
 | `type_checker` | `luck_type_checker` | `type_checker` |
 | `config` | `luck_config` | `config` |
@@ -66,7 +67,10 @@ No feature is on by default.
 * `formatter` - The formatter.
 * `semantic` - Scope, symbol, and reference analysis.
 * `stdlib` - Luau's and Roblox's standard libraries. Enables `semantic`.
+* `value` - Truthiness, constant evaluation, and side effects.
 * `linter` - The linter. Enables `stdlib`.
 * `type_checker` - Luau's own type checker. Building it needs clang.
 * `config` - `luck.json` loading. Enables `bundler`, `minifier`, `formatter`,
   and `linter`.
+* `serde` - `Deserialize` for the enabled stages' options, as `luck.json`
+  writes them.

@@ -36,9 +36,8 @@
 //! use luck_formatter::FormatOptions;
 //!
 //! let allocator = Allocator::new();
-//! let result = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::default());
-//! assert!(result.errors.is_empty());
-//! assert_eq!(result.output, b"local x = 1\n");
+//! let output = luck_formatter::format(&allocator, b"local x=1", &FormatOptions::default());
+//! assert_eq!(output.as_deref(), Ok(&b"local x = 1\n"[..]));
 //! ```
 
 mod comments;
@@ -62,7 +61,7 @@ mod quotes;
 mod sort_requires;
 
 pub use comments::{Comments, SyntheticComment};
-pub use format::{FormatResult, format, format_chunk, format_parsed, format_range};
+pub use format::{format, format_chunk, format_parsed, format_range};
 pub use format_config::FormatConfig;
 pub use format_options::{
     BlockNewlineGaps, CallParentheses, CollapseSimpleStatement, FormatOptions, HexCase,

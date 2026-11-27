@@ -290,21 +290,20 @@ fn format_document(
     } else {
         luck_parser::parse_with_tokens(allocator, source)
     };
-    if !parse.errors.is_empty() {
-        let mut rendered = Vec::new();
-        let label = file_path.to_string_lossy();
-        let file = SourceFile { label: &label, text: Some(source) };
-        DefaultReporter.render(file, &parse.errors, &mut rendered);
-        return FormatOutcome::Failed(rendered);
-    }
-    let result = match range {
+    let formatted = match range {
         Some(byte_range) => luck_formatter::format_range(allocator, &parse, options, byte_range),
         None => luck_formatter::format_parsed(allocator, &parse, options),
     };
-    if result.output == source {
-        FormatOutcome::Unchanged
-    } else {
-        FormatOutcome::Changed(result.output)
+    match formatted {
+        Err(errors) => {
+            let mut rendered = Vec::new();
+            let label = file_path.to_string_lossy();
+            let file = SourceFile { label: &label, text: Some(source) };
+            DefaultReporter.render(file, &errors, &mut rendered);
+            FormatOutcome::Failed(rendered)
+        }
+        Ok(output) if output == source => FormatOutcome::Unchanged,
+        Ok(output) => FormatOutcome::Changed(output),
     }
 }
 
