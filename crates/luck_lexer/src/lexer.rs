@@ -17,10 +17,11 @@ use crate::lex_result::LexResult;
 use batch::{BUFFER_TOKENS, UNREAD_TOKEN};
 use string::LongBracketKind;
 
-/// Most real files run about this many bytes per token or more, so most
-/// sources fit the first reservation, and pages a sparser one leaves
-/// untouched cost nothing.
-const BYTES_PER_TOKEN: usize = 4;
+/// Hand-written code runs over 2.5 bytes per token, and minified code about
+/// 2, so nearly every source fits the first reservation and never pays to
+/// move its tokens, and the pages a sparser one leaves untouched cost
+/// nothing.
+const BYTES_PER_TOKEN: usize = 2;
 
 /// Keeps a huge comment-only file from reserving gigabytes it never touches.
 const MAX_RESERVED_TOKENS: usize = 1 << 20;
