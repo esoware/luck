@@ -5,7 +5,7 @@ crate.
 
 This crate re-exports the luck crates as modules, so a build tool or editor can
 depend on one crate instead of tracking each `luck_*` crate. It's published as
-`luck_lua` but imported as `luck`. The lexer, parser, and syntax tree are
+`luck_luau` but imported as `luck`. The lexer, parser, and syntax tree are
 always included, and every other stage is behind its own feature. The language
 server and the CLI aren't included.
 

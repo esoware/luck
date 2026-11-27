@@ -59,7 +59,7 @@ Every tool is also a Rust crate:
 - Bundle Luau projects: [`luck_bundler`](crates/luck_bundler)
 - Resolve requires: [`luck_resolver`](crates/luck_resolver)
 - Type check Luau: [`luck_type_checker`](crates/luck_type_checker)
-- All of the above in one crate: [`luck_lua`](crates/luck)
+- All of the above in one crate: [`luck_luau`](crates/luck)
 
 ## Contribute
 

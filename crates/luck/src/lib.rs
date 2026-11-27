@@ -2,7 +2,7 @@
 //!
 //! The whole luck toolchain behind one dependency, for build tools and
 //! editors that would rather not track each `luck_*` crate. The package
-//! publishes as `luck_lua`, but the library is named `luck`.
+//! publishes as `luck_luau`, but the library is named `luck`.
 //!
 //! The parse core is always present. Every other stage sits behind its own
 //! feature, and `full` enables all of them:
