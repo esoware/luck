@@ -1,8 +1,9 @@
 # luck_data_structures
 
-Small data structures shared across luck's crates, such as the output buffer the printers write to.
+Small data structures for code printers.
 
-Nothing here knows about Luau.
+`CodeBuffer` is a growable byte buffer that a printer writes source code into,
+and `BitSet` is a fixed number of bits. Neither knows anything about Luau.
 
 ## Usage
 
@@ -15,8 +16,3 @@ output.print_byte(b' ');
 output.print_bytes(b"x");
 assert_eq!(output.into_bytes(), b"local x");
 ```
-
-## API
-
-- `CodeBuffer` is the byte buffer the printers write to.
-- `BitSet` is a fixed-size set of bits.

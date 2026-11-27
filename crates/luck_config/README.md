@@ -1,20 +1,25 @@
 # luck_config
 
-Loads and validates `luck.json` project configs, including `extends`, `overrides`, and `.editorconfig`.
+Loads and validates `luck.json` project configs.
 
-## Overview
+`Project::load` reads a `luck.json`, following its `extends` chain, and checks
+every key, glob, rule name, and option, along with keys that conflict. Each
+problem comes back as an E014 diagnostic at its location in the file. The
+resulting `Project` answers what each file needs: its linter, its format
+options, and its definitions, along with the project's build entries.
 
-The result is a `Project`, which every luck command and the language server get their settings from. It gives each file its lint and format settings, and the project its definitions and build entries.
+`overrides` change settings for the files their globs match, and format
+settings layer on top of `.editorconfig`. Every file is read through a
+`FileSystem`, so an editor can load a project from unsaved buffers.
+`walk_source_files` finds a project's `.luau` and `.lua` files, skipping
+whatever `.gitignore` and `.luckignore` exclude.
 
-Every key is checked when the config loads. Each problem becomes an E014 diagnostic pointing at its spot in the file.
-
-`overrides` change lint and format settings for files matching a glob, and format settings layer on top of `.editorconfig`.
-
-Files are read through a `FileSystem`, so an editor can pass in unsaved files. `walk_source_files` finds a project's `.luau` and `.lua` files, skipping anything `.gitignore` or `.luckignore` excludes.
-
-The JSON schema in the VS Code extension is generated from these config types.
+The JSON schema in luck's VS Code extension is generated from the config types.
 
 ## Usage
+
+This example finds the `luck.json` above `src`, or falls back to the defaults,
+and asks for one file's settings:
 
 ```rust,no_run
 use std::path::Path;
@@ -35,16 +40,18 @@ let format = project.format_options(Some(file), Some(&Editorconfigs::default()))
 
 ## API
 
-- `Project` is a loaded project, from `load`, `from_config`, or `defaults`.
-- `Project` gives its settings through `stdlib`, `definitions`, `linter_for`, `format_options`, `transforms`, `bundle_options`, and `builds`.
-- `find_config` finds the nearest `luck.json` at or above a directory.
-- `ConfigError` says why a config didn't load.
-- `CONFIG_FILE_NAME` is `luck.json`.
-- `DefinitionSource` is what one `definitions` entry loads.
-- `BuildConfig` is one bundle that `luck build` writes.
-- `check_output_paths` fails if a build's outputs would overwrite its inputs or each other.
-- `Editorconfigs` caches `.editorconfig` lookups, and `EDITORCONFIG_FILE_NAME` is `.editorconfig`.
-- `ProjectFilter` applies the project's `include` and `exclude` globs.
-- `located_path` gives the path a file's globs match against.
-- `glob_set` compiles globs the way a config does.
-- `walk_source_files` finds a directory's source files, with `WalkVisitor`, `WalkRoot`, `WalkEntry`, `WalkedFile`, and `WalkError`.
+* `Project`, from `load`, `from_config`, or `defaults`, with `stdlib`,
+  `definitions`, `linter_for`, `format_options`, `transforms`,
+  `bundle_options`, and `builds`.
+* `find_config`, which finds the nearest `luck.json` at or above a directory.
+* `ConfigError`, why a config didn't load.
+* `CONFIG_FILE_NAME` and `EDITORCONFIG_FILE_NAME`, the config files' names.
+* `DefinitionSource`, what one `definitions` entry loads.
+* `BuildConfig`, one bundle `luck build` writes, and `check_output_paths`,
+  which rejects outputs that would overwrite an input or each other.
+* `Editorconfigs`, which caches the `.editorconfig` files a project reads.
+* `ProjectFilter`, the project's `include` and `exclude` globs, and
+  `located_path`, the path a file's globs match against.
+* `glob_set`, which compiles globs the way a config does.
+* `walk_source_files`, with `WalkVisitor`, `WalkRoot`, `WalkEntry`,
+  `WalkedFile`, and `WalkError`.

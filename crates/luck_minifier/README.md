@@ -1,14 +1,21 @@
 # luck_minifier
 
-A Luau minifier that strips types, folds constants, removes dead code, and renames locals.
+A Luau minifier that strips types, folds constants, removes dead code, and
+renames locals.
 
-## Overview
+Minification rewrites the syntax tree in place. Types go first, then
+compression passes such as constant folding, dead code removal, and inlining
+repeat until one changes nothing. Each function's declarations are then
+hoisted into a single `local`, and the passes run again. Last, locals get the
+shortest names their scopes allow, and the tree is printed once.
 
-Compression passes repeat until one changes nothing, then the tree is printed once with `luck_codegen`. Based on `oxc_minifier`.
-
-Every rewrite assumes a metamethod can run wherever Luau allows one, so it never drops code that might call one. `minify(minify(x)) == minify(x)`, and tests check it.
+Every rewrite assumes a metamethod can run wherever Luau allows one, so the
+output behaves like the input even when tables have metatables. Minifying
+already minified code changes nothing. The design follows `oxc_minifier`.
 
 ## Usage
+
+This example minifies a constant expression:
 
 ```rust
 use luck_allocator::Allocator;
@@ -20,15 +27,13 @@ let output = luck_minifier::minify(&allocator, b"return 1 + 2", &config);
 assert_eq!(output.as_deref(), Ok(&b"return 3"[..]));
 ```
 
-## API
-
-- `minify` parses a source and minifies it.
-- `minify_chunk` minifies a tree you already have, into a buffer you pass.
-- `TransformConfig` turns each transform on or off.
+`minify` parses the source itself, and `minify_chunk` minifies a tree you
+already have.
 
 ## Transforms
 
-All of them except `rename_globals` are on by default.
+`TransformConfig` turns each transform on or off. All of them except
+`rename_globals` are on by default.
 
 | Field | What it does |
 | --- | --- |
@@ -46,5 +51,6 @@ All of them except `rename_globals` are on by default.
 
 ## Cargo features
 
-- `serde` derives `Deserialize` for `TransformConfig`, in the shape `luck.json` uses.
-- `schemars` derives `JsonSchema` too, and enables `serde`.
+* `serde` - Derives `Deserialize` for `TransformConfig`, in the shape a
+  `luck.json` config gives it.
+* `schemars` - Derives `JsonSchema` for `TransformConfig`. Enables `serde`.

@@ -1,16 +1,14 @@
 # luck_token
 
-Tokens, spans, operators, and literal handling shared by every luck crate that reads or writes Luau.
+Tokens, spans, operators, and literals of the Luau language.
 
-## Overview
+This crate defines the pieces that a Luau lexer, parser, and printer share. A
+`Token` holds a kind, a span, and a few flags, but no text, so a token stream
+stays small and each token's text is sliced from the source with `Token::text`.
 
-It depends on no other luck crate.
-
-Luau reads sources as bytes, so strings and comments don't have to be UTF-8. Spans are `u32` offsets, which caps a source at 4 GiB.
-
-A `Token` stores no text. Get it from the source with `Token::text`.
-
-It also reads and writes number and string literals exactly as Luau does, and recognizes `--!` hot comments and `luck:` directives.
+Sources are handled as bytes, the way Luau reads them, so strings and comments
+don't have to be valid UTF-8. Spans use `u32` offsets, which limits a source to
+4 GiB. Number and string literals are decoded and spelled exactly as Luau does.
 
 ## Usage
 
@@ -33,14 +31,25 @@ assert_eq!(begin.text(source), b"hello ");
 
 ## API
 
-- Spans: `Span`, `index_to_offset`, `offset_to_index`
-- Tokens: `Token`, `TokenKind`
-- Operators: `BinOp`, `UnOp`, `CompoundOp`, `Associativity`
-- Numbers: `Numeral`, `NumberSpelling`, `read_numeral`, `spell_number`
-- Strings: `StringValue`, `StringKind`, `StringSpelling`, `Escaped`, `EscapeError`
-- String functions: `read_escape`, `decode_string`, `decode_interpolated_text`, `spell_string`, `spell_string_shorter_than`, `write_interpolated_text`, `write_long_string`
-- Comments: `Comment`, `CommentKind`, `CommentPosition`
-- Directives: `CommentContent`, `LintDirective`, `LintVerb`, `LintExtent`, `DirectiveError`, `DirectiveErrorKind`
-- Lines: `LineIndex`, `line_breaks`, `has_line_break`, `ends_with_line_break`, `strip_line_break`, `is_luau_whitespace`
-- Chunk headers: `has_shebang`, `leading_hot_comments`, `chunk_header`
-- Limits: `MAX_ACTIVE_LOCALS`, `MAX_REGISTERS`
+* `Span`, a byte range in a source, with `index_to_offset` and
+  `offset_to_index` to convert positions to and from its `u32` offsets.
+* `LineIndex`, which maps offsets to lines and columns.
+* `Token` and `TokenKind`, every Luau token.
+* `BinOp`, `UnOp`, and `CompoundOp`, the operators, and `Associativity`.
+* `read_numeral` and `spell_number`, which read and write number literals, with
+  `Numeral` and `NumberSpelling`.
+* `decode_string`, `read_escape`, `spell_string`, and
+  `spell_string_shorter_than`, which read and write string literals, with
+  `StringValue`, `StringKind`, `StringSpelling`, `Escaped`, and `EscapeError`.
+* `decode_interpolated_text`, `write_interpolated_text`, and
+  `write_long_string`, for interpolated and long strings.
+* `Comment`, with its `CommentKind` and `CommentPosition`, and
+  `CommentContent`, what a comment tells a tool.
+* `LintDirective`, a `luck:` lint directive, with `LintVerb`, `LintExtent`,
+  `DirectiveError`, and `DirectiveErrorKind`.
+* `line_breaks`, `has_line_break`, `ends_with_line_break`, `strip_line_break`,
+  and `is_luau_whitespace`, which follow Luau's rules for line breaks and
+  whitespace.
+* `has_shebang`, `leading_hot_comments`, and `chunk_header`, which find the
+  shebang and `--!` comments a chunk opens with.
+* `MAX_ACTIVE_LOCALS` and `MAX_REGISTERS`, Luau's compiler limits.

@@ -1,20 +1,25 @@
 # luck_semantic
 
-Scope, symbol, and reference analysis for Luau, in a single pass over the syntax tree.
+Scope, symbol, and reference analysis for Luau.
 
-## Overview
+`SemanticBuilder` walks a chunk once, in source order, and builds its
+`Scoping`, which holds every scope, symbol, and reference in flat tables
+indexed by typed ids. Each name in the tree carries a `NameIndex`, which
+`Scoping::symbol_of` and `Scoping::reference_of` turn into what the name
+declares or refers to. The design follows `oxc_semantic`.
 
-`SemanticBuilder` does the walk. Each name in the tree finds its symbol or reference through its `NameIndex`. Based on `oxc_semantic`.
+The rest is opt-in. `with_check` reports code that the grammar accepts but Luau
+rejects, such as an assignment to a `const` local. `with_nodes` builds an
+`AstNodes` table with every node's parent and scope, and `with_requires`
+collects every `require` call.
 
-Three more parts are off unless you ask for them:
-
-- `with_check` reports code the grammar allows but Luau rejects, such as assigning to a `const`.
-- `with_nodes` builds `AstNodes`, every node with its parent and scope.
-- `with_requires` collects every `require` call.
-
-It knows nothing about the standard library. `luck_stdlib` adds that.
+No standard library is involved, so every name that isn't declared is a global.
+`luck_stdlib` adds a library on top.
 
 ## Usage
+
+This example assigns to a `const` local, then finds both of its references and
+the error:
 
 ```rust
 use luck_allocator::Allocator;
@@ -34,12 +39,13 @@ assert_eq!(built.errors[0].message, "attempt to assign to const variable `greeti
 
 ## API
 
-- `SemanticBuilder` configures the walk, then runs it with `build`, or with `rebuild` to reuse an earlier result's memory.
-- `SemanticBuilderReturn` holds the `Semantic` and the checker's errors.
-- `Semantic` gives the `scoping`, `nodes`, and `requires`.
-- `Scoping` holds every scope, symbol, reference, and name. Look them up with `symbol_of`, `reference_of`, and `resolved_references`.
-- `Scope`, `ScopeKind`, `Symbol`, `SymbolKind`, `Reference`, and `ReferenceKind` are its entries.
-- `ScopeId`, `SymbolId`, `ReferenceId`, `NameId`, and `NodeId` index them.
-- `AstNodes` lists every node in preorder as an `AstNode`, with its parent and scope.
-- `AstTypesBitset` records which node types a tree contains.
-- `RequireSite` is one `require` call.
+* `SemanticBuilder`, which runs the walk with `build`, or with `rebuild` to
+  reuse an earlier result's memory, and returns a `SemanticBuilderReturn`.
+* `Semantic`, which holds the `Scoping`, along with the `AstNodes` and
+  `RequireSite`s when they were asked for.
+* `Scoping`, with its `Scope`, `Symbol`, and `Reference` entries and their
+  `ScopeKind`, `SymbolKind`, and `ReferenceKind`.
+* `ScopeId`, `SymbolId`, `ReferenceId`, `NameId`, and `NodeId`, the typed ids.
+* `AstNodes` and `AstNode`, every node in preorder with its parent and scope.
+* `AstTypesBitset`, the set of node types a tree contains.
+* `RequireSite`, one call of `require`.

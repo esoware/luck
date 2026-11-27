@@ -1,16 +1,21 @@
 # luck_parser
 
-A hand-written Luau parser with error recovery, which builds a `luck_ast` tree.
+A hand-written, error-recovering parser for Luau, including its full type
+syntax.
 
-## Overview
+`parse` reads a source into a `luck_ast` tree in an arena you pass in, using
+Pratt parsing for expressions and recursive descent for statements. When it
+hits a syntax error, it recovers and keeps going, so a single parse reports
+every error in the file. As in Luau, strings and comments may hold any byte.
 
-The tree goes in an arena you pass in. Expressions use Pratt parsing and statements use recursive descent. It recovers from syntax errors, so one parse reports all of them.
-
-`parse_definitions` reads definition files, which allow Luau's `declare` statements. `parse_with_tokens` also keeps the tokens, which the formatter needs.
-
-No tree it returns nests deeper than `luck_ast::MAX_NESTING_DEPTH`. Strings and comments can contain any byte.
+No tree it returns nests deeper than `luck_ast::MAX_NESTING_DEPTH`, so anything
+that walks the tree recursively is safe on a thread with
+`luck_ast::MIN_STACK_BYTES` of stack.
 
 ## Usage
+
+This example parses one statement, then shows the error a truncated function
+gets:
 
 ```rust
 use luck_allocator::Allocator;
@@ -26,9 +31,12 @@ assert_eq!(broken.errors[0].code, "E008");
 
 ## API
 
-- `parse` parses code.
-- `parse_with_tokens` parses code and keeps the tokens.
-- `parse_definitions` parses a definition file.
-- `parse_definitions_with_tokens` parses a definition file and keeps the tokens.
-- `ParseResult` holds the tree, comments, tokens, errors, and node counts.
-- `Groupings` records the parentheses the tree drops.
+* `parse`, which parses code.
+* `parse_definitions`, which parses a definition file, where Luau's `declare`
+  statements are allowed.
+* `parse_with_tokens` and `parse_definitions_with_tokens`, which do the same
+  and also keep the token list, as a formatter needs.
+* `ParseResult`, the tree with its comments, tokens, and errors, and node counts
+  for sizing later passes.
+* `Groupings`, the parentheses the tree left out, which a formatter uses to keep
+  the source's grouping.

@@ -1,6 +1,7 @@
 # luck_cli
 
-The `luck` command-line tool for formatting, linting, type checking, bundling, and minifying Luau.
+The `luck` command-line tool, for formatting, linting, type checking, bundling,
+and minifying Luau.
 
 ## Install
 
@@ -8,7 +9,8 @@ The `luck` command-line tool for formatting, linting, type checking, bundling, a
 cargo install luck_cli
 ```
 
-Building it needs clang, for Luau's type checker. Install LLVM, or Xcode's command line tools on macOS.
+Building it needs clang, for Luau's type checker. Install LLVM, or on macOS,
+Xcode's command line tools.
 
 ## Commands
 

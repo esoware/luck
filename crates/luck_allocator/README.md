@@ -1,16 +1,15 @@
 # luck_allocator
 
-A bump arena allocator for luck's syntax trees, with arena-backed `Box`, `List`, and compact string types.
+A bump allocation arena for syntax trees.
 
-## Overview
+Allocating from an `Allocator` bumps a pointer within a chunk of memory, and a
+new chunk comes from the global allocator when the current one fills up.
+Nothing allocated in the arena is ever dropped. Instead, the whole arena is
+freed at once when it's reset or dropped, which suits a syntax tree that lives
+exactly as long as the file it came from.
 
-Every luck syntax tree lives in an `Allocator`. Nothing in it is ever dropped, so don't put a type that needs `Drop` in it.
-
-`reset` frees everything at once and keeps the memory for the next file.
-
-`AllocatorPool` and `ThreadAllocators` hand out arenas to worker threads.
-
-Based on `oxc_allocator`, which is based on `bumpalo`.
+`reset` keeps the arena's memory, so one arena can be reused for file after
+file. The arena started out as `oxc_allocator`'s, which derives from `bumpalo`.
 
 ## Usage
 
@@ -30,14 +29,20 @@ assert_eq!(*value, 42);
 
 ## API
 
-- `Allocator` is the arena, with `alloc`, `alloc_str`, `alloc_slice_copy`, and `reset`.
-- `Box` holds one value in the arena.
-- `List` holds a sequence of values in the arena, and `ListIntoIter` iterates it by value.
-- `ThinStr` is a `&str` in 12 bytes, and `ThinBytes` is the same for `&[u8]`.
-- `TextBytes` checks bytes for UTF-8 once, then hands out `ThinStr`s of its ranges.
-- `AllocatorPool` shares arenas between threads. `get` returns an `AllocatorGuard`, which resets the arena and gives it back on drop.
-- `ThreadAllocators` gives each thread its own arena, which outlives the thread's work.
+* `Allocator`, the arena, with `alloc`, `alloc_str`, `alloc_slice_copy`, and
+  `reset`.
+* `Box`, a single value in the arena.
+* `List`, a sequence of values in the arena, and `ListIntoIter`, which iterates
+  one by value.
+* `ThinStr` and `ThinBytes`, a `&str` and a `&[u8]` stored in 12 bytes.
+* `TextBytes`, bytes checked as UTF-8 once, which hands out a `ThinStr` of any
+  range.
+* `AllocatorPool`, which lends arenas to threads. Each comes in an
+  `AllocatorGuard`, which resets the arena and returns it when dropped.
+* `ThreadAllocators`, which gives every thread its own arena.
 
 ## Cargo features
 
-- `track_allocations` counts each arena's allocations, for `luck_allocs`. Internal use only.
+* `track_allocations` - Counts the allocations each arena makes, and marks the
+  chunks it requests from the global allocator. This is for luck's allocation
+  snapshots and isn't meant for other use.

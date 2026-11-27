@@ -1,31 +1,29 @@
 # luck_lsp
 
-A Luau language server, built on luck's linter and formatter and Luau's own type checker.
+A Luau language server, with type-aware hover and completion, lint diagnostics,
+and formatting.
 
-## Overview
+The server speaks the Language Server Protocol over stdio, or over TCP for
+debugging. Hover, completion, and signature help come from Luau's own type
+checker, including documentation from definition files. Diagnostics combine
+lint results, requires that don't resolve, and type errors.
 
-It runs as `luck lsp` and speaks the Language Server Protocol over stdio, or TCP for debugging. Hover, completion, and signature help come from Luau's types, including docs from definition files.
+Go-to-definition, references, and rename work across files for a module's
+members, and go-to-definition can jump into Luau's and Roblox's built-in
+definitions, which are served as `luck:` documents. The server also provides
+code actions, semantic tokens, highlights, folding and selection ranges,
+document links, and document and workspace symbols, with positions in UTF-8,
+UTF-16, or UTF-32.
 
-It also supports:
-
-- lint and type error diagnostics, plus requires that don't resolve
-- formatting, including ranges
-- go-to-definition, references, rename, and document and workspace symbols, including module members across files
-- go-to-definition into Luau's and Roblox's definition files, shown as `luck:` documents
-- code actions for fixes, `source.fixAll.luck`, and disabling a rule
-- semantic tokens, highlights, folding ranges, selection ranges, and document links
-- UTF-8, UTF-16, and UTF-32 positions
-
-Custom methods are `luck/syntaxTree`, `luck/fixAllWorkspace`, and the notification `luck/didChangeFiles`. If the client passes a config in `initializationOptions`, the server reads only the files the client sends it.
-
-## Architecture
-
-A main loop reads messages in order and never touches a syntax tree. Requests run on a worker pool.
-
-Each document version is parsed once, in its own arena, and an edit cancels linting of the old version. Idle workers index the rest of the workspace in the background.
+A client that sends a config in `initializationOptions` can serve every file
+itself, with nothing read from disk.
 
 ## API
 
-- `serve_stdio` serves over stdio, as `luck lsp` does.
-- `serve_socket` serves over TCP, for debugging.
-- `serve` serves over any `lsp_server` connection.
+* `serve_stdio`, which serves over stdio, as `luck lsp` does.
+* `serve_socket`, which serves over TCP, for debugging.
+* `serve`, which serves over any `lsp_server` connection.
+
+Beyond the standard protocol, the server handles the `luck/syntaxTree` and
+`luck/fixAllWorkspace` requests and the `luck/didChangeFiles` notification,
+through which a client pushes the text of files it holds.

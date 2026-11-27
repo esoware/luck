@@ -1,16 +1,23 @@
 # luck_diagnostics
 
-The error and warning type every luck tool reports through, with codes, labels, and help text.
+A diagnostic type for reporting errors and warnings in source code.
 
-## Overview
+A `Diagnostic` has a code, a severity, a message, and the span the problem is
+at. It can also carry labels that point at related spans, a help line, a note,
+a link to the code's documentation, and a tag that tells an editor to show the
+code as unnecessary or deprecated.
 
-A `Diagnostic` has a code, a severity, a message, and a span. It can also have labels pointing at other spans, help text, a note, a docs link, and an editor tag.
+Every code has exactly one constructor, such as `Diagnostic::e008` for a syntax
+error, so each code's meaning is defined in one place. A lint diagnostic is
+built with `Diagnostic::lint` instead, with the rule's name as its code.
 
-Each code has its own constructor, such as `Diagnostic::e008` for parse errors. Lint rules use `Diagnostic::lint`, with the rule name as the code.
-
-A diagnostic doesn't know its file. `FileDiagnostics` pairs a list of them with a path.
+A diagnostic doesn't record its file. Diagnostics that travel between files go
+in a `FileDiagnostics`, which pairs them with a path.
 
 ## Usage
+
+This example reports an unclosed function, with a label on the `function`
+keyword:
 
 ```rust
 use luck_diagnostics::Diagnostic;
@@ -25,9 +32,9 @@ assert_eq!(diag.labels[0].message, "unclosed `function`");
 
 ## API
 
-- `Diagnostic` boxes a `DiagnosticInner` and derefs to it.
-- `DiagnosticInner` has the fields `code`, `severity`, `message`, `span`, `labels`, `help`, `note`, `url`, and `tag`.
-- `Severity` is `Error` or `Warning`.
-- `Label` is a secondary span with a message.
-- `Tag` is `Unnecessary` or `Deprecated`, which editors show as faded or struck through.
-- `FileDiagnostics` is a path and its diagnostics.
+* `Diagnostic`, which boxes a `DiagnosticInner` holding its fields, and derefs
+  to it.
+* `Severity`, either `Error` or `Warning`.
+* `Label`, another span the diagnostic is about, with its own message.
+* `Tag`, either `Unnecessary` or `Deprecated`.
+* `FileDiagnostics`, a path and the diagnostics in that file.

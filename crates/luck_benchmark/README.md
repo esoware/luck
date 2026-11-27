@@ -1,11 +1,11 @@
 # luck_benchmark
 
-Criterion benchmarks for each stage of the luck pipeline, one binary per stage.
+Criterion benchmarks for each stage of luck's pipeline.
 
-```sh
-just bench                 # every stage
-just bench --bench parser  # one stage
-just minsize               # rewrite the minified-size snapshot
-```
+Each stage has its own bench binary, so its numbers move independently of the
+others. Run them all with `just bench`, or one with `just bench --bench parser`.
+`just minsize` rewrites the committed minified-size snapshot.
 
-CI runs the same binaries on CodSpeed with the `codspeed` feature.
+## Cargo features
+
+* `codspeed` - Runs the benchmarks under CodSpeed, as CI does.

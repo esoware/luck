@@ -1,18 +1,24 @@
 # luck_linter
 
-A Luau linter with scope-aware rules, auto-fixes, and inline suppression comments.
+A Luau linter with scope-aware rules, auto-fixes, and suppression comments.
 
-## Overview
+Rules fall into four categories: correctness, suspicious, style, and
+performance. Only correctness rules run by default. Rules see every scope and
+reference and each function's control flow, and they check globals against a
+standard library from `luck_stdlib`, which can include Roblox's API or a host's
+own definitions.
 
-Rules come in four categories: correctness, suspicious, style, and performance. Only correctness runs by default. A `Linter` compiles its `LintConfig` once, then lints any number of files.
+A `Linter` compiles its `LintConfig` once, then lints any number of files.
+Fixes come in two kinds. A `FixKind::Fix` keeps the code's behavior and is safe
+to apply automatically, while a `FixKind::Suggestion` might change it, so it
+should only be applied by hand.
 
-Rules see scopes, references, and control flow, and get the known globals from `luck_stdlib`.
-
-A fix is either a `FixKind::Fix`, which keeps behavior and is what `--fix` applies, or a `FixKind::Suggestion`, which might not, so only the user applies it.
-
-`-- luck: allow(rule)` silences a rule for the next statement. Add `start` and `end` to cover a region.
+A `-- luck: allow(rule)` comment silences a rule for the next statement, and
+adding `start` and `end` covers a region.
 
 ## Usage
+
+This example reports an undefined global, then fixes an unused local:
 
 ```rust
 use luck_allocator::Allocator;
@@ -34,7 +40,7 @@ assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"local _unused = 1"[..]))
 
 ## Configuration
 
-`LintConfig` is the `lint` section of `luck.json`:
+`LintConfig` deserializes from the `lint` section of a `luck.json`:
 
 ```json
 {
@@ -48,18 +54,23 @@ assert_eq!(fixed.map(|fixed| fixed.parse.source), Ok(&b"local _unused = 1"[..]))
 
 ## API
 
-- `Linter` lints a parse with `run`, or an `Analysis` with `run_analyzed`, and fixes a parse with `fix`.
-- `Analysis` is a parse with its semantic analysis and lint directives, from `Linter::analyze`.
-- `LintConfig`, `CategoryLevels`, `RuleSettings`, and `RuleLevel` pick which rules run and at what severity.
-- `RuleId` names a rule, and `RuleId::ALL` lists them all.
-- `Category` is a rule's category.
-- `Message` is one diagnostic with its fixes.
-- `Fix` is a set of `TextEdit`s, and `FixKind` says whether it's a fix or a suggestion.
-- `Fixed` and `FixError` are what `fix` returns.
-- `non_overlapping_edits` picks the edits from a set of messages that can apply together.
-- `RuleTimings` and `RuleTiming` record how long each rule took.
+* `Linter`, which lints a parse with `run` and applies fixes with `fix` until
+  none are left. `analyze` builds an `Analysis`, which `run_analyzed` lints and
+  can stop early when cancelled.
+* `LintConfig`, with `CategoryLevels`, `RuleSettings`, and `RuleLevel`, which
+  pick the rules that run and their severity.
+* `RuleId`, one rule, and `RuleId::ALL`, every rule.
+* `Category`, a rule's category.
+* `Message`, one diagnostic with its fixes.
+* `Fix`, a set of `TextEdit`s that apply together, and `FixKind`, which says
+  whether it's a fix or a suggestion.
+* `Fixed` and `FixError`, what `fix` returns.
+* `non_overlapping_edits`, the edits from a set of messages that can apply at
+  once.
+* `RuleTimings` and `RuleTiming`, how long each rule took.
 
 ## Cargo features
 
-- `serde` derives `Deserialize` and `Serialize` for `LintConfig`, in the shape `luck.json` uses.
-- `schemars` derives `JsonSchema` too, and enables `serde`.
+* `serde` - Derives `Deserialize` and `Serialize` for `LintConfig`, in the
+  shape a `luck.json` config gives it.
+* `schemars` - Derives `JsonSchema` for `LintConfig`. Enables `serde`.

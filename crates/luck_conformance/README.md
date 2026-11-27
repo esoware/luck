@@ -1,19 +1,23 @@
 # luck_conformance
 
-Runs Luau's official conformance tests through every luck stage and records the results as snapshots.
+Runs Luau's official conformance tests through every stage of luck.
 
-```sh
-just conformance                   # rewrite every snapshot
-just conformance --filter strings  # print failures for files whose name contains "strings"
-```
+`just conformance` runs every test file and rewrites the committed snapshots in
+`snapshots/`. With `--filter strings`, it checks only the files whose name
+contains `strings`, prints each failure in full, and writes no snapshot. The
+reference interpreter is mlua's vendored build of Luau.
 
-Each stage writes a snapshot to `snapshots/`:
+Each stage has its own snapshot:
 
-- `parser` checks that luck parses every file Luau compiles, and rejects every file it rejects.
-- `codegen` checks that compact output parses back to the same tree and prints the same again.
-- `formatter` checks that formatted output parses back to the same tree and formats the same again.
-- `minifier` checks that minified output parses and minifies the same again.
-- `runtime` checks that the original, formatted, and minified programs end the same way when run in Luau.
-- `linter` records every rule's diagnostics.
+* `parser` - luck parses every file Luau compiles, and rejects every file it
+  rejects.
+* `codegen` - Compact output parses back to the same tree, and prints the same
+  again.
+* `formatter` - Formatted output parses back to the same tree, and formats the
+  same again.
+* `minifier` - Minified output parses, and minifies the same again.
+* `runtime` - The original, formatted, and minified programs end the same way
+  in Luau.
+* `linter` - Every rule's diagnostics.
 
-The reference interpreter is mlua's vendored Luau. Ported from oxc's `tasks/coverage`.
+Ported from oxc's `tasks/coverage`.

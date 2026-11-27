@@ -1,18 +1,22 @@
 # luck
 
-The full luck toolchain in one crate: a parser, formatter, linter, minifier, bundler, and type checker for Luau.
+A Luau parser, formatter, linter, minifier, bundler, and type checker in one
+crate.
 
-## Overview
+This crate re-exports the luck crates as modules, so a build tool or editor can
+depend on one crate instead of tracking each `luck_*` crate. It's published as
+`luck_lua` but imported as `luck`. The lexer, parser, and syntax tree are
+always included, and every other stage is behind its own feature. The language
+server and the CLI aren't included.
 
-It re-exports every luck crate as a module, except the language server and the CLI. The package is published as `luck_lua`, but you import it as `luck`.
-
-The parser and what it needs are always included. Everything else is behind a feature.
+Every tree lives in an `allocator::Allocator` that you own. Calling `reset`
+frees everything in it at once and keeps the memory for the next file. For
+threads, `allocator::AllocatorPool` lends out arenas that reset when they're
+returned.
 
 ## Usage
 
-```sh
-cargo add luck_lua --features formatter,minifier
-```
+This example needs the `formatter` and `minifier` features:
 
 ```rust
 use luck::allocator::Allocator;
@@ -48,22 +52,21 @@ assert_eq!(minified.as_deref(), Ok(&b"return 3"[..]));
 | `type_checker` | `luck_type_checker` | `type_checker` |
 | `config` | `luck_config` | `config` |
 
-`VERSION` is the toolchain version.
-
-## Arenas
-
-Every tree lives in an `allocator::Allocator` that you own. Call `reset` to free everything in it and reuse the memory for the next file. For threads, take arenas from an `AllocatorPool`.
+`VERSION` is the toolchain's version.
 
 ## Cargo features
 
-- `full` enables everything below.
-- `codegen` adds the compact printer.
-- `resolver` adds module resolution.
-- `bundler` adds bundling, and enables `resolver` and `minifier`.
-- `minifier` adds the minifier.
-- `formatter` adds the formatter.
-- `semantic` adds scope and symbol analysis.
-- `stdlib` adds the standard library definitions, and enables `semantic`.
-- `linter` adds the linter, and enables `stdlib`.
-- `type_checker` adds Luau's type checker. Building it needs clang.
-- `config` adds `luck.json` loading, and enables `bundler`, `minifier`, `formatter`, and `linter`.
+No feature is on by default.
+
+* `full` - Enables every feature below.
+* `codegen` - The compact printer.
+* `resolver` - Module resolution for `require`.
+* `bundler` - Single-file bundling. Enables `resolver` and `minifier`.
+* `minifier` - The minifier.
+* `formatter` - The formatter.
+* `semantic` - Scope, symbol, and reference analysis.
+* `stdlib` - Luau's and Roblox's standard libraries. Enables `semantic`.
+* `linter` - The linter. Enables `stdlib`.
+* `type_checker` - Luau's own type checker. Building it needs clang.
+* `config` - `luck.json` loading. Enables `bundler`, `minifier`, `formatter`,
+  and `linter`.

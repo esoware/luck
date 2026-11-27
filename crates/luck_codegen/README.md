@@ -1,16 +1,22 @@
 # luck_codegen
 
-A compact code printer for Luau syntax trees, used by the minifier and the bundler.
+Prints a Luau syntax tree as the shortest source that parses back to the same
+tree.
 
-## Overview
+`compact` writes no comments, puts a space only where two tokens would
+otherwise run together, and adds a `;` only where the next statement would
+otherwise read as a call. It keeps the parentheses the tree holds and adds the
+fewest others needed for the output to parse back the same way.
 
-Writes the fewest characters that parse back to the same tree. It never reads the source, so trees built in code print too.
-
-Comments are dropped. Literals print as written, or in their shortest form with `LiteralSpelling::Shortest`.
-
-It takes trees no deeper than `luck_ast::MAX_NESTING_DEPTH`, which every parsed tree is.
+Literals print as written, or with `LiteralSpelling::Shortest`, in the shortest
+form of their value. The printer never reads source text, so a tree built in
+code prints too. It recurses once per level of nesting, so give it trees within
+`luck_ast::MAX_NESTING_DEPTH`, as every parsed tree is.
 
 ## Usage
+
+This example parses an expression with redundant parentheses and prints it back
+compactly:
 
 ```rust
 use luck_allocator::Allocator;
@@ -24,6 +30,6 @@ assert_eq!(output, b"local x=(a+b)*c");
 
 ## API
 
-- `compact` prints a chunk into a new buffer.
-- `compact_into` prints into a buffer you pass, reusing its memory.
-- `LiteralSpelling` is `AsWritten` or `Shortest`.
+* `compact`, which prints a chunk into a new buffer.
+* `compact_into`, which prints into a buffer you pass in, reusing its memory.
+* `LiteralSpelling`, either `AsWritten` or `Shortest`.

@@ -1,20 +1,30 @@
 # luck_value
 
-Works out what Luau expressions evaluate to, whether they're truthy, and whether evaluating them has side effects.
+Constant evaluation, truthiness, and side-effect analysis for Luau expressions.
 
-## Overview
+Four traits answer questions about an expression without running it.
+`ConstantEvaluation` works out its `ConstantValue`, `ToBoolean` whether it's
+truthy, `MayHaveSideEffects` whether evaluating it could raise, run a
+metamethod, or read a global, and `IsLiteralValue` whether it has the same
+value wherever and whenever it runs.
 
-The minifier and the linter both use it, the way oxc's tools use `oxc_ecmascript`.
+The answers assume any metamethod can run wherever Luau allows one. Reading a
+global counts as a side effect, because it indexes the environment, which may
+have an `__index`. An operator is only pure when its operand types rule out
+metamethods and errors, such as `+` on two numbers.
 
-It assumes any metamethod can run wherever Luau allows one. Reading a global indexes the environment, so it can call `__index`. Reading a local can't.
+Constant evaluation matches Luau's arithmetic exactly. Anything that depends on
+the C library, such as an inexact power or a string comparison, is left
+unevaluated.
 
-An operator only counts as pure when its operand types rule out metamethods and errors, like `+` on two numbers.
-
-Constant evaluation matches Luau's arithmetic exactly. Anything that depends on the C library, such as an inexact power or a string comparison, isn't folded.
-
-Each trait takes a `ValueContext` that says which names are globals. `NoBindings` treats every name as a global.
+Each trait takes a `ValueContext`, which says which names are globals.
+`NoBindings` treats every name as a global, the safe choice when there's no
+scope information.
 
 ## Usage
+
+This example evaluates `7 // 2`, and shows that `x or true` is truthy but may
+still have side effects:
 
 ```rust
 use luck_allocator::Allocator;
@@ -33,10 +43,3 @@ assert_eq!(quotient.evaluate_value(&NoBindings), Some(ConstantValue::Number(3.0)
 assert_eq!(guard.to_boolean(&NoBindings), Some(true));
 assert!(guard.may_have_side_effects(&NoBindings), "`x` may be a global");
 ```
-
-## API
-
-- `ToBoolean`, `ConstantEvaluation`, `MayHaveSideEffects`, and `IsLiteralValue` are traits on expressions.
-- `ConstantValue` is a value known without running the program.
-- `ValueContext` tells locals from globals.
-- `NoBindings` is a context where every name is a global.
