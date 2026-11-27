@@ -1,5 +1,5 @@
 [package]
-name                   = "luck_lua"
+name                   = "luck_luau"
 version.workspace      = true
 authors.workspace      = true
 categories.workspace   = true
@@ -14,7 +14,7 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
-# The `luck` package name is taken on crates.io by an unrelated crate, so the package publishes as `luck_lua` while the library stays `luck`.
+# The `luck` package name is taken on crates.io by an unrelated crate, so the package publishes as `luck_luau` while the library stays `luck`.
 [lib]
 name = "luck"
 
@@ -54,7 +54,7 @@ luck_type_checker = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Every stage's doctest runs.
-luck_lua = { path = ".", features = ["full"] }
+luck_luau = { path = ".", features = ["full"] }
 
 [package.metadata.docs.rs]
 all-features = true

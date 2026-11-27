@@ -1092,7 +1092,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "luck_lua"
+name = "luck_luau"
 version = "0.6.0"
 dependencies = [
  "luck_allocator",
@@ -1104,7 +1104,7 @@ dependencies = [
  "luck_formatter",
  "luck_lexer",
  "luck_linter",
- "luck_lua",
+ "luck_luau",
  "luck_minifier",
  "luck_parser",
  "luck_resolver",
