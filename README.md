@@ -8,46 +8,68 @@
 
 </div>
 
-Luck is a Luau toolchain written in Rust: formatter, linter, language server, parser, bundler, and minifier behind one CLI and one config file. It covers standalone Luau and Luau on Roblox. Multi-file projects in, a single file out.
+Luck is an extremely fast Luau toolchain. It formats, lints, type checks, bundles, and minifies Luau, for standalone scripts and for Roblox, with one CLI and one config file.
 
-The lexer, parser, AST, and code generator are hand-written with no external parser dependency, and every tool works on the same syntax tree.
-
-## Quick start
+## Install
 
 ```sh
 cargo install luck_cli
 ```
 
-Building it needs clang, which compiles Luau's type checker: install [LLVM](https://github.com/llvm/llvm-project/releases), or on macOS Xcode's command line tools.
+Building it needs clang, for Luau's type checker. Install [LLVM](https://github.com/llvm/llvm-project/releases), or on macOS, Xcode's command line tools.
+
+## Usage
 
 ```sh
-luck init          # scaffold a luck.json
+luck init          # create a luck.json
 luck build         # bundle the project into a single file
 luck fmt src/      # format
-luck lint src/     # lint (add --fix to auto-fix)
+luck lint src/     # lint, and fix with --fix
 luck check src/    # report syntax, compile, and type errors
+luck lsp           # run the language server
 ```
 
-Configuration lives in `luck.json`. `lint`, `fmt`, `check`, and the language server give each file the nearest one above it, `build` takes the one above the working directory, and `bundle`, `graph`, and `minify` the one above their input. Build entries, minifier passes, format options, lint rule settings, and the definitions a project loads all come from it, and `overrides` change the lint and format settings of the files their globs match. Every `.luau` and `.lua` file is Luau, and runs with Luau's standard library and what `definitions` lists over it, in order: `"@roblox"` for Roblox's API, at the security level `security` names, such as `"PluginSecurity"` for a plugin, and any other entry a Luau [definition file](crates/luck_stdlib/README.md#definition-files), named `*.d.luau`, that declares a host's globals, types, and functions, such as Lune's, which the linter, `check`, and the language server all read. A mistake in it is reported where it is, at load. See the schema shipped with the [VS Code extension](editors/vscode).
+Every command reads its settings from the nearest `luck.json`.
 
 ## Tools
 
-- **Bundler.** Resolves Luau's string requires, relative paths, `@aliases`, and `.luaurc` and `.config.luau` chains, then emits one self-contained file with no external loader or runtime library.
-- **Minifier.** Eleven AST transforms that rewrite the tree in place, in three phases: Luau type stripping, compression passes that repeat until one changes nothing, and renaming, each reading the scopes and references semantic analysis finds. Dead code removal, constant folding, and local renaming do most of the work. Config flags turn each transform on and off, and every transform assumes metamethods can fire.
-- **Formatter.** Prettier-style layout that breaks on line width and handles the full Luau type grammar. `format(format(x)) == format(x)` and the output re-parses, both enforced by tests.
-- **Linter.** 63 rules across correctness, suspicious, style, and performance categories, with inline suppressions and `--fix`.
-- **Type checker.** Luau's own, the C++ Analysis library of the Luau release luck pins, which `luck check` runs over a project's files, with each `require` resolved as the bundler resolves it, and with the definitions the project loads, Roblox's API as a script at the project's security level reaches it among them.
-- **Language server.** Luau's own type errors and types in diagnostics, hover, completions, and signature help, with the documentation a definition file has, go-to-definition into definition files, references, rename, and semantic tokens, with a module's members followed across the workspace, served by `luck lsp` and consumed by the [VS Code extension](editors/vscode).
+- A Prettier-style formatter that handles Luau's full type syntax
+- A linter with 63 rules, auto-fixes, and suppression comments
+- Luau's own type checker, built from Luau's C++ source
+- A language server with diagnostics, hover, completion, go-to-definition,
+  references, and rename, used by the [VS Code extension](editors/vscode)
+- A bundler that turns a multi-file project into one file with no runtime
+  library
+- A minifier that strips types, folds constants, removes dead code, and renames
+  locals
 
-Every tool is also a library crate (`luck_parser`, `luck_formatter`, `luck_linter`, ...). The `luck` facade crate, published as `luck_lua`, re-exports all of them except the language server, so you can build on the same pieces the CLI uses.
+Luck knows Luau's standard library out of the box. Add `"@roblox"` to
+`definitions` in `luck.json` for Roblox's API, or a
+[definition file](crates/luck_stdlib/README.md#definition-files) for any other
+host, such as Lune.
+
+## Build on top of Luck
+
+Every tool is also a Rust crate:
+
+- Parse Luau: [`luck_parser`](crates/luck_parser)
+- Format Luau: [`luck_formatter`](crates/luck_formatter)
+- Lint Luau: [`luck_linter`](crates/luck_linter)
+- Minify Luau: [`luck_minifier`](crates/luck_minifier)
+- Bundle Luau projects: [`luck_bundler`](crates/luck_bundler)
+- Resolve requires: [`luck_resolver`](crates/luck_resolver)
+- Type check Luau: [`luck_type_checker`](crates/luck_type_checker)
+- All of the above in one crate: [`luck_lua`](crates/luck)
 
 ## Contribute
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup and pull requests, and `AGENTS.md` lists the conventions and invariants the code follows.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup and pull requests.
 
 ## License
 
-Luck is free and open-source software licensed under the [MIT License](LICENSE).
+Luck is free and open-source software licensed under the
+[MIT License](LICENSE).
 
 [license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 [license-url]: LICENSE
