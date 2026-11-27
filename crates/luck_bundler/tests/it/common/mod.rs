@@ -6,7 +6,7 @@ use luck_ast::MIN_STACK_BYTES;
 use luck_bundler::{Bundle, BundleOptions, DynamicRequire, bundle, bundle_minified};
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
 use luck_minifier::TransformConfig;
-use luck_resolver::to_slash_lossy;
+use luck_resolver::{Resolver, to_slash_lossy};
 use rayon::ThreadPoolBuilder;
 use tempfile::TempDir;
 
@@ -54,15 +54,18 @@ pub(crate) fn bundle_both(
     options: &BundleOptions<'_>,
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
     let transforms = TransformConfig::default();
-    let text_result = on_pool(1, || bundle(&ThreadAllocators::new(), entry, options));
-    let threaded_result = off_pool(|| bundle(&ThreadAllocators::new(), entry, options));
+    let text_result =
+        on_pool(1, || bundle(&ThreadAllocators::new(), &Resolver::new(), entry, options));
+    let threaded_result =
+        off_pool(|| bundle(&ThreadAllocators::new(), &Resolver::new(), entry, options));
     assert_eq!(
         format!("{text_result:?}"),
         format!("{threaded_result:?}"),
         "bundling on threads changes the bundle"
     );
-    let minified_result =
-        on_pool(3, || bundle_minified(&ThreadAllocators::new(), entry, options, &transforms));
+    let minified_result = on_pool(3, || {
+        bundle_minified(&ThreadAllocators::new(), &Resolver::new(), entry, options, &transforms)
+    });
     match (&text_result, minified_result) {
         (Ok(text_bundle), Ok(minified)) => {
             let bytes = &text_bundle.output;
@@ -101,11 +104,7 @@ pub(crate) fn bundle_project(
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
     bundle_both(
         &directory.join(entry),
-        &BundleOptions {
-            project_root: directory,
-            dynamic_require: DynamicRequire::default(),
-            luau_config: None,
-        },
+        &BundleOptions { project_root: directory, dynamic_require: DynamicRequire::default() },
     )
 }
 

@@ -21,8 +21,8 @@ itself, with nothing read from disk.
 ## API
 
 * `serve_stdio`, which serves over stdio, as `luck lsp` does.
-* `serve_socket`, which serves over TCP, for debugging.
-* `serve`, which serves over any `lsp_server` connection.
+* `serve`, which serves over any `lsp_server` connection, re-exported as
+  `Connection`.
 
 Beyond the standard protocol, the server handles the `luck/syntaxTree` and
 `luck/fixAllWorkspace` requests and the `luck/didChangeFiles` notification,

@@ -3,9 +3,9 @@
 //! Luau minification on the arena tree, in place, as `oxc_minifier` minifies
 //! JavaScript.
 //!
-//! [`minify`] parses source into the caller's arena and [`minify_chunk`]
-//! takes a tree. Both rewrite the tree in place and print it once, with
-//! [`luck_codegen::compact_into`].
+//! [`minify`] parses source into the caller's arena, [`minify_parsed`] takes
+//! a parse, and [`minify_chunk`] takes a tree. Each rewrites the tree in place
+//! and prints it once, with [`luck_codegen::compact_into`].
 //!
 //! The work runs in three phases:
 //!
@@ -54,5 +54,5 @@ mod rename;
 mod strip_types;
 mod transform_config;
 
-pub use pipeline::{minify, minify_chunk};
+pub use pipeline::{minify, minify_chunk, minify_parsed};
 pub use transform_config::TransformConfig;

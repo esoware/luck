@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fmt;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -45,6 +46,8 @@ impl fmt::Display for WalkError {
         self.0.fmt(f)
     }
 }
+
+impl Error for WalkError {}
 
 /// What [`walk_source_files`] asks of its caller: which project each directory
 /// and source file it reaches is in, and whether to go on.

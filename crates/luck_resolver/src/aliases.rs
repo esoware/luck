@@ -72,7 +72,7 @@ impl AliasCache {
     pub(crate) fn in_effect(
         &self,
         file_system: &impl FileSystem,
-        luau_config: Option<LuauConfigAliases>,
+        luau_config: Option<&LuauConfigAliases>,
         directory: &Path,
     ) -> Arc<AliasesInEffect> {
         self.merged_tables.get_or_insert_with(directory.as_os_str(), || {
@@ -122,7 +122,7 @@ fn alias_target(declaring_directory: &Path, written_target: &str) -> AliasTarget
 /// declares, and without it, one doesn't load.
 fn read_declared(
     file_system: &impl FileSystem,
-    luau_config: Option<LuauConfigAliases>,
+    luau_config: Option<&LuauConfigAliases>,
     directory: &Path,
 ) -> Declared {
     let luaurc = directory.join(".luaurc");

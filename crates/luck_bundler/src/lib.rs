@@ -2,10 +2,10 @@
 //!
 //! Dependency graph construction and single-file bundling for Luau projects.
 //!
-//! Starting from an entry file, resolves every `require()` through
-//! [`luck_resolver`], builds and sorts the dependency graph, and emits one file
-//! where each module registers with a lazy loader that mirrors Luau's own
-//! `require`.
+//! Starting from an entry file, resolves every `require()` through the
+//! caller's [`luck_resolver::ResolverGeneric`], reading each module through its
+//! file system, builds and sorts the dependency graph, and emits one file where
+//! each module registers with a lazy loader that mirrors Luau's own `require`.
 //!
 //! Each module is read and its requires resolved by a task on rayon's pool,
 //! into the arena of the thread that runs it, so that pool's threads need
@@ -20,15 +20,15 @@
 //! use luck_allocator::ThreadAllocators;
 //! use luck_ast::MIN_STACK_BYTES;
 //! use luck_bundler::{BundleOptions, DynamicRequire};
+//! use luck_resolver::Resolver;
 //!
 //! rayon::ThreadPoolBuilder::new().stack_size(MIN_STACK_BYTES).build_global().unwrap();
-//! let options = BundleOptions {
-//!     project_root: Path::new("."),
-//!     dynamic_require: DynamicRequire::default(),
-//!     luau_config: None,
-//! };
+//! let options =
+//!     BundleOptions { project_root: Path::new("."), dynamic_require: DynamicRequire::default() };
 //! let arenas = ThreadAllocators::new();
-//! let bundle = luck_bundler::bundle(&arenas, Path::new("main.luau"), &options).unwrap();
+//! let resolver = Resolver::new();
+//! let bundle =
+//!     luck_bundler::bundle(&arenas, &resolver, Path::new("main.luau"), &options).unwrap();
 //! assert!(!bundle.output.is_empty());
 //! ```
 

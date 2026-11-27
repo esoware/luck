@@ -93,6 +93,7 @@ macro_rules! declare_all_lint_rules {
         /// A lint rule, which config, directives, and diagnostics name by its
         /// [`name`](Self::name), as oxlint's `RuleEnum` numbers its rules.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[non_exhaustive]
         pub enum RuleId {
             $($rule,)+
         }

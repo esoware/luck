@@ -11,14 +11,6 @@ use crate::format_block::{first_item_start, format_selection};
 use crate::ir::Formatter;
 use crate::{FormatOptions, LineEndings};
 
-#[derive(Debug, Clone)]
-pub struct FormatResult {
-    /// Bytes, as the source is, which are UTF-8 when the source is.
-    pub output: Vec<u8>,
-    /// The parse's errors, each an E008. Formatting itself reports none.
-    pub errors: Vec<Diagnostic>,
-}
-
 fn print_chunk<'ast>(
     allocator: &'ast Allocator,
     chunk: &'ast Block<'ast>,
@@ -76,12 +68,19 @@ pub fn format_chunk<'ast>(
     Ok(print_chunk(allocator, chunk, comments, None, options))
 }
 
-/// Parses `source` into `allocator` and formats it. Input that fails to parse
-/// returns empty output with its parse errors in `FormatResult::errors`.
+/// Parses `source` into `allocator` and formats it.
 ///
 /// `source` is bytes, as Luau reads it, and the formatter copies a comment or
 /// a string that isn't UTF-8 as written.
-pub fn format(allocator: &Allocator, source: &[u8], options: &FormatOptions) -> FormatResult {
+///
+/// # Errors
+///
+/// Returns the parse errors, each an E008, when `source` doesn't parse.
+pub fn format(
+    allocator: &Allocator,
+    source: &[u8],
+    options: &FormatOptions,
+) -> Result<Vec<u8>, Vec<Diagnostic>> {
     let parse = luck_parser::parse_with_tokens(allocator, source);
     format_parsed(allocator, &parse, options)
 }
@@ -90,9 +89,12 @@ pub fn format(allocator: &Allocator, source: &[u8], options: &FormatOptions) -> 
 /// with `luck_parser::parse_with_tokens`: the formatter finds the tokens the
 /// tree keeps no span for among its tokens.
 ///
-/// A parse with errors returns empty output and those errors. Text the
-/// formatter rewrites goes in `allocator`, which may be the one the tree
-/// lives in.
+/// Text the formatter rewrites goes in `allocator`, which may be the one the
+/// tree lives in.
+///
+/// # Errors
+///
+/// Returns the parse's errors, each an E008, when it has any.
 ///
 /// # Panics
 ///
@@ -102,13 +104,12 @@ pub fn format_parsed<'ast>(
     allocator: &'ast Allocator,
     parse: &'ast ParseResult<'ast>,
     options: &FormatOptions,
-) -> FormatResult {
+) -> Result<Vec<u8>, Vec<Diagnostic>> {
     if !parse.errors.is_empty() {
-        return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
+        return Err(parse.errors.clone());
     }
     let comments = Comments::from_parse(parse);
-    let output = print_chunk(allocator, &parse.chunk, comments, Some(&parse.groupings), options);
-    FormatResult { output, errors: Vec::new() }
+    Ok(print_chunk(allocator, &parse.chunk, comments, Some(&parse.groupings), options))
 }
 
 /// Format only the statements that overlap a byte range, or those of the
@@ -119,6 +120,10 @@ pub fn format_parsed<'ast>(
 /// It never sorts requires, since a selection can split a run of them.
 /// `parse` is as for [`format_parsed`].
 ///
+/// # Errors
+///
+/// As [`format_parsed`] does.
+///
 /// # Panics
 ///
 /// As [`format_parsed`] does.
@@ -127,20 +132,19 @@ pub fn format_range<'ast>(
     parse: &'ast ParseResult<'ast>,
     options: &FormatOptions,
     range: Range<usize>,
-) -> FormatResult {
+) -> Result<Vec<u8>, Vec<Diagnostic>> {
     if !parse.errors.is_empty() {
-        return FormatResult { output: Vec::new(), errors: parse.errors.clone() };
+        return Err(parse.errors.clone());
     }
     let source = parse.source;
     let selection = Span::from_indices(range.start, range.end);
     let options = FormatOptions { sort_requires: false, ..*options };
-    let output = match format_selection(allocator, parse, &options, selection) {
+    Ok(match format_selection(allocator, parse, &options, selection) {
         Some((span, selected)) => {
             let before = &source[..span.start as usize];
             let after = &source[span.end as usize..];
             [before, &selected, after].concat()
         }
         None => source.to_owned(),
-    };
-    FormatResult { output, errors: Vec::new() }
+    })
 }

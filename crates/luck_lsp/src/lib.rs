@@ -59,8 +59,8 @@
 //! parses as one and is never checked as a module, and which a project that
 //! lists it reads as its open document holds it.
 //!
-//! [`serve_stdio`] serves over stdio, as `luck lsp` does, [`serve_socket`]
-//! over TCP for debugging, and [`serve`] over any `lsp_server` connection.
+//! [`serve_stdio`] serves over stdio, as `luck lsp` does, and [`serve`] over
+//! any [`Connection`], such as one `Connection::listen` makes over TCP.
 //!
 //! # Usage
 //!
@@ -85,5 +85,6 @@ mod transport;
 mod type_check;
 mod workspace;
 
+pub use lsp_server::Connection;
 pub use server::serve;
-pub use transport::{serve_socket, serve_stdio};
+pub use transport::serve_stdio;

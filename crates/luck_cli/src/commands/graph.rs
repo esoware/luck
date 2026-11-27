@@ -8,7 +8,7 @@ use luck_resolver::to_slash_lossy;
 use serde_json::{Map, Value, json};
 
 use crate::exit::{Exit, fail_with_diags};
-use crate::project::{bundle_options, existing_file, one_shot_project};
+use crate::project::{bundle_options, bundle_resolver, existing_file, one_shot_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -43,8 +43,9 @@ impl GraphArgs {
         let options = bundle_options(&project, self.dynamic_require);
 
         let arenas = ThreadAllocators::new();
-        let dependency_graph = DependencyGraph::build(&arenas, entry_path, &options)
-            .map_err(|errors| fail_with_diags(&errors))?;
+        let dependency_graph =
+            DependencyGraph::build(&arenas, &bundle_resolver(), entry_path, &options)
+                .map_err(|errors| fail_with_diags(&errors))?;
 
         if verbosity != Verbosity::Quiet {
             print_files(&dependency_graph.warnings);

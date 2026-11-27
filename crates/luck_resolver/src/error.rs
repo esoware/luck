@@ -7,6 +7,7 @@ use crate::path::to_slash_lossy;
 
 /// Why a require names no module, or more than one, or a definition file.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResolveError {
     /// Every file the module could have been, in the order they were tried,
     /// from the directory the search reached.

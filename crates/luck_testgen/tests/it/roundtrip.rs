@@ -73,17 +73,15 @@ fn format_reparses_and_is_idempotent() {
         allocator.reset();
         let Program { source, label } = &program;
         let original = parse_cleanly(&allocator, &program, "generator", source.as_bytes());
-        let first = format(&allocator, source.as_bytes(), &options);
-        assert!(
-            first.errors.is_empty(),
-            "{label}: format errored:\n{source}\nerrors: {:?}",
-            first.errors
-        );
-        let formatted = parse_cleanly(&allocator, &program, "format", &first.output);
+        let first = format(&allocator, source.as_bytes(), &options).unwrap_or_else(|errors| {
+            panic!("{label}: format errored:\n{source}\nerrors: {errors:?}")
+        });
+        let formatted = parse_cleanly(&allocator, &program, "format", &first);
         assert_same_tree(&program, "format", &original, &formatted);
-        let second = format(&allocator, &first.output, &options);
+        let second = format(&allocator, &first, &options);
         assert_eq!(
-            first.output, second.output,
+            second.as_ref(),
+            Ok(&first),
             "{label}: format not idempotent.\ninput:\n{source}"
         );
     }
@@ -105,7 +103,8 @@ fn format_chunk_without_source_reparses_and_formats_as_itself() {
         assert_same_tree(&program, "format_chunk", &original, &reprinted);
         let reformatted = format(&allocator, &via_ast, &options);
         assert_eq!(
-            via_ast, reformatted.output,
+            reformatted.as_ref(),
+            Ok(&via_ast),
             "{label}: format changed format_chunk's output.\ninput:\n{source}"
         );
     }
@@ -123,18 +122,18 @@ fn formatting_minified_output_reparses_and_is_idempotent() {
         let minified = luck_minifier::minify(&allocator, source.as_bytes(), &config)
             .unwrap_or_else(|errors| panic!("{label}: minify errored: {errors:?}\n{source}"));
         let minified_parse = parse_cleanly(&allocator, &program, "minify", &minified);
-        let first = format(&allocator, &minified, &options);
         let minified_text = String::from_utf8_lossy(&minified);
-        assert!(
-            first.errors.is_empty(),
-            "{label}: format errored on minified output:\n{minified_text}\nerrors: {:?}",
-            first.errors
-        );
-        let formatted = parse_cleanly(&allocator, &program, "format of minify", &first.output);
+        let first = format(&allocator, &minified, &options).unwrap_or_else(|errors| {
+            panic!(
+                "{label}: format errored on minified output:\n{minified_text}\nerrors: {errors:?}"
+            )
+        });
+        let formatted = parse_cleanly(&allocator, &program, "format of minify", &first);
         assert_same_tree(&program, "format of minify", &minified_parse, &formatted);
-        let second = format(&allocator, &first.output, &options);
+        let second = format(&allocator, &first, &options);
         assert_eq!(
-            first.output, second.output,
+            second.as_ref(),
+            Ok(&first),
             "{label}: format not idempotent on minified output.\nminified:\n{minified_text}"
         );
     }

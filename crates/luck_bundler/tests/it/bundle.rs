@@ -4,7 +4,7 @@ use std::{fs, io};
 use luck_allocator::ThreadAllocators;
 use luck_bundler::{Bundle, BundleOptions, DependencyGraph, DynamicRequire, ModuleId};
 use luck_diagnostics::FileDiagnostics;
-use luck_resolver::{FileSystem as _, FileSystemOs, to_slash_lossy};
+use luck_resolver::{FileSystem as _, FileSystemOs, Resolver, to_slash_lossy};
 use tempfile::TempDir;
 
 use crate::common::{
@@ -29,10 +29,7 @@ fn run_bundle_with(
 ) -> Result<Bundle, Vec<FileDiagnostics>> {
     let input_directory = fixture_directory(name);
     let entry = input_directory.join(entry_name);
-    bundle_both(
-        &entry,
-        &BundleOptions { project_root: &input_directory, dynamic_require, luau_config: None },
-    )
+    bundle_both(&entry, &BundleOptions { project_root: &input_directory, dynamic_require })
 }
 
 #[test]
@@ -308,7 +305,6 @@ return util.value
         &BundleOptions {
             project_root: &source_directory,
             dynamic_require: DynamicRequire::default(),
-            luau_config: None,
         },
     )
     .expect("bundle failed");
@@ -726,9 +722,9 @@ fn threads_sharing_one_resolver_find_what_one_thread_does() {
         let options = BundleOptions {
             project_root: directory.path(),
             dynamic_require: DynamicRequire::default(),
-            luau_config: None,
         };
-        let bundle = || luck_bundler::bundle(&ThreadAllocators::new(), &entry, &options);
+        let bundle =
+            || luck_bundler::bundle(&ThreadAllocators::new(), &Resolver::new(), &entry, &options);
         let one_thread = on_pool(1, bundle);
         match &one_thread {
             Ok(bundled) => assert_eq!(bundled.source_files.len(), 161),
@@ -759,11 +755,11 @@ require(\"./b\")
     let options = BundleOptions {
         project_root: directory.path(),
         dynamic_require: DynamicRequire::default(),
-        luau_config: None,
     };
-    let graph =
-        off_pool(|| DependencyGraph::build(&arenas, &directory.path().join("main.luau"), &options))
-            .expect("graph failed");
+    let resolver = Resolver::new();
+    let entry = directory.path().join("main.luau");
+    let graph = off_pool(|| DependencyGraph::build(&arenas, &resolver, &entry, &options))
+        .expect("graph failed");
 
     let relative_paths: Vec<&str> =
         graph.modules.iter().map(|module| module.relative_path.as_str()).collect();

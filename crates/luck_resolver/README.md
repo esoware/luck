@@ -15,8 +15,8 @@ as an editor's unsaved buffers. Directory listings, aliases, and file probes
 are cached and shared across threads until `clear_cache`.
 
 A `.config.luau` is Luau code, so reading its aliases means running it. The
-resolver leaves that to a `LuauConfigAliases` function you pass in, such as
-`luck_type_checker::luau_config_aliases`.
+resolver leaves that to a function or closure you pass to `with_luau_config`,
+such as `luck_type_checker::luau_config_aliases`.
 
 ## Usage
 
@@ -34,12 +34,12 @@ assert!(resolution.path.ends_with("foo.luau"));
 
 ## API
 
-* `Resolver` and `ResolverGeneric`, with `resolve`, `with_luau_config`, and
-  `clear_cache`.
+* `Resolver` and `ResolverGeneric`, with `resolve`, `with_luau_config`,
+  `file_system`, and `clear_cache`.
 * `Resolution`, the resolved path, and whether `@self` shadowed a `.luaurc`
   alias.
 * `ResolveError`, with `to_diagnostic` to report it.
-* `LuauConfigAliases`, the function type that reads a `.config.luau`'s aliases.
+* `LuauConfigAliases`, the type of what reads a `.config.luau`'s aliases.
 * `FileSystem`, the file system interface, with `DirEntry` and `FileMetadata`,
   and `FileSystemOs`, the operating system's.
 * `lexically_normalized`, which resolves `.` and `..` without touching the

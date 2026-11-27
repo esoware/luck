@@ -151,12 +151,15 @@ fn assert_comments_keep_the_tree(label: &str, source: &str, parse: Parse) {
         let written = comment_texts(&commented_parse);
         for (set, options) in option_sets().iter().enumerate() {
             let case = format!("{label}, {shape:?}, option set {set}");
-            let output =
-                String::from_utf8(format_parsed(&allocator, &commented_parse, options).output)
-                    .unwrap();
+            let output = String::from_utf8(
+                format_parsed(&allocator, &commented_parse, options).expect("the source parses"),
+            )
+            .unwrap();
             let formatted = parse(&allocator, output.as_bytes());
-            let again =
-                String::from_utf8(format_parsed(&allocator, &formatted, options).output).unwrap();
+            let again = String::from_utf8(
+                format_parsed(&allocator, &formatted, options).expect("the output parses"),
+            )
+            .unwrap();
             assert!(
                 again == output,
                 "{case}: not idempotent:\n{}",

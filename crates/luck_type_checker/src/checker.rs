@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::error::Error;
 use std::fmt;
 use std::mem;
 use std::num::NonZero;
@@ -57,6 +58,17 @@ pub enum CheckError {
     /// `module`.
     Internal { module: String, diag: Diagnostic },
 }
+
+impl fmt::Display for CheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("the check was cancelled"),
+            Self::Internal { module, diag } => write!(f, "{module}: {diag}"),
+        }
+    }
+}
+
+impl Error for CheckError {}
 
 /// What [`Checker::describe`] finds at an offset of a module.
 #[derive(Debug, Clone, PartialEq, Eq)]

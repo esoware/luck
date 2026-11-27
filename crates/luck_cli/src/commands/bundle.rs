@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::exit::{Exit, fail_with_diags, operation_error, usage_error};
 use crate::minify_flags::MinifyFlags;
 use crate::output::write_output;
-use crate::project::{bundle_options, existing_file, one_shot_project};
+use crate::project::{bundle_options, bundle_resolver, existing_file, one_shot_project};
 use crate::reporter::print_files;
 use crate::verbosity::Verbosity;
 
@@ -51,10 +51,11 @@ impl BundleArgs {
         let project = one_shot_project(self.config.as_deref(), entry_path)?;
         let transforms = self.minify_flags.apply_to(project.transforms());
         let options = bundle_options(&project, self.dynamic_require);
+        let resolver = bundle_resolver();
 
         let arenas = ThreadAllocators::new();
         if self.minify {
-            let minified = bundle_minified(&arenas, entry_path, &options, &transforms)
+            let minified = bundle_minified(&arenas, &resolver, entry_path, &options, &transforms)
                 .map_err(|errors| fail_with_diags(&errors))?;
             check_output_paths(&minified.source_files, self.output.iter()).map_err(usage_error)?;
             if verbosity != Verbosity::Quiet {
@@ -63,8 +64,8 @@ impl BundleArgs {
             return write_output(self.output.as_deref(), &minified.output);
         }
 
-        let result =
-            bundle(&arenas, entry_path, &options).map_err(|errors| fail_with_diags(&errors))?;
+        let result = bundle(&arenas, &resolver, entry_path, &options)
+            .map_err(|errors| fail_with_diags(&errors))?;
 
         check_output_paths(&result.source_files, self.output.iter().chain(&self.line_map))
             .map_err(usage_error)?;

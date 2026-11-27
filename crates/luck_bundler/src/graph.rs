@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use luck_allocator::ThreadAllocators;
 use luck_diagnostics::{Diagnostic, FileDiagnostics};
-use luck_resolver::{FileSystem as _, FileSystemOs, LuauConfigAliases, Resolver, to_slash_lossy};
+use luck_resolver::{FileSystem, ResolverGeneric, to_slash_lossy};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Control, DfsEvent, depth_first_search};
@@ -24,10 +24,6 @@ pub struct BundleOptions<'input> {
     /// relative to this.
     pub project_root: &'input Path,
     pub dynamic_require: DynamicRequire,
-    /// What reads the aliases of each `.config.luau`, Luau's own as
-    /// `luck_type_checker::luau_config_aliases` gives it, without which none
-    /// loads.
-    pub luau_config: Option<LuauConfigAliases>,
 }
 
 #[derive(Debug)]
@@ -43,7 +39,8 @@ pub struct DependencyGraph<'ast> {
 
 impl<'ast> DependencyGraph<'ast> {
     /// Reads and parses every module the entry reaches, each on rayon's pool
-    /// into the arena of the thread that reads it.
+    /// into the arena of the thread that reads it, through `resolver`'s file
+    /// system.
     ///
     /// The calling thread keeps the graph. On a thread of the pool, it runs
     /// queued modules while it waits, so a pool of one thread reads them all
@@ -57,21 +54,19 @@ impl<'ast> DependencyGraph<'ast> {
     /// ambiguous requires.
     pub fn build(
         arenas: &'ast ThreadAllocators,
+        resolver: &ResolverGeneric<impl FileSystem>,
         entry_path: &Path,
         options: &BundleOptions<'_>,
     ) -> Result<Self, Vec<FileDiagnostics>> {
+        let file_system = resolver.file_system();
         // Emitted paths are made relative to this, so it must be canonical like
         // the modules' paths.
-        let root = absolute_project_root(options.project_root);
-        let resolver = match options.luau_config {
-            Some(luau_config) => Resolver::new().with_luau_config(luau_config),
-            None => Resolver::new(),
-        };
-        let reader = Reader::new(options.dynamic_require, &root, &resolver);
+        let root = absolute_project_root(file_system, options.project_root);
+        let reader = Reader::new(options.dynamic_require, &root, resolver);
         let entry =
-            FileSystemOs.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
-        let found = discover_reachable(arenas, reader, &entry);
-        number_modules(arenas, reader, entry, found)
+            file_system.canonicalize(entry_path).unwrap_or_else(|_| entry_path.to_path_buf());
+        let found = discover_reachable(arenas, &reader, &entry);
+        number_modules(arenas, &reader, entry, found)
     }
 }
 
@@ -96,7 +91,7 @@ impl<'ast> IndexMut<ModuleId> for DependencyGraph<'ast> {
 /// this thread's arena. Stops with E009 at the module limit.
 fn number_modules<'ast>(
     arenas: &'ast ThreadAllocators,
-    reader: Reader<'_>,
+    reader: &Reader<'_, impl FileSystem>,
     entry: PathBuf,
     mut found: FxHashMap<OsString, Discovered<'ast>>,
 ) -> Result<DependencyGraph<'ast>, Vec<FileDiagnostics>> {

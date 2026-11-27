@@ -27,8 +27,8 @@ let output = luck_minifier::minify(&allocator, b"return 1 + 2", &config);
 assert_eq!(output.as_deref(), Ok(&b"return 3"[..]));
 ```
 
-`minify` parses the source itself, and `minify_chunk` minifies a tree you
-already have.
+`minify` parses the source itself, `minify_parsed` minifies a parse you
+already have, and `minify_chunk` minifies a tree you already have.
 
 ## Transforms
 

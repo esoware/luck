@@ -2,6 +2,7 @@ use luck_allocator::Allocator;
 use luck_ast::{Block, MAX_NESTING_DEPTH, Name, NameIndex, TreeCounts, VisitMut};
 use luck_codegen::LiteralSpelling;
 use luck_diagnostics::Diagnostic;
+use luck_parser::ParseResult;
 use luck_token::{CommentKind, chunk_header, leading_hot_comments};
 
 use crate::binding::NameIndexes;
@@ -10,12 +11,8 @@ use crate::rename::rename;
 use crate::strip_types::strip_types;
 use crate::transform_config::TransformConfig;
 
-/// Parses `source` into `allocator` and minifies it, returning the compact
-/// output or the parse errors.
-///
-/// The source and the output are bytes, as Luau reads them. A string spelled
-/// as written keeps its bytes, and the output is UTF-8 whenever the source
-/// is.
+/// Parses `source` into `allocator` and minifies it, as [`minify_parsed`]
+/// does.
 ///
 /// # Errors
 ///
@@ -25,10 +22,29 @@ pub fn minify<'ast>(
     source: &'ast [u8],
     config: &TransformConfig,
 ) -> Result<Vec<u8>, Vec<Diagnostic>> {
-    let mut result = luck_parser::parse(allocator, source);
+    minify_parsed(allocator, luck_parser::parse(allocator, source), config)
+}
+
+/// Minifies the tree of a parse a caller already holds, returning the compact
+/// output, under the shebang and hot comments its source opens with. New
+/// nodes go in `allocator`.
+///
+/// The source and the output are bytes, as Luau reads them. A string spelled
+/// as written keeps its bytes, and the output is UTF-8 whenever the source
+/// is.
+///
+/// # Errors
+///
+/// Returns the parse's errors, each an E008, when it has any.
+pub fn minify_parsed<'ast>(
+    allocator: &'ast Allocator,
+    mut result: ParseResult<'ast>,
+    config: &TransformConfig,
+) -> Result<Vec<u8>, Vec<Diagnostic>> {
     if !result.errors.is_empty() {
         return Err(result.errors);
     }
+    let source = result.source;
     let shebang = result
         .comments
         .first()

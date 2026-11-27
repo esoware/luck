@@ -39,7 +39,6 @@ luck_type_checker = { workspace = true }
 
 ariadne               = { workspace = true }
 clap                  = { workspace = true }
-globset               = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 rayon                 = { workspace = true }
 rustc-hash            = { workspace = true }

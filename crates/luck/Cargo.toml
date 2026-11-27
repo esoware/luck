@@ -21,7 +21,7 @@ name = "luck"
 [features]
 default = []
 
-full = ["codegen", "bundler", "minifier", "formatter", "linter", "type_checker", "config"]
+full = ["codegen", "bundler", "minifier", "formatter", "value", "linter", "type_checker", "config", "serde"]
 
 codegen      = ["luck_codegen"]
 resolver     = ["luck_resolver"]
@@ -30,9 +30,11 @@ minifier     = ["luck_minifier"]
 formatter    = ["luck_formatter"]
 semantic     = ["luck_semantic"]
 stdlib       = ["luck_stdlib", "semantic"]
+value        = ["luck_value"]
 linter       = ["luck_linter", "stdlib"]
 type_checker = ["luck_type_checker"]
 config       = ["luck_config", "bundler", "minifier", "formatter", "linter"]
+serde        = ["luck_bundler?/serde", "luck_formatter?/serde", "luck_linter?/serde", "luck_minifier?/serde"]
 
 [dependencies]
 luck_allocator    = { workspace = true }
@@ -51,6 +53,7 @@ luck_semantic     = { workspace = true, optional = true }
 luck_stdlib       = { workspace = true, optional = true }
 luck_token        = { workspace = true }
 luck_type_checker = { workspace = true, optional = true }
+luck_value        = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Every stage's doctest runs.

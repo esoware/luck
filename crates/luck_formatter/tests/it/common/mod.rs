@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use luck_allocator::Allocator;
 use luck_ast::{SpanCounter, Synth};
-use luck_formatter::{FormatOptions, FormatResult, format_parsed, format_range};
+use luck_formatter::{FormatOptions, format_parsed, format_range};
 use luck_parser::ParseResult;
 
 /// A parse that keeps its tokens, of code, as
@@ -35,13 +35,13 @@ pub(crate) fn formatted_with(input: &[u8], options: &FormatOptions) -> Vec<u8> {
 /// [`formatted_with`], for a source `parse` reads.
 pub(crate) fn formatted_as(parse: Parse, input: &[u8], options: &FormatOptions) -> Vec<u8> {
     let allocator = Allocator::new();
-    let result = format_parsed(&allocator, &parse(&allocator, input), options);
-    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-    let reparsed = parse(&allocator, &result.output);
+    let output = format_parsed(&allocator, &parse(&allocator, input), options)
+        .unwrap_or_else(|errors| panic!("parse errors: {errors:?}"));
+    let reparsed = parse(&allocator, &output);
     assert!(reparsed.errors.is_empty(), "formatted output has parse errors: {:?}", reparsed.errors);
     let second_pass = format_parsed(&allocator, &reparsed, options);
-    assert_eq!(second_pass.output, result.output, "not idempotent");
-    result.output
+    assert_eq!(second_pass.as_ref(), Ok(&output), "not idempotent");
+    output
 }
 
 pub(crate) fn assert_format(input: &str, expected: &str) {
@@ -65,22 +65,21 @@ pub(crate) fn assert_format_with<Input, Expected>(
 }
 
 /// `source` parsed and range-formatted over `range`.
-fn range_formatted(source: &str, range: Range<usize>) -> FormatResult {
+fn range_formatted(source: &str, range: Range<usize>) -> Vec<u8> {
     let allocator = Allocator::new();
     let parse = luck_parser::parse_with_tokens(&allocator, source.as_bytes());
     format_range(&allocator, &parse, &FormatOptions::default(), range)
+        .unwrap_or_else(|errors| panic!("parse errors: {errors:?}"))
 }
 
 /// Nothing outside the selected statements changes, so the second pass finds
 /// them in the output at the same distance from each end of the text.
 pub(crate) fn assert_format_range(input: &str, range: Range<usize>, expected: &str) {
     let Range { start, end } = range;
-    let result = range_formatted(input, start..end);
-    assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
-    assert_eq!(result.output, expected.as_bytes(), "format mismatch");
+    assert_eq!(range_formatted(input, start..end), expected.as_bytes(), "format mismatch");
     let formatted_end = expected.len() - (input.len() - end);
     let second_pass = range_formatted(expected, start..formatted_end);
-    assert_eq!(second_pass.output, expected.as_bytes(), "not idempotent");
+    assert_eq!(second_pass, expected.as_bytes(), "not idempotent");
     let allocator = Allocator::new();
     let reparsed = luck_parser::parse(&allocator, expected.as_bytes());
     assert!(reparsed.errors.is_empty(), "formatted output has parse errors: {:?}", reparsed.errors);
